@@ -1,8 +1,25 @@
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
 [package]
 name = "framework"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+# Compiler settings and optimizations. https://doc.rust-lang.org/cargo/reference/profiles.html#strip
+[profile.release]
+strip = "symbols" # Compilation option to optimize the size of the final binary. Active in release compilation mode.
 
 [dependencies]
+clap = { version = "4.4.18", features = ["derive"] } # CLI arg parser.
+thiserror = "1.0.56" # Enables creation of custom errors
+datafusion = "34.0.0"
+tokio = "1.35.1" # An event-driven, non-blocking I/O platform for writing asynchronous I/O backed applications.
+log = "0.4.20" # A lightweight logging facade
+env_logger = "0.11.0" # Implements a logger that can be configured via environment variables.
+
+[dev-dependencies]
+fake = { version = "2.9.2", features = ["derive"] } # Fake data like name, number, address, lorem, dates, etc.
+tempfile = "3.9.0" # Managing temporary files and directories.
+rand = "0.8.5" # Random number generators and other randomness functionality.
+assert_cmd = "2.0.13" # Test CLI Applications.
