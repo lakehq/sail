@@ -23,7 +23,9 @@ use log::{debug, info, trace, LevelFilter};
 // Helps the creation of custom errors
 use thiserror::Error;
 
-
-fn main() {
+// #[tokio::main] macro to run code on the Tokio runtime.
+// Initializes the Tokio runtime and manages the synchronization primitives
+#[tokio::main]
+async fn main() -> Result<(), MDataAppError>{
     println!("Hello, world!");
 }
