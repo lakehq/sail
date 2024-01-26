@@ -12,6 +12,8 @@ tonic = "0.10"
 tonic-reflection = "0.10"
 tonic-health = "0.10"
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+uuid = { version = "1.7.0", features = ["v4"] }
+datafusion = "35.0.0"
 
 [build-dependencies]
 tonic-build = "0.10"
