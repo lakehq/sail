@@ -1,0 +1,17 @@
+[package]
+name = "spark-connect-server"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+prost = "0.12"
+prost-types = "0.12"
+tonic = "0.10"
+tonic-reflection = "0.10"
+tonic-health = "0.10"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+
+[build-dependencies]
+tonic-build = "0.10"
