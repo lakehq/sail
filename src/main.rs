@@ -20,7 +20,7 @@ use env_logger::{Builder, Env};
 // LevelFilter is an enum representing the available verbosity level filters of the logger.
 use log::{debug, info, trace, LevelFilter};
 
-// This library provides a convenient derive macro for the standard library’s std::error::Error trait.
+// Helps the creation of custom errors
 use thiserror::Error;
 
 
