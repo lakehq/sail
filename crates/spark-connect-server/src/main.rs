@@ -1,6 +1,5 @@
 use spark_connect_server::server::SparkConnectServer;
 use spark_connect_server::spark::connect::spark_connect_service_server::SparkConnectServiceServer;
-use std::fmt::Debug;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

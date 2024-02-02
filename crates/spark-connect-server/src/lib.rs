@@ -1,3 +1,7 @@
+mod error;
+mod expression;
+mod plan;
+mod schema;
 pub mod server;
 mod session;
 
