@@ -16,6 +16,7 @@ Cargo.lock
 # Editor directories and files
 .idea/
 .vscode/*
+*.iml
 !.vscode/extensions.json
 !.vscode/settings.json
 

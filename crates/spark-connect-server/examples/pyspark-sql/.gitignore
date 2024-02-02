@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+
+build/
+dist/
+tmp/
+
+.env
+.venv
+env/
+venv/
+
+# We ignore the Poetry lock file for this sample project
+# to make the codebase cleaner. But you may want to commit it
+# for your own project.
+poetry.lock
