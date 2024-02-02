@@ -3,6 +3,7 @@ use spark_connect_server::spark::connect::spark_connect_service_server::SparkCon
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // TODO: Use TLS
     let address = "127.0.0.1:50051".parse()?;
 
     let (mut health_reporter, health_server) = tonic_health::server::health_reporter();
