@@ -1,5 +1,7 @@
 use crate::error::{ProtoFieldExt, SparkError};
-use crate::expression::{from_spark_expression, from_spark_literal_to_scalar};
+use crate::expression::{
+    from_spark_expression, from_spark_literal_to_scalar, from_spark_sort_order,
+};
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::relation as scr;
@@ -60,22 +62,20 @@ pub(crate) async fn from_spark_relation(
         }
         scr::RelType::Project(project) => {
             let input = project.input.as_ref().required("projection input")?;
+            let input = from_spark_relation(ctx, input).await?;
             let expressions = project
                 .expressions
                 .iter()
-                .map(from_spark_expression)
+                .map(|e| from_spark_expression(e, input.schema()))
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(plan::builder::project(
-                from_spark_relation(ctx, input).await?,
-                expressions,
-            )?)
+            Ok(plan::builder::project(input, expressions)?)
         }
         scr::RelType::Filter(filter) => {
             let input = filter.input.as_ref().required("filter input")?;
             let condition = filter.condition.as_ref().required("filter condition")?;
-            let predicate = from_spark_expression(condition)?;
-            let filter =
-                plan::Filter::try_new(predicate, Arc::new(from_spark_relation(ctx, input).await?))?;
+            let input = from_spark_relation(ctx, input).await?;
+            let predicate = from_spark_expression(condition, input.schema())?;
+            let filter = plan::Filter::try_new(predicate, Arc::new(input))?;
             Ok(LogicalPlan::Filter(filter))
         }
         scr::RelType::Join(_) => {
@@ -84,8 +84,20 @@ pub(crate) async fn from_spark_relation(
         scr::RelType::SetOp(_) => {
             todo!()
         }
-        scr::RelType::Sort(_) => {
-            todo!()
+        scr::RelType::Sort(sort) => {
+            // TODO: handle sort.is_global
+            let input = sort.input.as_ref().required("sort input")?;
+            let input = from_spark_relation(ctx, input).await?;
+            let expr = sort
+                .order
+                .iter()
+                .map(|o| from_spark_sort_order(o, input.schema()))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(LogicalPlan::Sort(plan::Sort {
+                expr,
+                input: Arc::new(input),
+                fetch: None,
+            }))
         }
         scr::RelType::Limit(limit) => {
             let input = limit.input.as_ref().required("limit input")?;
@@ -171,6 +183,7 @@ pub(crate) async fn from_spark_relation(
         }
         scr::RelType::SubqueryAlias(sub) => {
             let input = sub.input.as_ref().required("subquery alias input")?;
+            // TODO: handle quoted identifiers
             let mut alias = sub.alias.clone();
             for q in sub.qualifier.iter().rev() {
                 alias = format!("{}.{}", q, alias);
