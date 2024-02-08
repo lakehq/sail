@@ -16,11 +16,17 @@ pub enum SparkError {
     InvalidArgument(String),
     #[error("not implemented: {0}")]
     NotImplemented(String),
+    #[error("not supported: {0}")]
+    NotSupported(String),
 }
 
 impl SparkError {
     pub fn todo(message: impl Into<String>) -> Self {
         SparkError::NotImplemented(message.into())
+    }
+
+    pub fn unsupported(message: impl Into<String>) -> Self {
+        SparkError::NotSupported(message.into())
     }
 
     pub fn missing(message: impl Into<String>) -> Self {
@@ -44,6 +50,7 @@ impl<T> ProtoFieldExt<T> for Option<T> {
 
 impl From<SparkError> for tonic::Status {
     fn from(error: SparkError) -> Self {
+        dbg!(&error);
         match error {
             SparkError::DataFusionError(DataFusionError::Plan(s))
             | SparkError::DataFusionError(DataFusionError::Configuration(s)) => {
@@ -65,6 +72,7 @@ impl From<SparkError> for tonic::Status {
             }
             SparkError::ArrowError(e) => tonic::Status::internal(e.to_string()),
             SparkError::NotImplemented(s) => tonic::Status::unimplemented(s),
+            SparkError::NotSupported(s) => tonic::Status::internal(s),
         }
     }
 }
