@@ -4,3 +4,14 @@ members = [
     "crates/spark-connect-server"
 ]
 resolver = "2"
+
+[workspace.dependencies]
+tracing = "0.1.40"
+tracing-opentelemetry = "0.22.0"
+tracing-subscriber = "0.3.18"
+opentelemetry = "0.21.0"
+# https://github.com/open-telemetry/opentelemetry-rust/blob/main/opentelemetry-jaeger/README.md?plain=1#L67
+# https://github.com/open-telemetry/opentelemetry-rust/blob/main/opentelemetry-sdk/src/lib.rs#L97
+opentelemetry_sdk = { version = "0.21.2", features = ["rt-tokio"] }
+opentelemetry-semantic-conventions = "0.13.0"
+opentelemetry-otlp = "0.14.0"
