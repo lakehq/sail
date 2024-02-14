@@ -8,7 +8,7 @@ resolver = "2"
 [workspace.dependencies]
 tracing = "0.1.40"
 tracing-opentelemetry = "0.22.0"
-tracing-subscriber = "0.3.18"
+tracing-subscriber = { version = "0.3.18", features = [ "env-filter", "fmt", "json" ] }
 opentelemetry = "0.21.0"
 # https://github.com/open-telemetry/opentelemetry-rust/blob/main/opentelemetry-jaeger/README.md?plain=1#L67
 # https://github.com/open-telemetry/opentelemetry-rust/blob/main/opentelemetry-sdk/src/lib.rs#L97
