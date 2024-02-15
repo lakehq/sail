@@ -1,7 +1,8 @@
 [workspace]
 members = [
     "crates/hello",
-    "crates/spark-connect-server"
+    "crates/spark-connect-server",
+    "crates/telemetry",
 ]
 resolver = "2"
 
