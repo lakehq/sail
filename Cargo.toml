@@ -2,7 +2,7 @@
 members = [
     "crates/hello",
     "crates/spark-connect-server",
-    "crates/telemetry",
+    "crates/framework-telemetry",
 ]
 resolver = "2"
 
@@ -15,5 +15,5 @@ opentelemetry = "0.21.0"
 # https://github.com/open-telemetry/opentelemetry-rust/blob/main/opentelemetry-sdk/src/lib.rs#L97
 opentelemetry_sdk = { version = "0.21.2", features = ["rt-tokio"] }
 opentelemetry-semantic-conventions = "0.13.0"
-opentelemetry-otlp = "0.14.0"
+opentelemetry-otlp = {  version = "0.14.0", features = [ "trace", "grpc-tonic" ] }
 opentelemetry-stdout = {  version = "0.2.0", features = ["trace"] } # Temporary until we fully configure OpenTelemetry
