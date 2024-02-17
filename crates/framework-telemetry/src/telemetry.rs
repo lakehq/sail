@@ -39,7 +39,6 @@ pub fn init_tracer() -> SDKTracer {
     let processor = SDKBatchSpanProcessor::builder(exporter, runtime::Tokio).build();
     let provider = SDKTracerProvider::builder()
         .with_span_processor(processor)
-        // .with_simple_exporter(opentelemetry_stdout::SpanExporter::default())
         .with_config(
             config().with_resource(
                 os_resource
