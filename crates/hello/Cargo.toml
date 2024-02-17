@@ -13,3 +13,4 @@ tracing-subscriber = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 opentelemetry-stdout = { workspace = true }
+tokio = { workspace = true }
