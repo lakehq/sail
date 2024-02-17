@@ -1,16 +1,17 @@
 [package]
-name = "hello"
+name = "framework-telemetry"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-framework-telemetry = { path = "../framework-telemetry" }
+tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
+opentelemetry-semantic-conventions = { workspace = true }
+opentelemetry-otlp = { workspace = true }
 opentelemetry-stdout = { workspace = true }
-tokio = { workspace = true }
