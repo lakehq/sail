@@ -2,13 +2,17 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
+###################################################################################
+# Auto Generated Default Variables
+###################################################################################
+
 replicaCount: 1
 
 image:
-  repository: nginx
+  repository: ""
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
-  tag: ""
+  tag: "latest"
 
 imagePullSecrets: []
 nameOverride: ""
@@ -105,3 +109,56 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+###################################################################################
+# OpenTelemetry Operator
+# Helm value configurations: https://artifacthub.io/packages/helm/cert-manager/cert-manager
+###################################################################################
+opentelemetry-operator:
+  enabled: true
+
+  ## Admission webhooks make sure only requests with correctly formatted rules will get into the Operator.
+  ## They also enable the sidecar injection for OpenTelemetryCollector and Instrumentation CR's
+  admissionWebhooks:
+    ## https://github.com/open-telemetry/opentelemetry-helm-charts/blob/main/charts/opentelemetry-operator/README.md#tls-certificate-requirement
+    ## TLS Certificate Option 1: Use certManager to generate self-signed certificate.
+    ## certManager must be enabled. If enabled, always takes precendence over options 2 and 3.
+    certManager:
+      # Annotations for the cert and issuer if cert-manager is enabled.
+      # Annotate to ensure creation after the cert-manager CRDs have been installed.
+      certificateAnnotations:
+        "helm.sh/hook": post-install,post-upgrade
+        "helm.sh/hook-weight": "1"
+      issuerAnnotations:
+        "helm.sh/hook": post-install,post-upgrade
+        "helm.sh/hook-weight": "1"
+
+  # Default OpenTelemetry Collector that wll be deployed by Helm
+  collector:
+    enabled: true
+    mode: sidecar
+    config: |
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+            http:
+
+      exporters:
+        debug:
+
+      service:
+        pipelines:
+          traces:
+            receivers: [otlp]
+            exporters: [debug]
+
+###################################################################################
+# Cert Manager
+# Helm value configurations: https://artifacthub.io/packages/helm/cert-manager/cert-manager
+###################################################################################
+
+cert-manager:
+  enabled: true
+  # https://cert-manager.io/docs/installation/helm/#crd-installation-advice
+  installCRDs: true

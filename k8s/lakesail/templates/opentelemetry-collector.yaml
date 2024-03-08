@@ -1,0 +1,17 @@
+#{{- if and (index .Values "opentelemetry-operator" "enabled") (index .Values "opentelemetry-operator" "collector" "enabled") }}
+#{{- if .Values "opentelemetry-operator" "enabled"}}
+{{ $operator := index .Values "opentelemetry-operator" }}
+{{- if and (index $operator.enabled) (index $operator.collector.enabled) }}
+apiVersion: opentelemetry.io/v1alpha1
+kind: OpenTelemetryCollector
+metadata:
+  name: {{ .Release.Name }}-opentelemetry-collector
+  annotations:
+    # https://helm.sh/docs/topics/charts_hooks/#hooks-and-the-release-lifecycle
+    "helm.sh/hook": post-install,post-upgrade,pre-delete
+    "helm.sh/hook-weight": "0"
+spec:
+  mode: {{ index $operator.collector.mode }}
+  config:
+    {{ tpl (toYaml (index $operator.collector.config)) $ | nindent 2 }}
+{{- end }}
