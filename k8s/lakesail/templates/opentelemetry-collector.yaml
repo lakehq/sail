@@ -1,5 +1,3 @@
-#{{- if and (index .Values "opentelemetry-operator" "enabled") (index .Values "opentelemetry-operator" "collector" "enabled") }}
-#{{- if .Values "opentelemetry-operator" "enabled"}}
 {{ $operator := index .Values "opentelemetry-operator" }}
 {{- if and (index $operator.enabled) (index $operator.collector.enabled) }}
 apiVersion: opentelemetry.io/v1alpha1
