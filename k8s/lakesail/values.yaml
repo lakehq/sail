@@ -134,7 +134,10 @@ opentelemetry-operator:
         "helm.sh/hook-weight": "1"
 
   # Default OpenTelemetry Collector that wll be deployed by Helm
+  # TODO: Refactor to have a dedicated collector config for each mode so one or more modes (or all) can be deployed.
   collector:
+    # Basic sidecar collector with debug exporter (outputs to console).
+    # Good enough for our current stage, in a future TODO: we can get more fancy.
     enabled: true
     mode: sidecar
     config: |
