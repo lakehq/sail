@@ -4,9 +4,9 @@ WORKDIR /app
 
 RUN apt-get update
 
-COPY crates .
-COPY Cargo.toml .
-COPY Cargo.lock .
+COPY Cargo.toml Cargo.toml
+COPY Cargo.lock Cargo.lock
+COPY crates crates
 
 RUN cargo build --release
 
