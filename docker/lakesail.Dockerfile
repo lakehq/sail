@@ -2,7 +2,9 @@ FROM rust:1.76.0-bookworm AS builder
 
 WORKDIR /app
 
-RUN apt-get update
+RUN apt-get update && \
+    apt-get install -y protobuf-compiler && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY Cargo.toml Cargo.toml
 COPY Cargo.lock Cargo.lock
