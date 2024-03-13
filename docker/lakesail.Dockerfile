@@ -17,4 +17,5 @@ FROM debian:bookworm-slim
 RUN apt-get update
 
 COPY --from=builder /app/target/release/hello /usr/local/bin
+
 ENTRYPOINT ["/usr/local/bin/hello"]
