@@ -1,8 +1,14 @@
+use tower::ServiceBuilder;
+use tower_http::trace::{DefaultMakeSpan, TraceLayer};
+
+use framework_telemetry::telemetry::init_telemetry;
 use spark_connect_server::server::SparkConnectServer;
 use spark_connect_server::spark::connect::spark_connect_service_server::SparkConnectServiceServer;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_telemetry()?;
+
     // A secure connection can be handled by a gateway in production.
     let address = "127.0.0.1:50051".parse()?;
 
@@ -20,7 +26,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let server = SparkConnectServer::default();
 
+    let layer = ServiceBuilder::new()
+        .layer(
+            TraceLayer::new_for_grpc().make_span_with(DefaultMakeSpan::new().include_headers(true)),
+        )
+        .into_inner();
+
     tonic::transport::Server::builder()
+        .layer(layer)
         .add_service(reflect_server)
         .add_service(health_server)
         .add_service(SparkConnectServiceServer::new(server))

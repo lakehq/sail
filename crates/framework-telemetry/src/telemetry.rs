@@ -1,7 +1,6 @@
 use std::time::Duration;
 
-use opentelemetry::{global, trace::TracerProvider, Key};
-
+use opentelemetry::{global, trace::TracerProvider};
 use opentelemetry_sdk::{
     propagation::TraceContextPropagator,
     resource::{
@@ -14,7 +13,6 @@ use opentelemetry_sdk::{
         TracerProvider as SDKTracerProvider,
     },
 };
-
 use tracing_subscriber::{fmt, layer::SubscriberExt, Registry};
 
 pub fn init_telemetry() -> Result<(), tracing::subscriber::SetGlobalDefaultError> {
@@ -22,6 +20,7 @@ pub fn init_telemetry() -> Result<(), tracing::subscriber::SetGlobalDefaultError
     let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
     let subscriber = Registry::default()
         .with(fmt::layer()) // If we want JSON: fmt::layer().json().flatten_event(true)
+        .with(tracing_subscriber::EnvFilter::from_default_env())
         .with(telemetry);
     tracing::subscriber::set_global_default(subscriber)
 }

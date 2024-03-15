@@ -1,9 +1,13 @@
 mod error;
+mod executor;
 mod expression;
 mod plan;
 mod schema;
 pub mod server;
+mod service;
 mod session;
+
+const SPARK_VERSION: &str = "3.5.0";
 
 pub mod spark {
     pub mod connect {

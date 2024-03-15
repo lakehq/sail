@@ -1,6 +1,13 @@
+use std::sync::PoisonError;
+
 use datafusion::common::DataFusionError;
 use datafusion::sql::sqlparser;
+use prost::DecodeError;
 use thiserror::Error;
+use tokio::sync::mpsc::error::SendError;
+use tokio::task::JoinError;
+
+pub(crate) type SparkResult<T> = Result<T, SparkError>;
 
 #[derive(Debug, Error)]
 pub enum SparkError {
@@ -10,6 +17,8 @@ pub enum SparkError {
     SqlParserError(#[from] sqlparser::parser::ParserError),
     #[error("error in Arrow: {0}")]
     ArrowError(#[from] datafusion::arrow::error::ArrowError),
+    #[error("error in channel: {0}")]
+    SendError(String),
     #[error("missing argument: {0}")]
     MissingArgument(String),
     #[error("invalid argument: {0}")]
@@ -18,6 +27,8 @@ pub enum SparkError {
     NotImplemented(String),
     #[error("not supported: {0}")]
     NotSupported(String),
+    #[error("internal error: {0}")]
+    InternalError(String),
 }
 
 impl SparkError {
@@ -36,15 +47,47 @@ impl SparkError {
     pub fn invalid(message: impl Into<String>) -> Self {
         SparkError::InvalidArgument(message.into())
     }
+
+    pub fn send<T>(message: impl Into<String>) -> Self {
+        SparkError::SendError(message.into())
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        SparkError::InternalError(message.into())
+    }
+}
+
+impl<T> From<PoisonError<T>> for SparkError {
+    fn from(error: PoisonError<T>) -> Self {
+        SparkError::InternalError(error.to_string())
+    }
+}
+
+impl<T> From<SendError<T>> for SparkError {
+    fn from(error: SendError<T>) -> Self {
+        SparkError::SendError(error.to_string())
+    }
+}
+
+impl From<JoinError> for SparkError {
+    fn from(error: JoinError) -> Self {
+        SparkError::InternalError(error.to_string())
+    }
 }
 
 pub trait ProtoFieldExt<T> {
-    fn required(self, description: impl Into<String>) -> Result<T, SparkError>;
+    fn required(self, description: impl Into<String>) -> SparkResult<T>;
 }
 
 impl<T> ProtoFieldExt<T> for Option<T> {
-    fn required(self, description: impl Into<String>) -> Result<T, SparkError> {
+    fn required(self, description: impl Into<String>) -> SparkResult<T> {
         self.ok_or_else(|| SparkError::MissingArgument(description.into()))
+    }
+}
+
+impl<T> ProtoFieldExt<T> for Result<T, DecodeError> {
+    fn required(self, description: impl Into<String>) -> SparkResult<T> {
+        self.map_err(|e| SparkError::InvalidArgument(format!("{}: {}", description.into(), e)))
     }
 }
 
@@ -71,8 +114,10 @@ impl From<SparkError> for tonic::Status {
                 tonic::Status::invalid_argument(s)
             }
             SparkError::ArrowError(e) => tonic::Status::internal(e.to_string()),
+            SparkError::SendError(s) => tonic::Status::cancelled(s),
             SparkError::NotImplemented(s) => tonic::Status::unimplemented(s),
             SparkError::NotSupported(s) => tonic::Status::internal(s),
+            SparkError::InternalError(s) => tonic::Status::internal(s),
         }
     }
 }
