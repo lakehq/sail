@@ -91,7 +91,8 @@ impl SparkConnectService for SparkConnectServer {
                         service::handle_execute_write_operation(session, write, metadata).await?
                     }
                     CommandType::CreateDataframeView(view) => {
-                        service::handle_execute_create_dataframe_view(session, view).await?
+                        service::handle_execute_create_dataframe_view(session, view, metadata)
+                            .await?
                     }
                     CommandType::WriteOperationV2(write) => {
                         service::handle_execute_write_operation_v2(session, write).await?

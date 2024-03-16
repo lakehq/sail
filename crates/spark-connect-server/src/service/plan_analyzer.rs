@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use tonic::Status;
 
-use crate::error::ProtoFieldExt;
+use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::plan::from_spark_relation;
 use crate::schema::to_spark_schema;
 use crate::session::Session;
@@ -31,12 +30,12 @@ use crate::SPARK_VERSION;
 pub(crate) async fn handle_analyze_schema(
     session: Arc<Session>,
     request: SchemaRequest,
-) -> Result<SchemaResponse, Status> {
+) -> SparkResult<SchemaResponse> {
     let ctx = session.context();
     let sc::Plan { op_type: op } = request.plan.required("plan")?;
     let relation = match op.required("plan op")? {
         plan::OpType::Root(relation) => relation,
-        plan::OpType::Command(_) => return Err(Status::invalid_argument("relation expected")),
+        plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
     };
     let plan = from_spark_relation(&ctx, &relation).await?;
     let schema: SchemaRef = Arc::new(plan.schema().as_ref().into());
@@ -48,42 +47,42 @@ pub(crate) async fn handle_analyze_schema(
 pub(crate) async fn handle_analyze_explain(
     _session: Arc<Session>,
     _request: ExplainRequest,
-) -> Result<ExplainResponse, Status> {
+) -> SparkResult<ExplainResponse> {
     todo!()
 }
 
 pub(crate) async fn handle_analyze_tree_string(
     _session: Arc<Session>,
     _request: TreeStringRequest,
-) -> Result<TreeStringResponse, Status> {
+) -> SparkResult<TreeStringResponse> {
     todo!()
 }
 
 pub(crate) async fn handle_analyze_is_local(
     _session: Arc<Session>,
     _request: IsLocalRequest,
-) -> Result<IsLocalResponse, Status> {
+) -> SparkResult<IsLocalResponse> {
     todo!()
 }
 
 pub(crate) async fn handle_analyze_is_streaming(
     _session: Arc<Session>,
     _request: IsStreamingRequest,
-) -> Result<IsStreamingResponse, Status> {
+) -> SparkResult<IsStreamingResponse> {
     todo!()
 }
 
 pub(crate) async fn handle_analyze_input_files(
     _session: Arc<Session>,
     _request: InputFilesRequest,
-) -> Result<InputFilesResponse, Status> {
+) -> SparkResult<InputFilesResponse> {
     todo!()
 }
 
 pub(crate) async fn handle_analyze_spark_version(
     _session: Arc<Session>,
     _request: SparkVersionRequest,
-) -> Result<SparkVersionResponse, Status> {
+) -> SparkResult<SparkVersionResponse> {
     Ok(SparkVersionResponse {
         version: SPARK_VERSION.to_string(),
     })
@@ -92,42 +91,42 @@ pub(crate) async fn handle_analyze_spark_version(
 pub(crate) async fn handle_analyze_ddl_parse(
     _session: Arc<Session>,
     _request: DdlParseRequest,
-) -> Result<DdlParseResponse, Status> {
+) -> SparkResult<DdlParseResponse> {
     todo!()
 }
 
 pub(crate) async fn handle_analyze_same_semantics(
     _session: Arc<Session>,
     _request: SameSemanticsRequest,
-) -> Result<SameSemanticsResponse, Status> {
+) -> SparkResult<SameSemanticsResponse> {
     todo!()
 }
 
 pub(crate) async fn handle_analyze_semantic_hash(
     _session: Arc<Session>,
     _request: SemanticHashRequest,
-) -> Result<SemanticHashResponse, Status> {
+) -> SparkResult<SemanticHashResponse> {
     todo!()
 }
 
 pub(crate) async fn handle_analyze_persist(
     _session: Arc<Session>,
     _request: PersistRequest,
-) -> Result<PersistResponse, Status> {
+) -> SparkResult<PersistResponse> {
     Ok(PersistResponse {})
 }
 
 pub(crate) async fn handle_analyze_unpersist(
     _session: Arc<Session>,
     _request: UnpersistRequest,
-) -> Result<UnpersistResponse, Status> {
+) -> SparkResult<UnpersistResponse> {
     Ok(UnpersistResponse {})
 }
 
 pub(crate) async fn handle_analyze_get_storage_level(
     _session: Arc<Session>,
     _request: GetStorageLevelRequest,
-) -> Result<GetStorageLevelResponse, Status> {
+) -> SparkResult<GetStorageLevelResponse> {
     Ok(GetStorageLevelResponse {
         storage_level: Some(StorageLevel {
             use_disk: false,

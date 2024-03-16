@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion::common::file_options::StatementOptions;
-use datafusion::common::FileType;
+use datafusion::common::{FileType, TableReference};
+use datafusion::dataframe::DataFrame;
 use datafusion::logical_expr::dml::CopyOptions;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -11,7 +12,7 @@ use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
 use tracing::debug;
 
-use crate::error::{ProtoFieldExt, SparkError};
+use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::executor::{
     execute_plan, Executor, ExecutorBatch, ExecutorMetadata, ExecutorOutput, ExecutorTaskContext,
 };
@@ -94,7 +95,7 @@ async fn handle_execute_plan(
     session: Arc<Session>,
     plan: LogicalPlan,
     metadata: ExecutorMetadata,
-) -> Result<ExecutePlanResponseStream, Status> {
+) -> SparkResult<ExecutePlanResponseStream> {
     let ctx = session.context();
     let operation_id = metadata.operation_id.clone();
     let stream = execute_plan(&ctx, &plan).await?;
@@ -109,7 +110,7 @@ pub(crate) async fn handle_execute_relation(
     session: Arc<Session>,
     relation: Relation,
     metadata: ExecutorMetadata,
-) -> Result<ExecutePlanResponseStream, Status> {
+) -> SparkResult<ExecutePlanResponseStream> {
     let ctx = session.context();
     let plan = from_spark_relation(&ctx, &relation).await?;
     handle_execute_plan(session, plan, metadata).await
@@ -118,7 +119,7 @@ pub(crate) async fn handle_execute_relation(
 pub(crate) async fn handle_execute_register_function(
     _session: Arc<Session>,
     _udf: CommonInlineUserDefinedFunction,
-) -> Result<ExecutePlanResponseStream, Status> {
+) -> SparkResult<ExecutePlanResponseStream> {
     todo!()
 }
 
@@ -126,18 +127,18 @@ pub(crate) async fn handle_execute_write_operation(
     session: Arc<Session>,
     write: WriteOperation,
     metadata: ExecutorMetadata,
-) -> Result<ExecutePlanResponseStream, Status> {
+) -> SparkResult<ExecutePlanResponseStream> {
     let relation = write.input.required("input")?;
     let ctx = session.context();
     let _ = SaveMode::try_from(write.mode).required("save mode")?;
     if !write.sort_column_names.is_empty() {
-        return Err(Status::unimplemented("not supported: sort column names"));
+        return Err(SparkError::unsupported("sort column names"));
     }
     if !write.partitioning_columns.is_empty() {
-        return Err(Status::unimplemented("not supported: partitioning columns"));
+        return Err(SparkError::unsupported("partitioning columns"));
     }
     if let Some(_) = write.bucket_by {
-        return Err(Status::unimplemented("not supported: bucketing"));
+        return Err(SparkError::unsupported("bucketing"));
     }
     // TODO: option compatibility
     let options = CopyOptions::SQLOptions(StatementOptions::from(&write.options));
@@ -151,7 +152,7 @@ pub(crate) async fn handle_execute_write_operation(
                 "csv" => FileType::CSV,
                 "arrow" => FileType::ARROW,
                 _ => {
-                    return Err(Status::invalid_argument(format!(
+                    return Err(SparkError::invalid(format!(
                         "unsupported source: {}",
                         source
                     )))
@@ -170,16 +171,34 @@ pub(crate) async fn handle_execute_write_operation(
 }
 
 pub(crate) async fn handle_execute_create_dataframe_view(
-    _session: Arc<Session>,
-    _view: CreateDataFrameViewCommand,
-) -> Result<ExecutePlanResponseStream, Status> {
-    todo!()
+    session: Arc<Session>,
+    view: CreateDataFrameViewCommand,
+    metadata: ExecutorMetadata,
+) -> SparkResult<ExecutePlanResponseStream> {
+    let ctx = session.context();
+    let relation = view.input.required("input relation")?;
+    let plan = from_spark_relation(&ctx, &relation).await?;
+    let df = DataFrame::new(ctx.state(), plan);
+    let table_ref = TableReference::from(view.name.as_str());
+    let _ = view.is_global;
+    if view.replace {
+        ctx.deregister_table(table_ref.clone())?;
+    }
+    ctx.register_table(table_ref, df.into_view())?;
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    tx.send(ExecutorOutput::new(ExecutorBatch::Complete))
+        .await?;
+    Ok(ExecutePlanResponseStream::new(
+        session.session_id().to_string(),
+        metadata.operation_id,
+        ReceiverStream::new(rx),
+    ))
 }
 
 pub(crate) async fn handle_execute_write_operation_v2(
     _session: Arc<Session>,
     _write: WriteOperationV2,
-) -> Result<ExecutePlanResponseStream, Status> {
+) -> SparkResult<ExecutePlanResponseStream> {
     todo!()
 }
 
@@ -187,7 +206,7 @@ pub(crate) async fn handle_execute_sql_command(
     session: Arc<Session>,
     sql: SqlCommand,
     metadata: ExecutorMetadata,
-) -> Result<ExecutePlanResponseStream, Status> {
+) -> SparkResult<ExecutePlanResponseStream> {
     let relation = Relation {
         common: None,
         rel_type: Some(relation::RelType::Sql(sc::Sql {
@@ -202,39 +221,39 @@ pub(crate) async fn handle_execute_sql_command(
 pub(crate) async fn handle_execute_write_stream_operation_start(
     _session: Arc<Session>,
     _start: WriteStreamOperationStart,
-) -> Result<ExecutePlanResponseStream, Status> {
+) -> SparkResult<ExecutePlanResponseStream> {
     todo!()
 }
 
 pub(crate) async fn handle_execute_streaming_query_command(
     _session: Arc<Session>,
     _stream: StreamingQueryCommand,
-) -> Result<ExecutePlanResponseStream, Status> {
+) -> SparkResult<ExecutePlanResponseStream> {
     todo!()
 }
 
 pub(crate) async fn handle_execute_get_resources_command(
     _session: Arc<Session>,
     _resource: GetResourcesCommand,
-) -> Result<ExecutePlanResponseStream, Status> {
+) -> SparkResult<ExecutePlanResponseStream> {
     todo!()
 }
 
 pub(crate) async fn handle_execute_streaming_query_manager_command(
     _session: Arc<Session>,
     _manager: StreamingQueryManagerCommand,
-) -> Result<ExecutePlanResponseStream, Status> {
+) -> SparkResult<ExecutePlanResponseStream> {
     todo!()
 }
 
 pub(crate) async fn handle_execute_register_table_function(
     _session: Arc<Session>,
     _udtf: CommonInlineUserDefinedTableFunction,
-) -> Result<ExecutePlanResponseStream, Status> {
+) -> SparkResult<ExecutePlanResponseStream> {
     todo!()
 }
 
-pub(crate) async fn handle_interrupt_all(session: Arc<Session>) -> Result<Vec<String>, Status> {
+pub(crate) async fn handle_interrupt_all(session: Arc<Session>) -> SparkResult<Vec<String>> {
     let mut state = session.lock()?;
     let mut out = vec![];
     for executor in state.remove_all_executors().iter() {
@@ -246,7 +265,7 @@ pub(crate) async fn handle_interrupt_all(session: Arc<Session>) -> Result<Vec<St
 pub(crate) async fn handle_interrupt_tag(
     session: Arc<Session>,
     tag: String,
-) -> Result<Vec<String>, Status> {
+) -> SparkResult<Vec<String>> {
     let mut state = session.lock()?;
     let mut out = vec![];
     for executor in state.remove_executors_by_tag(tag.as_str()).iter() {
@@ -258,7 +277,7 @@ pub(crate) async fn handle_interrupt_tag(
 pub(crate) async fn handle_interrupt_operation_id(
     session: Arc<Session>,
     operation_id: String,
-) -> Result<Vec<String>, Status> {
+) -> SparkResult<Vec<String>> {
     let executor = session.lock()?.remove_executor(operation_id.as_str());
     if let Some(_) = executor {
         Ok(vec![operation_id])
@@ -271,13 +290,13 @@ pub(crate) async fn handle_reattach_execute(
     session: Arc<Session>,
     operation_id: String,
     response_id: Option<String>,
-) -> Result<ExecutePlanResponseStream, Status> {
+) -> SparkResult<ExecutePlanResponseStream> {
     let mut executor = session
         .lock()?
         .remove_executor(operation_id.as_str())
         .ok_or_else(|| SparkError::invalid(format!("operation not found: {}", operation_id)))?;
     if !executor.metadata.reattachable {
-        return Err(Status::invalid_argument(format!(
+        return Err(SparkError::invalid(format!(
             "operation not reattachable: {}",
             operation_id
         )));
@@ -293,7 +312,7 @@ pub(crate) async fn handle_release_execute(
     session: Arc<Session>,
     operation_id: String,
     response_id: Option<String>,
-) -> Result<(), Status> {
+) -> SparkResult<()> {
     let executor = session.lock()?.remove_executor(operation_id.as_str());
     if let Some(mut executor) = executor {
         executor.release(response_id).await?;
