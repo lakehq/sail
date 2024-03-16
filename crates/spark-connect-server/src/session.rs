@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -12,6 +13,15 @@ pub(crate) struct Session {
     session_id: String,
     context: SessionContext,
     state: Mutex<SessionState>,
+}
+
+impl Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("user_id", &self.user_id)
+            .field("session_id", &self.session_id)
+            .finish()
+    }
 }
 
 pub(crate) struct SessionState {
@@ -36,6 +46,7 @@ impl Session {
         &self.session_id
     }
 
+    #[allow(dead_code)]
     pub(crate) fn user_id(&self) -> Option<&str> {
         self.user_id.as_deref()
     }
@@ -112,7 +123,7 @@ impl SessionState {
     }
 }
 
-#[derive(Eq, PartialEq, Hash, Clone)]
+#[derive(Eq, PartialEq, Hash, Clone, Debug)]
 pub(crate) struct SessionKey {
     pub user_id: Option<String>,
     pub session_id: String,
@@ -120,6 +131,7 @@ pub(crate) struct SessionKey {
 
 type SessionStore = HashMap<SessionKey, Arc<Session>>;
 
+#[derive(Debug)]
 pub(crate) struct SessionManager {
     sessions: Mutex<SessionStore>,
 }
@@ -139,6 +151,7 @@ impl SessionManager {
         Ok(session.clone())
     }
 
+    #[allow(dead_code)]
     pub(crate) fn delete_session(&self, key: &SessionKey) -> SparkResult<()> {
         self.sessions.lock()?.remove(key);
         Ok(())

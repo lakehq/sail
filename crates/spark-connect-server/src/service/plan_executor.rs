@@ -9,6 +9,7 @@ use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
+use tracing::debug;
 
 use crate::error::{ProtoFieldExt, SparkError};
 use crate::executor::{
@@ -78,6 +79,7 @@ impl Stream for ExecutePlanResponseStream {
                             Some(ResponseType::ResultComplete(ResultComplete::default()));
                     }
                 }
+                debug!("{:?}", response);
                 Ok(response)
             })
         })
@@ -95,9 +97,9 @@ async fn handle_execute_plan(
 ) -> Result<ExecutePlanResponseStream, Status> {
     let ctx = session.context();
     let operation_id = metadata.operation_id.clone();
-    let mut executor = Executor::new(metadata);
     let stream = execute_plan(&ctx, &plan).await?;
-    let rx = executor.start(ExecutorTaskContext::new(stream)).await?;
+    let mut executor = Executor::new(metadata, ExecutorTaskContext::new(stream));
+    let rx = executor.start().await?;
     session.lock()?.add_executor(executor);
     let session_id = session.session_id().to_string();
     Ok(ExecutePlanResponseStream::new(session_id, operation_id, rx))
@@ -114,8 +116,8 @@ pub(crate) async fn handle_execute_relation(
 }
 
 pub(crate) async fn handle_execute_register_function(
-    session: Arc<Session>,
-    udf: CommonInlineUserDefinedFunction,
+    _session: Arc<Session>,
+    _udf: CommonInlineUserDefinedFunction,
 ) -> Result<ExecutePlanResponseStream, Status> {
     todo!()
 }
@@ -127,7 +129,7 @@ pub(crate) async fn handle_execute_write_operation(
 ) -> Result<ExecutePlanResponseStream, Status> {
     let relation = write.input.required("input")?;
     let ctx = session.context();
-    let mode = SaveMode::try_from(write.mode).required("save mode")?;
+    let _ = SaveMode::try_from(write.mode).required("save mode")?;
     if !write.sort_column_names.is_empty() {
         return Err(Status::unimplemented("not supported: sort column names"));
     }
@@ -160,7 +162,7 @@ pub(crate) async fn handle_execute_write_operation(
                 .build()
                 .or_else(|e| Err(SparkError::from(e)))?
         }
-        SaveType::Table(table) => {
+        SaveType::Table(_) => {
             todo!()
         }
     };
@@ -168,15 +170,15 @@ pub(crate) async fn handle_execute_write_operation(
 }
 
 pub(crate) async fn handle_execute_create_dataframe_view(
-    session: Arc<Session>,
-    view: CreateDataFrameViewCommand,
+    _session: Arc<Session>,
+    _view: CreateDataFrameViewCommand,
 ) -> Result<ExecutePlanResponseStream, Status> {
     todo!()
 }
 
 pub(crate) async fn handle_execute_write_operation_v2(
-    session: Arc<Session>,
-    write: WriteOperationV2,
+    _session: Arc<Session>,
+    _write: WriteOperationV2,
 ) -> Result<ExecutePlanResponseStream, Status> {
     todo!()
 }
@@ -198,36 +200,36 @@ pub(crate) async fn handle_execute_sql_command(
 }
 
 pub(crate) async fn handle_execute_write_stream_operation_start(
-    session: Arc<Session>,
-    start: WriteStreamOperationStart,
+    _session: Arc<Session>,
+    _start: WriteStreamOperationStart,
 ) -> Result<ExecutePlanResponseStream, Status> {
     todo!()
 }
 
 pub(crate) async fn handle_execute_streaming_query_command(
-    session: Arc<Session>,
-    stream: StreamingQueryCommand,
+    _session: Arc<Session>,
+    _stream: StreamingQueryCommand,
 ) -> Result<ExecutePlanResponseStream, Status> {
     todo!()
 }
 
 pub(crate) async fn handle_execute_get_resources_command(
-    session: Arc<Session>,
-    resource: GetResourcesCommand,
+    _session: Arc<Session>,
+    _resource: GetResourcesCommand,
 ) -> Result<ExecutePlanResponseStream, Status> {
     todo!()
 }
 
 pub(crate) async fn handle_execute_streaming_query_manager_command(
-    session: Arc<Session>,
-    manager: StreamingQueryManagerCommand,
+    _session: Arc<Session>,
+    _manager: StreamingQueryManagerCommand,
 ) -> Result<ExecutePlanResponseStream, Status> {
     todo!()
 }
 
 pub(crate) async fn handle_execute_register_table_function(
-    session: Arc<Session>,
-    udtf: CommonInlineUserDefinedTableFunction,
+    _session: Arc<Session>,
+    _udtf: CommonInlineUserDefinedTableFunction,
 ) -> Result<ExecutePlanResponseStream, Status> {
     todo!()
 }
@@ -280,7 +282,8 @@ pub(crate) async fn handle_reattach_execute(
             operation_id
         )));
     }
-    let rx = executor.restart(response_id).await?;
+    executor.release(response_id).await?;
+    let rx = executor.start().await?;
     session.lock()?.add_executor(executor);
     let session_id = session.session_id().to_string();
     Ok(ExecutePlanResponseStream::new(session_id, operation_id, rx))
@@ -293,7 +296,7 @@ pub(crate) async fn handle_release_execute(
 ) -> Result<(), Status> {
     let executor = session.lock()?.remove_executor(operation_id.as_str());
     if let Some(mut executor) = executor {
-        executor.pause(response_id).await?;
+        executor.release(response_id).await?;
         session.lock()?.add_executor(executor);
     }
     Ok(())

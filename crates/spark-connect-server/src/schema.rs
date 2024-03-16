@@ -55,7 +55,8 @@ pub(crate) fn from_spark_data_type(data_type: &sc::DataType) -> SparkResult<adt:
         sdt::Kind::Date(_) => Ok(adt::DataType::Date32),
         sdt::Kind::Timestamp(_) => Ok(adt::DataType::Timestamp(
             adt::TimeUnit::Microsecond,
-            todo!(), // spark.sql.session.timeZone
+            // TODO: should we use "spark.sql.session.timeZone"?
+            None,
         )),
         sdt::Kind::TimestampNtz(_) => {
             Ok(adt::DataType::Timestamp(adt::TimeUnit::Microsecond, None))

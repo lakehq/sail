@@ -8,9 +8,15 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::common::ParamValues;
-use datafusion::execution::context::SessionContext;
-use datafusion::logical_expr::logical_plan as plan;
+use datafusion::datasource::file_format::csv::CsvFormat;
+use datafusion::datasource::file_format::json::JsonFormat;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
+use datafusion::datasource::provider_as_source;
+use datafusion::execution::context::{DataFilePaths, SessionContext};
 use datafusion::logical_expr::LogicalPlan;
+use datafusion::logical_expr::{logical_plan as plan, LogicalPlanBuilder, UNNAMED_TABLE};
 use datafusion::sql::parser::Statement;
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
@@ -21,6 +27,7 @@ use crate::expression::{
 };
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
+use crate::spark::connect::read::ReadType;
 use crate::spark::connect::relation;
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
@@ -54,10 +61,48 @@ pub(crate) async fn from_spark_relation(
     relation: &sc::Relation,
 ) -> SparkResult<LogicalPlan> {
     let sc::Relation { common, rel_type } = relation;
+    let _ = common;
+    let state = ctx.state();
     let rel_type = rel_type.as_ref().required("relation type")?;
     match rel_type {
-        relation::RelType::Read(_) => {
-            todo!()
+        relation::RelType::Read(read) => {
+            let _ = read.is_streaming;
+            match read.read_type.as_ref().required("read type")? {
+                ReadType::NamedTable(_) => {
+                    todo!()
+                }
+                ReadType::DataSource(source) => {
+                    let urls = source.paths.clone().to_urls()?;
+                    if urls.is_empty() {
+                        return Err(SparkError::invalid("empty data source paths"));
+                    }
+                    let (format, extension): (Arc<dyn FileFormat>, _) = match source
+                        .format
+                        .as_ref()
+                        .map(|f| f.as_str())
+                    {
+                        Some("json") => (Arc::new(JsonFormat::default()), ".json"),
+                        Some("csv") => (Arc::new(CsvFormat::default()), ".csv"),
+                        Some("parquet") => (Arc::new(ParquetFormat::new()), ".parquet"),
+                        _ => return Err(SparkError::unsupported("unsupported data source format")),
+                    };
+                    let options = ListingOptions::new(format).with_file_extension(extension);
+                    // TODO: use provided schema if available
+                    let schema = options.infer_schema(&state, &urls[0]).await?;
+                    let config = ListingTableConfig::new_with_multi_paths(urls)
+                        .with_listing_options(options)
+                        .with_schema(schema);
+                    let provider = Arc::new(ListingTable::try_new(config)?);
+                    Ok(
+                        LogicalPlanBuilder::scan(
+                            UNNAMED_TABLE,
+                            provider_as_source(provider),
+                            None,
+                        )?
+                        .build()?,
+                    )
+                }
+            }
         }
         relation::RelType::Project(project) => {
             let input = project.input.as_ref().required("projection input")?;
@@ -153,6 +198,7 @@ pub(crate) async fn from_spark_relation(
             let schema = if let [batch, ..] = batches.as_slice() {
                 batch.schema()
             } else {
+                let _ = schema.as_ref().required("local relation schema")?;
                 todo!("parse schema from spark schema")
             };
             let provider = datafusion::datasource::MemTable::try_new(schema, vec![batches])?;

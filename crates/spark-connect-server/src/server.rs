@@ -1,7 +1,7 @@
 use async_stream;
 use tonic::codegen::tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::info;
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::error::ProtoFieldExt;
@@ -26,6 +26,7 @@ use crate::spark::connect::{
     ReleaseExecuteRequest, ReleaseExecuteResponse,
 };
 
+#[derive(Debug)]
 pub struct SparkConnectServer {
     session_manager: SessionManager,
 }
@@ -58,8 +59,8 @@ impl SparkConnectService for SparkConnectServer {
         &self,
         request: Request<ExecutePlanRequest>,
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
-        info!("{:?}", request);
         let request = request.into_inner();
+        debug!("{:?}", request);
         let session_key = SessionKey {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
@@ -74,16 +75,15 @@ impl SparkConnectService for SparkConnectServer {
         let session = self.session_manager.get_session(session_key)?;
         let Plan { op_type: op } = request.plan.required("plan")?;
         let op = op.required("plan op")?;
-        match op {
+        let stream = match op {
             plan::OpType::Root(relation) => {
-                let stream = service::handle_execute_relation(session, relation, metadata).await?;
-                Ok(Response::new(stream))
+                service::handle_execute_relation(session, relation, metadata).await?
             }
             plan::OpType::Command(Command {
                 command_type: command,
             }) => {
                 let command = command.required("command")?;
-                let stream = match command {
+                match command {
                     CommandType::RegisterFunction(udf) => {
                         service::handle_execute_register_function(session, udf).await?
                     }
@@ -116,20 +116,20 @@ impl SparkConnectService for SparkConnectServer {
                         service::handle_execute_register_table_function(session, udtf).await?
                     }
                     CommandType::Extension(_) => {
-                        Err(Status::unimplemented("unsupported command extension"))?
+                        return Err(Status::unimplemented("unsupported command extension"));
                     }
-                };
-                Ok(Response::new(stream))
+                }
             }
-        }
+        };
+        Ok(Response::new(stream))
     }
 
     async fn analyze_plan(
         &self,
         request: Request<AnalyzePlanRequest>,
     ) -> Result<Response<AnalyzePlanResponse>, Status> {
-        info!("{:?}", request);
         let request = request.into_inner();
+        debug!("{:?}", request);
         let session_key = SessionKey {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
@@ -190,18 +190,20 @@ impl SparkConnectService for SparkConnectServer {
                 Some(AnalyzeResult::GetStorageLevel(level))
             }
         };
-        Ok(Response::new(AnalyzePlanResponse {
+        let response = AnalyzePlanResponse {
             session_id: request.session_id,
             result,
-        }))
+        };
+        debug!("{:?}", response);
+        Ok(Response::new(response))
     }
 
     async fn config(
         &self,
         request: Request<ConfigRequest>,
     ) -> Result<Response<ConfigResponse>, Status> {
-        info!("{:?}", request);
         let request = request.into_inner();
+        debug!("{:?}", request);
         let session_key = SessionKey {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
@@ -238,6 +240,7 @@ impl SparkConnectService for SparkConnectServer {
                 service::handle_config_is_modifiable(session, keys, &mut response.pairs)?;
             }
         }
+        debug!("{:?}", response);
         Ok(Response::new(response))
     }
 
@@ -245,7 +248,6 @@ impl SparkConnectService for SparkConnectServer {
         &self,
         request: Request<Streaming<AddArtifactsRequest>>,
     ) -> Result<Response<AddArtifactsResponse>, Status> {
-        info!("{:?}", request);
         let mut request = request.into_inner();
         let first = match request.next().await {
             Some(item) => item?,
@@ -255,6 +257,7 @@ impl SparkConnectService for SparkConnectServer {
                 ));
             }
         };
+        debug!("{:?}", first);
         let session_key = SessionKey {
             user_id: first.user_context.map(|u| u.user_id),
             session_id: first.session_id.clone(),
@@ -268,6 +271,7 @@ impl SparkConnectService for SparkConnectServer {
             }
             while let Some(item) = request.next().await {
                 let item = item?;
+                debug!("{:?}", item);
                 if item.session_id != session_id {
                     Err(Status::invalid_argument("session ID must be consistent"))?;
                 }
@@ -277,30 +281,34 @@ impl SparkConnectService for SparkConnectServer {
             }
         };
         let artifacts = service::handle_add_artifacts(session, stream).await?;
-        Ok(Response::new(AddArtifactsResponse { artifacts }))
+        let response = AddArtifactsResponse { artifacts };
+        debug!("{:?}", response);
+        Ok(Response::new(response))
     }
 
     async fn artifact_status(
         &self,
         request: Request<ArtifactStatusesRequest>,
     ) -> Result<Response<ArtifactStatusesResponse>, Status> {
-        info!("{:?}", request);
         let request = request.into_inner();
+        debug!("{:?}", request);
         let session_key = SessionKey {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
         };
         let session = self.session_manager.get_session(session_key)?;
         let statuses = service::handle_artifact_statuses(session, request.names).await?;
-        Ok(Response::new(ArtifactStatusesResponse { statuses }))
+        let response = ArtifactStatusesResponse { statuses };
+        debug!("{:?}", response);
+        Ok(Response::new(response))
     }
 
     async fn interrupt(
         &self,
         request: Request<InterruptRequest>,
     ) -> Result<Response<InterruptResponse>, Status> {
-        info!("{:?}", request);
         let request = request.into_inner();
+        debug!("{:?}", request);
         let session_key = SessionKey {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
@@ -326,10 +334,12 @@ impl SparkConnectService for SparkConnectServer {
                 "a valid interrupt type is required",
             )),
         };
-        Ok(Response::new(InterruptResponse {
+        let response = InterruptResponse {
             session_id: request.session_id.clone(),
             interrupted_ids: ids?,
-        }))
+        };
+        debug!("{:?}", response);
+        Ok(Response::new(response))
     }
 
     type ReattachExecuteStream = ExecutePlanResponseStream;
@@ -338,8 +348,8 @@ impl SparkConnectService for SparkConnectServer {
         &self,
         request: Request<ReattachExecuteRequest>,
     ) -> Result<Response<Self::ReattachExecuteStream>, Status> {
-        info!("{:?}", request);
         let request = request.into_inner();
+        debug!("{:?}", request);
         let session_key = SessionKey {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
@@ -358,8 +368,8 @@ impl SparkConnectService for SparkConnectServer {
         &self,
         request: Request<ReleaseExecuteRequest>,
     ) -> Result<Response<ReleaseExecuteResponse>, Status> {
-        info!("{:?}", request);
         let request = request.into_inner();
+        debug!("{:?}", request);
         let session_key = SessionKey {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
@@ -374,6 +384,7 @@ impl SparkConnectService for SparkConnectServer {
             session_id: request.session_id.clone(),
             operation_id: Some(request.operation_id),
         };
+        debug!("{:?}", response);
         Ok(Response::new(response))
     }
 }

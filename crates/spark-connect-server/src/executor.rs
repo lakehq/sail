@@ -18,16 +18,18 @@ use crate::schema::to_spark_schema;
 use crate::spark::connect::execute_plan_response::{ArrowBatch, Metrics, ObservedMetrics};
 use crate::spark::connect::DataType;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum ExecutorBatch {
     ArrowBatch(ArrowBatch),
     Schema(DataType),
+    #[allow(dead_code)]
     Metrics(Metrics),
+    #[allow(dead_code)]
     ObservedMetrics(Vec<ObservedMetrics>),
     Complete,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct ExecutorOutput {
     pub(crate) id: String,
     pub(crate) batch: ExecutorBatch,
@@ -55,10 +57,9 @@ pub(crate) struct Executor {
 
 enum ExecutorState {
     Idle,
+    Pending(ExecutorTaskContext),
     Running(ExecutorTask),
-    Paused(ExecutorTaskContext),
     Failed(SparkError),
-    Completed,
 }
 
 struct ExecutorTask {
@@ -107,10 +108,10 @@ enum ExecutorTaskResult {
 }
 
 impl Executor {
-    pub(crate) fn new(metadata: ExecutorMetadata) -> Self {
+    pub(crate) fn new(metadata: ExecutorMetadata, context: ExecutorTaskContext) -> Self {
         Self {
             metadata,
-            state: ExecutorState::Idle,
+            state: ExecutorState::Pending(context),
         }
     }
 
@@ -154,45 +155,15 @@ impl Executor {
         }
     }
 
-    fn take_task(&mut self) -> SparkResult<ExecutorTask> {
+    pub(crate) async fn start(&mut self) -> SparkResult<ReceiverStream<ExecutorOutput>> {
         let state = mem::replace(&mut self.state, ExecutorState::Idle);
-        match state {
-            ExecutorState::Running(task) => Ok(task),
+        let context = match state {
+            ExecutorState::Pending(context) => context,
             _ => {
                 self.state = state;
-                Err(SparkError::internal("task not found for operation"))
+                return Err(SparkError::internal("task context not found for operation"));
             }
-        }
-    }
-
-    fn take_task_context(&mut self) -> SparkResult<ExecutorTaskContext> {
-        let state = mem::replace(&mut self.state, ExecutorState::Idle);
-        match state {
-            ExecutorState::Paused(context) => Ok(context),
-            ExecutorState::Failed(e) => Err(e),
-            _ => {
-                self.state = state;
-                Err(SparkError::internal("task context not found for operation"))
-            }
-        }
-    }
-
-    pub(crate) async fn start(
-        &mut self,
-        context: ExecutorTaskContext,
-    ) -> SparkResult<ReceiverStream<ExecutorOutput>> {
-        match self.state {
-            ExecutorState::Idle => {}
-            ExecutorState::Running(_) | ExecutorState::Paused(_) => {
-                return Err(SparkError::internal("operation already started"));
-            }
-            ExecutorState::Failed(_) => {
-                return Err(SparkError::internal("operation already failed"));
-            }
-            ExecutorState::Completed => {
-                return Err(SparkError::invalid("operation already completed"));
-            }
-        }
+        };
         let (tx, rx) = mpsc::channel(1);
         let (notifier, listener) = oneshot::channel();
         let handle = tokio::spawn(async move { Executor::run(context, listener, tx).await });
@@ -200,36 +171,27 @@ impl Executor {
         Ok(ReceiverStream::new(rx))
     }
 
-    pub(crate) async fn pause(&mut self, response_id: Option<String>) -> SparkResult<()> {
-        let task = match self.take_task() {
-            Ok(task) => task,
-            Err(_) => return Ok(()),
-        };
+    async fn notify(task: ExecutorTask) -> SparkResult<ExecutorState> {
         let _ = task.notifier.send(());
         match task.handle.await? {
-            ExecutorTaskResult::Paused(mut context) => {
-                if let Some(response_id) = response_id {
-                    context.remove_output_until(&response_id);
-                }
-                self.state = ExecutorState::Paused(context);
-            }
-            ExecutorTaskResult::Completed => {
-                self.state = ExecutorState::Completed;
-            }
-            ExecutorTaskResult::Failed(e) => {
-                self.state = ExecutorState::Failed(e);
-            }
-        };
-        Ok(())
+            ExecutorTaskResult::Paused(context) => Ok(ExecutorState::Pending(context)),
+            ExecutorTaskResult::Completed => Ok(ExecutorState::Idle),
+            ExecutorTaskResult::Failed(e) => Ok(ExecutorState::Failed(e)),
+        }
     }
 
-    pub(crate) async fn restart(
-        &mut self,
-        response_id: Option<String>,
-    ) -> SparkResult<ReceiverStream<ExecutorOutput>> {
-        self.pause(response_id).await?;
-        let context = self.take_task_context()?;
-        self.start(context).await
+    pub(crate) async fn release(&mut self, response_id: Option<String>) -> SparkResult<()> {
+        let state = mem::replace(&mut self.state, ExecutorState::Idle);
+        self.state = match state {
+            ExecutorState::Running(task) => Executor::notify(task).await?,
+            _ => state,
+        };
+        if let Some(response_id) = response_id {
+            if let ExecutorState::Pending(context) = &mut self.state {
+                context.remove_output_until(&response_id);
+            }
+        }
+        Ok(())
     }
 }
 

@@ -46,43 +46,43 @@ pub(crate) async fn handle_analyze_schema(
 }
 
 pub(crate) async fn handle_analyze_explain(
-    session: Arc<Session>,
-    request: ExplainRequest,
+    _session: Arc<Session>,
+    _request: ExplainRequest,
 ) -> Result<ExplainResponse, Status> {
     todo!()
 }
 
 pub(crate) async fn handle_analyze_tree_string(
-    session: Arc<Session>,
-    request: TreeStringRequest,
+    _session: Arc<Session>,
+    _request: TreeStringRequest,
 ) -> Result<TreeStringResponse, Status> {
     todo!()
 }
 
 pub(crate) async fn handle_analyze_is_local(
-    session: Arc<Session>,
-    request: IsLocalRequest,
+    _session: Arc<Session>,
+    _request: IsLocalRequest,
 ) -> Result<IsLocalResponse, Status> {
     todo!()
 }
 
 pub(crate) async fn handle_analyze_is_streaming(
-    session: Arc<Session>,
-    request: IsStreamingRequest,
+    _session: Arc<Session>,
+    _request: IsStreamingRequest,
 ) -> Result<IsStreamingResponse, Status> {
     todo!()
 }
 
 pub(crate) async fn handle_analyze_input_files(
-    session: Arc<Session>,
-    request: InputFilesRequest,
+    _session: Arc<Session>,
+    _request: InputFilesRequest,
 ) -> Result<InputFilesResponse, Status> {
     todo!()
 }
 
 pub(crate) async fn handle_analyze_spark_version(
-    session: Arc<Session>,
-    request: SparkVersionRequest,
+    _session: Arc<Session>,
+    _request: SparkVersionRequest,
 ) -> Result<SparkVersionResponse, Status> {
     Ok(SparkVersionResponse {
         version: SPARK_VERSION.to_string(),
@@ -90,43 +90,43 @@ pub(crate) async fn handle_analyze_spark_version(
 }
 
 pub(crate) async fn handle_analyze_ddl_parse(
-    session: Arc<Session>,
-    request: DdlParseRequest,
+    _session: Arc<Session>,
+    _request: DdlParseRequest,
 ) -> Result<DdlParseResponse, Status> {
     todo!()
 }
 
 pub(crate) async fn handle_analyze_same_semantics(
-    session: Arc<Session>,
-    request: SameSemanticsRequest,
+    _session: Arc<Session>,
+    _request: SameSemanticsRequest,
 ) -> Result<SameSemanticsResponse, Status> {
     todo!()
 }
 
 pub(crate) async fn handle_analyze_semantic_hash(
-    session: Arc<Session>,
-    request: SemanticHashRequest,
+    _session: Arc<Session>,
+    _request: SemanticHashRequest,
 ) -> Result<SemanticHashResponse, Status> {
     todo!()
 }
 
 pub(crate) async fn handle_analyze_persist(
-    session: Arc<Session>,
-    request: PersistRequest,
+    _session: Arc<Session>,
+    _request: PersistRequest,
 ) -> Result<PersistResponse, Status> {
     Ok(PersistResponse {})
 }
 
 pub(crate) async fn handle_analyze_unpersist(
-    session: Arc<Session>,
-    request: UnpersistRequest,
+    _session: Arc<Session>,
+    _request: UnpersistRequest,
 ) -> Result<UnpersistResponse, Status> {
     Ok(UnpersistResponse {})
 }
 
 pub(crate) async fn handle_analyze_get_storage_level(
-    session: Arc<Session>,
-    request: GetStorageLevelRequest,
+    _session: Arc<Session>,
+    _request: GetStorageLevelRequest,
 ) -> Result<GetStorageLevelResponse, Status> {
     Ok(GetStorageLevelResponse {
         storage_level: Some(StorageLevel {

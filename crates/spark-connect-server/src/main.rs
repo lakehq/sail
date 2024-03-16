@@ -1,5 +1,7 @@
+use tonic::codegen::http;
 use tower::ServiceBuilder;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
+use tracing::{debug, Span};
 
 use framework_telemetry::telemetry::init_telemetry;
 use spark_connect_server::server::SparkConnectServer;
@@ -28,7 +30,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let layer = ServiceBuilder::new()
         .layer(
-            TraceLayer::new_for_grpc().make_span_with(DefaultMakeSpan::new().include_headers(true)),
+            TraceLayer::new_for_grpc()
+                .make_span_with(DefaultMakeSpan::new().include_headers(true))
+                .on_request(|request: &http::Request<_>, _: &Span| {
+                    debug!("{:?}", request);
+                })
+                .on_response(|response: &http::response::Response<_>, _, _: &Span| {
+                    debug!("{:?}", response);
+                }),
         )
         .into_inner();
 
