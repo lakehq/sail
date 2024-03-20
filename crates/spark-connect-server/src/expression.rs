@@ -1,7 +1,5 @@
-use crate::error::{ProtoFieldExt, SparkError};
-use crate::schema::from_spark_data_type;
-use crate::spark::connect as sc;
-use crate::spark::connect::expression as sce;
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::TableReference;
 use datafusion::common::{Column, DFSchema, ScalarValue};
@@ -9,9 +7,14 @@ use datafusion::config::ConfigOptions;
 use datafusion::logical_expr::{expr, AggregateUDF, ScalarUDF, TableSource, WindowUDF};
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::sql::sqlparser::ast;
+use datafusion::sql::sqlparser::ast::ObjectName;
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::{Parser, WildcardExpr};
-use std::sync::Arc;
+
+use crate::error::{ProtoFieldExt, SparkError, SparkResult};
+use crate::schema::from_spark_data_type;
+use crate::spark::connect as sc;
+use crate::spark::connect::expression as sce;
 
 #[derive(Default)]
 struct ExpressionContextProvider {
@@ -53,7 +56,7 @@ impl ContextProvider for ExpressionContextProvider {
 pub(crate) fn from_spark_sort_order(
     sort_order: &sce::SortOrder,
     schema: &DFSchema,
-) -> Result<expr::Expr, SparkError> {
+) -> SparkResult<expr::Expr> {
     let expr = sort_order
         .child
         .as_ref()
@@ -84,7 +87,7 @@ pub(crate) fn from_spark_sort_order(
 pub(crate) fn from_spark_expression(
     expr: &sc::Expression,
     schema: &DFSchema,
-) -> Result<expr::Expr, SparkError> {
+) -> SparkResult<expr::Expr> {
     let sc::Expression { expr_type } = expr;
     let expr_type = expr_type.as_ref().required("expression type")?;
     match expr_type {
@@ -101,14 +104,25 @@ pub(crate) fn from_spark_expression(
         sce::ExprType::ExpressionString(expr) => {
             let dialect = GenericDialect {};
             let mut parser = Parser::new(&dialect).try_with_sql(&expr.expression)?;
-            let provider = ExpressionContextProvider::default();
-            let planner = SqlToRel::new(&provider);
-            let expr = planner.sql_to_expr(
-                parser.parse_expr()?,
-                schema,
-                &mut PlannerContext::default(),
-            )?;
-            Ok(expr)
+            match parser.parse_wildcard_expr()? {
+                WildcardExpr::Expr(expr) => {
+                    let provider = ExpressionContextProvider::default();
+                    let planner = SqlToRel::new(&provider);
+                    let expr = planner.sql_to_expr(expr, schema, &mut PlannerContext::default())?;
+                    Ok(expr)
+                }
+                WildcardExpr::QualifiedWildcard(ObjectName(name)) => {
+                    let qualifier = name
+                        .iter()
+                        .map(|x| x.value.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    Ok(expr::Expr::Wildcard {
+                        qualifier: Some(qualifier),
+                    })
+                }
+                WildcardExpr::Wildcard => Ok(expr::Expr::Wildcard { qualifier: None }),
+            }
         }
         sce::ExprType::UnresolvedStar(star) => {
             // FIXME: column reference is parsed as qualifier
@@ -197,9 +211,7 @@ pub(crate) fn from_spark_expression(
     }
 }
 
-pub(crate) fn from_spark_literal_to_scalar(
-    literal: &sce::Literal,
-) -> Result<ScalarValue, SparkError> {
+pub(crate) fn from_spark_literal_to_scalar(literal: &sce::Literal) -> SparkResult<ScalarValue> {
     let sce::Literal { literal_type } = literal;
     let literal_type = literal_type.as_ref().required("literal type")?;
     match literal_type {

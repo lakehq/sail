@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+framework-telemetry = { path = "../framework-telemetry" }
 prost = "0.12"
 prost-types = "0.12"
 tonic = "0.10"
@@ -16,6 +17,10 @@ uuid = { version = "1.7.0", features = ["v4"] }
 datafusion = "35.0.0"
 async-recursion = "1.0"
 thiserror = "1.0"
+tower = "0.4"
+tower-http = { version = "0.4", features = ["trace"] }
+tracing = { workspace = true }
+async-stream = "0.3"
 
 [build-dependencies]
 tonic-build = "0.10"

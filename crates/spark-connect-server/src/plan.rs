@@ -1,26 +1,34 @@
-use crate::error::{ProtoFieldExt, SparkError};
+use std::collections::HashMap;
+use std::io::Cursor;
+use std::sync::Arc;
+
+use async_recursion::async_recursion;
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::ipc::reader::StreamReader;
+use datafusion::arrow::ipc::writer::StreamWriter;
+use datafusion::common::ParamValues;
+use datafusion::datasource::file_format::csv::CsvFormat;
+use datafusion::datasource::file_format::json::JsonFormat;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
+use datafusion::datasource::provider_as_source;
+use datafusion::execution::context::{DataFilePaths, SessionContext};
+use datafusion::logical_expr::LogicalPlan;
+use datafusion::logical_expr::{logical_plan as plan, LogicalPlanBuilder, UNNAMED_TABLE};
+use datafusion::sql::parser::Statement;
+use datafusion::sql::sqlparser::dialect::GenericDialect;
+use datafusion::sql::sqlparser::parser::Parser;
+
+use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::expression::{
     from_spark_expression, from_spark_literal_to_scalar, from_spark_sort_order,
 };
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
-use crate::spark::connect::relation as scr;
-use async_recursion::async_recursion;
-use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::ipc::reader::StreamReader;
-use datafusion::arrow::ipc::writer::StreamWriter;
-use datafusion::common::ParamValues;
-use datafusion::execution::context::SessionContext;
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::logical_expr::logical_plan as plan;
-use datafusion::logical_expr::LogicalPlan;
-use datafusion::sql::parser::Statement;
-use datafusion::sql::sqlparser::dialect::GenericDialect;
-use datafusion::sql::sqlparser::parser::Parser;
-use std::collections::HashMap;
-use std::io::Cursor;
-use std::sync::Arc;
-use tonic::codegen::tokio_stream::StreamExt;
+use crate::spark::connect::read::ReadType;
+use crate::spark::connect::relation;
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
     let cursor = Cursor::new(data);
@@ -32,18 +40,16 @@ pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, Spar
     Ok(batches)
 }
 
-pub(crate) async fn write_arrow_batches(
-    mut batches: SendableRecordBatchStream,
-) -> Result<ArrowBatch, SparkError> {
+pub(crate) async fn to_arrow_batch(
+    batch: &RecordBatch,
+    schema: SchemaRef,
+) -> SparkResult<ArrowBatch> {
     let mut output = ArrowBatch::default();
     {
         let cursor = Cursor::new(&mut output.data);
-        let mut writer = StreamWriter::try_new(cursor, &batches.schema())?;
-        while let Some(batch) = batches.next().await {
-            let batch = batch?;
-            writer.write(&batch)?;
-            output.row_count += batch.num_rows() as i64;
-        }
+        let mut writer = StreamWriter::try_new(cursor, schema.as_ref())?;
+        writer.write(batch)?;
+        output.row_count += batch.num_rows() as i64;
         writer.finish()?;
     }
     Ok(output)
@@ -53,14 +59,52 @@ pub(crate) async fn write_arrow_batches(
 pub(crate) async fn from_spark_relation(
     ctx: &SessionContext,
     relation: &sc::Relation,
-) -> Result<LogicalPlan, SparkError> {
+) -> SparkResult<LogicalPlan> {
     let sc::Relation { common, rel_type } = relation;
+    let _ = common;
+    let state = ctx.state();
     let rel_type = rel_type.as_ref().required("relation type")?;
     match rel_type {
-        scr::RelType::Read(_) => {
-            todo!()
+        relation::RelType::Read(read) => {
+            let _ = read.is_streaming;
+            match read.read_type.as_ref().required("read type")? {
+                ReadType::NamedTable(_) => {
+                    todo!()
+                }
+                ReadType::DataSource(source) => {
+                    let urls = source.paths.clone().to_urls()?;
+                    if urls.is_empty() {
+                        return Err(SparkError::invalid("empty data source paths"));
+                    }
+                    let (format, extension): (Arc<dyn FileFormat>, _) = match source
+                        .format
+                        .as_ref()
+                        .map(|f| f.as_str())
+                    {
+                        Some("json") => (Arc::new(JsonFormat::default()), ".json"),
+                        Some("csv") => (Arc::new(CsvFormat::default()), ".csv"),
+                        Some("parquet") => (Arc::new(ParquetFormat::new()), ".parquet"),
+                        _ => return Err(SparkError::unsupported("unsupported data source format")),
+                    };
+                    let options = ListingOptions::new(format).with_file_extension(extension);
+                    // TODO: use provided schema if available
+                    let schema = options.infer_schema(&state, &urls[0]).await?;
+                    let config = ListingTableConfig::new_with_multi_paths(urls)
+                        .with_listing_options(options)
+                        .with_schema(schema);
+                    let provider = Arc::new(ListingTable::try_new(config)?);
+                    Ok(
+                        LogicalPlanBuilder::scan(
+                            UNNAMED_TABLE,
+                            provider_as_source(provider),
+                            None,
+                        )?
+                        .build()?,
+                    )
+                }
+            }
         }
-        scr::RelType::Project(project) => {
+        relation::RelType::Project(project) => {
             let input = project.input.as_ref().required("projection input")?;
             let input = from_spark_relation(ctx, input).await?;
             let expressions = project
@@ -70,7 +114,7 @@ pub(crate) async fn from_spark_relation(
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(plan::builder::project(input, expressions)?)
         }
-        scr::RelType::Filter(filter) => {
+        relation::RelType::Filter(filter) => {
             let input = filter.input.as_ref().required("filter input")?;
             let condition = filter.condition.as_ref().required("filter condition")?;
             let input = from_spark_relation(ctx, input).await?;
@@ -78,13 +122,13 @@ pub(crate) async fn from_spark_relation(
             let filter = plan::Filter::try_new(predicate, Arc::new(input))?;
             Ok(LogicalPlan::Filter(filter))
         }
-        scr::RelType::Join(_) => {
+        relation::RelType::Join(_) => {
             todo!()
         }
-        scr::RelType::SetOp(_) => {
+        relation::RelType::SetOp(_) => {
             todo!()
         }
-        scr::RelType::Sort(sort) => {
+        relation::RelType::Sort(sort) => {
             // TODO: handle sort.is_global
             let input = sort.input.as_ref().required("sort input")?;
             let input = from_spark_relation(ctx, input).await?;
@@ -99,7 +143,7 @@ pub(crate) async fn from_spark_relation(
                 fetch: None,
             }))
         }
-        scr::RelType::Limit(limit) => {
+        relation::RelType::Limit(limit) => {
             let input = limit.input.as_ref().required("limit input")?;
             Ok(LogicalPlan::Limit(plan::Limit {
                 skip: 0,
@@ -107,10 +151,10 @@ pub(crate) async fn from_spark_relation(
                 input: Arc::new(from_spark_relation(ctx, input).await?),
             }))
         }
-        scr::RelType::Aggregate(_) => {
+        relation::RelType::Aggregate(_) => {
             todo!()
         }
-        scr::RelType::Sql(sc::Sql {
+        relation::RelType::Sql(sc::Sql {
             query,
             args,
             pos_args,
@@ -145,7 +189,7 @@ pub(crate) async fn from_spark_relation(
                 todo!("multiple statements in SQL query")
             }
         }
-        scr::RelType::LocalRelation(sc::LocalRelation { data, schema }) => {
+        relation::RelType::LocalRelation(sc::LocalRelation { data, schema }) => {
             let batches = if let Some(data) = data {
                 read_arrow_batches(data.clone())?
             } else {
@@ -154,6 +198,7 @@ pub(crate) async fn from_spark_relation(
             let schema = if let [batch, ..] = batches.as_slice() {
                 batch.schema()
             } else {
+                let _ = schema.as_ref().required("local relation schema")?;
                 todo!("parse schema from spark schema")
             };
             let provider = datafusion::datasource::MemTable::try_new(schema, vec![batches])?;
@@ -164,10 +209,10 @@ pub(crate) async fn from_spark_relation(
             )?
             .build()?)
         }
-        scr::RelType::Sample(_) => {
+        relation::RelType::Sample(_) => {
             todo!()
         }
-        scr::RelType::Offset(offset) => {
+        relation::RelType::Offset(offset) => {
             let input = offset.input.as_ref().required("offset input")?;
             Ok(LogicalPlan::Limit(plan::Limit {
                 skip: offset.offset as usize,
@@ -175,13 +220,13 @@ pub(crate) async fn from_spark_relation(
                 input: Arc::new(from_spark_relation(ctx, input).await?),
             }))
         }
-        scr::RelType::Deduplicate(_) => {
+        relation::RelType::Deduplicate(_) => {
             todo!()
         }
-        scr::RelType::Range(_) => {
+        relation::RelType::Range(_) => {
             todo!()
         }
-        scr::RelType::SubqueryAlias(sub) => {
+        relation::RelType::SubqueryAlias(sub) => {
             let input = sub.input.as_ref().required("subquery alias input")?;
             // TODO: handle quoted identifiers
             let mut alias = sub.alias.clone();
@@ -193,121 +238,113 @@ pub(crate) async fn from_spark_relation(
                 alias,
             )?))
         }
-        scr::RelType::Repartition(_) => {
+        relation::RelType::Repartition(_) => {
             todo!()
         }
-        scr::RelType::ToDf(_) => {
+        relation::RelType::ToDf(_) => {
             todo!()
         }
-        scr::RelType::WithColumnsRenamed(_) => {
+        relation::RelType::WithColumnsRenamed(_) => {
             todo!()
         }
-        scr::RelType::ShowString(_) => {
+        relation::RelType::ShowString(_) => {
             todo!()
         }
-        scr::RelType::Drop(_) => {
+        relation::RelType::Drop(_) => {
             todo!()
         }
-        scr::RelType::Tail(_) => {
+        relation::RelType::Tail(_) => {
             todo!()
         }
-        scr::RelType::WithColumns(_) => {
+        relation::RelType::WithColumns(_) => {
             todo!()
         }
-        scr::RelType::Hint(_) => {
+        relation::RelType::Hint(_) => {
             todo!()
         }
-        scr::RelType::Unpivot(_) => {
+        relation::RelType::Unpivot(_) => {
             todo!()
         }
-        scr::RelType::ToSchema(_) => {
+        relation::RelType::ToSchema(_) => {
             todo!()
         }
-        scr::RelType::RepartitionByExpression(_) => {
+        relation::RelType::RepartitionByExpression(_) => {
             todo!()
         }
-        scr::RelType::MapPartitions(_) => {
+        relation::RelType::MapPartitions(_) => {
             todo!()
         }
-        scr::RelType::CollectMetrics(_) => {
+        relation::RelType::CollectMetrics(_) => {
             todo!()
         }
-        scr::RelType::Parse(_) => {
+        relation::RelType::Parse(_) => {
             todo!()
         }
-        scr::RelType::GroupMap(_) => {
+        relation::RelType::GroupMap(_) => {
             todo!()
         }
-        scr::RelType::CoGroupMap(_) => {
+        relation::RelType::CoGroupMap(_) => {
             todo!()
         }
-        scr::RelType::WithWatermark(_) => {
+        relation::RelType::WithWatermark(_) => {
             todo!()
         }
-        scr::RelType::ApplyInPandasWithState(_) => {
+        relation::RelType::ApplyInPandasWithState(_) => {
             todo!()
         }
-        scr::RelType::HtmlString(_) => {
+        relation::RelType::HtmlString(_) => {
             todo!()
         }
-        scr::RelType::CachedLocalRelation(_) => {
+        relation::RelType::CachedLocalRelation(_) => {
             todo!()
         }
-        scr::RelType::CachedRemoteRelation(_) => {
+        relation::RelType::CachedRemoteRelation(_) => {
             todo!()
         }
-        scr::RelType::CommonInlineUserDefinedTableFunction(_) => {
+        relation::RelType::CommonInlineUserDefinedTableFunction(_) => {
             todo!()
         }
-        scr::RelType::FillNa(_) => {
+        relation::RelType::FillNa(_) => {
             todo!()
         }
-        scr::RelType::DropNa(_) => {
+        relation::RelType::DropNa(_) => {
             todo!()
         }
-        scr::RelType::Replace(_) => {
+        relation::RelType::Replace(_) => {
             todo!()
         }
-        scr::RelType::Summary(_) => {
+        relation::RelType::Summary(_) => {
             todo!()
         }
-        scr::RelType::Crosstab(_) => {
+        relation::RelType::Crosstab(_) => {
             todo!()
         }
-        scr::RelType::Describe(_) => {
+        relation::RelType::Describe(_) => {
             todo!()
         }
-        scr::RelType::Cov(_) => {
+        relation::RelType::Cov(_) => {
             todo!()
         }
-        scr::RelType::Corr(_) => {
+        relation::RelType::Corr(_) => {
             todo!()
         }
-        scr::RelType::ApproxQuantile(_) => {
+        relation::RelType::ApproxQuantile(_) => {
             todo!()
         }
-        scr::RelType::FreqItems(_) => {
+        relation::RelType::FreqItems(_) => {
             todo!()
         }
-        scr::RelType::SampleBy(_) => {
+        relation::RelType::SampleBy(_) => {
             todo!()
         }
-        scr::RelType::Catalog(_) => {
+        relation::RelType::Catalog(_) => {
             todo!()
         }
-        scr::RelType::Extension(_) => {
+        relation::RelType::Extension(_) => {
             todo!()
         }
-        scr::RelType::Unknown(_) => {
+        relation::RelType::Unknown(_) => {
             todo!()
         }
     }
-}
-
-pub(crate) async fn execute_plan(
-    ctx: &SessionContext,
-    plan: &LogicalPlan,
-) -> Result<SendableRecordBatchStream, SparkError> {
-    let plan = ctx.state().create_physical_plan(&plan).await?;
-    Ok(plan.execute(0, Arc::new(TaskContext::default()))?)
 }
