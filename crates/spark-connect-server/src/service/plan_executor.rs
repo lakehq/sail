@@ -120,7 +120,7 @@ pub(crate) async fn handle_execute_register_function(
     _session: Arc<Session>,
     _udf: CommonInlineUserDefinedFunction,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    todo!()
+    Err(SparkError::todo("register function"))
 }
 
 pub(crate) async fn handle_execute_write_operation(
@@ -164,7 +164,7 @@ pub(crate) async fn handle_execute_write_operation(
                 .or_else(|e| Err(SparkError::from(e)))?
         }
         SaveType::Table(_) => {
-            todo!()
+            return Err(SparkError::todo("save table"));
         }
     };
     handle_execute_plan(session, plan, metadata).await
@@ -199,7 +199,7 @@ pub(crate) async fn handle_execute_write_operation_v2(
     _session: Arc<Session>,
     _write: WriteOperationV2,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    todo!()
+    Err(SparkError::todo("write operation v2"))
 }
 
 pub(crate) async fn handle_execute_sql_command(
@@ -222,35 +222,35 @@ pub(crate) async fn handle_execute_write_stream_operation_start(
     _session: Arc<Session>,
     _start: WriteStreamOperationStart,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    todo!()
+    Err(SparkError::todo("write stream operation start"))
 }
 
 pub(crate) async fn handle_execute_streaming_query_command(
     _session: Arc<Session>,
     _stream: StreamingQueryCommand,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    todo!()
+    Err(SparkError::todo("streaming query command"))
 }
 
 pub(crate) async fn handle_execute_get_resources_command(
     _session: Arc<Session>,
     _resource: GetResourcesCommand,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    todo!()
+    Err(SparkError::todo("get resources command"))
 }
 
 pub(crate) async fn handle_execute_streaming_query_manager_command(
     _session: Arc<Session>,
     _manager: StreamingQueryManagerCommand,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    todo!()
+    Err(SparkError::todo("streaming query manager command"))
 }
 
 pub(crate) async fn handle_execute_register_table_function(
     _session: Arc<Session>,
     _udtf: CommonInlineUserDefinedTableFunction,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    todo!()
+    Err(SparkError::todo("register table function"))
 }
 
 pub(crate) async fn handle_interrupt_all(session: Arc<Session>) -> SparkResult<Vec<String>> {

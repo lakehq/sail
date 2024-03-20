@@ -93,11 +93,10 @@ impl<T> ProtoFieldExt<T> for Result<T, DecodeError> {
 
 impl From<SparkError> for tonic::Status {
     fn from(error: SparkError) -> Self {
-        dbg!(&error);
         match error {
-            SparkError::DataFusionError(DataFusionError::Plan(s))
-            | SparkError::DataFusionError(DataFusionError::Configuration(s)) => {
-                tonic::Status::invalid_argument(s)
+            SparkError::DataFusionError(e @ DataFusionError::Plan(_))
+            | SparkError::DataFusionError(e @ DataFusionError::Configuration(_)) => {
+                tonic::Status::invalid_argument(e.to_string())
             }
             SparkError::DataFusionError(DataFusionError::SQL(e, _)) => {
                 tonic::Status::invalid_argument(e.to_string())
@@ -105,19 +104,19 @@ impl From<SparkError> for tonic::Status {
             SparkError::DataFusionError(DataFusionError::SchemaError(e, _)) => {
                 tonic::Status::invalid_argument(e.to_string())
             }
-            SparkError::DataFusionError(DataFusionError::NotImplemented(s)) => {
-                tonic::Status::unimplemented(s)
+            SparkError::DataFusionError(e @ DataFusionError::NotImplemented(_)) => {
+                tonic::Status::unimplemented(e.to_string())
             }
             SparkError::DataFusionError(e) => tonic::Status::internal(e.to_string()),
             SparkError::SqlParserError(e) => tonic::Status::invalid_argument(e.to_string()),
-            SparkError::MissingArgument(s) | SparkError::InvalidArgument(s) => {
-                tonic::Status::invalid_argument(s)
+            e @ SparkError::MissingArgument(_) | e @ SparkError::InvalidArgument(_) => {
+                tonic::Status::invalid_argument(e.to_string())
             }
             SparkError::ArrowError(e) => tonic::Status::internal(e.to_string()),
-            SparkError::SendError(s) => tonic::Status::cancelled(s),
-            SparkError::NotImplemented(s) => tonic::Status::unimplemented(s),
-            SparkError::NotSupported(s) => tonic::Status::internal(s),
-            SparkError::InternalError(s) => tonic::Status::internal(s),
+            e @ SparkError::SendError(_) => tonic::Status::cancelled(e.to_string()),
+            e @ SparkError::NotImplemented(_) => tonic::Status::unimplemented(e.to_string()),
+            e @ SparkError::NotSupported(_) => tonic::Status::internal(e.to_string()),
+            e @ SparkError::InternalError(_) => tonic::Status::internal(e.to_string()),
         }
     }
 }

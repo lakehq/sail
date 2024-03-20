@@ -14,7 +14,6 @@ use datafusion::sql::sqlparser::parser::{Parser, WildcardExpr};
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::schema::from_spark_data_type;
 use crate::spark::connect as sc;
-use crate::spark::connect::expression as sce;
 
 #[derive(Default)]
 struct ExpressionContextProvider {
@@ -54,25 +53,27 @@ impl ContextProvider for ExpressionContextProvider {
 }
 
 pub(crate) fn from_spark_sort_order(
-    sort_order: &sce::SortOrder,
+    sort_order: &sc::expression::SortOrder,
     schema: &DFSchema,
 ) -> SparkResult<expr::Expr> {
+    use sc::expression::sort_order::{NullOrdering, SortDirection};
+
     let expr = sort_order
         .child
         .as_ref()
         .required("expression for sort order")?;
-    let asc = match sce::sort_order::SortDirection::try_from(sort_order.direction) {
-        Ok(sce::sort_order::SortDirection::Ascending) => true,
-        Ok(sce::sort_order::SortDirection::Descending) => false,
-        Ok(sce::sort_order::SortDirection::Unspecified) => true,
+    let asc = match SortDirection::try_from(sort_order.direction) {
+        Ok(SortDirection::Ascending) => true,
+        Ok(SortDirection::Descending) => false,
+        Ok(SortDirection::Unspecified) => true,
         Err(_) => {
             return Err(SparkError::invalid("invalid sort direction"));
         }
     };
-    let nulls_first = match sce::sort_order::NullOrdering::try_from(sort_order.null_ordering) {
-        Ok(sce::sort_order::NullOrdering::SortNullsFirst) => true,
-        Ok(sce::sort_order::NullOrdering::SortNullsLast) => false,
-        Ok(sce::sort_order::NullOrdering::SortNullsUnspecified) => asc,
+    let nulls_first = match NullOrdering::try_from(sort_order.null_ordering) {
+        Ok(NullOrdering::SortNullsFirst) => true,
+        Ok(NullOrdering::SortNullsLast) => false,
+        Ok(NullOrdering::SortNullsUnspecified) => asc,
         Err(_) => {
             return Err(SparkError::invalid("invalid null ordering"));
         }
@@ -88,20 +89,20 @@ pub(crate) fn from_spark_expression(
     expr: &sc::Expression,
     schema: &DFSchema,
 ) -> SparkResult<expr::Expr> {
+    use sc::expression::ExprType;
+
     let sc::Expression { expr_type } = expr;
     let expr_type = expr_type.as_ref().required("expression type")?;
     match expr_type {
-        sce::ExprType::Literal(literal) => {
+        ExprType::Literal(literal) => {
             Ok(expr::Expr::Literal(from_spark_literal_to_scalar(literal)?))
         }
-        sce::ExprType::UnresolvedAttribute(attr) => {
+        ExprType::UnresolvedAttribute(attr) => {
             let col = Column::new_unqualified(&attr.unparsed_identifier);
             Ok(expr::Expr::Column(col))
         }
-        sce::ExprType::UnresolvedFunction(_) => {
-            todo!()
-        }
-        sce::ExprType::ExpressionString(expr) => {
+        ExprType::UnresolvedFunction(_) => Err(SparkError::todo("unresolved function")),
+        ExprType::ExpressionString(expr) => {
             let dialect = GenericDialect {};
             let mut parser = Parser::new(&dialect).try_with_sql(&expr.expression)?;
             match parser.parse_wildcard_expr()? {
@@ -124,7 +125,7 @@ pub(crate) fn from_spark_expression(
                 WildcardExpr::Wildcard => Ok(expr::Expr::Wildcard { qualifier: None }),
             }
         }
-        sce::ExprType::UnresolvedStar(star) => {
+        ExprType::UnresolvedStar(star) => {
             // FIXME: column reference is parsed as qualifier
             if let Some(target) = &star.unparsed_target {
                 let dialect = GenericDialect {};
@@ -154,7 +155,7 @@ pub(crate) fn from_spark_expression(
                 Ok(expr::Expr::Wildcard { qualifier: None })
             }
         }
-        sce::ExprType::Alias(alias) => {
+        ExprType::Alias(alias) => {
             let expr = alias.expr.as_ref().required("expression for alias")?;
             if let [name] = alias.name.as_slice() {
                 Ok(expr::Expr::Alias(expr::Alias {
@@ -166,94 +167,64 @@ pub(crate) fn from_spark_expression(
                 Err(SparkError::invalid("one alias name must be specified"))
             }
         }
-        sce::ExprType::Cast(cast) => {
+        ExprType::Cast(cast) => {
+            use sc::expression::cast::CastToType;
+
             let expr = cast.expr.as_ref().required("expression for cast")?;
             let data_type = cast.cast_to_type.as_ref().required("data type for cast")?;
             let data_type = match data_type {
-                sce::cast::CastToType::Type(t) => from_spark_data_type(&t)?,
-                sce::cast::CastToType::TypeStr(_) => {
-                    todo!()
-                }
+                CastToType::Type(t) => from_spark_data_type(&t)?,
+                CastToType::TypeStr(_) => Err(SparkError::todo("cast type string"))?,
             };
             Ok(expr::Expr::Cast(expr::Cast {
                 expr: Box::new(from_spark_expression(expr, schema)?),
                 data_type,
             }))
         }
-        sce::ExprType::UnresolvedRegex(_) => {
-            todo!()
+        ExprType::UnresolvedRegex(_) => Err(SparkError::todo("unresolved regex")),
+        ExprType::SortOrder(sort) => from_spark_sort_order(sort, schema),
+        ExprType::LambdaFunction(_) => Err(SparkError::todo("lambda function")),
+        ExprType::Window(_) => Err(SparkError::todo("window")),
+        ExprType::UnresolvedExtractValue(_) => Err(SparkError::todo("unresolved extract value")),
+        ExprType::UpdateFields(_) => Err(SparkError::todo("update fields")),
+        ExprType::UnresolvedNamedLambdaVariable(_) => {
+            Err(SparkError::todo("unresolved named lambda variable"))
         }
-        sce::ExprType::SortOrder(sort) => from_spark_sort_order(sort, schema),
-        sce::ExprType::LambdaFunction(_) => {
-            todo!()
+        ExprType::CommonInlineUserDefinedFunction(_) => {
+            Err(SparkError::todo("common inline user defined function"))
         }
-        sce::ExprType::Window(_) => {
-            todo!()
-        }
-        sce::ExprType::UnresolvedExtractValue(_) => {
-            todo!()
-        }
-        sce::ExprType::UpdateFields(_) => {
-            todo!()
-        }
-        sce::ExprType::UnresolvedNamedLambdaVariable(_) => {
-            todo!()
-        }
-        sce::ExprType::CommonInlineUserDefinedFunction(_) => {
-            todo!()
-        }
-        sce::ExprType::CallFunction(_) => {
-            todo!()
-        }
-        sce::ExprType::Extension(_) => {
-            todo!()
-        }
+        ExprType::CallFunction(_) => Err(SparkError::todo("call function")),
+        ExprType::Extension(_) => Err(SparkError::unsupported("expression extension")),
     }
 }
 
-pub(crate) fn from_spark_literal_to_scalar(literal: &sce::Literal) -> SparkResult<ScalarValue> {
-    let sce::Literal { literal_type } = literal;
+pub(crate) fn from_spark_literal_to_scalar(
+    literal: &sc::expression::Literal,
+) -> SparkResult<ScalarValue> {
+    use sc::expression::literal::LiteralType;
+
+    let sc::expression::Literal { literal_type } = literal;
     let literal_type = literal_type.as_ref().required("literal type")?;
     match literal_type {
-        sce::literal::LiteralType::Null(_) => Ok(ScalarValue::Null),
-        sce::literal::LiteralType::Binary(x) => Ok(ScalarValue::Binary(Some(x.clone()))),
-        sce::literal::LiteralType::Boolean(x) => Ok(ScalarValue::Boolean(Some(*x))),
-        sce::literal::LiteralType::Byte(x) => Ok(ScalarValue::Int8(Some(*x as i8))),
-        sce::literal::LiteralType::Short(x) => Ok(ScalarValue::Int16(Some(*x as i16))),
-        sce::literal::LiteralType::Integer(x) => Ok(ScalarValue::Int32(Some(*x))),
-        sce::literal::LiteralType::Long(x) => Ok(ScalarValue::Int64(Some(*x))),
-        sce::literal::LiteralType::Float(x) => Ok(ScalarValue::Float32(Some(*x))),
-        sce::literal::LiteralType::Double(x) => Ok(ScalarValue::Float64(Some(*x))),
-        sce::literal::LiteralType::Decimal(_) => {
-            todo!()
-        }
-        sce::literal::LiteralType::String(x) => Ok(ScalarValue::Utf8(Some(x.clone()))),
-        sce::literal::LiteralType::Date(_) => {
-            todo!()
-        }
-        sce::literal::LiteralType::Timestamp(_) => {
-            todo!()
-        }
-        sce::literal::LiteralType::TimestampNtz(_) => {
-            todo!()
-        }
-        sce::literal::LiteralType::CalendarInterval(_) => {
-            todo!()
-        }
-        sce::literal::LiteralType::YearMonthInterval(_) => {
-            todo!()
-        }
-        sce::literal::LiteralType::DayTimeInterval(_) => {
-            todo!()
-        }
-        sce::literal::LiteralType::Array(_) => {
-            todo!()
-        }
-        sce::literal::LiteralType::Map(_) => {
-            todo!()
-        }
-        sce::literal::LiteralType::Struct(_) => {
-            todo!()
-        }
+        LiteralType::Null(_) => Ok(ScalarValue::Null),
+        LiteralType::Binary(x) => Ok(ScalarValue::Binary(Some(x.clone()))),
+        LiteralType::Boolean(x) => Ok(ScalarValue::Boolean(Some(*x))),
+        LiteralType::Byte(x) => Ok(ScalarValue::Int8(Some(*x as i8))),
+        LiteralType::Short(x) => Ok(ScalarValue::Int16(Some(*x as i16))),
+        LiteralType::Integer(x) => Ok(ScalarValue::Int32(Some(*x))),
+        LiteralType::Long(x) => Ok(ScalarValue::Int64(Some(*x))),
+        LiteralType::Float(x) => Ok(ScalarValue::Float32(Some(*x))),
+        LiteralType::Double(x) => Ok(ScalarValue::Float64(Some(*x))),
+        LiteralType::Decimal(_) => Err(SparkError::todo("literal decimal")),
+        LiteralType::String(x) => Ok(ScalarValue::Utf8(Some(x.clone()))),
+        LiteralType::Date(_) => Err(SparkError::todo("literal date")),
+        LiteralType::Timestamp(_) => Err(SparkError::todo("literal timestamp")),
+        LiteralType::TimestampNtz(_) => Err(SparkError::todo("literal timestamp ntz")),
+        LiteralType::CalendarInterval(_) => Err(SparkError::todo("literal calendar interval")),
+        LiteralType::YearMonthInterval(_) => Err(SparkError::todo("literal year month interval")),
+        LiteralType::DayTimeInterval(_) => Err(SparkError::todo("literal day time interval")),
+        LiteralType::Array(_) => Err(SparkError::todo("literal array")),
+        LiteralType::Map(_) => Err(SparkError::todo("literal map")),
+        LiteralType::Struct(_) => Err(SparkError::todo("literal struct")),
     }
 }

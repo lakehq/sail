@@ -48,35 +48,35 @@ pub(crate) async fn handle_analyze_explain(
     _session: Arc<Session>,
     _request: ExplainRequest,
 ) -> SparkResult<ExplainResponse> {
-    todo!()
+    Err(SparkError::todo("handle analyze explain"))
 }
 
 pub(crate) async fn handle_analyze_tree_string(
     _session: Arc<Session>,
     _request: TreeStringRequest,
 ) -> SparkResult<TreeStringResponse> {
-    todo!()
+    Err(SparkError::todo("handle analyze tree string"))
 }
 
 pub(crate) async fn handle_analyze_is_local(
     _session: Arc<Session>,
     _request: IsLocalRequest,
 ) -> SparkResult<IsLocalResponse> {
-    todo!()
+    Err(SparkError::todo("handle analyze is local"))
 }
 
 pub(crate) async fn handle_analyze_is_streaming(
     _session: Arc<Session>,
     _request: IsStreamingRequest,
 ) -> SparkResult<IsStreamingResponse> {
-    todo!()
+    Err(SparkError::todo("handle analyze is streaming"))
 }
 
 pub(crate) async fn handle_analyze_input_files(
     _session: Arc<Session>,
     _request: InputFilesRequest,
 ) -> SparkResult<InputFilesResponse> {
-    todo!()
+    Err(SparkError::todo("handle analyze input files"))
 }
 
 pub(crate) async fn handle_analyze_spark_version(
@@ -92,21 +92,21 @@ pub(crate) async fn handle_analyze_ddl_parse(
     _session: Arc<Session>,
     _request: DdlParseRequest,
 ) -> SparkResult<DdlParseResponse> {
-    todo!()
+    Err(SparkError::todo("handle analyze ddl parse"))
 }
 
 pub(crate) async fn handle_analyze_same_semantics(
     _session: Arc<Session>,
     _request: SameSemanticsRequest,
 ) -> SparkResult<SameSemanticsResponse> {
-    todo!()
+    Err(SparkError::todo("handle analyze same semantics"))
 }
 
 pub(crate) async fn handle_analyze_semantic_hash(
     _session: Arc<Session>,
     _request: SemanticHashRequest,
 ) -> SparkResult<SemanticHashResponse> {
-    todo!()
+    Err(SparkError::todo("handle analyze semantic hash"))
 }
 
 pub(crate) async fn handle_analyze_persist(

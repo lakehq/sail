@@ -27,8 +27,6 @@ use crate::expression::{
 };
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
-use crate::spark::connect::read::ReadType;
-use crate::spark::connect::relation;
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
     let cursor = Cursor::new(data);
@@ -60,16 +58,20 @@ pub(crate) async fn from_spark_relation(
     ctx: &SessionContext,
     relation: &sc::Relation,
 ) -> SparkResult<LogicalPlan> {
+    use crate::spark::connect::relation::RelType;
+
     let sc::Relation { common, rel_type } = relation;
     let _ = common;
     let state = ctx.state();
     let rel_type = rel_type.as_ref().required("relation type")?;
     match rel_type {
-        relation::RelType::Read(read) => {
+        RelType::Read(read) => {
+            use sc::read::ReadType;
+
             let _ = read.is_streaming;
             match read.read_type.as_ref().required("read type")? {
                 ReadType::NamedTable(_) => {
-                    todo!()
+                    return Err(SparkError::todo("named table read type"));
                 }
                 ReadType::DataSource(source) => {
                     let urls = source.paths.clone().to_urls()?;
@@ -104,7 +106,7 @@ pub(crate) async fn from_spark_relation(
                 }
             }
         }
-        relation::RelType::Project(project) => {
+        RelType::Project(project) => {
             let input = project.input.as_ref().required("projection input")?;
             let input = from_spark_relation(ctx, input).await?;
             let expressions = project
@@ -114,7 +116,7 @@ pub(crate) async fn from_spark_relation(
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(plan::builder::project(input, expressions)?)
         }
-        relation::RelType::Filter(filter) => {
+        RelType::Filter(filter) => {
             let input = filter.input.as_ref().required("filter input")?;
             let condition = filter.condition.as_ref().required("filter condition")?;
             let input = from_spark_relation(ctx, input).await?;
@@ -122,13 +124,13 @@ pub(crate) async fn from_spark_relation(
             let filter = plan::Filter::try_new(predicate, Arc::new(input))?;
             Ok(LogicalPlan::Filter(filter))
         }
-        relation::RelType::Join(_) => {
-            todo!()
+        RelType::Join(_) => {
+            return Err(SparkError::todo("join"));
         }
-        relation::RelType::SetOp(_) => {
-            todo!()
+        RelType::SetOp(_) => {
+            return Err(SparkError::todo("set operation"));
         }
-        relation::RelType::Sort(sort) => {
+        RelType::Sort(sort) => {
             // TODO: handle sort.is_global
             let input = sort.input.as_ref().required("sort input")?;
             let input = from_spark_relation(ctx, input).await?;
@@ -143,7 +145,7 @@ pub(crate) async fn from_spark_relation(
                 fetch: None,
             }))
         }
-        relation::RelType::Limit(limit) => {
+        RelType::Limit(limit) => {
             let input = limit.input.as_ref().required("limit input")?;
             Ok(LogicalPlan::Limit(plan::Limit {
                 skip: 0,
@@ -151,10 +153,10 @@ pub(crate) async fn from_spark_relation(
                 input: Arc::new(from_spark_relation(ctx, input).await?),
             }))
         }
-        relation::RelType::Aggregate(_) => {
-            todo!()
+        RelType::Aggregate(_) => {
+            return Err(SparkError::todo("aggregate"));
         }
-        relation::RelType::Sql(sc::Sql {
+        RelType::Sql(sc::Sql {
             query,
             args,
             pos_args,
@@ -186,10 +188,10 @@ pub(crate) async fn from_spark_relation(
                     ))
                 }
             } else {
-                todo!("multiple statements in SQL query")
+                Err(SparkError::todo("multiple statements in SQL query"))
             }
         }
-        relation::RelType::LocalRelation(sc::LocalRelation { data, schema }) => {
+        RelType::LocalRelation(sc::LocalRelation { data, schema }) => {
             let batches = if let Some(data) = data {
                 read_arrow_batches(data.clone())?
             } else {
@@ -199,20 +201,20 @@ pub(crate) async fn from_spark_relation(
                 batch.schema()
             } else {
                 let _ = schema.as_ref().required("local relation schema")?;
-                todo!("parse schema from spark schema")
+                return Err(SparkError::todo("parse schema from spark schema"));
             };
             let provider = datafusion::datasource::MemTable::try_new(schema, vec![batches])?;
-            Ok(plan::LogicalPlanBuilder::scan(
-                plan::builder::UNNAMED_TABLE,
-                datafusion::datasource::provider_as_source(Arc::new(provider)),
+            Ok(LogicalPlanBuilder::scan(
+                UNNAMED_TABLE,
+                provider_as_source(Arc::new(provider)),
                 None,
             )?
             .build()?)
         }
-        relation::RelType::Sample(_) => {
-            todo!()
+        RelType::Sample(_) => {
+            return Err(SparkError::todo("sample"));
         }
-        relation::RelType::Offset(offset) => {
+        RelType::Offset(offset) => {
             let input = offset.input.as_ref().required("offset input")?;
             Ok(LogicalPlan::Limit(plan::Limit {
                 skip: offset.offset as usize,
@@ -220,13 +222,13 @@ pub(crate) async fn from_spark_relation(
                 input: Arc::new(from_spark_relation(ctx, input).await?),
             }))
         }
-        relation::RelType::Deduplicate(_) => {
-            todo!()
+        RelType::Deduplicate(_) => {
+            return Err(SparkError::todo("deduplicate"));
         }
-        relation::RelType::Range(_) => {
-            todo!()
+        RelType::Range(_) => {
+            return Err(SparkError::todo("range"));
         }
-        relation::RelType::SubqueryAlias(sub) => {
+        RelType::SubqueryAlias(sub) => {
             let input = sub.input.as_ref().required("subquery alias input")?;
             // TODO: handle quoted identifiers
             let mut alias = sub.alias.clone();
@@ -238,113 +240,115 @@ pub(crate) async fn from_spark_relation(
                 alias,
             )?))
         }
-        relation::RelType::Repartition(_) => {
-            todo!()
+        RelType::Repartition(_) => {
+            return Err(SparkError::todo("repartition"));
         }
-        relation::RelType::ToDf(_) => {
-            todo!()
+        RelType::ToDf(_) => {
+            return Err(SparkError::todo("to dataframe"));
         }
-        relation::RelType::WithColumnsRenamed(_) => {
-            todo!()
+        RelType::WithColumnsRenamed(_) => {
+            return Err(SparkError::todo("with columns renamed"));
         }
-        relation::RelType::ShowString(_) => {
-            todo!()
+        RelType::ShowString(_) => {
+            return Err(SparkError::todo("show string"));
         }
-        relation::RelType::Drop(_) => {
-            todo!()
+        RelType::Drop(_) => {
+            return Err(SparkError::todo("drop"));
         }
-        relation::RelType::Tail(_) => {
-            todo!()
+        RelType::Tail(_) => {
+            return Err(SparkError::todo("tail"));
         }
-        relation::RelType::WithColumns(_) => {
-            todo!()
+        RelType::WithColumns(_) => {
+            return Err(SparkError::todo("with columns"));
         }
-        relation::RelType::Hint(_) => {
-            todo!()
+        RelType::Hint(_) => {
+            return Err(SparkError::todo("hint"));
         }
-        relation::RelType::Unpivot(_) => {
-            todo!()
+        RelType::Unpivot(_) => {
+            return Err(SparkError::todo("unpivot"));
         }
-        relation::RelType::ToSchema(_) => {
-            todo!()
+        RelType::ToSchema(_) => {
+            return Err(SparkError::todo("to schema"));
         }
-        relation::RelType::RepartitionByExpression(_) => {
-            todo!()
+        RelType::RepartitionByExpression(_) => {
+            return Err(SparkError::todo("repartition by expression"));
         }
-        relation::RelType::MapPartitions(_) => {
-            todo!()
+        RelType::MapPartitions(_) => {
+            return Err(SparkError::todo("map partitions"));
         }
-        relation::RelType::CollectMetrics(_) => {
-            todo!()
+        RelType::CollectMetrics(_) => {
+            return Err(SparkError::todo("collect metrics"));
         }
-        relation::RelType::Parse(_) => {
-            todo!()
+        RelType::Parse(_) => {
+            return Err(SparkError::todo("parse"));
         }
-        relation::RelType::GroupMap(_) => {
-            todo!()
+        RelType::GroupMap(_) => {
+            return Err(SparkError::todo("group map"));
         }
-        relation::RelType::CoGroupMap(_) => {
-            todo!()
+        RelType::CoGroupMap(_) => {
+            return Err(SparkError::todo("co-group map"));
         }
-        relation::RelType::WithWatermark(_) => {
-            todo!()
+        RelType::WithWatermark(_) => {
+            return Err(SparkError::todo("with watermark"));
         }
-        relation::RelType::ApplyInPandasWithState(_) => {
-            todo!()
+        RelType::ApplyInPandasWithState(_) => {
+            return Err(SparkError::todo("apply in pandas with state"));
         }
-        relation::RelType::HtmlString(_) => {
-            todo!()
+        RelType::HtmlString(_) => {
+            return Err(SparkError::todo("html string"));
         }
-        relation::RelType::CachedLocalRelation(_) => {
-            todo!()
+        RelType::CachedLocalRelation(_) => {
+            return Err(SparkError::todo("cached local relation"));
         }
-        relation::RelType::CachedRemoteRelation(_) => {
-            todo!()
+        RelType::CachedRemoteRelation(_) => {
+            return Err(SparkError::todo("cached remote relation"));
         }
-        relation::RelType::CommonInlineUserDefinedTableFunction(_) => {
-            todo!()
+        RelType::CommonInlineUserDefinedTableFunction(_) => {
+            return Err(SparkError::todo(
+                "common inline user defined table function",
+            ));
         }
-        relation::RelType::FillNa(_) => {
-            todo!()
+        RelType::FillNa(_) => {
+            return Err(SparkError::todo("fill na"));
         }
-        relation::RelType::DropNa(_) => {
-            todo!()
+        RelType::DropNa(_) => {
+            return Err(SparkError::todo("drop na"));
         }
-        relation::RelType::Replace(_) => {
-            todo!()
+        RelType::Replace(_) => {
+            return Err(SparkError::todo("replace"));
         }
-        relation::RelType::Summary(_) => {
-            todo!()
+        RelType::Summary(_) => {
+            return Err(SparkError::todo("summary"));
         }
-        relation::RelType::Crosstab(_) => {
-            todo!()
+        RelType::Crosstab(_) => {
+            return Err(SparkError::todo("crosstab"));
         }
-        relation::RelType::Describe(_) => {
-            todo!()
+        RelType::Describe(_) => {
+            return Err(SparkError::todo("describe"));
         }
-        relation::RelType::Cov(_) => {
-            todo!()
+        RelType::Cov(_) => {
+            return Err(SparkError::todo("cov"));
         }
-        relation::RelType::Corr(_) => {
-            todo!()
+        RelType::Corr(_) => {
+            return Err(SparkError::todo("corr"));
         }
-        relation::RelType::ApproxQuantile(_) => {
-            todo!()
+        RelType::ApproxQuantile(_) => {
+            return Err(SparkError::todo("approx quantile"));
         }
-        relation::RelType::FreqItems(_) => {
-            todo!()
+        RelType::FreqItems(_) => {
+            return Err(SparkError::todo("freq items"));
         }
-        relation::RelType::SampleBy(_) => {
-            todo!()
+        RelType::SampleBy(_) => {
+            return Err(SparkError::todo("sample by"));
         }
-        relation::RelType::Catalog(_) => {
-            todo!()
+        RelType::Catalog(_) => {
+            return Err(SparkError::todo("catalog"));
         }
-        relation::RelType::Extension(_) => {
-            todo!()
+        RelType::Extension(_) => {
+            return Err(SparkError::unsupported("Spark relation extension"));
         }
-        relation::RelType::Unknown(_) => {
-            todo!()
+        RelType::Unknown(_) => {
+            return Err(SparkError::unsupported("unknown Spark relation"));
         }
     }
 }
