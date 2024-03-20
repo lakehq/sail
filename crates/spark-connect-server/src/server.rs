@@ -1,21 +1,32 @@
-use crate::plan::{execute_plan, from_spark_relation, write_arrow_batches};
-use crate::schema::to_spark_schema;
-use crate::session::SessionManager;
-use crate::spark::connect::config_request as cr;
-use crate::spark::connect::execute_plan_response as epr;
+use async_stream;
+use tonic::codegen::tokio_stream::StreamExt;
+use tonic::{Request, Response, Status, Streaming};
+use tracing::debug;
+use uuid::Uuid;
+
+use crate::error::ProtoFieldExt;
+use crate::executor::ExecutorMetadata;
+use crate::service;
+use crate::service::ExecutePlanResponseStream;
+use crate::session::{SessionKey, SessionManager};
+use crate::spark::connect as sc;
+use crate::spark::connect::analyze_plan_request::Analyze;
+use crate::spark::connect::analyze_plan_response::Result as AnalyzeResult;
+use crate::spark::connect::command::CommandType;
+use crate::spark::connect::config_request::operation::OpType as ConfigOpType;
+use crate::spark::connect::interrupt_request::{Interrupt, InterruptType};
 use crate::spark::connect::plan;
+use crate::spark::connect::release_execute_request::{Release, ReleaseAll, ReleaseUntil};
 use crate::spark::connect::spark_connect_service_server::SparkConnectService;
+use crate::spark::connect::Command;
 use crate::spark::connect::{
     AddArtifactsRequest, AddArtifactsResponse, AnalyzePlanRequest, AnalyzePlanResponse,
     ArtifactStatusesRequest, ArtifactStatusesResponse, ConfigRequest, ConfigResponse,
-    ExecutePlanRequest, ExecutePlanResponse, InterruptRequest, InterruptResponse, KeyValue, Plan,
-    ReattachExecuteRequest, ReleaseExecuteRequest, ReleaseExecuteResponse,
+    ExecutePlanRequest, InterruptRequest, InterruptResponse, Plan, ReattachExecuteRequest,
+    ReleaseExecuteRequest, ReleaseExecuteResponse,
 };
-use datafusion::prelude::SessionContext;
-use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
-use tonic::{Request, Response, Status, Streaming};
-use uuid::Uuid;
 
+#[derive(Debug)]
 pub struct SparkConnectServer {
     session_manager: SessionManager,
 }
@@ -28,151 +39,209 @@ impl Default for SparkConnectServer {
     }
 }
 
+fn is_reattachable(request_options: &[sc::execute_plan_request::RequestOption]) -> bool {
+    for item in request_options {
+        match &item.request_option {
+            Some(sc::execute_plan_request::request_option::RequestOption::ReattachOptions(v)) => {
+                return v.reattachable;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 #[tonic::async_trait]
 impl SparkConnectService for SparkConnectServer {
-    type ExecutePlanStream = ReceiverStream<Result<ExecutePlanResponse, Status>>;
+    type ExecutePlanStream = ExecutePlanResponseStream;
 
     async fn execute_plan(
         &self,
         request: Request<ExecutePlanRequest>,
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
-        println!("{:?}", request);
         let request = request.into_inner();
-        let session_id = request.session_id;
-        let operation_id = request
-            .operation_id
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
-        let mut responses = vec![];
-        if let ExecutePlanRequest {
-            plan:
-                Some(Plan {
-                    op_type: Some(plan::OpType::Root(relation)),
-                }),
-            ..
-        } = request
-        {
-            let ctx = SessionContext::new();
-            let plan = from_spark_relation(&ctx, &relation).await?;
-            let batches = execute_plan(&ctx, &plan).await?;
-            let schema = batches.schema();
-            let output = write_arrow_batches(batches).await?;
-
-            responses.push(ExecutePlanResponse {
-                session_id: session_id.clone(),
-                operation_id: operation_id.clone(),
-                response_id: Uuid::new_v4().to_string(),
-                metrics: None,
-                observed_metrics: vec![],
-                schema: Some(to_spark_schema(schema)?),
-                response_type: Some(epr::ResponseType::ArrowBatch(output)),
-            });
-        }
-
-        responses.push(ExecutePlanResponse {
-            session_id: session_id.clone(),
-            operation_id: operation_id.clone(),
-            response_id: Uuid::new_v4().to_string(),
-            metrics: None,
-            observed_metrics: vec![],
-            schema: None,
-            response_type: Some(epr::ResponseType::ResultComplete(epr::ResultComplete {})),
-        });
-        let (tx, rx) = tokio::sync::mpsc::channel(1);
-        tokio::spawn(async move {
-            for response in responses {
-                let _ = tx.send(Ok(response)).await;
+        debug!("{:?}", request);
+        let session_key = SessionKey {
+            user_id: request.user_context.map(|u| u.user_id),
+            session_id: request.session_id.clone(),
+        };
+        let metadata = ExecutorMetadata {
+            operation_id: request
+                .operation_id
+                .unwrap_or_else(|| Uuid::new_v4().to_string()),
+            tags: request.tags,
+            reattachable: is_reattachable(&request.request_options),
+        };
+        let session = self.session_manager.get_session(session_key)?;
+        let Plan { op_type: op } = request.plan.required("plan")?;
+        let op = op.required("plan op")?;
+        let stream = match op {
+            plan::OpType::Root(relation) => {
+                service::handle_execute_relation(session, relation, metadata).await?
             }
-        });
-        Ok(Response::new(ReceiverStream::new(rx)))
+            plan::OpType::Command(Command {
+                command_type: command,
+            }) => {
+                let command = command.required("command")?;
+                match command {
+                    CommandType::RegisterFunction(udf) => {
+                        service::handle_execute_register_function(session, udf).await?
+                    }
+                    CommandType::WriteOperation(write) => {
+                        service::handle_execute_write_operation(session, write, metadata).await?
+                    }
+                    CommandType::CreateDataframeView(view) => {
+                        service::handle_execute_create_dataframe_view(session, view, metadata)
+                            .await?
+                    }
+                    CommandType::WriteOperationV2(write) => {
+                        service::handle_execute_write_operation_v2(session, write).await?
+                    }
+                    CommandType::SqlCommand(sql) => {
+                        service::handle_execute_sql_command(session, sql, metadata).await?
+                    }
+                    CommandType::WriteStreamOperationStart(start) => {
+                        service::handle_execute_write_stream_operation_start(session, start).await?
+                    }
+                    CommandType::StreamingQueryCommand(stream) => {
+                        service::handle_execute_streaming_query_command(session, stream).await?
+                    }
+                    CommandType::GetResourcesCommand(resource) => {
+                        service::handle_execute_get_resources_command(session, resource).await?
+                    }
+                    CommandType::StreamingQueryManagerCommand(manager) => {
+                        service::handle_execute_streaming_query_manager_command(session, manager)
+                            .await?
+                    }
+                    CommandType::RegisterTableFunction(udtf) => {
+                        service::handle_execute_register_table_function(session, udtf).await?
+                    }
+                    CommandType::Extension(_) => {
+                        return Err(Status::unimplemented("unsupported command extension"));
+                    }
+                }
+            }
+        };
+        Ok(Response::new(stream))
     }
 
     async fn analyze_plan(
         &self,
         request: Request<AnalyzePlanRequest>,
     ) -> Result<Response<AnalyzePlanResponse>, Status> {
-        println!("{:?}", request);
-        todo!()
+        let request = request.into_inner();
+        debug!("{:?}", request);
+        let session_key = SessionKey {
+            user_id: request.user_context.map(|u| u.user_id),
+            session_id: request.session_id.clone(),
+        };
+        let session = self.session_manager.get_session(session_key)?;
+        let analyze = request.analyze.required("analyze")?;
+        let result = match analyze {
+            Analyze::Schema(schema) => {
+                let schema = service::handle_analyze_schema(session, schema).await?;
+                Some(AnalyzeResult::Schema(schema))
+            }
+            Analyze::Explain(explain) => {
+                let explain = service::handle_analyze_explain(session, explain).await?;
+                Some(AnalyzeResult::Explain(explain))
+            }
+            Analyze::TreeString(tree) => {
+                let tree = service::handle_analyze_tree_string(session, tree).await?;
+                Some(AnalyzeResult::TreeString(tree))
+            }
+            Analyze::IsLocal(local) => {
+                let local = service::handle_analyze_is_local(session, local).await?;
+                Some(AnalyzeResult::IsLocal(local))
+            }
+            Analyze::IsStreaming(streaming) => {
+                let streaming = service::handle_analyze_is_streaming(session, streaming).await?;
+                Some(AnalyzeResult::IsStreaming(streaming))
+            }
+            Analyze::InputFiles(input) => {
+                let input = service::handle_analyze_input_files(session, input).await?;
+                Some(AnalyzeResult::InputFiles(input))
+            }
+            Analyze::SparkVersion(version) => {
+                let version = service::handle_analyze_spark_version(session, version).await?;
+                Some(AnalyzeResult::SparkVersion(version))
+            }
+            Analyze::DdlParse(ddl) => {
+                let ddl = service::handle_analyze_ddl_parse(session, ddl).await?;
+                Some(AnalyzeResult::DdlParse(ddl))
+            }
+            Analyze::SameSemantics(same) => {
+                let same = service::handle_analyze_same_semantics(session, same).await?;
+                Some(AnalyzeResult::SameSemantics(same))
+            }
+            Analyze::SemanticHash(hash) => {
+                let hash = service::handle_analyze_semantic_hash(session, hash).await?;
+                Some(AnalyzeResult::SemanticHash(hash))
+            }
+            Analyze::Persist(persist) => {
+                let persist = service::handle_analyze_persist(session, persist).await?;
+                Some(AnalyzeResult::Persist(persist))
+            }
+            Analyze::Unpersist(unpersist) => {
+                let unpersist = service::handle_analyze_unpersist(session, unpersist).await?;
+                Some(AnalyzeResult::Unpersist(unpersist))
+            }
+            Analyze::GetStorageLevel(level) => {
+                let level = service::handle_analyze_get_storage_level(session, level).await?;
+                Some(AnalyzeResult::GetStorageLevel(level))
+            }
+        };
+        let response = AnalyzePlanResponse {
+            session_id: request.session_id,
+            result,
+        };
+        debug!("{:?}", response);
+        Ok(Response::new(response))
     }
 
     async fn config(
         &self,
         request: Request<ConfigRequest>,
     ) -> Result<Response<ConfigResponse>, Status> {
-        println!("{:?}", request);
         let request = request.into_inner();
-        let session_id = request.session_id;
-        let session = self.session_manager.get_session(&session_id)?;
-        let mut session = session
-            .lock()
-            .or_else(|_| Err(Status::internal("failed to lock session")))?;
-
-        let mut pairs = vec![];
-        let warnings = vec![];
-        if let Some(cr::Operation { op_type: Some(op) }) = request.operation {
-            match op {
-                cr::operation::OpType::Get(cr::Get { keys }) => {
-                    for key in keys {
-                        pairs.push(KeyValue {
-                            key: key.clone(),
-                            value: session.get_config(&key).map(|v| v.clone()),
-                        });
-                    }
-                }
-                cr::operation::OpType::Set(cr::Set { pairs: kv }) => {
-                    for KeyValue { key, value } in kv {
-                        if let Some(value) = value {
-                            session.set_config(&key, &value);
-                        } else {
-                            session.unset_config(&key);
-                        }
-                    }
-                }
-                cr::operation::OpType::GetWithDefault(cr::GetWithDefault { pairs: kv }) => {
-                    for KeyValue { key, value } in kv {
-                        pairs.push(KeyValue {
-                            key: key.clone(),
-                            value: session.get_config(&key).map(|v| v.clone()).or(value),
-                        });
-                    }
-                }
-                cr::operation::OpType::GetOption(cr::GetOption { keys }) => {
-                    for key in keys {
-                        if let Some(value) = session.get_config(&key) {
-                            pairs.push(KeyValue {
-                                key: key.clone(),
-                                value: Some(value.clone()),
-                            });
-                        }
-                    }
-                }
-                cr::operation::OpType::GetAll(cr::GetAll { prefix }) => {
-                    for (k, v) in session.iter_config(&prefix) {
-                        pairs.push(KeyValue {
-                            key: k.clone(),
-                            value: Some(v.clone()),
-                        });
-                    }
-                }
-                cr::operation::OpType::Unset(cr::Unset { keys }) => {
-                    for key in keys {
-                        session.unset_config(&key);
-                    }
-                }
-                cr::operation::OpType::IsModifiable(cr::IsModifiable { keys }) => {
-                    for key in keys {
-                        pairs.push(KeyValue {
-                            key: key.clone(),
-                            value: Some("true".to_string()),
-                        });
-                    }
-                }
+        debug!("{:?}", request);
+        let session_key = SessionKey {
+            user_id: request.user_context.map(|u| u.user_id),
+            session_id: request.session_id.clone(),
+        };
+        let session = self.session_manager.get_session(session_key)?;
+        let sc::config_request::Operation { op_type: op } =
+            request.operation.required("operation")?;
+        let op = op.required("operation type")?;
+        let mut response = ConfigResponse {
+            session_id: request.session_id,
+            pairs: vec![],
+            warnings: vec![],
+        };
+        match op {
+            ConfigOpType::Get(sc::config_request::Get { keys }) => {
+                service::handle_config_get(session, keys, &mut response.pairs)?;
+            }
+            ConfigOpType::Set(sc::config_request::Set { pairs }) => {
+                service::handle_config_set(session, pairs)?;
+            }
+            ConfigOpType::GetWithDefault(sc::config_request::GetWithDefault { pairs }) => {
+                service::handle_config_get_with_default(session, pairs, &mut response.pairs)?;
+            }
+            ConfigOpType::GetOption(sc::config_request::GetOption { keys }) => {
+                service::handle_config_get_option(session, keys, &mut response.pairs)?;
+            }
+            ConfigOpType::GetAll(sc::config_request::GetAll { prefix }) => {
+                service::handle_config_get_all(session, prefix, &mut response.pairs)?;
+            }
+            ConfigOpType::Unset(sc::config_request::Unset { keys }) => {
+                service::handle_config_unset(session, keys)?;
+            }
+            ConfigOpType::IsModifiable(sc::config_request::IsModifiable { keys }) => {
+                service::handle_config_is_modifiable(session, keys, &mut response.pairs)?;
             }
         }
-        let response = ConfigResponse {
-            session_id,
-            pairs,
-            warnings,
-        };
+        debug!("{:?}", response);
         Ok(Response::new(response))
     }
 
@@ -180,48 +249,143 @@ impl SparkConnectService for SparkConnectServer {
         &self,
         request: Request<Streaming<AddArtifactsRequest>>,
     ) -> Result<Response<AddArtifactsResponse>, Status> {
-        println!("{:?}", request);
-        todo!()
+        let mut request = request.into_inner();
+        let first = match request.next().await {
+            Some(item) => item?,
+            None => {
+                return Err(Status::invalid_argument(
+                    "at least one artifact request is required",
+                ));
+            }
+        };
+        debug!("{:?}", first);
+        let session_key = SessionKey {
+            user_id: first.user_context.map(|u| u.user_id),
+            session_id: first.session_id.clone(),
+        };
+        let session = self.session_manager.get_session(session_key)?;
+        let payload = first.payload;
+        let session_id = first.session_id;
+        let stream = async_stream::try_stream! {
+            if let Some(payload) = payload {
+                yield payload;
+            }
+            while let Some(item) = request.next().await {
+                let item = item?;
+                debug!("{:?}", item);
+                if item.session_id != session_id {
+                    Err(Status::invalid_argument("session ID must be consistent"))?;
+                }
+                if let Some(payload) = item.payload {
+                    yield payload;
+                }
+            }
+        };
+        let artifacts = service::handle_add_artifacts(session, stream).await?;
+        let response = AddArtifactsResponse { artifacts };
+        debug!("{:?}", response);
+        Ok(Response::new(response))
     }
 
     async fn artifact_status(
         &self,
         request: Request<ArtifactStatusesRequest>,
     ) -> Result<Response<ArtifactStatusesResponse>, Status> {
-        println!("{:?}", request);
-        todo!()
+        let request = request.into_inner();
+        debug!("{:?}", request);
+        let session_key = SessionKey {
+            user_id: request.user_context.map(|u| u.user_id),
+            session_id: request.session_id.clone(),
+        };
+        let session = self.session_manager.get_session(session_key)?;
+        let statuses = service::handle_artifact_statuses(session, request.names).await?;
+        let response = ArtifactStatusesResponse { statuses };
+        debug!("{:?}", response);
+        Ok(Response::new(response))
     }
 
     async fn interrupt(
         &self,
         request: Request<InterruptRequest>,
     ) -> Result<Response<InterruptResponse>, Status> {
-        println!("{:?}", request);
-        todo!()
+        let request = request.into_inner();
+        debug!("{:?}", request);
+        let session_key = SessionKey {
+            user_id: request.user_context.map(|u| u.user_id),
+            session_id: request.session_id.clone(),
+        };
+        let session = self.session_manager.get_session(session_key)?;
+        let ids = match InterruptType::try_from(request.interrupt_type) {
+            Ok(InterruptType::All) => Ok(service::handle_interrupt_all(session).await?),
+            Ok(InterruptType::Tag) => {
+                if let Some(Interrupt::OperationTag(tag)) = request.interrupt {
+                    Ok(service::handle_interrupt_tag(session, tag).await?)
+                } else {
+                    Err(Status::invalid_argument("operation tag is required"))
+                }
+            }
+            Ok(InterruptType::OperationId) => {
+                if let Some(Interrupt::OperationId(id)) = request.interrupt {
+                    Ok(service::handle_interrupt_operation_id(session, id).await?)
+                } else {
+                    Err(Status::invalid_argument("operation ID is required"))
+                }
+            }
+            Ok(InterruptType::Unspecified) | Err(_) => Err(Status::invalid_argument(
+                "a valid interrupt type is required",
+            )),
+        };
+        let response = InterruptResponse {
+            session_id: request.session_id.clone(),
+            interrupted_ids: ids?,
+        };
+        debug!("{:?}", response);
+        Ok(Response::new(response))
     }
 
-    type ReattachExecuteStream = ReceiverStream<Result<ExecutePlanResponse, Status>>;
+    type ReattachExecuteStream = ExecutePlanResponseStream;
 
     async fn reattach_execute(
         &self,
         request: Request<ReattachExecuteRequest>,
     ) -> Result<Response<Self::ReattachExecuteStream>, Status> {
-        println!("{:?}", request);
-        todo!()
+        let request = request.into_inner();
+        debug!("{:?}", request);
+        let session_key = SessionKey {
+            user_id: request.user_context.map(|u| u.user_id),
+            session_id: request.session_id.clone(),
+        };
+        let session = self.session_manager.get_session(session_key)?;
+        let stream = service::handle_reattach_execute(
+            session,
+            request.operation_id,
+            request.last_response_id,
+        )
+        .await?;
+        Ok(Response::new(stream))
     }
 
     async fn release_execute(
         &self,
         request: Request<ReleaseExecuteRequest>,
     ) -> Result<Response<ReleaseExecuteResponse>, Status> {
-        println!("{:?}", request);
         let request = request.into_inner();
-        let session_id = request.session_id;
-        let operation_id = request.operation_id;
-        let response = ReleaseExecuteResponse {
-            session_id,
-            operation_id: Some(operation_id),
+        debug!("{:?}", request);
+        let session_key = SessionKey {
+            user_id: request.user_context.map(|u| u.user_id),
+            session_id: request.session_id.clone(),
         };
+        let session = self.session_manager.get_session(session_key)?;
+        let response_id = match request.release.required("release")? {
+            Release::ReleaseAll(ReleaseAll {}) => None,
+            Release::ReleaseUntil(ReleaseUntil { response_id }) => Some(response_id),
+        };
+        service::handle_release_execute(session, request.operation_id.clone(), response_id).await?;
+        let response = ReleaseExecuteResponse {
+            session_id: request.session_id.clone(),
+            operation_id: Some(request.operation_id),
+        };
+        debug!("{:?}", response);
         Ok(Response::new(response))
     }
 }

@@ -1,13 +1,15 @@
-use crate::error::{ProtoFieldExt, SparkError};
+use std::sync::Arc;
+
+use datafusion::arrow::datatypes as adt;
+
+use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::spark::connect as sc;
 use crate::spark::connect::data_type as sdt;
-use datafusion::arrow::datatypes as adt;
-use std::sync::Arc;
 
 // References:
 //   org.apache.spark.sql.util.ArrowUtils#toArrowType
 //   org.apache.spark.sql.connect.common.DataTypeProtoConverter
-pub(crate) fn from_spark_data_type(data_type: &sc::DataType) -> Result<adt::DataType, SparkError> {
+pub(crate) fn from_spark_data_type(data_type: &sc::DataType) -> SparkResult<adt::DataType> {
     let sc::DataType { kind } = data_type;
     let kind = kind.as_ref().required("data type kind")?;
     match kind {
@@ -34,7 +36,7 @@ pub(crate) fn from_spark_data_type(data_type: &sc::DataType) -> Result<adt::Data
             let fields = r#struct
                 .fields
                 .iter()
-                .map(|field| -> Result<adt::Field, SparkError> {
+                .map(|field| -> SparkResult<adt::Field> {
                     let name = field.name.as_str();
                     let data_type = field.data_type.as_ref().required("data type")?;
                     let data_type = from_spark_data_type(data_type)?;
@@ -53,7 +55,8 @@ pub(crate) fn from_spark_data_type(data_type: &sc::DataType) -> Result<adt::Data
         sdt::Kind::Date(_) => Ok(adt::DataType::Date32),
         sdt::Kind::Timestamp(_) => Ok(adt::DataType::Timestamp(
             adt::TimeUnit::Microsecond,
-            todo!(),
+            // TODO: should we use "spark.sql.session.timeZone"?
+            None,
         )),
         sdt::Kind::TimestampNtz(_) => {
             Ok(adt::DataType::Timestamp(adt::TimeUnit::Microsecond, None))
@@ -88,11 +91,11 @@ pub(crate) fn from_spark_data_type(data_type: &sc::DataType) -> Result<adt::Data
     }
 }
 
-pub(crate) fn to_spark_schema(schema: adt::SchemaRef) -> Result<sc::DataType, SparkError> {
+pub(crate) fn to_spark_schema(schema: adt::SchemaRef) -> SparkResult<sc::DataType> {
     to_spark_data_type(&adt::DataType::Struct(schema.fields().clone()))
 }
 
-pub(crate) fn to_spark_data_type(data_type: &adt::DataType) -> Result<sc::DataType, SparkError> {
+pub(crate) fn to_spark_data_type(data_type: &adt::DataType) -> SparkResult<sc::DataType> {
     match data_type {
         adt::DataType::Null => Ok(sc::DataType {
             kind: Some(sdt::Kind::Null(sdt::Null::default())),
@@ -100,20 +103,16 @@ pub(crate) fn to_spark_data_type(data_type: &adt::DataType) -> Result<sc::DataTy
         adt::DataType::Boolean => Ok(sc::DataType {
             kind: Some(sdt::Kind::Boolean(sdt::Boolean::default())),
         }),
-        adt::DataType::UInt8 => Err(SparkError::unsupported("uint8")),
-        adt::DataType::UInt16 => Err(SparkError::unsupported("uint16")),
-        adt::DataType::UInt32 => Err(SparkError::unsupported("uint32")),
-        adt::DataType::UInt64 => Err(SparkError::unsupported("uint64")),
-        adt::DataType::Int8 => Ok(sc::DataType {
+        adt::DataType::UInt8 | adt::DataType::Int8 => Ok(sc::DataType {
             kind: Some(sdt::Kind::Byte(sdt::Byte::default())),
         }),
-        adt::DataType::Int16 => Ok(sc::DataType {
+        adt::DataType::UInt16 | adt::DataType::Int16 => Ok(sc::DataType {
             kind: Some(sdt::Kind::Short(sdt::Short::default())),
         }),
-        adt::DataType::Int32 => Ok(sc::DataType {
+        adt::DataType::UInt32 | adt::DataType::Int32 => Ok(sc::DataType {
             kind: Some(sdt::Kind::Integer(sdt::Integer::default())),
         }),
-        adt::DataType::Int64 => Ok(sc::DataType {
+        adt::DataType::UInt64 | adt::DataType::Int64 => Ok(sc::DataType {
             kind: Some(sdt::Kind::Long(sdt::Long::default())),
         }),
         adt::DataType::Float16 => Err(SparkError::unsupported("float16")),
@@ -167,7 +166,7 @@ pub(crate) fn to_spark_data_type(data_type: &adt::DataType) -> Result<sc::DataTy
             kind: Some(sdt::Kind::Struct(sdt::Struct {
                 fields: fields
                     .iter()
-                    .map(|field| -> Result<sdt::StructField, SparkError> {
+                    .map(|field| -> SparkResult<sdt::StructField> {
                         let name = field.name();
                         let data_type = to_spark_data_type(field.data_type())?;
                         Ok(sdt::StructField {
