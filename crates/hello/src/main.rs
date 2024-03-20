@@ -14,8 +14,8 @@ fn expensive_work() -> &'static str {
 }
 
 #[tokio::main]
-async fn main() {
-    init_telemetry();
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_telemetry()?;
 
     info!(
         meow_1 = "Meow1",
@@ -50,4 +50,6 @@ async fn main() {
         warn!("Warn Log: About to exit!");
         trace!("status: {}", work_result);
     }
+
+    Ok(())
 }
