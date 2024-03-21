@@ -19,6 +19,7 @@ docker/build-lakesail-docker.sh
 kind load docker-image lakesail-framework:latest
 
 cd k8s/lakesail
+helm dependency build .
 helm install lakesail .
 ```
 
