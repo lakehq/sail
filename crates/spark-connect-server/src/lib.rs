@@ -1,6 +1,7 @@
 mod error;
 mod executor;
 mod expression;
+mod extension;
 mod plan;
 mod schema;
 pub mod server;

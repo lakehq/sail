@@ -1,3 +1,4 @@
+use datafusion::arrow::array::RecordBatch;
 use std::collections::VecDeque;
 use std::mem;
 use std::sync::Arc;
@@ -126,13 +127,24 @@ impl Executor {
         let out = ExecutorOutput::new(ExecutorBatch::Schema(schema));
         context.add_output(out.clone());
         tx.send(out).await?;
+
+        let mut empty = true;
         while let Some(batch) = context.stream.next().await {
             let batch = batch?;
-            let batch = to_arrow_batch(&batch, context.stream.schema()).await?;
+            let batch = to_arrow_batch(&batch).await?;
+            let out = ExecutorOutput::new(ExecutorBatch::ArrowBatch(batch));
+            context.add_output(out.clone());
+            tx.send(out).await?;
+            empty = false;
+        }
+        if empty {
+            let batch = RecordBatch::new_empty(context.stream.schema());
+            let batch = to_arrow_batch(&batch).await?;
             let out = ExecutorOutput::new(ExecutorBatch::ArrowBatch(batch));
             context.add_output(out.clone());
             tx.send(out).await?;
         }
+
         let out = ExecutorOutput::new(ExecutorBatch::Complete);
         context.add_output(out.clone());
         tx.send(out).await?;
