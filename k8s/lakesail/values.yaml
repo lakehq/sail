@@ -124,6 +124,7 @@ opentelemetry-operator:
     ## TLS Certificate Option 1: Use certManager to generate self-signed certificate.
     ## certManager must be enabled. If enabled, always takes precendence over options 2 and 3.
     certManager:
+      enabled: true
       # Annotations for the cert and issuer if cert-manager is enabled.
       # Annotate to ensure creation after the cert-manager CRDs have been installed.
       certificateAnnotations:

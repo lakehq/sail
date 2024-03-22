@@ -19,7 +19,7 @@ docker/build-lakesail-docker.sh
 kind load docker-image lakesail-framework:latest
 
 cd k8s/lakesail
-helm dependency build .
+helm dependency build . # OR helm dependency update .
 helm install lakesail .
 ```
 
@@ -33,4 +33,8 @@ helm install lakesail .
 
 ```shell
 helm uninstall lakesail
+```
+
+```shell
+kind delete cluster
 ```
