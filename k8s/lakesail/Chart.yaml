@@ -11,7 +11,7 @@ keywords:
 
 dependencies:
   - name: cert-manager
-    version: v1.14.3
+    version: v1.14.4
     repository: https://charts.jetstack.io
     alias: cert-manager
     condition: cert-manager.enabled

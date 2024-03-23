@@ -117,19 +117,24 @@ affinity: {}
 opentelemetry-operator:
   enabled: true
 
+  manager: # TODO: Remove once admissionWebhooks create is enabled.
+    env:
+        ENABLE_WEBHOOKS: "false"
+
   ## Admission webhooks make sure only requests with correctly formatted rules will get into the Operator.
   ## They also enable the sidecar injection for OpenTelemetryCollector and Instrumentation CR's
   admissionWebhooks:
-    certManager:
-      enabled: true
-      # Annotations for the cert and issuer if cert-manager is enabled.
-      # Annotate to ensure creation after the cert-manager CRDs have been installed.
-      certificateAnnotations:
-        "helm.sh/hook": post-install,post-upgrade
-        "helm.sh/hook-weight": "1"
-      issuerAnnotations:
-        "helm.sh/hook": post-install,post-upgrade
-        "helm.sh/hook-weight": "1"
+    create: false # TODO: Enable this once we have a better understanding of how this works.
+#    certManager: # TODO: Uncomment this once we have cert-manager enabled.
+#      enabled: true
+#      # Annotations for the cert and issuer if cert-manager is enabled.
+#      # Annotate to ensure creation after the cert-manager CRDs have been installed.
+#      certificateAnnotations:
+#        "helm.sh/hook": post-install,post-upgrade
+#        "helm.sh/hook-weight": "1"
+#      issuerAnnotations:
+#        "helm.sh/hook": post-install,post-upgrade
+#        "helm.sh/hook-weight": "1"
 
 # Default OpenTelemetry Collector that wll be deployed by Helm
 # TODO: Refactor to have a dedicated collector config for each mode so one or more modes (or all) can be deployed.
