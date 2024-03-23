@@ -151,25 +151,35 @@ opentelemetry-collector-spec:
             endpoint: 0.0.0.0:4317
           http:
             endpoint: 0.0.0.0:4318
+
     processors:
+      batch:
       memory_limiter:
         check_interval: 1s
         limit_percentage: 75
         spike_limit_percentage: 15
-      batch:
-        send_batch_size: 10000
-        timeout: 10s
 
     exporters:
       debug:
         verbosity: detailed
+      logging:
+        verbosity: detailed
+
+    extensions:
+      health_check:
 
     service:
+      extensions: [health_check]
+
+      telemetry:
+        logs:
+          level: "debug"
+
       pipelines:
         traces:
           receivers: [otlp]
-          processors: []
-          exporters: [debug]
+          processors: [batch, memory_limiter]
+          exporters: [debug, logging]
 
 ###################################################################################
 # Cert Manager
