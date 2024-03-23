@@ -112,7 +112,7 @@ affinity: {}
 
 ###################################################################################
 # OpenTelemetry Operator
-# Helm value configurations: https://artifacthub.io/packages/helm/cert-manager/cert-manager
+# Helm value configurations: https://github.com/open-telemetry/opentelemetry-helm-charts/blob/main/charts/opentelemetry-operator/values.yaml
 ###################################################################################
 opentelemetry-operator:
   enabled: true
@@ -120,9 +120,6 @@ opentelemetry-operator:
   ## Admission webhooks make sure only requests with correctly formatted rules will get into the Operator.
   ## They also enable the sidecar injection for OpenTelemetryCollector and Instrumentation CR's
   admissionWebhooks:
-    ## https://github.com/open-telemetry/opentelemetry-helm-charts/blob/main/charts/opentelemetry-operator/README.md#tls-certificate-requirement
-    ## TLS Certificate Option 1: Use certManager to generate self-signed certificate.
-    ## certManager must be enabled. If enabled, always takes precendence over options 2 and 3.
     certManager:
       enabled: true
       # Annotations for the cert and issuer if cert-manager is enabled.

@@ -20,7 +20,7 @@ kind load docker-image lakesail-framework:latest
 
 cd k8s/lakesail
 helm dependency build . # OR helm dependency update .
-helm install lakesail .
+helm install lakesail . # --debug
 ```
 
 ## Connect

@@ -4,10 +4,10 @@ apiVersion: opentelemetry.io/v1alpha1
 kind: OpenTelemetryCollector
 metadata:
   name: {{ .Release.Name }}-opentelemetry-collector
-  annotations:
-    # https://helm.sh/docs/topics/charts_hooks/#hooks-and-the-release-lifecycle
-    "helm.sh/hook": post-install,post-upgrade,pre-delete
-    "helm.sh/hook-weight": "0"
+#  annotations:
+#    # https://helm.sh/docs/topics/charts_hooks/#hooks-and-the-release-lifecycle
+#    "helm.sh/hook": post-install,post-upgrade,pre-delete
+#    "helm.sh/hook-weight": "0"
 spec:
   # TODO: Refactor to have a dedicated collector config for each mode so one or more modes (or all) can be deployed.
   mode: {{ index $operator.collector.mode }}
