@@ -16,7 +16,7 @@ dependencies:
     alias: cert-manager
     condition: cert-manager.enabled
   - name: opentelemetry-operator
-    version: 0.48.0
+    version: 0.52.0
     repository: https://open-telemetry.github.io/opentelemetry-helm-charts
     alias: opentelemetry-operator
     condition: opentelemetry-operator.enabled
