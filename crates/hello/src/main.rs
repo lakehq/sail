@@ -1,6 +1,6 @@
 use framework_telemetry::telemetry::init_telemetry;
 use std::{thread, time::Duration};
-use tracing::{error, error_span, info, info_span, instrument, span, trace, warn};
+use tracing::{error, error_span, info, info_span, instrument, span, trace, warn, debug};
 
 #[instrument]
 #[inline]
@@ -16,11 +16,21 @@ fn expensive_work() -> &'static str {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Sleep for a while for the telemetry to be initialized
-    tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(10000)).await;
 
     init_telemetry()?;
     println!("Hello, world!");
 
+    trace!(
+        meow_1 = "Meow1",
+        meow_2 = "Meow2",
+        "Trace Log: Meow Meow Meow"
+    );
+    debug!(
+        meow_1 = "Meow1",
+        meow_2 = "Meow2",
+        "Debug Log: Meow Meow Meow"
+    );
     info!(
         meow_1 = "Meow1",
         meow_2 = "Meow2",

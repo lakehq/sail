@@ -27,7 +27,7 @@ pub fn init_telemetry() -> Result<(), TelemetryError> {
     let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
     let subscriber = Registry::default()
         .with(fmt::layer()) // If we want JSON: fmt::layer().json().flatten_event(true)
-        // .with(tracing_subscriber::EnvFilter::from_default_env())
+        .with(tracing_subscriber::EnvFilter::from_default_env())
         .with(telemetry);
     tracing::subscriber::set_global_default(subscriber)?;
 
