@@ -155,14 +155,12 @@ opentelemetry-collector-spec:
     processors:
       batch:
       memory_limiter:
-        check_interval: 1s
+        check_interval: 5s
         limit_percentage: 75
         spike_limit_percentage: 15
 
     exporters:
       debug:
-        verbosity: detailed
-      logging:
         verbosity: detailed
 
     extensions:
@@ -179,7 +177,7 @@ opentelemetry-collector-spec:
         traces:
           receivers: [otlp]
           processors: [batch, memory_limiter]
-          exporters: [debug, logging]
+          exporters: [debug]
 
 ###################################################################################
 # Cert Manager
