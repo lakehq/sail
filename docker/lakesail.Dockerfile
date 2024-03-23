@@ -14,6 +14,8 @@ RUN cargo build --release
 
 FROM debian:bookworm-slim
 
+ENV RUST_LOG=trace
+
 RUN apt-get update
 
 COPY --from=builder /app/target/release/hello /usr/local/bin

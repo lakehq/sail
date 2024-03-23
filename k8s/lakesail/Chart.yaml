@@ -10,11 +10,12 @@ keywords:
   - lakesail
 
 dependencies:
-  - name: cert-manager
-    version: v1.14.4
-    repository: https://charts.jetstack.io
-    alias: cert-manager
-    condition: cert-manager.enabled
+# TODO: Re-enable cert-manager dependency when admissionWebhooks are enabled.
+#  - name: cert-manager
+#    version: v1.14.4
+#    repository: https://charts.jetstack.io
+#    alias: cert-manager
+#    condition: cert-manager.enabled
   - name: opentelemetry-operator
     version: 0.52.0
     repository: https://open-telemetry.github.io/opentelemetry-helm-charts

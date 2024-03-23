@@ -148,23 +148,35 @@ opentelemetry-collector-spec:
       otlp:
         protocols:
           grpc:
+            endpoint: 0.0.0.0:4317
           http:
+            endpoint: 0.0.0.0:4318
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 15
+      batch:
+        send_batch_size: 10000
+        timeout: 10s
 
     exporters:
       debug:
+        verbosity: detailed
 
     service:
       pipelines:
         traces:
           receivers: [otlp]
+          processors: []
           exporters: [debug]
 
 ###################################################################################
 # Cert Manager
 # Helm value configurations: https://artifacthub.io/packages/helm/cert-manager/cert-manager
 ###################################################################################
-
-cert-manager:
-  enabled: true
-  # https://cert-manager.io/docs/installation/helm/#crd-installation-advice
-  installCRDs: true
+# TODO: Re-enable cert-manager dependency when admissionWebhooks are enabled.
+#cert-manager:
+#  enabled: true
+#  # https://cert-manager.io/docs/installation/helm/#crd-installation-advice
+#  installCRDs: true

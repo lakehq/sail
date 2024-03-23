@@ -23,10 +23,11 @@ helm dependency build . # OR helm dependency update .
 helm install lakesail . # --debug
 ```
 
-## Connect
+## Misc
 
 ```shell
-
+kubectl get pods
+kubectl logs POD_NAME
 ```
 
 ## Teardown
