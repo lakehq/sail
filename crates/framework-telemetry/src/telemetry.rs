@@ -21,6 +21,7 @@ pub enum TelemetryError {
     #[error("Set global default error: {0}")]
     SetGlobalDefaultError(#[from] SetGlobalDefaultError),
 }
+
 pub fn init_telemetry() -> Result<(), TelemetryError> {
     let tracer = init_tracer()?;
     let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
@@ -64,7 +65,7 @@ pub fn init_tracer() -> Result<sdktrace::Tracer, TraceError> {
         .with_exporter(
             opentelemetry_otlp::new_exporter()
                 .tonic()
-                .with_endpoint("http://localhost:4317"), // TODO: env var
+                .with_endpoint("http://0.0.0.0:4317"), // TODO: env var
         )
         .with_trace_config(
             sdktrace::config().with_resource(
