@@ -1,5 +1,6 @@
 {{ $operator := index .Values "opentelemetry-operator" }}
-{{- if and (index $operator.enabled) (index $operator.collector.enabled) }}
+{{ $collector := index .Values "opentelemetry-collector-spec" }}
+{{- if and (index $operator.enabled) (index $collector.enabled) }}
 apiVersion: opentelemetry.io/v1alpha1
 kind: OpenTelemetryCollector
 metadata:
@@ -10,7 +11,7 @@ metadata:
 #    "helm.sh/hook-weight": "0"
 spec:
   # TODO: Refactor to have a dedicated collector config for each mode so one or more modes (or all) can be deployed.
-  mode: {{ index $operator.collector.mode }}
+  mode: {{ index $collector.mode }}
   config:
-    {{ tpl (toYaml (index $operator.collector.config)) $ | nindent 2 }}
+    {{ tpl (toYaml (index $collector.config)) $ | nindent 2 }}
 {{- end }}

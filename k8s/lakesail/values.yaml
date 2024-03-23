@@ -131,28 +131,28 @@ opentelemetry-operator:
         "helm.sh/hook": post-install,post-upgrade
         "helm.sh/hook-weight": "1"
 
-  # Default OpenTelemetry Collector that wll be deployed by Helm
-  # TODO: Refactor to have a dedicated collector config for each mode so one or more modes (or all) can be deployed.
-  collector:
-    # Basic sidecar collector with debug exporter (outputs to console).
-    # Good enough for our current stage, in a future TODO: we can get more fancy.
-    enabled: true
-    mode: deployment # TODO: Change to sidecar once this is working.
-    config: |
-      receivers:
-        otlp:
-          protocols:
-            grpc:
-            http:
+# Default OpenTelemetry Collector that wll be deployed by Helm
+# TODO: Refactor to have a dedicated collector config for each mode so one or more modes (or all) can be deployed.
+opentelemetry-collector-spec:
+  # Basic sidecar collector with debug exporter (outputs to console).
+  # Good enough for our current stage, in a future TODO: we can get more fancy.
+  enabled: true
+  mode: deployment # TODO: Change to sidecar once this is working.
+  config: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+          http:
 
-      exporters:
-        debug:
+    exporters:
+      debug:
 
-      service:
-        pipelines:
-          traces:
-            receivers: [otlp]
-            exporters: [debug]
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          exporters: [debug]
 
 ###################################################################################
 # Cert Manager
