@@ -22,11 +22,12 @@ pub enum TelemetryError {
     SetGlobalDefaultError(#[from] SetGlobalDefaultError),
 }
 
-pub fn init_telemetry() -> Result<(), TelemetryError> {
-    let tracer = init_tracer()?;
+// TODO: Make use_collector an env var
+pub fn init_telemetry(use_collector: bool) -> Result<(), TelemetryError> {
+    let tracer = init_tracer(use_collector)?;
     let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
     let subscriber = Registry::default()
-        .with(fmt::layer()) // If we want JSON: fmt::layer().json().flatten_event(true)
+        .with(fmt::layer())
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .with(telemetry);
     tracing::subscriber::set_global_default(subscriber)?;
@@ -34,7 +35,8 @@ pub fn init_telemetry() -> Result<(), TelemetryError> {
     Ok(())
 }
 
-pub fn init_tracer() -> Result<sdktrace::Tracer, TraceError> {
+// TODO: Make use_collector an env var
+pub fn init_tracer(use_collector: bool) -> Result<sdktrace::Tracer, TraceError> {
     global::set_text_map_propagator(TraceContextPropagator::new());
 
     let os_resource = OsResourceDetector.detect(Duration::from_secs(0));
@@ -43,40 +45,42 @@ pub fn init_tracer() -> Result<sdktrace::Tracer, TraceError> {
     let env_resource = EnvResourceDetector::new().detect(Duration::from_secs(0));
     let telemetry_resource = TelemetryResourceDetector.detect(Duration::from_secs(0));
 
-    // let exporter = opentelemetry_stdout::SpanExporter::default();
-    // let processor = SDKBatchSpanProcessor::builder(exporter, runtime::Tokio).build();
-    // let provider = SDKTracerProvider::builder()
-    //     .with_span_processor(processor)
-    //     .with_config(
-    //         config().with_resource(
-    //             os_resource
-    //                 .merge(&process_resource)
-    //                 .merge(&sdk_resource)
-    //                 .merge(&env_resource)
-    //                 .merge(&telemetry_resource),
-    //         ),
-    //     )
-    //     .build();
-    //
-    // provider.tracer("Test") // TODO: should be service.name
+    if use_collector {
+        opentelemetry_otlp::new_pipeline()
+            .tracing()
+            .with_exporter(
+                opentelemetry_otlp::new_exporter()
+                    .tonic()
+                    .with_endpoint("http://0.0.0.0:4317"), // TODO: env var
+            )
+            .with_trace_config(
+                sdktrace::config().with_resource(
+                    os_resource
+                        .merge(&process_resource)
+                        .merge(&sdk_resource)
+                        .merge(&env_resource)
+                        .merge(&telemetry_resource),
+                ),
+            )
+            .install_batch(runtime::Tokio)
+    } else {
+        let exporter = opentelemetry_stdout::SpanExporter::default();
+        let processor = sdktrace::BatchSpanProcessor::builder(exporter, runtime::Tokio).build();
+        let provider = sdktrace::TracerProvider::builder()
+            .with_span_processor(processor)
+            .with_config(
+                sdktrace::config().with_resource(
+                    os_resource
+                        .merge(&process_resource)
+                        .merge(&sdk_resource)
+                        .merge(&env_resource)
+                        .merge(&telemetry_resource),
+                ),
+            )
+            .build();
 
-    opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_exporter(
-            opentelemetry_otlp::new_exporter()
-                .tonic()
-                .with_endpoint("http://0.0.0.0:4317"), // TODO: env var
-        )
-        .with_trace_config(
-            sdktrace::config().with_resource(
-                os_resource
-                    .merge(&process_resource)
-                    .merge(&sdk_resource)
-                    .merge(&env_resource)
-                    .merge(&telemetry_resource),
-            ),
-        )
-        .install_batch(runtime::Tokio)
+        Ok(provider.tracer("Test")) // TODO: should be service.name
+    }
 }
 
 // TODO: init_metrics
