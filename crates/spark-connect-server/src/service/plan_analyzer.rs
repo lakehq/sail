@@ -4,7 +4,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::plan::from_spark_relation;
-use crate::schema::to_spark_schema;
+use crate::schema::{parse_spark_schema_string, to_spark_schema};
 use crate::session::Session;
 use crate::spark::connect as sc;
 use crate::spark::connect::analyze_plan_request::{
@@ -69,7 +69,10 @@ pub(crate) async fn handle_analyze_is_streaming(
     _session: Arc<Session>,
     _request: IsStreamingRequest,
 ) -> SparkResult<IsStreamingResponse> {
-    Err(SparkError::todo("handle analyze is streaming"))
+    // TODO: support streaming
+    Ok(IsStreamingResponse {
+        is_streaming: false,
+    })
 }
 
 pub(crate) async fn handle_analyze_input_files(
@@ -90,9 +93,12 @@ pub(crate) async fn handle_analyze_spark_version(
 
 pub(crate) async fn handle_analyze_ddl_parse(
     _session: Arc<Session>,
-    _request: DdlParseRequest,
+    request: DdlParseRequest,
 ) -> SparkResult<DdlParseResponse> {
-    Err(SparkError::todo("handle analyze ddl parse"))
+    let schema = parse_spark_schema_string(request.ddl_string.as_str())?;
+    Ok(DdlParseResponse {
+        parsed: Some(to_spark_schema(schema)?),
+    })
 }
 
 pub(crate) async fn handle_analyze_same_semantics(

@@ -18,15 +18,15 @@ use datafusion::logical_expr::{
     logical_plan as plan, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use datafusion::sql::parser::Statement;
-use datafusion::sql::sqlparser::dialect::GenericDialect;
-use datafusion::sql::sqlparser::parser::Parser;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::expression::{
     from_spark_expression, from_spark_literal_to_scalar, from_spark_sort_order,
 };
+use crate::schema::parse_spark_schema_string;
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
+use crate::sql::new_sql_parser;
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
     let cursor = Cursor::new(data);
@@ -158,38 +158,33 @@ pub(crate) async fn from_spark_relation(
             args,
             pos_args,
         }) => {
-            let dialect = GenericDialect {};
-            let mut statements = Parser::parse_sql(&dialect, query)?;
-            if statements.len() == 1 {
-                let plan = ctx
-                    .state()
-                    .statement_to_plan(Statement::Statement(Box::new(statements.pop().unwrap())))
-                    .await?;
-                if pos_args.len() == 0 && args.len() == 0 {
-                    Ok(plan)
-                } else if pos_args.len() > 0 && args.len() == 0 {
-                    let params = pos_args
-                        .iter()
-                        .map(|arg| from_spark_literal_to_scalar(arg))
-                        .collect::<SparkResult<_>>()?;
-                    Ok(plan.with_param_values(ParamValues::List(params))?)
-                } else if pos_args.len() == 0 && args.len() > 0 {
-                    let params = args
-                        .iter()
-                        .map(|(i, arg)| from_spark_literal_to_scalar(arg).map(|v| (i.clone(), v)))
-                        .collect::<SparkResult<_>>()?;
-                    Ok(plan.with_param_values(ParamValues::Map(params))?)
-                } else {
-                    Err(SparkError::invalid(
-                        "both positional and named arguments are specified",
-                    ))
-                }
+            let statement = new_sql_parser(query)?.parse_one_statement()?;
+            let plan = ctx
+                .state()
+                .statement_to_plan(Statement::Statement(Box::new(statement)))
+                .await?;
+            if pos_args.len() == 0 && args.len() == 0 {
+                Ok(plan)
+            } else if pos_args.len() > 0 && args.len() == 0 {
+                let params = pos_args
+                    .iter()
+                    .map(|arg| from_spark_literal_to_scalar(arg))
+                    .collect::<SparkResult<_>>()?;
+                Ok(plan.with_param_values(ParamValues::List(params))?)
+            } else if pos_args.len() == 0 && args.len() > 0 {
+                let params = args
+                    .iter()
+                    .map(|(i, arg)| from_spark_literal_to_scalar(arg).map(|v| (i.clone(), v)))
+                    .collect::<SparkResult<_>>()?;
+                Ok(plan.with_param_values(ParamValues::Map(params))?)
             } else {
-                Err(SparkError::todo("multiple statements in SQL query"))
+                Err(SparkError::invalid(
+                    "both positional and named arguments are specified",
+                ))
             }
         }
-        RelType::LocalRelation(sc::LocalRelation { data, schema }) => {
-            let batches = if let Some(data) = data {
+        RelType::LocalRelation(local) => {
+            let batches = if let Some(data) = &local.data {
                 read_arrow_batches(data.clone())?
             } else {
                 vec![]
@@ -197,8 +192,8 @@ pub(crate) async fn from_spark_relation(
             let schema = if let [batch, ..] = batches.as_slice() {
                 batch.schema()
             } else {
-                let _ = schema.as_ref().required("local relation schema")?;
-                return Err(SparkError::todo("parse schema from spark schema"));
+                let schema = local.schema.as_ref().required("local relation schema")?;
+                parse_spark_schema_string(schema)?
             };
             let provider = datafusion::datasource::MemTable::try_new(schema, vec![batches])?;
             Ok(LogicalPlanBuilder::scan(
