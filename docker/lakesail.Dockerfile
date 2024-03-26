@@ -18,6 +18,6 @@ ENV RUST_LOG=trace
 
 RUN apt-get update
 
-COPY --from=builder /app/target/release/hello /usr/local/bin
-
-ENTRYPOINT ["/usr/local/bin/hello"]
+# TODO: Adjust once we have a proper entrypoint
+COPY --from=builder /app/target/release/spark-connect-server /usr/local/bin
+ENTRYPOINT ["/usr/local/bin/spark-connect-server"]
