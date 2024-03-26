@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use datafusion::execution::context::SessionState as DFSessionState;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use lazy_static::lazy_static;
 
 use crate::error::SparkResult;
 use crate::executor::Executor;
@@ -69,7 +70,11 @@ impl Session {
 
 impl SessionState {
     pub(crate) fn get_config(&self, key: &str) -> Option<&String> {
-        self.config.get(key)
+        self.config.get(key).or_else(|| {
+            CONFIG_FALLBACK
+                .get(key)
+                .and_then(|fallback| self.config.get(*fallback))
+        })
     }
 
     pub(crate) fn set_config(&mut self, key: &str, value: &str) {
@@ -163,4 +168,80 @@ impl SessionManager {
         self.sessions.lock()?.remove(key);
         Ok(())
     }
+}
+
+lazy_static! {
+    static ref CONFIG_FALLBACK: HashMap<&'static str, &'static str> = {
+        let mut m = HashMap::new();
+        m.insert(
+            "spark.sql.adaptive.advisoryPartitionSizeInBytes",
+            "spark.sql.adaptive.shuffle.targetPostShuffleInputSize",
+        );
+        m.insert(
+            "spark.sql.execution.arrow.pyspark.enabled",
+            "spark.sql.execution.arrow.enabled",
+        );
+        m.insert(
+            "spark.sql.execution.arrow.pyspark.fallback.enabled",
+            "spark.sql.execution.arrow.fallback.enabled",
+        );
+        m.insert(
+            "spark.sql.execution.pandas.udf.buffer.size",
+            "spark.buffer.size",
+        );
+        m.insert(
+            "spark.sql.parquet.filterPushdown.stringPredicate",
+            "spark.sql.parquet.filterPushdown.string.startsWith",
+        );
+        m.insert(
+            "spark.sql.redaction.string.regex",
+            "spark.redaction.string.regex",
+        );
+        m.insert(
+            "spark.history.fs.driverlog.cleaner.enabled",
+            "spark.history.fs.cleaner.enabled",
+        );
+        m.insert(
+            "spark.history.fs.driverlog.cleaner.interval",
+            "spark.history.fs.cleaner.interval",
+        );
+        m.insert(
+            "spark.history.fs.driverlog.cleaner.maxAge",
+            "spark.history.fs.cleaner.maxAge",
+        );
+        m.insert(
+            "spark.authenticate.secret.driver.file",
+            "spark.authenticate.secret.file",
+        );
+        m.insert(
+            "spark.authenticate.secret.executor.file",
+            "spark.authenticate.secret.file",
+        );
+        m.insert("spark.driver.bindAddress", "spark.driver.host");
+        m.insert("spark.driver.blockManager.port", "spark.blockManager.port");
+        m.insert(
+            "spark.dynamicAllocation.initialExecutors",
+            "spark.dynamicAllocation.minExecutors",
+        );
+        m.insert(
+            "spark.dynamicAllocation.sustainedSchedulerBacklogTimeout",
+            "spark.dynamicAllocation.schedulerBacklogTimeout",
+        );
+        m.insert("spark.locality.wait.node", "spark.locality.wait");
+        m.insert("spark.locality.wait.process", "spark.locality.wait");
+        m.insert("spark.locality.wait.rack", "spark.locality.wait");
+        m.insert(
+            "spark.kubernetes.driver.container.image",
+            "spark.kubernetes.container.image",
+        );
+        m.insert(
+            "spark.kubernetes.executor.container.image",
+            "spark.kubernetes.container.image",
+        );
+        m.insert(
+            "spark.streaming.backpressure.initialRate",
+            "spark.streaming.receiver.maxRate",
+        );
+        m
+    };
 }
