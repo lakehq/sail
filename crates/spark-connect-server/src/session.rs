@@ -3,10 +3,13 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use datafusion::prelude::SessionContext;
+use datafusion::execution::context::SessionState as DFSessionState;
+use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::prelude::{SessionConfig, SessionContext};
 
 use crate::error::SparkResult;
 use crate::executor::Executor;
+use crate::extension::new_query_planner;
 
 pub(crate) struct Session {
     user_id: Option<String>,
@@ -31,10 +34,14 @@ pub(crate) struct SessionState {
 
 impl Session {
     pub(crate) fn new(user_id: Option<String>, session_id: String) -> Self {
+        let config = SessionConfig::new();
+        let runtime = Arc::new(RuntimeEnv::default());
+        let state = DFSessionState::new_with_config_rt(config, runtime);
+        let state = state.with_query_planner(new_query_planner());
         Self {
             user_id,
             session_id,
-            context: SessionContext::new(),
+            context: SessionContext::new_with_state(state),
             state: Mutex::new(SessionState {
                 config: HashMap::new(),
                 executors: HashMap::new(),

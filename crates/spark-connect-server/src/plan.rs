@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::common::ParamValues;
@@ -15,8 +14,9 @@ use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::provider_as_source;
 use datafusion::execution::context::{DataFilePaths, SessionContext};
-use datafusion::logical_expr::LogicalPlan;
-use datafusion::logical_expr::{logical_plan as plan, LogicalPlanBuilder, UNNAMED_TABLE};
+use datafusion::logical_expr::{
+    logical_plan as plan, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
+};
 use datafusion::sql::parser::Statement;
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
@@ -38,14 +38,11 @@ pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, Spar
     Ok(batches)
 }
 
-pub(crate) async fn to_arrow_batch(
-    batch: &RecordBatch,
-    schema: SchemaRef,
-) -> SparkResult<ArrowBatch> {
+pub(crate) async fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
     let mut output = ArrowBatch::default();
     {
         let cursor = Cursor::new(&mut output.data);
-        let mut writer = StreamWriter::try_new(cursor, schema.as_ref())?;
+        let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
         writer.write(batch)?;
         output.row_count += batch.num_rows() as i64;
         writer.finish()?;
@@ -109,11 +106,11 @@ pub(crate) async fn from_spark_relation(
         RelType::Project(project) => {
             let input = project.input.as_ref().required("projection input")?;
             let input = from_spark_relation(ctx, input).await?;
-            let expressions = project
+            let expressions: Vec<Expr> = project
                 .expressions
                 .iter()
                 .map(|e| from_spark_expression(e, input.schema()))
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<SparkResult<_>>()?;
             Ok(plan::builder::project(input, expressions)?)
         }
         RelType::Filter(filter) => {
@@ -134,13 +131,13 @@ pub(crate) async fn from_spark_relation(
             // TODO: handle sort.is_global
             let input = sort.input.as_ref().required("sort input")?;
             let input = from_spark_relation(ctx, input).await?;
-            let expr = sort
+            let expressions = sort
                 .order
                 .iter()
                 .map(|o| from_spark_sort_order(o, input.schema()))
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<SparkResult<_>>()?;
             Ok(LogicalPlan::Sort(plan::Sort {
-                expr,
+                expr: expressions,
                 input: Arc::new(input),
                 fetch: None,
             }))
@@ -174,13 +171,13 @@ pub(crate) async fn from_spark_relation(
                     let params = pos_args
                         .iter()
                         .map(|arg| from_spark_literal_to_scalar(arg))
-                        .collect::<Result<Vec<_>, _>>()?;
+                        .collect::<SparkResult<_>>()?;
                     Ok(plan.with_param_values(ParamValues::List(params))?)
                 } else if pos_args.len() == 0 && args.len() > 0 {
                     let params = args
                         .iter()
                         .map(|(i, arg)| from_spark_literal_to_scalar(arg).map(|v| (i.clone(), v)))
-                        .collect::<Result<HashMap<_, _>, _>>()?;
+                        .collect::<SparkResult<_>>()?;
                     Ok(plan.with_param_values(ParamValues::Map(params))?)
                 } else {
                     Err(SparkError::invalid(
@@ -222,11 +219,65 @@ pub(crate) async fn from_spark_relation(
                 input: Arc::new(from_spark_relation(ctx, input).await?),
             }))
         }
-        RelType::Deduplicate(_) => {
-            return Err(SparkError::todo("deduplicate"));
+        RelType::Deduplicate(dedup) => {
+            let input = dedup.input.as_ref().required("deduplicate input")?;
+            let plan = from_spark_relation(ctx, input).await?;
+            let schema = plan.schema();
+            let within_watermark = dedup.within_watermark.unwrap_or(false);
+            if within_watermark {
+                return Err(SparkError::todo("deduplicate within watermark"));
+            }
+            let column_names = &dedup.column_names;
+            let all_columns_as_keys = dedup.all_columns_as_keys.unwrap_or(false);
+            let distinct = if column_names.len() > 0 && !all_columns_as_keys {
+                let on_expressions: Vec<Expr> = column_names
+                    .iter()
+                    .map(|name| {
+                        // TODO: handle qualified column names
+                        let field = schema.field_with_unqualified_name(name)?;
+                        Ok(Expr::Column(field.qualified_column()))
+                    })
+                    .collect::<SparkResult<_>>()?;
+                let select_expressions: Vec<Expr> = schema
+                    .fields()
+                    .iter()
+                    .map(|field| Expr::Column(field.qualified_column()))
+                    .collect();
+                plan::Distinct::On(plan::DistinctOn::try_new(
+                    on_expressions,
+                    select_expressions,
+                    None,
+                    Arc::new(plan),
+                )?)
+            } else if column_names.len() == 0 && all_columns_as_keys {
+                plan::Distinct::All(Arc::new(plan))
+            } else {
+                return Err(SparkError::invalid(
+                    "must either specify deduplicate column names or use all columns as keys",
+                ));
+            };
+            Ok(LogicalPlan::Distinct(distinct))
         }
-        RelType::Range(_) => {
-            return Err(SparkError::todo("range"));
+        RelType::Range(range) => {
+            let start = range.start.unwrap_or(0);
+            let end = range.end;
+            let step = range.step;
+            // TODO: use parallelism in Spark configuration as the default
+            let num_partitions = range.num_partitions.unwrap_or(1);
+            if num_partitions < 1 {
+                return Err(SparkError::invalid(format!(
+                    "invalid number of partitions: {}",
+                    num_partitions
+                )));
+            }
+            Ok(LogicalPlan::Extension(Extension {
+                node: Arc::new(crate::extension::logical::RangeNode::try_new(
+                    start,
+                    end,
+                    step,
+                    num_partitions as u32,
+                )?),
+            }))
         }
         RelType::SubqueryAlias(sub) => {
             let input = sub.input.as_ref().required("subquery alias input")?;
@@ -240,26 +291,119 @@ pub(crate) async fn from_spark_relation(
                 alias,
             )?))
         }
-        RelType::Repartition(_) => {
-            return Err(SparkError::todo("repartition"));
+        RelType::Repartition(repartition) => {
+            let input = repartition.input.as_ref().required("repartition input")?;
+            let plan = from_spark_relation(ctx, input).await?;
+            // TODO: handle shuffle partition
+            let _ = repartition.shuffle;
+            Ok(LogicalPlan::Repartition(plan::Repartition {
+                input: Arc::new(plan),
+                partitioning_scheme: plan::Partitioning::RoundRobinBatch(
+                    repartition.num_partitions as usize,
+                ),
+            }))
         }
-        RelType::ToDf(_) => {
-            return Err(SparkError::todo("to dataframe"));
+        RelType::ToDf(to_df) => {
+            let input = to_df.input.as_ref().required("input relation")?;
+            let names = &to_df.column_names;
+            let plan = from_spark_relation(ctx, input).await?;
+            let schema = plan.schema();
+            if names.len() != schema.fields().len() {
+                return Err(SparkError::invalid(format!(
+                    "number of column names ({}) does not match number of columns ({})",
+                    names.len(),
+                    schema.fields().len()
+                )));
+            }
+            let expr: Vec<Expr> = schema
+                .fields()
+                .iter()
+                .zip(names.iter())
+                .map(|(field, name)| Expr::Column(field.qualified_column()).alias(name))
+                .collect();
+            Ok(plan::builder::project(plan, expr)?)
         }
-        RelType::WithColumnsRenamed(_) => {
-            return Err(SparkError::todo("with columns renamed"));
+        RelType::WithColumnsRenamed(rename) => {
+            let input = rename.input.as_ref().required("input relation")?;
+            let rename_map = &rename.rename_columns_map;
+            let plan = from_spark_relation(ctx, input).await?;
+            let schema = plan.schema();
+            let expr: Vec<Expr> = schema
+                .fields()
+                .iter()
+                .map(|field| {
+                    let name = field.name();
+                    let column = Expr::Column(field.qualified_column());
+                    match rename_map.get(name) {
+                        Some(n) => column.alias(n),
+                        None => column,
+                    }
+                })
+                .collect();
+            Ok(plan::builder::project(plan, expr)?)
         }
         RelType::ShowString(_) => {
             return Err(SparkError::todo("show string"));
         }
-        RelType::Drop(_) => {
-            return Err(SparkError::todo("drop"));
+        RelType::Drop(drop) => {
+            let input = drop.input.as_ref().required("input relation")?;
+            let plan = from_spark_relation(ctx, input).await?;
+            let schema = plan.schema();
+            let columns_to_drop = &drop.columns;
+            if !columns_to_drop.is_empty() {
+                return Err(SparkError::todo("drop column expressions"));
+            }
+            let names_to_drop = &drop.column_names;
+            let expr: Vec<Expr> = schema
+                .fields()
+                .iter()
+                .filter(|field| !names_to_drop.contains(&field.name()))
+                .map(|field| Expr::Column(field.qualified_column()))
+                .collect();
+            Ok(plan::builder::project(plan, expr)?)
         }
         RelType::Tail(_) => {
             return Err(SparkError::todo("tail"));
         }
-        RelType::WithColumns(_) => {
-            return Err(SparkError::todo("with columns"));
+        RelType::WithColumns(columns) => {
+            let input = columns.input.as_ref().required("input relation")?;
+            let plan = from_spark_relation(ctx, input).await?;
+            let schema = plan.schema();
+            let mut aliases: HashMap<String, (Expr, bool)> = columns
+                .aliases
+                .iter()
+                .map(|x| {
+                    // TODO: handle quoted identifiers
+                    let name = x.name.join(".");
+                    let expr = from_spark_expression(
+                        x.expr.as_ref().required("column alias expression")?,
+                        schema,
+                    )?;
+                    // TODO: handle metadata
+                    let _ = x.metadata;
+                    Ok((name.clone(), (expr, false)))
+                })
+                .collect::<SparkResult<_>>()?;
+            let mut expressions: Vec<Expr> = schema
+                .fields()
+                .iter()
+                .map(|field| {
+                    let name = field.name();
+                    match aliases.get_mut(name) {
+                        Some((expr, exists)) => {
+                            *exists = true;
+                            expr.clone().alias(name)
+                        }
+                        None => Expr::Column(field.qualified_column()),
+                    }
+                })
+                .collect();
+            for (name, (expr, exists)) in &aliases {
+                if !exists {
+                    expressions.push(expr.clone().alias(name));
+                }
+            }
+            Ok(plan::builder::project(plan, expressions)?)
         }
         RelType::Hint(_) => {
             return Err(SparkError::todo("hint"));
@@ -270,8 +414,21 @@ pub(crate) async fn from_spark_relation(
         RelType::ToSchema(_) => {
             return Err(SparkError::todo("to schema"));
         }
-        RelType::RepartitionByExpression(_) => {
-            return Err(SparkError::todo("repartition by expression"));
+        RelType::RepartitionByExpression(repartition) => {
+            let input = repartition.input.as_ref().required("repartition input")?;
+            let plan = from_spark_relation(ctx, input).await?;
+            let expressions: Vec<Expr> = repartition
+                .partition_exprs
+                .iter()
+                .map(|e| from_spark_expression(e, plan.schema()))
+                .collect::<SparkResult<_>>()?;
+            let num_partitions = repartition
+                .num_partitions
+                .ok_or_else(|| SparkError::todo("rebalance partitioning by expression"))?;
+            Ok(LogicalPlan::Repartition(plan::Repartition {
+                input: Arc::new(plan),
+                partitioning_scheme: plan::Partitioning::Hash(expressions, num_partitions as usize),
+            }))
         }
         RelType::MapPartitions(_) => {
             return Err(SparkError::todo("map partitions"));
