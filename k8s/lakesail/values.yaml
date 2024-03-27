@@ -30,7 +30,7 @@ serviceAccount:
   name: ""
 
 podAnnotations: {
-  sidecar.opentelemetry.io/inject: "sidecar-for-lakesail",
+  sidecar.opentelemetry.io/inject: "true",
   instrumentation.opentelemetry.io/inject-sdk: "true"
 }
 podLabels: {}
@@ -127,6 +127,13 @@ opentelemetry-operator:
   enabled: true
 
   manager: # TODO: Remove once admissionWebhooks create is enabled.
+    resources:
+      limits:
+        cpu: null
+        memory: null
+#      requests:
+#        cpu: null
+#        memory: null
     env:
       ENABLE_WEBHOOKS: "false"
     extraArgs:
