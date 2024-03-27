@@ -5,8 +5,8 @@ use datafusion::catalog::TableReference;
 use datafusion::common::{Column, DFSchema, ScalarValue};
 use datafusion::config::ConfigOptions;
 use datafusion::logical_expr::{
-    expr, AggregateUDF, BuiltinScalarFunction, GetFieldAccess, GetIndexedField, Operator,
-    ScalarUDF, TableSource, WindowUDF,
+    expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, GetFieldAccess, GetIndexedField,
+    Operator, ScalarUDF, TableSource, WindowUDF,
 };
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::sql::sqlparser::ast;
@@ -323,6 +323,8 @@ pub(crate) fn get_scalar_function(
         "^" => Some(Operator::BitwiseXor),
         "==" => Some(Operator::Eq),
         "!=" => Some(Operator::NotEq),
+        "shiftleft" => Some(Operator::BitwiseShiftLeft),
+        "shiftright" => Some(Operator::BitwiseShiftRight),
         _ => None,
     };
     if let Some(op) = op {
@@ -330,6 +332,14 @@ pub(crate) fn get_scalar_function(
         return Ok(expr::Expr::BinaryExpr(expr::BinaryExpr { left, op, right }));
     }
     match name {
+        "isnull" => {
+            let expr = get_one_argument(args)?;
+            return Ok(expr::Expr::IsNull(expr));
+        }
+        "isnotnull" => {
+            let expr = get_one_argument(args)?;
+            return Ok(expr::Expr::IsNotNull(expr));
+        }
         "negative" => {
             let expr = get_one_argument(args)?;
             return Ok(expr::Expr::Negative(expr));
@@ -384,13 +394,81 @@ pub(crate) fn get_scalar_function(
                 args,
             }));
         }
+        "avg" => {
+            return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
+                func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Avg),
+                args,
+                distinct: false,
+                filter: None,
+                order_by: None,
+            }));
+        }
+        "sum" => {
+            return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
+                func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Sum),
+                args,
+                distinct: false,
+                filter: None,
+                order_by: None,
+            }));
+        }
+        "count" => {
+            return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
+                func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Count),
+                args,
+                distinct: false,
+                filter: None,
+                order_by: None,
+            }));
+        }
+        "max" => {
+            return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
+                func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Max),
+                args,
+                distinct: false,
+                filter: None,
+                order_by: None,
+            }));
+        }
+        "min" => {
+            return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
+                func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Min),
+                args,
+                distinct: false,
+                filter: None,
+                order_by: None,
+            }));
+        }
         _ => {}
+    }
+    if name == "in" {
+        if args.is_empty() {
+            return Err(SparkError::invalid("in requires at least 1 argument"));
+        }
+        let expr = args.remove(0);
+        return Ok(expr::Expr::InList(expr::InList {
+            expr: Box::new(expr),
+            list: args,
+            negated: false,
+        }));
+    }
+    if name == "array_repeat" {
+        if args.len() != 2 {
+            return Err(SparkError::invalid("array_repeat requires 2 arguments"));
+        }
+        // DataFusion requires the repeat count to be int64.
+        let count = args.pop().unwrap();
+        let count = expr::Expr::Cast(expr::Cast {
+            expr: Box::new(count),
+            data_type: DataType::Int64,
+        });
+        args.push(count);
     }
     if name == "regexp_replace" {
         if args.len() != 3 {
             return Err(SparkError::invalid("regexp_replace requires 3 arguments"));
         }
-        // Spark replaces all occurrences of the pattern
+        // Spark replaces all occurrences of the pattern.
         args.push(expr::Expr::Literal(ScalarValue::Utf8(Some(
             "g".to_string(),
         ))));

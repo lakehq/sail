@@ -15,7 +15,8 @@ use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTable
 use datafusion::datasource::provider_as_source;
 use datafusion::execution::context::{DataFilePaths, SessionContext};
 use datafusion::logical_expr::{
-    logical_plan as plan, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
+    logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, LogicalPlanBuilder,
+    UNNAMED_TABLE,
 };
 use datafusion::sql::parser::Statement;
 
@@ -150,8 +151,33 @@ pub(crate) async fn from_spark_relation(
                 input: Arc::new(from_spark_relation(ctx, input).await?),
             }))
         }
-        RelType::Aggregate(_) => {
-            return Err(SparkError::todo("aggregate"));
+        RelType::Aggregate(aggregate) => {
+            use sc::aggregate::GroupType;
+
+            if aggregate.pivot.is_some() {
+                return Err(SparkError::todo("pivot"));
+            }
+            let group_type = GroupType::try_from(aggregate.group_type).required("group type")?;
+            if group_type != GroupType::Unspecified && group_type != GroupType::Groupby {
+                return Err(SparkError::todo("unsupported aggregate group type"));
+            }
+            let input = aggregate.input.as_ref().required("aggregate input")?;
+            let plan = from_spark_relation(ctx, input).await?;
+            let group_expr = aggregate
+                .grouping_expressions
+                .iter()
+                .map(|e| from_spark_expression(e, plan.schema()))
+                .collect::<SparkResult<_>>()?;
+            let aggr_expr = aggregate
+                .aggregate_expressions
+                .iter()
+                .map(|e| from_spark_expression(e, plan.schema()))
+                .collect::<SparkResult<_>>()?;
+            Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+                Arc::new(plan),
+                group_expr,
+                aggr_expr,
+            )?))
         }
         RelType::Sql(sc::Sql {
             query,
