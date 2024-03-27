@@ -4,6 +4,9 @@ metadata:
   name: {{ include "lakesail.fullname" . }}
   labels:
     {{- include "lakesail.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-1"
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}

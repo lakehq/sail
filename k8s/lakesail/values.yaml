@@ -29,7 +29,10 @@ serviceAccount:
   # If not set and create is true, a name is generated using the fullname template
   name: ""
 
-podAnnotations: {}
+podAnnotations: {
+  sidecar.opentelemetry.io/inject: "true",
+  instrumentation.opentelemetry.io/inject-sdk: "true"
+}
 podLabels: {}
 
 podSecurityContext: {}
@@ -45,7 +48,7 @@ securityContext: {}
 
 service:
   type: ClusterIP
-  port: 80
+  port: 50051
 
 ingress:
   enabled: false
@@ -76,13 +79,19 @@ resources: {}
   #   memory: 128Mi
 
 livenessProbe:
-  httpGet:
-    path: /
-    port: http
+#  httpGet:
+#    path: /
+#    port: http
+  grpc:
+    port: 50051
+  initialDelaySeconds: 10
 readinessProbe:
-  httpGet:
-    path: /
-    port: http
+#  httpGet:
+#    path: /
+#    port: http
+  grpc:
+    port: 50051
+  initialDelaySeconds: 10
 
 autoscaling:
   enabled: false
@@ -119,7 +128,7 @@ opentelemetry-operator:
 
   manager: # TODO: Remove once admissionWebhooks create is enabled.
     env:
-        ENABLE_WEBHOOKS: "false"
+      ENABLE_WEBHOOKS: "false"
 
   ## Admission webhooks make sure only requests with correctly formatted rules will get into the Operator.
   ## They also enable the sidecar injection for OpenTelemetryCollector and Instrumentation CR's
@@ -142,7 +151,7 @@ opentelemetry-collector-spec:
   # Basic sidecar collector with debug exporter (outputs to console).
   # Good enough for our current stage, in a future TODO: we can get more fancy.
   enabled: true
-  mode: deployment # TODO: Change to sidecar once this is working.
+  mode: sidecar
   config: |
     receivers:
       otlp:
@@ -154,18 +163,16 @@ opentelemetry-collector-spec:
 
     processors:
       batch:
+        send_batch_size: 10000
+        timeout: 10s
       memory_limiter:
-        # 75% of maximum memory up to 2G
-        limit_mib: 1536
-        # 25% of limit up to 2G
-        spike_limit_mib: 512
-        check_interval: 5s
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 15
+
 
     exporters:
       debug:
-        verbosity: detailed
-      logging:
-        verbosity: detailed
 
     extensions:
       health_check:
@@ -173,15 +180,11 @@ opentelemetry-collector-spec:
     service:
       extensions: [health_check]
 
-      telemetry:
-        logs:
-          level: "debug"
-
       pipelines:
         traces:
           receivers: [otlp]
           processors: [batch, memory_limiter]
-          exporters: [debug, logging]
+          exporters: [debug]
 
 ###################################################################################
 # Cert Manager
