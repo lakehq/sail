@@ -30,7 +30,7 @@ serviceAccount:
   name: ""
 
 podAnnotations: {
-  sidecar.opentelemetry.io/inject: "true",
+  sidecar.opentelemetry.io/inject: "sidecar-for-lakesail",
   instrumentation.opentelemetry.io/inject-sdk: "true"
 }
 podLabels: {}
@@ -129,6 +129,8 @@ opentelemetry-operator:
   manager: # TODO: Remove once admissionWebhooks create is enabled.
     env:
       ENABLE_WEBHOOKS: "false"
+    extraArgs:
+      - "--zap-log-level=debug"
 
   ## Admission webhooks make sure only requests with correctly formatted rules will get into the Operator.
   ## They also enable the sidecar injection for OpenTelemetryCollector and Instrumentation CR's
@@ -158,18 +160,9 @@ opentelemetry-collector-spec:
         protocols:
           grpc:
             endpoint: 0.0.0.0:4317
-          http:
-            endpoint: 0.0.0.0:4318
 
     processors:
       batch:
-        send_batch_size: 10000
-        timeout: 10s
-      memory_limiter:
-        check_interval: 1s
-        limit_percentage: 75
-        spike_limit_percentage: 15
-
 
     exporters:
       debug:
@@ -183,7 +176,7 @@ opentelemetry-collector-spec:
       pipelines:
         traces:
           receivers: [otlp]
-          processors: [batch, memory_limiter]
+          processors: [batch]
           exporters: [debug]
 
 ###################################################################################

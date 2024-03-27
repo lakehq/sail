@@ -34,10 +34,15 @@ kubectl port-forward svc/lakesail 50051:50051
 ## Misc
 
 ```shell
-export POD_NAME=$(kubectl get pods --namespace default -l "app.kubernetes.io/name=lakesail,app.kubernetes.io/instance=lakesail" -o jsonpath="{.items[0].metadata.name}")
 kubectl get pods
-kubectl logs POD_NAME
+kubectl get all
+export POD_NAME=$(kubectl get pods --namespace default -l "app.kubernetes.io/name=lakesail,app.kubernetes.io/instance=lakesail" -o jsonpath="{.items[0].metadata.name}")
 kubectl describe pods/$POD_NAME
+kubectl describe deployment lakesail
+kubectl describe deployment lakesail-opentelemetry-operator
+kubectl logs svc/lakesail --all-containers=true
+kubectl logs svc/lakesail-opentelemetry-operator --all-containers=true
+kubectl exec svc/lakesail -- printenv
 ```
 
 ## Teardown
