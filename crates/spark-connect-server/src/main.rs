@@ -11,13 +11,17 @@ use spark_connect_server::spark::connect::spark_connect_service_server::SparkCon
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_telemetry(true)?;
 
+    debug!("SPARK CONNECT SERVER STARTED");
+
     // A secure connection can be handled by a gateway in production.
-    let address = "127.0.0.1:50051".parse()?;
+    let address = "0.0.0.0:50051".parse()?;
 
     let (mut health_reporter, health_server) = tonic_health::server::health_reporter();
     health_reporter
         .set_serving::<SparkConnectServiceServer<SparkConnectServer>>()
         .await;
+
+    debug!("HEALTH SERVER STARTED");
 
     let reflect_server = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
@@ -25,6 +29,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             spark_connect_server::spark::connect::FILE_DESCRIPTOR_SET,
         )
         .build()?;
+
+    debug!("REFLECTION SERVER STARTED");
 
     let server = SparkConnectServer::default();
 
@@ -41,6 +47,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into_inner();
 
+    debug!("TRACE LAYER STARTED");
+
     tonic::transport::Server::builder()
         .layer(layer)
         .add_service(reflect_server)
@@ -48,6 +56,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .add_service(SparkConnectServiceServer::new(server))
         .serve(address)
         .await?;
+
+    debug!("TONIC SERVER STARTED");
 
     Ok(())
 }
