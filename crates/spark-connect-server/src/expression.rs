@@ -4,9 +4,10 @@ use datafusion::arrow::datatypes::{DataType, IntervalMonthDayNanoType};
 use datafusion::catalog::TableReference;
 use datafusion::common::{Column, DFSchema, ScalarValue};
 use datafusion::config::ConfigOptions;
+use datafusion::logical_expr::expr::ScalarFunction;
 use datafusion::logical_expr::{
     expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, GetFieldAccess, GetIndexedField,
-    Operator, ScalarUDF, TableSource, WindowUDF,
+    Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
 };
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::sql::sqlparser::ast;
@@ -53,39 +54,6 @@ impl ContextProvider for EmptyContextProvider {
     fn options(&self) -> &ConfigOptions {
         &self.options
     }
-}
-
-pub(crate) fn from_spark_sort_order(
-    sort_order: &sc::expression::SortOrder,
-    schema: &DFSchema,
-) -> SparkResult<expr::Expr> {
-    use sc::expression::sort_order::{NullOrdering, SortDirection};
-
-    let expr = sort_order
-        .child
-        .as_ref()
-        .required("expression for sort order")?;
-    let asc = match SortDirection::try_from(sort_order.direction) {
-        Ok(SortDirection::Ascending) => true,
-        Ok(SortDirection::Descending) => false,
-        Ok(SortDirection::Unspecified) => true,
-        Err(_) => {
-            return Err(SparkError::invalid("invalid sort direction"));
-        }
-    };
-    let nulls_first = match NullOrdering::try_from(sort_order.null_ordering) {
-        Ok(NullOrdering::SortNullsFirst) => true,
-        Ok(NullOrdering::SortNullsLast) => false,
-        Ok(NullOrdering::SortNullsUnspecified) => asc,
-        Err(_) => {
-            return Err(SparkError::invalid("invalid null ordering"));
-        }
-    };
-    Ok(expr::Expr::Sort(expr::Sort {
-        expr: Box::new(from_spark_expression(expr, schema)?),
-        asc,
-        nulls_first,
-    }))
 }
 
 pub(crate) fn from_spark_expression(
@@ -196,7 +164,32 @@ pub(crate) fn from_spark_expression(
             }))
         }
         ExprType::UnresolvedRegex(_) => Err(SparkError::todo("unresolved regex")),
-        ExprType::SortOrder(sort) => from_spark_sort_order(sort, schema),
+        ExprType::SortOrder(sort) => {
+            use sc::expression::sort_order::{NullOrdering, SortDirection};
+
+            let expr = sort.child.as_ref().required("expression for sort order")?;
+            let asc = match SortDirection::try_from(sort.direction) {
+                Ok(SortDirection::Ascending) => true,
+                Ok(SortDirection::Descending) => false,
+                Ok(SortDirection::Unspecified) => true,
+                Err(_) => {
+                    return Err(SparkError::invalid("invalid sort direction"));
+                }
+            };
+            let nulls_first = match NullOrdering::try_from(sort.null_ordering) {
+                Ok(NullOrdering::SortNullsFirst) => true,
+                Ok(NullOrdering::SortNullsLast) => false,
+                Ok(NullOrdering::SortNullsUnspecified) => asc,
+                Err(_) => {
+                    return Err(SparkError::invalid("invalid null ordering"));
+                }
+            };
+            Ok(expr::Expr::Sort(expr::Sort {
+                expr: Box::new(from_spark_expression(expr, schema)?),
+                asc,
+                nulls_first,
+            }))
+        }
         ExprType::LambdaFunction(_) => Err(SparkError::todo("lambda function")),
         ExprType::Window(_) => Err(SparkError::todo("window")),
         ExprType::UnresolvedExtractValue(extract) => {
@@ -331,6 +324,7 @@ pub(crate) fn get_scalar_function(
         let (left, right) = get_two_arguments(args)?;
         return Ok(expr::Expr::BinaryExpr(expr::BinaryExpr { left, op, right }));
     }
+
     match name {
         "isnull" => {
             let expr = get_one_argument(args)?;
@@ -439,42 +433,46 @@ pub(crate) fn get_scalar_function(
                 order_by: None,
             }));
         }
+        "in" => {
+            if args.is_empty() {
+                return Err(SparkError::invalid("in requires at least 1 argument"));
+            }
+            let expr = args.remove(0);
+            return Ok(expr::Expr::InList(expr::InList {
+                expr: Box::new(expr),
+                list: args,
+                negated: false,
+            }));
+        }
         _ => {}
     }
-    if name == "in" {
-        if args.is_empty() {
-            return Err(SparkError::invalid("in requires at least 1 argument"));
+
+    match name {
+        "array_repeat" => {
+            if args.len() != 2 {
+                return Err(SparkError::invalid("array_repeat requires 2 arguments"));
+            }
+            // DataFusion requires the repeat count to be int64.
+            let count = args.pop().unwrap();
+            let count = expr::Expr::Cast(expr::Cast {
+                expr: Box::new(count),
+                data_type: DataType::Int64,
+            });
+            args.push(count);
         }
-        let expr = args.remove(0);
-        return Ok(expr::Expr::InList(expr::InList {
-            expr: Box::new(expr),
-            list: args,
-            negated: false,
-        }));
-    }
-    if name == "array_repeat" {
-        if args.len() != 2 {
-            return Err(SparkError::invalid("array_repeat requires 2 arguments"));
+        "regexp_replace" => {
+            if args.len() != 3 {
+                return Err(SparkError::invalid("regexp_replace requires 3 arguments"));
+            }
+            // Spark replaces all occurrences of the pattern.
+            args.push(expr::Expr::Literal(ScalarValue::Utf8(Some(
+                "g".to_string(),
+            ))));
         }
-        // DataFusion requires the repeat count to be int64.
-        let count = args.pop().unwrap();
-        let count = expr::Expr::Cast(expr::Cast {
-            expr: Box::new(count),
-            data_type: DataType::Int64,
-        });
-        args.push(count);
+        _ => {}
     }
-    if name == "regexp_replace" {
-        if args.len() != 3 {
-            return Err(SparkError::invalid("regexp_replace requires 3 arguments"));
-        }
-        // Spark replaces all occurrences of the pattern.
-        args.push(expr::Expr::Literal(ScalarValue::Utf8(Some(
-            "g".to_string(),
-        ))));
-    }
-    Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-        func_def: expr::ScalarFunctionDefinition::BuiltIn(name.parse()?),
+    Ok(expr::Expr::ScalarFunction(ScalarFunction {
+        func_def: ScalarFunctionDefinition::BuiltIn(name.parse()?),
         args,
     }))
 }
