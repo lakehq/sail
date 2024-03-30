@@ -170,6 +170,13 @@ opentelemetry-collector-spec:
 
     processors:
       batch:
+        send_batch_size: 10000
+        timeout: 10s
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 30
+
 
     exporters:
       debug:
@@ -183,7 +190,7 @@ opentelemetry-collector-spec:
       pipelines:
         traces:
           receivers: [otlp]
-          processors: [batch]
+          processors: [batch, memory_limiter]
           exporters: [debug]
 
 ###################################################################################
