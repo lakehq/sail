@@ -48,7 +48,15 @@ securityContext: {}
 
 service:
   type: ClusterIP
-  port: 50051
+  framework:
+    type: ClusterIP
+    port: 50051
+  opentelemetryGrpc:
+    type: ClusterIP
+    port: 4317
+  opentelemetryHttp:
+    type: ClusterIP
+    port: 4318
 
 ingress:
   enabled: false
@@ -84,14 +92,14 @@ livenessProbe:
 #    port: http
   grpc:
     port: 50051
-  initialDelaySeconds: 10
+  initialDelaySeconds: 1
 readinessProbe:
 #  httpGet:
 #    path: /
 #    port: http
   grpc:
     port: 50051
-  initialDelaySeconds: 10
+  initialDelaySeconds: 1
 
 autoscaling:
   enabled: false
@@ -119,14 +127,21 @@ tolerations: []
 
 affinity: {}
 
+#hostNetwork: true
+
 ###################################################################################
 # OpenTelemetry Operator
 # Helm value configurations: https://github.com/open-telemetry/opentelemetry-helm-charts/blob/main/charts/opentelemetry-operator/values.yaml
 ###################################################################################
 opentelemetry-operator:
   enabled: true
+#  hostNetwork: true
 
-  manager: # TODO: Remove once admissionWebhooks create is enabled.
+  manager:
+#    ports:
+#      webhookPort: 9443
+#    ports:
+#      webhookPort: 10250
     resources:
       limits:
         cpu: null
@@ -135,24 +150,53 @@ opentelemetry-operator:
 #        cpu: null
 #        memory: null
     env:
-      ENABLE_WEBHOOKS: "false"
+      ENABLE_WEBHOOKS: "true"
     extraArgs:
       - "--zap-log-level=debug"
 
   ## Admission webhooks make sure only requests with correctly formatted rules will get into the Operator.
   ## They also enable the sidecar injection for OpenTelemetryCollector and Instrumentation CR's
   admissionWebhooks:
-    create: false # TODO: Enable this once we have a better understanding of how this works.
-#    certManager: # TODO: Uncomment this once we have cert-manager enabled.
-#      enabled: true
-#      # Annotations for the cert and issuer if cert-manager is enabled.
-#      # Annotate to ensure creation after the cert-manager CRDs have been installed.
+    create: true
+#    servicePort: 10250
+#    servicePort: 443
+    failurePolicy: Fail
+
+#    pods:
+#      failurePolicy: Fail
+
+    timeoutSeconds: 30
+
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - kube-system
+            - kube-node-lease
+
+#    objectSelector:
+#      matchExpressions:
+#        - key: kubernetes.io/metadata.name
+#          operator: NotIn
+#          values:
+#            - kube-system
+
+    certManager:
+      enabled: false
+      # Ensure creation after the cert-manager CRDs are installed.
 #      certificateAnnotations:
 #        "helm.sh/hook": post-install,post-upgrade
 #        "helm.sh/hook-weight": "1"
 #      issuerAnnotations:
 #        "helm.sh/hook": post-install,post-upgrade
 #        "helm.sh/hook-weight": "1"
+
+    autoGenerateCert:
+      enabled: true
+      # If set to true, new webhook key/certificate is generated on helm upgrade.
+      recreate: true
+
 
 # Default OpenTelemetry Collector that wll be deployed by Helm
 # TODO: Refactor to have a dedicated collector config for each mode so one or more modes (or all) can be deployed.
@@ -167,6 +211,8 @@ opentelemetry-collector-spec:
         protocols:
           grpc:
             endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
 
     processors:
       batch:
@@ -177,15 +223,19 @@ opentelemetry-collector-spec:
         limit_percentage: 75
         spike_limit_percentage: 30
 
-
     exporters:
       debug:
+        verbosity: detailed
 
     extensions:
       health_check:
 
     service:
       extensions: [health_check]
+
+      telemetry:
+        logs:
+          level: "debug"
 
       pipelines:
         traces:
@@ -198,7 +248,9 @@ opentelemetry-collector-spec:
 # Helm value configurations: https://artifacthub.io/packages/helm/cert-manager/cert-manager
 ###################################################################################
 # TODO: Re-enable cert-manager dependency when admissionWebhooks are enabled.
-#cert-manager:
-#  enabled: true
-#  # https://cert-manager.io/docs/installation/helm/#crd-installation-advice
-#  installCRDs: true
+cert-manager:
+  enabled: true
+  # https://cert-manager.io/docs/installation/helm/#crd-installation-advice
+  installCRDs: true
+  prometheus:
+    enabled: false

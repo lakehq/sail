@@ -40,8 +40,14 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
-            - name: http
-              containerPort: {{ .Values.service.port }}
+            - name: grpc
+              containerPort: {{ .Values.service.framework.port }}
+              protocol: TCP
+            - name: otel-grpc
+              containerPort: {{ .Values.service.opentelemetryGrpc.port }}
+              protocol: TCP
+            - name: otel-http
+              containerPort: {{ .Values.service.opentelemetryHttp.port }}
               protocol: TCP
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}

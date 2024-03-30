@@ -7,9 +7,17 @@ metadata:
 spec:
   type: {{ .Values.service.type }}
   ports:
-    - port: {{ .Values.service.port }}
-      targetPort: http
+    - port: {{ .Values.service.framework.port }}
+      targetPort: grpc
       protocol: TCP
-      name: http
+      name: grpc
+    - port: {{ .Values.service.opentelemetryGrpc.port }}
+      targetPort: otel-grpc
+      protocol: TCP
+      name: otel-grpc
+    - port: {{ .Values.service.opentelemetryHttp.port }}
+      targetPort: otel-http
+      protocol: TCP
+      name: otel-http
   selector:
     {{- include "lakesail.selectorLabels" . | nindent 4 }}

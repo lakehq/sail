@@ -4,7 +4,7 @@
 
 ```shell
 # https://kind.sigs.k8s.io/docs/user/quick-start/#installation
-kind create cluster
+kind create cluster # --config=k8s/kind-config.yaml
 ```
 
 ## Build
