@@ -4,9 +4,8 @@ metadata:
   name: {{ include "lakesail.fullname" . }}
   labels:
     {{- include "lakesail.labels" . | nindent 4 }}
-#  annotations:
-#    "helm.sh/hook": post-install,post-upgrade
-#    "helm.sh/hook-weight": "-1"
+  annotations:
+    sidecar.opentelemetry.io/inject: "true"
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
@@ -40,14 +39,11 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
-            - name: grpc
-              containerPort: {{ .Values.service.framework.port }}
+            - name: tcp-service
+              containerPort: {{ .Values.service.tcpService.port }}
               protocol: TCP
-            - name: otel-grpc
-              containerPort: {{ .Values.service.opentelemetryGrpc.port }}
-              protocol: TCP
-            - name: otel-http
-              containerPort: {{ .Values.service.opentelemetryHttp.port }}
+            - name: spark-connect
+              containerPort: {{ .Values.service.sparkConnect.port }}
               protocol: TCP
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}

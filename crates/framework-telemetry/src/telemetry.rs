@@ -30,9 +30,9 @@ pub fn init_telemetry(use_collector: bool) -> Result<(), TelemetryError> {
     let tracer = init_tracer(use_collector)?;
     let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
     let subscriber = Registry::default()
-        .with(fmt::layer())
+        .with(telemetry)
         .with(tracing_subscriber::EnvFilter::from_default_env())
-        .with(telemetry);
+        .with(fmt::layer());
     tracing::subscriber::set_global_default(subscriber)?;
 
     Ok(())
@@ -49,9 +49,14 @@ pub fn init_tracer(use_collector: bool) -> Result<sdktrace::Tracer, TelemetryErr
     let telemetry_resource = TelemetryResourceDetector.detect(Duration::from_secs(0));
 
     if use_collector {
-        let host = env::var("SIDECAR_FOR_LAKESAIL_COLLECTOR_SERVICE_HOST")?;
-        let port = env::var("SIDECAR_FOR_LAKESAIL_COLLECTOR_SERVICE_PORT_OTLP_GRPC")?;
-        let url = format!("http://{}:{}", host, port);
+        // let host = env::var("SIDECAR_FOR_LAKESAIL_COLLECTOR_SERVICE_HOST")?;
+        // let host = "0.0.0.0";
+        // let port = env::var("SIDECAR_FOR_LAKESAIL_COLLECTOR_SERVICE_PORT_OTLP_GRPC")?;
+        // let url = format!("http://{}:{}", host, port);
+        // let url = env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")?;
+        // let host = env::var("LAKESAIL_PORT_4317_TCP_ADDR")?;
+        // let port = env::var("LAKESAIL_SERVICE_PORT_OTLP")?;
+        let url = "http://0.0.0.0:4317";
 
         Ok(
             opentelemetry_otlp::new_pipeline()
@@ -59,7 +64,9 @@ pub fn init_tracer(use_collector: bool) -> Result<sdktrace::Tracer, TelemetryErr
                 .with_exporter(
                     opentelemetry_otlp::new_exporter()
                         .tonic()
-                        .with_endpoint(url),
+                        .with_endpoint(url)
+                        .with_protocol(opentelemetry_otlp::Protocol::Grpc)
+                        .with_timeout(Duration::from_secs(3)),
                 )
                 .with_trace_config(
                     sdktrace::config().with_resource(
@@ -67,10 +74,10 @@ pub fn init_tracer(use_collector: bool) -> Result<sdktrace::Tracer, TelemetryErr
                             .merge(&process_resource)
                             .merge(&sdk_resource)
                             .merge(&env_resource)
-                            .merge(&telemetry_resource),
+                            .merge(&telemetry_resource)
                     ),
                 )
-                .install_batch(runtime::Tokio)?
+                .install_batch(runtime::TokioCurrentThread)?
         )
     } else {
         let exporter = opentelemetry_stdout::SpanExporter::default();

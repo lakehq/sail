@@ -7,15 +7,26 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-tokio = { version = "1.36.0", features = ["macros", "rt-multi-thread"] }
-tracing = "0.1.40"
-tracing-opentelemetry = "0.23.0"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter", "fmt", "json"] }
-opentelemetry = { version = "0.22", features = ["trace"] }
-# https://github.com/open-telemetry/opentelemetry-rust/blob/main/opentelemetry-jaeger/README.md?plain=1#L67
-# https://github.com/open-telemetry/opentelemetry-rust/blob/main/opentelemetry-sdk/src/lib.rs#L97
-opentelemetry_sdk = { version = "0.22", features = ["rt-tokio"] }
+tracing = { version = "0.1.40", features = ["attributes", "std", "log", "max_level_debug", "release_max_level_info"] }
+tracing-opentelemetry = { version = "0.23.0" }
+tracing-subscriber = { version = "0.3.18", features = ["registry", "std", "smallvec", "fmt", "ansi", "tracing-log", "std", "env-filter", "json"] }
+opentelemetry = { version = "0.22", features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.22", features = ["trace", "metrics", "rt-tokio", "rt-tokio-current-thread"] }
 opentelemetry-semantic-conventions = "0.14.0"
-opentelemetry-otlp = { version = "0.15.0", features = ["trace", "grpc-tonic"] }
+opentelemetry-otlp = { version = "0.15.0", features = ["trace", "metrics", "grpc-tonic", "tls", "tls-roots"] }
+opentelemetry-proto = { version = "0.5.0" }
 opentelemetry-stdout = { version = "0.3.0", features = ["trace"] } # Temporary until we fully configure OpenTelemetry
-thiserror = "1.0.58"
+thiserror = { workspace = true }
+tokio = { version = "1.36.0", features = ["full"] }
+tonic = { version = "0.11", features = ["tls", "tls-roots"] }
+tonic-build = "0.11"
+tonic-reflection = "0.11"
+tonic-health = "0.11"
+prost = "0.12"
+prost-types = "0.12"
+tower = { version = "0.4", features = ["full"] }
+tower-http = { version = "0.5", features = ["full"] }
+uuid = { version = "1.8.0", features = ["v4"] }
+datafusion = "36.0.0"
+async-recursion = "1.1.0"
+async-stream = "0.3"

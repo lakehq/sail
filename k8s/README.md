@@ -21,14 +21,13 @@ kind load docker-image lakesail-framework:latest
 cd k8s/lakesail
 helm dependency build . # OR helm dependency update .
 helm install lakesail . # --debug
-
-kubectl port-forward svc/lakesail 50051:50051
 ```
 
 ## Connect
 
 ```shell
 kubectl port-forward svc/lakesail 50051:50051
+kubectl port-forward svc/lakesail 50051:50051 8080:8080
 ```
 
 ## Misc
@@ -42,7 +41,10 @@ kubectl describe deployment lakesail
 kubectl describe deployment lakesail-opentelemetry-operator
 kubectl logs svc/lakesail --all-containers=true
 kubectl logs svc/lakesail-opentelemetry-operator --all-containers=true
+kubectl logs deployment/lakesail # -f for tailing
+kubectl logs deployment/lakesail-opentelemetry-operator # -f for tailing
 kubectl exec svc/lakesail -- printenv
+kubectl delete pod $POD_NAME
 ```
 
 ## Teardown

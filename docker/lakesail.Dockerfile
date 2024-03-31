@@ -38,6 +38,6 @@ RUN apt-get update && \
 COPY --from=builder /app/spark-connect-server /
 ENTRYPOINT ["./spark-connect-server"]
 
-EXPOSE 50051
-EXPOSE 4317
-EXPOSE 4318
+#EXPOSE 50051
+#EXPOSE 4317
+#EXPOSE 4318
