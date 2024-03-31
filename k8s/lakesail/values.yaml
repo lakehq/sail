@@ -95,14 +95,14 @@ livenessProbe:
 #    port: http
   grpc:
     port: 50051
-  initialDelaySeconds: 10
+  initialDelaySeconds: 1
 readinessProbe:
 #  httpGet:
 #    path: /
 #    port: http
   grpc:
     port: 50051
-  initialDelaySeconds: 10
+  initialDelaySeconds: 1
 
 autoscaling:
   enabled: false
@@ -206,7 +206,6 @@ opentelemetry-collector-spec:
 
     exporters:
       debug:
-        verbosity: detailed
 
     extensions:
       health_check:
