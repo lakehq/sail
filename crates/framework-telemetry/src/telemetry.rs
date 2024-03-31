@@ -49,14 +49,9 @@ pub fn init_tracer(use_collector: bool) -> Result<sdktrace::Tracer, TelemetryErr
     let telemetry_resource = TelemetryResourceDetector.detect(Duration::from_secs(0));
 
     if use_collector {
-        // let host = env::var("SIDECAR_FOR_LAKESAIL_COLLECTOR_SERVICE_HOST")?;
-        // let host = "0.0.0.0";
-        // let port = env::var("SIDECAR_FOR_LAKESAIL_COLLECTOR_SERVICE_PORT_OTLP_GRPC")?;
-        // let url = format!("http://{}:{}", host, port);
-        // let url = env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")?;
-        // let host = env::var("LAKESAIL_PORT_4317_TCP_ADDR")?;
-        // let port = env::var("LAKESAIL_SERVICE_PORT_OTLP")?;
-        let url = "http://0.0.0.0:4317";
+        let host = env::var("LAKESAIL_OPENTELEMETRY_COLLECTOR_SERVICE_HOST")?;
+        let port = env::var("LAKESAIL_OPENTELEMETRY_COLLECTOR_SERVICE_PORT_OTLP_GRPC")?;
+        let url = format!("http://{}:{}", host, port);
 
         Ok(
             opentelemetry_otlp::new_pipeline()
