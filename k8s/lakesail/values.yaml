@@ -204,25 +204,25 @@ opentelemetry-collector-spec:
         limit_percentage: 75
         spike_limit_percentage: 30
 
-      exporters:
-        debug:
-          verbosity: detailed
+    exporters:
+      debug:
+        verbosity: detailed
 
-      extensions:
-        health_check:
+    extensions:
+      health_check:
 
-      service:
-        extensions: [health_check]
+    service:
+      extensions: [health_check]
 
-        telemetry:
-          logs:
-            level: "debug"
+      telemetry:
+        logs:
+          level: "debug"
 
-        pipelines:
-          traces:
-            receivers: [otlp]
-            processors: [batch, memory_limiter]
-            exporters: [debug]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch, memory_limiter]
+          exporters: [debug]
 #  config: |
 #    receivers:
 #      otlp:
@@ -247,7 +247,7 @@ opentelemetry-collector-spec:
 #
 #    exporters:
 #      otlp:
-#        endpoint: "lakesail-collector.default:4317"
+#        endpoint: "lakesail-opentelemetry-collector.default:4317"
 #        tls:
 #          insecure: true
 #        sending_queue:

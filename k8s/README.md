@@ -27,7 +27,6 @@ helm install lakesail . # --debug
 
 ```shell
 kubectl port-forward svc/lakesail 50051:50051
-kubectl port-forward svc/lakesail 50051:50051 8080:8080
 ```
 
 ## Misc
@@ -42,6 +41,7 @@ kubectl describe deployment lakesail-opentelemetry-operator
 kubectl logs svc/lakesail --all-containers=true
 kubectl logs svc/lakesail-opentelemetry-operator --all-containers=true
 kubectl logs deployment/lakesail # -f for tailing
+kubectl logs deployment/lakesail-opentelemetry-collector # -f for tailing
 kubectl logs deployment/lakesail-opentelemetry-operator # -f for tailing
 kubectl exec svc/lakesail -- printenv
 kubectl delete pod $POD_NAME
