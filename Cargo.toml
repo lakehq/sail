@@ -7,7 +7,7 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-tracing = { version = "0.1.40", features = ["attributes", "std", "log", "max_level_debug", "release_max_level_info"] }
+tracing = { version = "0.1.40", features = ["attributes", "std", "log"] }
 tracing-opentelemetry = { version = "0.23.0" }
 tracing-subscriber = { version = "0.3.18", features = ["registry", "std", "smallvec", "fmt", "ansi", "tracing-log", "std", "env-filter", "json"] }
 opentelemetry = { version = "0.22", features = ["trace", "metrics"] }
