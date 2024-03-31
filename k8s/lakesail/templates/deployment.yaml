@@ -4,8 +4,6 @@ metadata:
   name: {{ include "lakesail.fullname" . }}
   labels:
     {{- include "lakesail.labels" . | nindent 4 }}
-  annotations:
-    sidecar.opentelemetry.io/inject: "true"
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}

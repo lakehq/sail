@@ -30,7 +30,7 @@ serviceAccount:
   name: ""
 
 podAnnotations: {
-  sidecar.opentelemetry.io/inject: "true",
+#  sidecar.opentelemetry.io/inject: "true",
 #  instrumentation.opentelemetry.io/inject-sdk: "true"
 }
 podLabels: {}
@@ -137,20 +137,12 @@ affinity: {}
 ###################################################################################
 opentelemetry-operator:
   enabled: true
-#  hostNetwork: true
 
   manager:
-#    ports:
-#      webhookPort: 9443
-#    ports:
-#      webhookPort: 10250
     resources:
       limits:
         cpu: null
         memory: null
-#      requests:
-#        cpu: null
-#        memory: null
     extraArgs:
       - "--zap-log-level=debug"
 
@@ -158,8 +150,6 @@ opentelemetry-operator:
   ## They also enable the sidecar injection for OpenTelemetryCollector and Instrumentation CR's
   admissionWebhooks:
     create: true
-#    servicePort: 10250
-#    servicePort: 443
     failurePolicy: Ignore
 
 #    pods:
@@ -174,24 +164,16 @@ opentelemetry-operator:
           values:
             - kube-system
             - kube-node-lease
-            - cert-manager
-
-#    objectSelector:
-#      matchExpressions:
-#        - key: kubernetes.io/metadata.name
-#          operator: NotIn
-#          values:
-#            - kube-system
 
     certManager:
-      enabled: true
+      enabled: false
       # Ensure creation after the cert-manager CRDs are installed.
-      certificateAnnotations:
-        "helm.sh/hook": post-install,post-upgrade
-        "helm.sh/hook-weight": "1"
-      issuerAnnotations:
-        "helm.sh/hook": post-install,post-upgrade
-        "helm.sh/hook-weight": "1"
+#      certificateAnnotations:
+#        "helm.sh/hook": post-install,post-upgrade
+#        "helm.sh/hook-weight": "1"
+#      issuerAnnotations:
+#        "helm.sh/hook": post-install,post-upgrade
+#        "helm.sh/hook-weight": "1"
 
     autoGenerateCert:
       enabled: true
@@ -205,7 +187,7 @@ opentelemetry-collector-spec:
   # Basic sidecar collector with debug exporter (outputs to console).
   # Good enough for our current stage, in a future TODO: we can get more fancy.
   enabled: true
-  mode: sidecar
+  mode: deployment
   config: |
       receivers:
         otlp:
@@ -215,16 +197,35 @@ opentelemetry-collector-spec:
             http:
               endpoint: 0.0.0.0:4318
 
-      processors:
+    processors:
+      batch:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 30
+      resourcedetection:
+        detectors: [env, system]
+        timeout: 2s
+        override: false
 
       exporters:
         debug:
+          verbosity: detailed
+
+      extensions:
+        health_check:
 
       service:
+        extensions: [health_check]
+
+        telemetry:
+          logs:
+            level: "debug"
+
         pipelines:
           traces:
             receivers: [otlp]
-            processors: []
+            processors: [batch, memory_limiter, resourcedetection]
             exporters: [debug]
 #  config: |
 #    receivers:
@@ -232,6 +233,8 @@ opentelemetry-collector-spec:
 #        protocols:
 #          grpc:
 #            endpoint: 0.0.0.0:4317
+#          http:
+#            endpoint: 0.0.0.0:4318
 #
 #    processors:
 #      batch:
@@ -279,9 +282,9 @@ opentelemetry-collector-spec:
 # Helm value configurations: https://artifacthub.io/packages/helm/cert-manager/cert-manager
 ###################################################################################
 # TODO: Re-enable cert-manager dependency when admissionWebhooks are enabled.
-cert-manager:
-  enabled: true
-  # https://cert-manager.io/docs/installation/helm/#crd-installation-advice
-  installCRDs: true
-  prometheus:
-    enabled: false
+#cert-manager:
+#  enabled: true
+#  # https://cert-manager.io/docs/installation/helm/#crd-installation-advice
+#  installCRDs: true
+#  prometheus:
+#    enabled: false

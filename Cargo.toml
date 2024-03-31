@@ -16,7 +16,7 @@ opentelemetry-semantic-conventions = "0.14.0"
 opentelemetry-otlp = { version = "0.15.0", features = ["trace", "metrics", "grpc-tonic", "tls", "tls-roots"] }
 opentelemetry-proto = { version = "0.5.0" }
 opentelemetry-stdout = { version = "0.3.0", features = ["trace"] } # Temporary until we fully configure OpenTelemetry
-thiserror = { workspace = true }
+thiserror = { version = "1.0.58" }
 tokio = { version = "1.36.0", features = ["full"] }
 tonic = { version = "0.11", features = ["tls", "tls-roots"] }
 tonic-build = "0.11"
@@ -25,8 +25,8 @@ tonic-health = "0.11"
 prost = "0.12"
 prost-types = "0.12"
 tower = { version = "0.4", features = ["full"] }
-tower-http = { version = "0.5", features = ["full"] }
+tower-http = { version = "0.4", features = ["full"] }
 uuid = { version = "1.8.0", features = ["v4"] }
-datafusion = "36.0.0"
+datafusion = "35.0.0" # 36.0.0 has breaking changes
 async-recursion = "1.1.0"
 async-stream = "0.3"
