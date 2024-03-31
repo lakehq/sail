@@ -4,7 +4,7 @@
 apiVersion: opentelemetry.io/v1alpha1
 kind: OpenTelemetryCollector
 metadata:
-  name: {{ .Release.Name }}-{{ index $collector.mode }}
+  name: {{ .Release.Name }}
   labels:
     "app.kubernetes.io/managed-by": "opentelemetry-operator"
   annotations:

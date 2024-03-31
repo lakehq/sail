@@ -203,10 +203,6 @@ opentelemetry-collector-spec:
         check_interval: 1s
         limit_percentage: 75
         spike_limit_percentage: 30
-      resourcedetection:
-        detectors: [env, system]
-        timeout: 2s
-        override: false
 
       exporters:
         debug:
@@ -225,7 +221,7 @@ opentelemetry-collector-spec:
         pipelines:
           traces:
             receivers: [otlp]
-            processors: [batch, memory_limiter, resourcedetection]
+            processors: [batch, memory_limiter]
             exporters: [debug]
 #  config: |
 #    receivers:
@@ -251,7 +247,7 @@ opentelemetry-collector-spec:
 #
 #    exporters:
 #      otlp:
-#        endpoint: "otel-collector.default:4317"
+#        endpoint: "lakesail-collector.default:4317"
 #        tls:
 #          insecure: true
 #        sending_queue:
