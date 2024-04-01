@@ -158,7 +158,7 @@ pub(crate) async fn handle_execute_write_operation(
                     )))
                 }
             };
-            LogicalPlanBuilder::copy_to(plan, path, format, false, options)
+            LogicalPlanBuilder::copy_to(plan, path, format, options)
                 .or_else(|e| Err(SparkError::from(e)))?
                 .build()
                 .or_else(|e| Err(SparkError::from(e)))?

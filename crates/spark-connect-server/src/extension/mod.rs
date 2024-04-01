@@ -6,6 +6,8 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use tonic::async_trait;
 
+pub(crate) mod analyzer;
+pub(crate) mod function;
 pub(crate) mod logical;
 pub(crate) mod physical;
 

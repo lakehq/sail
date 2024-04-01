@@ -21,6 +21,9 @@ use datafusion::sql::parser::Statement;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::expression::{from_spark_expression, from_spark_literal_to_scalar};
+use crate::extension::analyzer::alias::rewrite_multi_alias;
+use crate::extension::analyzer::explode::rewrite_explode;
+use crate::extension::analyzer::wildcard::rewrite_wildcard;
 use crate::schema::parse_spark_schema_string;
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
@@ -104,14 +107,17 @@ pub(crate) async fn from_spark_relation(
             let input = project.input.as_ref().required("projection input")?;
             let input = from_spark_relation(ctx, input).await?;
             let schema = input.schema();
-            let expressions: Vec<Expr> = project
+            let expr: Vec<Expr> = project
                 .expressions
                 .iter()
                 .map(|e| from_spark_expression(e, schema))
                 .collect::<SparkResult<_>>()?;
-            // TODO: transform expressions in analyzer
+            // TODO: handle rewrites in SQL parsing
+            let expr = rewrite_multi_alias(expr)?;
+            let (input, expr) = rewrite_wildcard(input, expr)?;
+            let (input, expr) = rewrite_explode(input, expr)?;
             Ok(LogicalPlan::Projection(plan::Projection::try_new(
-                expressions,
+                expr,
                 Arc::new(input),
             )?))
         }
@@ -135,7 +141,7 @@ pub(crate) async fn from_spark_relation(
             let input = sort.input.as_ref().required("sort input")?;
             let input = from_spark_relation(ctx, input).await?;
             let schema = input.schema();
-            let expressions = sort
+            let expr = sort
                 .order
                 .iter()
                 .map(|o| {
@@ -147,7 +153,7 @@ pub(crate) async fn from_spark_relation(
                 })
                 .collect::<SparkResult<_>>()?;
             Ok(LogicalPlan::Sort(plan::Sort {
-                expr: expressions,
+                expr,
                 input: Arc::new(input),
                 fetch: None,
             }))
@@ -263,7 +269,7 @@ pub(crate) async fn from_spark_relation(
             let column_names = &dedup.column_names;
             let all_columns_as_keys = dedup.all_columns_as_keys.unwrap_or(false);
             let distinct = if column_names.len() > 0 && !all_columns_as_keys {
-                let on_expressions: Vec<Expr> = column_names
+                let on_expr: Vec<Expr> = column_names
                     .iter()
                     .map(|name| {
                         // TODO: handle qualified column names
@@ -271,14 +277,14 @@ pub(crate) async fn from_spark_relation(
                         Ok(Expr::Column(field.qualified_column()))
                     })
                     .collect::<SparkResult<_>>()?;
-                let select_expressions: Vec<Expr> = schema
+                let select_expr: Vec<Expr> = schema
                     .fields()
                     .iter()
                     .map(|field| Expr::Column(field.qualified_column()))
                     .collect();
                 plan::Distinct::On(plan::DistinctOn::try_new(
-                    on_expressions,
-                    select_expressions,
+                    on_expr,
+                    select_expr,
                     None,
                     Arc::new(input),
                 )?)
@@ -426,27 +432,27 @@ pub(crate) async fn from_spark_relation(
                     Ok((name.clone(), (expr, false)))
                 })
                 .collect::<SparkResult<_>>()?;
-            let mut expressions: Vec<Expr> = schema
+            let mut expr: Vec<Expr> = schema
                 .fields()
                 .iter()
                 .map(|field| {
                     let name = field.name();
                     match aliases.get_mut(name) {
-                        Some((expr, exists)) => {
+                        Some((e, exists)) => {
                             *exists = true;
-                            expr.clone().alias(name)
+                            e.clone().alias(name)
                         }
                         None => Expr::Column(field.qualified_column()),
                     }
                 })
                 .collect();
-            for (name, (expr, exists)) in &aliases {
+            for (name, (e, exists)) in &aliases {
                 if !exists {
-                    expressions.push(expr.clone().alias(name));
+                    expr.push(e.clone().alias(name));
                 }
             }
             Ok(LogicalPlan::Projection(plan::Projection::try_new(
-                expressions,
+                expr,
                 Arc::new(input),
             )?))
         }
@@ -463,7 +469,7 @@ pub(crate) async fn from_spark_relation(
             let input = repartition.input.as_ref().required("repartition input")?;
             let input = from_spark_relation(ctx, input).await?;
             let schema = input.schema();
-            let expressions: Vec<Expr> = repartition
+            let expr: Vec<Expr> = repartition
                 .partition_exprs
                 .iter()
                 .map(|e| from_spark_expression(e, schema))
@@ -473,7 +479,7 @@ pub(crate) async fn from_spark_relation(
                 .ok_or_else(|| SparkError::todo("rebalance partitioning by expression"))?;
             Ok(LogicalPlan::Repartition(plan::Repartition {
                 input: Arc::new(input),
-                partitioning_scheme: plan::Partitioning::Hash(expressions, num_partitions as usize),
+                partitioning_scheme: plan::Partitioning::Hash(expr, num_partitions as usize),
             }))
         }
         RelType::MapPartitions(_) => {

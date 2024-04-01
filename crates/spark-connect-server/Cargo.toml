@@ -14,7 +14,7 @@ tonic-reflection = "0.10"
 tonic-health = "0.10"
 tokio = { workspace = true }
 uuid = { version = "1.7.0", features = ["v4"] }
-datafusion = "35.0.0"
+datafusion = "36.0.0"
 async-recursion = "1.0"
 thiserror = "1.0"
 tower = "0.4"

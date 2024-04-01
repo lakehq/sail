@@ -1,11 +1,8 @@
-use datafusion::sql::sqlparser::ast::{
-    ColumnDef, DataType, GroupByExpr, Ident, Query, Select, SetExpr, Statement, TableFactor,
-    TableWithJoins, Values,
-};
+use datafusion::sql::sqlparser::ast::{ColumnDef, DataType, Expr, GroupByExpr, Ident, Query, Select, SetExpr, Statement, TableFactor, TableWithJoins, Values};
 use datafusion::sql::sqlparser::dialect::Dialect;
 use datafusion::sql::sqlparser::keywords;
 use datafusion::sql::sqlparser::keywords::Keyword;
-use datafusion::sql::sqlparser::parser::{Parser, ParserError, WildcardExpr};
+use datafusion::sql::sqlparser::parser::{Parser, ParserError};
 use datafusion::sql::sqlparser::tokenizer::{Token, Word};
 
 #[derive(Debug)]
@@ -150,7 +147,7 @@ fn parse_spark_data_type(parser: &mut Parser) -> Result<DataType, ParserError> {
 }
 
 fn parse_spark_column_def(parser: &mut Parser) -> Result<ColumnDef, ParserError> {
-    let name = parser.parse_identifier()?;
+    let name = parser.parse_identifier(false)?;
     let data_type = parse_spark_data_type(parser)?;
     Ok(ColumnDef {
         name,
@@ -184,7 +181,7 @@ impl SparkSqlParser<'_> {
         Ok(statement)
     }
 
-    pub(crate) fn parse_wildcard_expr(&mut self) -> Result<WildcardExpr, ParserError> {
+    pub(crate) fn parse_wildcard_expr(&mut self) -> Result<Expr, ParserError> {
         Ok(self.parser.parse_wildcard_expr()?)
     }
 
