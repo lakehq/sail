@@ -14,11 +14,15 @@ if __name__ == "__main__":
 
     print(spark.range(-1).toPandas())
     print(spark.range(10, 0, -2, 3).toPandas())
+    print(spark.createDataFrame([1, 2, 3], schema="long").toPandas())
+    print(spark.createDataFrame([(1, "a"), (2, "b")], schema="a integer, t string").toPandas())
 
     df = spark.createDataFrame([Row(a=1, b=Row(foo="hello")), Row(a=2, b=Row(foo="world"))])
     print(df.schema)
+    print(df.select(F.abs(F.col("a"))).toPandas())
     print(df.distinct().dropDuplicates(["a"]).repartition(3).repartition(2, "a").toPandas())
     print(df.select("a", "b").limit(1).toPandas())
+    print(df.select(df.b["foo"]).toPandas())
     print(df.selectExpr("b.foo").toPandas())
     print(df.withColumn("c", F.col("a")).withColumn("a", F.col("b")).toPandas())
     print(df.drop("b").toPandas())

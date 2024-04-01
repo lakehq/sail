@@ -1,26 +1,30 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, IntervalMonthDayNanoType};
 use datafusion::catalog::TableReference;
 use datafusion::common::{Column, DFSchema, ScalarValue};
 use datafusion::config::ConfigOptions;
-use datafusion::logical_expr::{expr, AggregateUDF, ScalarUDF, TableSource, WindowUDF};
+use datafusion::logical_expr::expr::ScalarFunction;
+use datafusion::logical_expr::{
+    expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, GetFieldAccess, GetIndexedField,
+    Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
+};
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::sql::sqlparser::ast;
 use datafusion::sql::sqlparser::ast::ObjectName;
-use datafusion::sql::sqlparser::dialect::GenericDialect;
-use datafusion::sql::sqlparser::parser::{Parser, WildcardExpr};
+use datafusion::sql::sqlparser::parser::WildcardExpr;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::schema::from_spark_data_type;
+use crate::schema::{from_spark_data_type, parse_spark_data_type_string};
 use crate::spark::connect as sc;
+use crate::sql::new_sql_parser;
 
 #[derive(Default)]
-struct ExpressionContextProvider {
+pub(crate) struct EmptyContextProvider {
     options: ConfigOptions,
 }
 
-impl ContextProvider for ExpressionContextProvider {
+impl ContextProvider for EmptyContextProvider {
     fn get_table_source(
         &self,
         name: TableReference,
@@ -52,39 +56,6 @@ impl ContextProvider for ExpressionContextProvider {
     }
 }
 
-pub(crate) fn from_spark_sort_order(
-    sort_order: &sc::expression::SortOrder,
-    schema: &DFSchema,
-) -> SparkResult<expr::Expr> {
-    use sc::expression::sort_order::{NullOrdering, SortDirection};
-
-    let expr = sort_order
-        .child
-        .as_ref()
-        .required("expression for sort order")?;
-    let asc = match SortDirection::try_from(sort_order.direction) {
-        Ok(SortDirection::Ascending) => true,
-        Ok(SortDirection::Descending) => false,
-        Ok(SortDirection::Unspecified) => true,
-        Err(_) => {
-            return Err(SparkError::invalid("invalid sort direction"));
-        }
-    };
-    let nulls_first = match NullOrdering::try_from(sort_order.null_ordering) {
-        Ok(NullOrdering::SortNullsFirst) => true,
-        Ok(NullOrdering::SortNullsLast) => false,
-        Ok(NullOrdering::SortNullsUnspecified) => asc,
-        Err(_) => {
-            return Err(SparkError::invalid("invalid null ordering"));
-        }
-    };
-    Ok(expr::Expr::Sort(expr::Sort {
-        expr: Box::new(from_spark_expression(expr, schema)?),
-        asc,
-        nulls_first,
-    }))
-}
-
 pub(crate) fn from_spark_expression(
     expr: &sc::Expression,
     schema: &DFSchema,
@@ -101,13 +72,25 @@ pub(crate) fn from_spark_expression(
             let col = Column::new_unqualified(&attr.unparsed_identifier);
             Ok(expr::Expr::Column(col))
         }
-        ExprType::UnresolvedFunction(_) => Err(SparkError::todo("unresolved function")),
+        ExprType::UnresolvedFunction(func) => {
+            if func.is_distinct {
+                return Err(SparkError::unsupported("distinct function"));
+            }
+            if func.is_user_defined_function {
+                return Err(SparkError::unsupported("user defined function"));
+            }
+            let args = func
+                .arguments
+                .iter()
+                .map(|x| from_spark_expression(x, schema))
+                .collect::<SparkResult<Vec<_>>>()?;
+            Ok(get_scalar_function(func.function_name.as_str(), args)?)
+        }
         ExprType::ExpressionString(expr) => {
-            let dialect = GenericDialect {};
-            let mut parser = Parser::new(&dialect).try_with_sql(&expr.expression)?;
+            let mut parser = new_sql_parser(&expr.expression)?;
             match parser.parse_wildcard_expr()? {
                 WildcardExpr::Expr(expr) => {
-                    let provider = ExpressionContextProvider::default();
+                    let provider = EmptyContextProvider::default();
                     let planner = SqlToRel::new(&provider);
                     let expr = planner.sql_to_expr(expr, schema, &mut PlannerContext::default())?;
                     Ok(expr)
@@ -128,8 +111,7 @@ pub(crate) fn from_spark_expression(
         ExprType::UnresolvedStar(star) => {
             // FIXME: column reference is parsed as qualifier
             if let Some(target) = &star.unparsed_target {
-                let dialect = GenericDialect {};
-                let mut parser = Parser::new(&dialect).try_with_sql(target)?;
+                let mut parser = new_sql_parser(target)?;
                 let expr = parser.parse_wildcard_expr()?;
                 match expr {
                     WildcardExpr::Expr(_) => Err(SparkError::todo("expression as wildcard target")),
@@ -174,7 +156,7 @@ pub(crate) fn from_spark_expression(
             let data_type = cast.cast_to_type.as_ref().required("data type for cast")?;
             let data_type = match data_type {
                 CastToType::Type(t) => from_spark_data_type(&t)?,
-                CastToType::TypeStr(_) => Err(SparkError::todo("cast type string"))?,
+                CastToType::TypeStr(s) => parse_spark_data_type_string(s)?,
             };
             Ok(expr::Expr::Cast(expr::Cast {
                 expr: Box::new(from_spark_expression(expr, schema)?),
@@ -182,10 +164,74 @@ pub(crate) fn from_spark_expression(
             }))
         }
         ExprType::UnresolvedRegex(_) => Err(SparkError::todo("unresolved regex")),
-        ExprType::SortOrder(sort) => from_spark_sort_order(sort, schema),
+        ExprType::SortOrder(sort) => {
+            use sc::expression::sort_order::{NullOrdering, SortDirection};
+
+            let expr = sort.child.as_ref().required("expression for sort order")?;
+            let asc = match SortDirection::try_from(sort.direction) {
+                Ok(SortDirection::Ascending) => true,
+                Ok(SortDirection::Descending) => false,
+                Ok(SortDirection::Unspecified) => true,
+                Err(_) => {
+                    return Err(SparkError::invalid("invalid sort direction"));
+                }
+            };
+            let nulls_first = match NullOrdering::try_from(sort.null_ordering) {
+                Ok(NullOrdering::SortNullsFirst) => true,
+                Ok(NullOrdering::SortNullsLast) => false,
+                Ok(NullOrdering::SortNullsUnspecified) => asc,
+                Err(_) => {
+                    return Err(SparkError::invalid("invalid null ordering"));
+                }
+            };
+            Ok(expr::Expr::Sort(expr::Sort {
+                expr: Box::new(from_spark_expression(expr, schema)?),
+                asc,
+                nulls_first,
+            }))
+        }
         ExprType::LambdaFunction(_) => Err(SparkError::todo("lambda function")),
         ExprType::Window(_) => Err(SparkError::todo("window")),
-        ExprType::UnresolvedExtractValue(_) => Err(SparkError::todo("unresolved extract value")),
+        ExprType::UnresolvedExtractValue(extract) => {
+            use sc::expression::literal::LiteralType;
+
+            let child = extract
+                .child
+                .as_ref()
+                .required("child for extract value")?
+                .as_ref();
+            let extraction = extract
+                .extraction
+                .as_ref()
+                .required("extraction for extract value")?
+                .as_ref();
+            let literal = match extraction.expr_type.as_ref().required("extraction type")? {
+                ExprType::Literal(literal) => literal.literal_type.as_ref().required("literal")?,
+                _ => {
+                    return Err(SparkError::invalid("extraction must be a literal"));
+                }
+            };
+            let field = match literal {
+                LiteralType::Byte(x) | LiteralType::Short(x) | LiteralType::Integer(x) => {
+                    GetFieldAccess::ListIndex {
+                        key: Box::new(expr::Expr::Literal(ScalarValue::Int64(Some(*x as i64)))),
+                    }
+                }
+                LiteralType::Long(x) => GetFieldAccess::ListIndex {
+                    key: Box::new(expr::Expr::Literal(ScalarValue::Int64(Some(*x)))),
+                },
+                LiteralType::String(s) => GetFieldAccess::NamedStructField {
+                    name: ScalarValue::Utf8(Some(s.clone())),
+                },
+                _ => {
+                    return Err(SparkError::invalid("invalid extraction value"));
+                }
+            };
+            Ok(expr::Expr::GetIndexedField(GetIndexedField {
+                expr: Box::new(from_spark_expression(child, schema)?),
+                field,
+            }))
+        }
         ExprType::UpdateFields(_) => Err(SparkError::todo("update fields")),
         ExprType::UnresolvedNamedLambdaVariable(_) => {
             Err(SparkError::todo("unresolved named lambda variable"))
@@ -217,14 +263,216 @@ pub(crate) fn from_spark_literal_to_scalar(
         LiteralType::Double(x) => Ok(ScalarValue::Float64(Some(*x))),
         LiteralType::Decimal(_) => Err(SparkError::todo("literal decimal")),
         LiteralType::String(x) => Ok(ScalarValue::Utf8(Some(x.clone()))),
-        LiteralType::Date(_) => Err(SparkError::todo("literal date")),
-        LiteralType::Timestamp(_) => Err(SparkError::todo("literal timestamp")),
-        LiteralType::TimestampNtz(_) => Err(SparkError::todo("literal timestamp ntz")),
-        LiteralType::CalendarInterval(_) => Err(SparkError::todo("literal calendar interval")),
-        LiteralType::YearMonthInterval(_) => Err(SparkError::todo("literal year month interval")),
-        LiteralType::DayTimeInterval(_) => Err(SparkError::todo("literal day time interval")),
+        LiteralType::Date(x) => Ok(ScalarValue::Date32(Some(*x))),
+        // TODO: timezone
+        LiteralType::Timestamp(x) => Ok(ScalarValue::TimestampMicrosecond(Some(*x), None)),
+        LiteralType::TimestampNtz(x) => Ok(ScalarValue::TimestampMicrosecond(Some(*x), None)),
+        LiteralType::CalendarInterval(x) => Ok(ScalarValue::IntervalMonthDayNano(Some(
+            IntervalMonthDayNanoType::make_value(x.months, x.days, x.microseconds * 1000),
+        ))),
+        LiteralType::YearMonthInterval(x) => Ok(ScalarValue::IntervalYearMonth(Some(*x))),
+        LiteralType::DayTimeInterval(x) => Ok(ScalarValue::IntervalDayTime(Some(*x))),
         LiteralType::Array(_) => Err(SparkError::todo("literal array")),
         LiteralType::Map(_) => Err(SparkError::todo("literal map")),
         LiteralType::Struct(_) => Err(SparkError::todo("literal struct")),
     }
+}
+
+fn get_one_argument(mut args: Vec<expr::Expr>) -> SparkResult<Box<expr::Expr>> {
+    if args.len() != 1 {
+        return Err(SparkError::invalid("unary operator requires 1 argument"));
+    }
+    Ok(Box::new(args.pop().unwrap()))
+}
+
+fn get_two_arguments(mut args: Vec<expr::Expr>) -> SparkResult<(Box<expr::Expr>, Box<expr::Expr>)> {
+    if args.len() != 2 {
+        return Err(SparkError::invalid("binary operator requires 2 arguments"));
+    }
+    let right = Box::new(args.pop().unwrap());
+    let left = Box::new(args.pop().unwrap());
+    Ok((left, right))
+}
+
+pub(crate) fn get_scalar_function(
+    name: &str,
+    mut args: Vec<expr::Expr>,
+) -> SparkResult<expr::Expr> {
+    let op = match name {
+        ">" => Some(Operator::Gt),
+        ">=" => Some(Operator::GtEq),
+        "<" => Some(Operator::Lt),
+        "<=" => Some(Operator::LtEq),
+        "+" => Some(Operator::Plus),
+        "-" => Some(Operator::Minus),
+        "*" => Some(Operator::Multiply),
+        "/" => Some(Operator::Divide),
+        "%" => Some(Operator::Modulo),
+        "<=>" => Some(Operator::Eq), // TODO: null safe equality
+        "and" => Some(Operator::And),
+        "or" => Some(Operator::Or),
+        "|" => Some(Operator::BitwiseOr),
+        "&" => Some(Operator::BitwiseAnd),
+        "^" => Some(Operator::BitwiseXor),
+        "==" => Some(Operator::Eq),
+        "!=" => Some(Operator::NotEq),
+        "shiftleft" => Some(Operator::BitwiseShiftLeft),
+        "shiftright" => Some(Operator::BitwiseShiftRight),
+        _ => None,
+    };
+    if let Some(op) = op {
+        let (left, right) = get_two_arguments(args)?;
+        return Ok(expr::Expr::BinaryExpr(expr::BinaryExpr { left, op, right }));
+    }
+
+    match name {
+        "isnull" => {
+            let expr = get_one_argument(args)?;
+            return Ok(expr::Expr::IsNull(expr));
+        }
+        "isnotnull" => {
+            let expr = get_one_argument(args)?;
+            return Ok(expr::Expr::IsNotNull(expr));
+        }
+        "negative" => {
+            let expr = get_one_argument(args)?;
+            return Ok(expr::Expr::Negative(expr));
+        }
+        "not" => {
+            let expr = get_one_argument(args)?;
+            return Ok(expr::Expr::Not(expr));
+        }
+        "like" => {
+            let (expr, pattern) = get_two_arguments(args)?;
+            return Ok(expr::Expr::Like(expr::Like {
+                negated: false,
+                expr,
+                pattern,
+                case_insensitive: false,
+                escape_char: None,
+            }));
+        }
+        "ilike" => {
+            let (expr, pattern) = get_two_arguments(args)?;
+            return Ok(expr::Expr::Like(expr::Like {
+                negated: false,
+                expr,
+                pattern,
+                case_insensitive: true,
+                escape_char: None,
+            }));
+        }
+        "rlike" => {
+            let (expr, pattern) = get_two_arguments(args)?;
+            return Ok(expr::Expr::SimilarTo(expr::Like {
+                negated: false,
+                expr,
+                pattern,
+                case_insensitive: false,
+                escape_char: None,
+            }));
+        }
+        // TODO: contains
+        "startswith" => {
+            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func_def: expr::ScalarFunctionDefinition::BuiltIn(
+                    BuiltinScalarFunction::StartsWith,
+                ),
+                args,
+            }));
+        }
+        // TODO: endswith
+        "array" => {
+            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func_def: expr::ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
+                args,
+            }));
+        }
+        "avg" => {
+            return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
+                func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Avg),
+                args,
+                distinct: false,
+                filter: None,
+                order_by: None,
+            }));
+        }
+        "sum" => {
+            return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
+                func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Sum),
+                args,
+                distinct: false,
+                filter: None,
+                order_by: None,
+            }));
+        }
+        "count" => {
+            return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
+                func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Count),
+                args,
+                distinct: false,
+                filter: None,
+                order_by: None,
+            }));
+        }
+        "max" => {
+            return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
+                func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Max),
+                args,
+                distinct: false,
+                filter: None,
+                order_by: None,
+            }));
+        }
+        "min" => {
+            return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
+                func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Min),
+                args,
+                distinct: false,
+                filter: None,
+                order_by: None,
+            }));
+        }
+        "in" => {
+            if args.is_empty() {
+                return Err(SparkError::invalid("in requires at least 1 argument"));
+            }
+            let expr = args.remove(0);
+            return Ok(expr::Expr::InList(expr::InList {
+                expr: Box::new(expr),
+                list: args,
+                negated: false,
+            }));
+        }
+        _ => {}
+    }
+
+    match name {
+        "array_repeat" => {
+            if args.len() != 2 {
+                return Err(SparkError::invalid("array_repeat requires 2 arguments"));
+            }
+            // DataFusion requires the repeat count to be int64.
+            let count = args.pop().unwrap();
+            let count = expr::Expr::Cast(expr::Cast {
+                expr: Box::new(count),
+                data_type: DataType::Int64,
+            });
+            args.push(count);
+        }
+        "regexp_replace" => {
+            if args.len() != 3 {
+                return Err(SparkError::invalid("regexp_replace requires 3 arguments"));
+            }
+            // Spark replaces all occurrences of the pattern.
+            args.push(expr::Expr::Literal(ScalarValue::Utf8(Some(
+                "g".to_string(),
+            ))));
+        }
+        _ => {}
+    }
+    Ok(expr::Expr::ScalarFunction(ScalarFunction {
+        func_def: ScalarFunctionDefinition::BuiltIn(name.parse()?),
+        args,
+    }))
 }

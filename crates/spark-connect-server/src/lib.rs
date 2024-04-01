@@ -7,8 +7,9 @@ mod schema;
 pub mod server;
 mod service;
 mod session;
+mod sql;
 
-const SPARK_VERSION: &str = "3.5.0";
+const SPARK_VERSION: &str = "3.5.1";
 
 pub mod spark {
     pub mod connect {
