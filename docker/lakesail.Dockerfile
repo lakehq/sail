@@ -32,9 +32,11 @@ FROM debian:bookworm-slim
 
 ENV RUST_LOG=debug
 
+# TODO: See if ca-certificates and python3-dev are needed in the final image
 RUN apt-get update && \
     apt-get install -y \
-    ca-certificates && \
+    ca-certificates \
+    python3-dev && \
     rm -rf /var/lib/apt/lists/*
 
 ENV LAKESAIL_OPENTELEMETRY_COLLECTOR="1"
