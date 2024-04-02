@@ -12,6 +12,7 @@ RUN apt-get update && \
     ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
+# TODO: See if this is necessary
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=${TARGETPLATFORM} \
     cargo install \
     cargo-strip
