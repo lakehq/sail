@@ -15,9 +15,6 @@ fn expensive_work() -> &'static str {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Sleep for a while for the telemetry to be initialized
-    tokio::time::sleep(tokio::time::Duration::from_millis(10000)).await;
-
     init_telemetry(true)?;
     println!("Hello, world!");
 

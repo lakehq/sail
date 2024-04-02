@@ -11,8 +11,6 @@ use spark_connect_server::spark::connect::spark_connect_service_server::SparkCon
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_telemetry(true)?;
 
-    debug!("SPARK CONNECT SERVER CONFIGURED");
-
     // A secure connection can be handled by a gateway in production.
     let address = "0.0.0.0:50051".parse()?;
 
@@ -21,16 +19,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .set_serving::<SparkConnectServiceServer<SparkConnectServer>>()
         .await;
 
-    debug!("HEALTH SERVER CONFIGURED");
-
     let reflect_server = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
         .register_encoded_file_descriptor_set(
             spark_connect_server::spark::connect::FILE_DESCRIPTOR_SET,
         )
         .build()?;
-
-    debug!("REFLECTION SERVER CONFIGURED");
 
     let server = SparkConnectServer::default();
 
@@ -46,8 +40,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }),
         )
         .into_inner();
-
-    debug!("TRACE LAYER CONFIGURED");
 
     tonic::transport::Server::builder()
         .layer(layer)
