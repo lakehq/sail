@@ -36,6 +36,8 @@ RUN apt-get update && \
     ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
+ENV LAKESAIL_OPENTELEMETRY_COLLECTOR="1"
+
 # TODO: Adjust once we have a proper entrypoint
 COPY --from=builder /app/spark-connect-server /
 ENTRYPOINT ["./spark-connect-server"]

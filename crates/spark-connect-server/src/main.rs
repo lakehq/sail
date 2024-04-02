@@ -9,7 +9,7 @@ use spark_connect_server::spark::connect::spark_connect_service_server::SparkCon
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_telemetry(true)?;
+    init_telemetry()?;
 
     // A secure connection can be handled by a gateway in production.
     let address = "0.0.0.0:50051".parse()?;
