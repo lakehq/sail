@@ -38,7 +38,3 @@ RUN apt-get update && \
 # TODO: Adjust once we have a proper entrypoint
 COPY --from=builder /app/spark-connect-server /
 ENTRYPOINT ["./spark-connect-server"]
-
-#EXPOSE 50051
-#EXPOSE 4317
-#EXPOSE 4318
