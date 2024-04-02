@@ -9,7 +9,8 @@ RUN apt-get update && \
     apt-get install -y \
     protobuf-compiler \
     libprotobuf-dev \
-    ca-certificates && \
+    ca-certificates \
+    python3-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # TODO: See if this is necessary
