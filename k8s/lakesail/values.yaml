@@ -166,6 +166,10 @@ opentelemetry-operator:
             - kube-node-lease
 
     certManager:
+      # To use cert-manager:
+      # 1. Set enabled to true.
+      # 2. Set the issuer and certificate annotations (uncomment the lines below).
+      # 3. Set cert-manager.enabled to true in the cert-manager subchart of the parent chart.
       enabled: false
       # Ensure creation after the cert-manager CRDs are installed.
 #      certificateAnnotations:
@@ -276,10 +280,10 @@ opentelemetry-collector-spec:
 # Cert Manager
 # Helm value configurations: https://artifacthub.io/packages/helm/cert-manager/cert-manager
 ###################################################################################
-# TODO: Re-enable cert-manager dependency when admissionWebhooks are enabled.
-#cert-manager:
-#  enabled: true
-#  # https://cert-manager.io/docs/installation/helm/#crd-installation-advice
-#  installCRDs: true
-#  prometheus:
-#    enabled: false
+cert-manager:
+  # Default is using a automatically generated self-signed certificate.
+  enabled: false
+  # https://cert-manager.io/docs/installation/helm/#crd-installation-advice
+  installCRDs: true
+  prometheus:
+    enabled: false
