@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lakesail.fullname" . }}
+  labels:
+    {{- include "lakesail.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.tcpService.port }}
+      targetPort: tcp-service
+      protocol: TCP
+      name: tcp-service
+    - port: {{ .Values.service.sparkConnect.port }}
+      targetPort: spark-connect
+      protocol: TCP
+      appProtocol: grpc
+      name: spark-connect
+  selector:
+    {{- include "lakesail.selectorLabels" . | nindent 4 }}
