@@ -25,9 +25,8 @@ pub enum TelemetryError {
     EnvError(#[from] env::VarError),
 }
 
-// TODO: Make use_collector an env var
-pub fn init_telemetry(use_collector: bool) -> Result<(), TelemetryError> {
-    let tracer = init_tracer(use_collector)?;
+pub fn init_telemetry() -> Result<(), TelemetryError> {
+    let tracer = init_tracer()?;
     let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
     let subscriber = Registry::default()
         .with(telemetry)
@@ -38,8 +37,7 @@ pub fn init_telemetry(use_collector: bool) -> Result<(), TelemetryError> {
     Ok(())
 }
 
-// TODO: Make use_collector an env var
-pub fn init_tracer(use_collector: bool) -> Result<sdktrace::Tracer, TelemetryError> {
+pub fn init_tracer() -> Result<sdktrace::Tracer, TelemetryError> {
     global::set_text_map_propagator(TraceContextPropagator::new());
 
     let os_resource = OsResourceDetector.detect(Duration::from_secs(0));
@@ -48,32 +46,34 @@ pub fn init_tracer(use_collector: bool) -> Result<sdktrace::Tracer, TelemetryErr
     let env_resource = EnvResourceDetector::new().detect(Duration::from_secs(0));
     let telemetry_resource = TelemetryResourceDetector.detect(Duration::from_secs(0));
 
+    let use_collector = match env::var("LAKESAIL_OPENTELEMETRY_COLLECTOR") {
+        Ok(val) => !val.is_empty(),
+        Err(_) => false,
+    };
     if use_collector {
         let host = env::var("LAKESAIL_OPENTELEMETRY_COLLECTOR_SERVICE_HOST")?;
         let port = env::var("LAKESAIL_OPENTELEMETRY_COLLECTOR_SERVICE_PORT_OTLP_GRPC")?;
         let url = format!("http://{}:{}", host, port);
 
-        Ok(
-            opentelemetry_otlp::new_pipeline()
-                .tracing()
-                .with_exporter(
-                    opentelemetry_otlp::new_exporter()
-                        .tonic()
-                        .with_endpoint(url)
-                        .with_protocol(opentelemetry_otlp::Protocol::Grpc)
-                        .with_timeout(Duration::from_secs(3)),
-                )
-                .with_trace_config(
-                    sdktrace::config().with_resource(
-                        os_resource
-                            .merge(&process_resource)
-                            .merge(&sdk_resource)
-                            .merge(&env_resource)
-                            .merge(&telemetry_resource)
-                    ),
-                )
-                .install_batch(runtime::TokioCurrentThread)?
-        )
+        Ok(opentelemetry_otlp::new_pipeline()
+            .tracing()
+            .with_exporter(
+                opentelemetry_otlp::new_exporter()
+                    .tonic()
+                    .with_endpoint(url)
+                    .with_protocol(opentelemetry_otlp::Protocol::Grpc)
+                    .with_timeout(Duration::from_secs(3)),
+            )
+            .with_trace_config(
+                sdktrace::config().with_resource(
+                    os_resource
+                        .merge(&process_resource)
+                        .merge(&sdk_resource)
+                        .merge(&env_resource)
+                        .merge(&telemetry_resource),
+                ),
+            )
+            .install_batch(runtime::TokioCurrentThread)?)
     } else {
         let exporter = opentelemetry_stdout::SpanExporter::default();
         let processor = sdktrace::BatchSpanProcessor::builder(exporter, runtime::Tokio).build();
