@@ -171,9 +171,18 @@ impl Executor {
         let state = mem::replace(&mut self.state, ExecutorState::Idle);
         let context = match state {
             ExecutorState::Pending(context) => context,
-            _ => {
+            ExecutorState::Failed(ref e) => {
+                let error = e.to_string();
+                self.state = state;
+                return Err(SparkError::internal(error));
+            }
+            ExecutorState::Idle => {
                 self.state = state;
                 return Err(SparkError::internal("task context not found for operation"));
+            }
+            ExecutorState::Running(_) => {
+                self.state = state;
+                return Err(SparkError::internal("task is already running"));
             }
         };
         let (tx, rx) = mpsc::channel(1);

@@ -1,10 +1,48 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes as adt;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::sql::planner::SqlToRel;
+use datafusion::sql::sqlparser::ast::{ColumnDef, Ident};
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
+use crate::expression::EmptyContextProvider;
 use crate::spark::connect as sc;
 use crate::spark::connect::data_type as sdt;
+use crate::sql::new_sql_parser;
+
+pub(crate) fn parse_spark_schema_string(schema: &str) -> SparkResult<SchemaRef> {
+    let mut parser = new_sql_parser(schema)?;
+    if let Ok(dt) = parser.parse_spark_schema() {
+        let provider = EmptyContextProvider::default();
+        let planner = SqlToRel::new(&provider);
+        Ok(Arc::new(planner.build_schema(dt)?))
+    } else {
+        parse_spark_json_schema(schema)
+    }
+}
+
+pub(crate) fn parse_spark_data_type_string(dt: &str) -> SparkResult<adt::DataType> {
+    let mut parser = new_sql_parser(dt)?;
+    let dt = parser.parse_spark_data_type()?;
+    let col = ColumnDef {
+        name: Ident {
+            value: "a".to_string(),
+            quote_style: None,
+        },
+        data_type: dt,
+        collation: None,
+        options: vec![],
+    };
+    let provider = EmptyContextProvider::default();
+    let planner = SqlToRel::new(&provider);
+    let schema = planner.build_schema(vec![col])?;
+    Ok(schema.field_with_name("a")?.data_type().clone())
+}
+
+pub(crate) fn parse_spark_json_schema(_schema: &str) -> SparkResult<SchemaRef> {
+    Err(SparkError::todo("parse spark json schema"))
+}
 
 // References:
 //   org.apache.spark.sql.util.ArrowUtils#toArrowType
@@ -86,7 +124,7 @@ pub(crate) fn from_spark_data_type(data_type: &sc::DataType) -> SparkResult<adt:
                 false,
             ))
         }
-        sdt::Kind::Udt(_) => Err(SparkError::unsupported("udt")),
+        sdt::Kind::Udt(_) => Err(SparkError::todo("udt")),
         sdt::Kind::Unparsed(_) => Err(SparkError::todo("unparsed")),
     }
 }
