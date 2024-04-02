@@ -31,3 +31,5 @@ datafusion = "35.0.0" # 36.0.0 has breaking changes
 async-recursion = "1.1.0"
 async-stream = "0.3"
 lazy_static = "1.4.0"
+# auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
+pyo3 = { version = "0.21.1", features = ["auto-initialize"] }
