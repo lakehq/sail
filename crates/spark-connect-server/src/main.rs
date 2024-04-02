@@ -9,10 +9,10 @@ use spark_connect_server::spark::connect::spark_connect_service_server::SparkCon
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_telemetry()?;
+    init_telemetry(true)?;
 
     // A secure connection can be handled by a gateway in production.
-    let address = "127.0.0.1:50051".parse()?;
+    let address = "0.0.0.0:50051".parse()?;
 
     let (mut health_reporter, health_server) = tonic_health::server::health_reporter();
     health_reporter

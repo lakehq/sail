@@ -1,6 +1,6 @@
 use framework_telemetry::telemetry::init_telemetry;
 use std::{thread, time::Duration};
-use tracing::{error, error_span, info, info_span, instrument, span, trace, warn};
+use tracing::{error, error_span, info, info_span, instrument, span, trace, warn, debug};
 
 #[instrument]
 #[inline]
@@ -14,9 +14,20 @@ fn expensive_work() -> &'static str {
 }
 
 #[tokio::main]
-async fn main() {
-    init_telemetry();
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_telemetry(true)?;
+    println!("Hello, world!");
 
+    trace!(
+        meow_1 = "Meow1",
+        meow_2 = "Meow2",
+        "Trace Log: Meow Meow Meow"
+    );
+    debug!(
+        meow_1 = "Meow1",
+        meow_2 = "Meow2",
+        "Debug Log: Meow Meow Meow"
+    );
     info!(
         meow_1 = "Meow1",
         meow_2 = "Meow2",
@@ -50,4 +61,6 @@ async fn main() {
         warn!("Warn Log: About to exit!");
         trace!("status: {}", work_result);
     }
+
+    Ok(())
 }

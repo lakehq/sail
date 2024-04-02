@@ -12,5 +12,23 @@ tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
+opentelemetry-semantic-conventions = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry-proto = { workspace = true }
 opentelemetry-stdout = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
+tonic = { workspace = true }
+tonic-reflection = { workspace = true }
+tonic-health = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+uuid = { workspace = true }
+datafusion = { workspace = true }
+async-recursion = { workspace = true }
+async-stream = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }
