@@ -385,7 +385,12 @@ pub(crate) fn get_scalar_function(
                 args,
             }));
         }
-        // TODO: endswith
+        "endswith" => {
+            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::EndsWith),
+                args,
+            }));
+        }
         "array" => {
             return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                 func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
