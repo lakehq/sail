@@ -13,6 +13,11 @@ use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::sql::sqlparser::ast;
 use datafusion::sql::sqlparser::ast::ObjectName;
 use datafusion::sql::sqlparser::parser::WildcardExpr;
+use datafusion_expr::expr_fn::create_udf;
+
+use pyo3::types::{PyBytes, PyModule};
+use pyo3::{PyResult, PyObject, Python};
+use pyo3::prelude::PyAnyMethods;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::schema::{from_spark_data_type, parse_spark_data_type_string};
@@ -256,6 +261,39 @@ pub(crate) fn from_spark_expression(
                 Some(sc::common_inline_user_defined_function::Function::PythonUdf(python_udf)) => python_udf,
                 _ => return Err(SparkError::invalid("Expected a Python UDF")),
             };
+
+            let python_function = Python::with_gil(|py| {
+                let cloudpickle = PyModule::import_bound(py, "pyspark.cloudpickle")
+                    .expect("Unable to import 'pyspark.cloudpickle'")
+                    .getattr("loads")
+                    .unwrap();
+
+                let python_function: PyObject = cloudpickle
+                    .call1(PyBytes::new_bound(py, python_udf.as_bytes()))
+                    .map_err(|s| SparkError::custom(format!("cannot pickle {s}")))
+                    .extract(py)?;
+
+                // Wrap the deserialized Python UDF in a Rust function
+                let rust_function = move |args: Vec<PyObject>| -> PyResult<PyObject> {
+                    python_function.call_bound(py, args, None)
+                };
+
+                Ok(rust_function)
+            });
+
+            let input_types = udf
+                .arguments
+                .iter()
+                .map(|arg| arg.get_type(schema))
+                .collect::<Result<Vec<_>, _>>()?;
+
+            // TODO: create_udf is less performant. Look into ScalarUDFImpl:
+            //       https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+            let udf = create_udf(
+                function_name,
+                arguments.iter().map(|arg| arg.data_type(schema)).collect::<Result<Vec<_>, _>>()?,
+            );
+            // ...
         }
         ExprType::CallFunction(_) => Err(SparkError::todo("call function")),
         ExprType::Extension(_) => Err(SparkError::unsupported("expression extension")),

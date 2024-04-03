@@ -28,6 +28,7 @@ tower = { version = "0.4", features = ["full"] }
 tower-http = { version = "0.4", features = ["full"] }
 uuid = { version = "1.8.0", features = ["v4"] }
 datafusion = "35.0.0" # 36.0.0 has breaking changes
+datafusion-expr = "35.0.0"
 async-recursion = "1.1.0"
 async-stream = "0.3"
 lazy_static = "1.4.0"
