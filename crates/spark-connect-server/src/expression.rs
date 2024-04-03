@@ -291,7 +291,7 @@ pub(crate) fn from_spark_expression(
             //       https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
             let udf = create_udf(
                 function_name,
-                arguments.iter().map(|arg| arg.data_type(schema)).collect::<Result<Vec<_>, _>>()?,
+                input_types,
             );
             // ...
         }
