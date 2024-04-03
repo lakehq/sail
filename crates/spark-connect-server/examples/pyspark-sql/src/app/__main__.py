@@ -1,3 +1,4 @@
+import pandas as pd
 import pyspark.sql.functions as F
 from pyspark.sql import SparkSession, Row
 from pyspark.sql.types import IntegerType
@@ -5,6 +6,8 @@ from pyspark.sql.types import IntegerType
 if __name__ == "__main__":
     # A secure connection can be handled by a gateway in production.
     spark = SparkSession.builder.remote("sc://localhost:50051").getOrCreate()
+    pd.set_option("display.max_rows", None)
+    pd.set_option("display.max_columns", None)
 
     @F.udf(IntegerType())
     def add_one(x):
@@ -38,6 +41,30 @@ if __name__ == "__main__":
     # df.write.json("/tmp/df.json")
     # df = spark.read.json("/tmp/df.json/")
     # print(df.toPandas())
+
+    print(
+        spark.createDataFrame(
+            [
+                Row(a=[1, 2, None], b={"m": 3.0, "n": 4.0}, c="foo"),
+                Row(a=[], b={"p": 1.0}, c="bar"),
+                Row(a=None, b={"q": 2.0}, c="baz"),
+            ]
+        )
+        .select(
+            (F.explode_outer("a") + F.lit(1)).alias("d"),
+            F.posexplode(F.col("a")),
+            F.col("c"),
+        )
+        .toPandas()
+    )
+    print(
+        spark.createDataFrame([Row(a=[[1, 2], None], b={"m": 3.0, "n": 4.0})])
+        .select(
+            F.posexplode_outer(F.explode("a")).alias("p", "a"),
+            F.posexplode("b").alias("q", "k", "v"),
+        )
+        .toPandas()
+    )
 
     # FIXME: not working
     # print(df.selectExpr("b.*").toPandas())
