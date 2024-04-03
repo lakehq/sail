@@ -81,9 +81,9 @@ pub(crate) fn from_spark_expression(
             if func.is_distinct {
                 return Err(SparkError::unsupported("distinct function"));
             }
-            if func.is_user_defined_function {
-                return Err(SparkError::unsupported("user defined function"));
-            }
+            // if func.is_user_defined_function {
+            //     return Err(SparkError::unsupported("user defined function"));
+            // }
             let args = func
                 .arguments
                 .iter()
@@ -242,25 +242,24 @@ pub(crate) fn from_spark_expression(
             Err(SparkError::todo("unresolved named lambda variable"))
         }
         ExprType::CommonInlineUserDefinedFunction(udf) => {
-            Err(SparkError::todo("unresolved common inline user defined function"))
-            // let function_name = <std::string::String as AsRef<T>>::as_ref(&udf.function_name)
-            //     .function_name
-            //     .as_ref()
-            //     .required("function name for user defined function")?;
-            //
-            // let deterministic = udf
-            //     .deterministic;
-            //
-            // let arguments = udf
-            //     .arguments
-            //     .iter()
-            //     .map(|x| from_spark_expression(x, schema))
-            //     .collect::<SparkResult<Vec<_>>>()?;
-            //
-            // let python_udf = match &udf.function {
-            //     Some(sc::common_inline_user_defined_function::Function::PythonUdf(python_udf)) => python_udf,
-            //     _ => return Err(SparkError::invalid("Expected a Python UDF")),
-            // };
+            // Err(SparkError::todo("unresolved common inline user defined function"))
+            let function_name = udf
+                .function_name
+                .as_str();
+
+            let deterministic = udf
+                .deterministic;
+
+            let arguments = udf
+                .arguments
+                .iter()
+                .map(|x| from_spark_expression(x, schema))
+                .collect::<SparkResult<Vec<_>>>()?;
+
+            let python_udf = match &udf.function {
+                Some(sc::common_inline_user_defined_function::Function::PythonUdf(python_udf)) => python_udf,
+                _ => return Err(SparkError::invalid("Expected a Python UDF")),
+            };
 
             // Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
             //     func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
@@ -297,7 +296,7 @@ pub(crate) fn from_spark_expression(
             //
             //     Ok(rust_function)
             // });
-            //
+
             // let input_types = udf
             //     .arguments
             //     .iter()
