@@ -145,6 +145,12 @@ pub(crate) async fn handle_execute_write_operation(
     let plan = from_spark_relation(&ctx, &relation).await?;
     let plan = match write.save_type.required("save type")? {
         SaveType::Path(path) => {
+            // always write multi-file output
+            let path = if path.ends_with("/") {
+                path
+            } else {
+                format!("{}/", path)
+            };
             let source = write.source.required("source")?;
             let format = match source.as_str() {
                 "json" => FileType::JSON,
@@ -158,7 +164,7 @@ pub(crate) async fn handle_execute_write_operation(
                     )))
                 }
             };
-            LogicalPlanBuilder::copy_to(plan, path, format, false, options)
+            LogicalPlanBuilder::copy_to(plan, path, format, options)
                 .or_else(|e| Err(SparkError::from(e)))?
                 .build()
                 .or_else(|e| Err(SparkError::from(e)))?

@@ -4,17 +4,15 @@ use datafusion::arrow::datatypes::{DataType, IntervalMonthDayNanoType};
 use datafusion::catalog::TableReference;
 use datafusion::common::{Column, DFSchema, ScalarValue};
 use datafusion::config::ConfigOptions;
-use datafusion::logical_expr::expr::ScalarFunction;
 use datafusion::logical_expr::{
     expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, GetFieldAccess, GetIndexedField,
     Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
 };
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::sql::sqlparser::ast;
-use datafusion::sql::sqlparser::ast::ObjectName;
-use datafusion::sql::sqlparser::parser::WildcardExpr;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
+use crate::extension::function::alias::MultiAlias;
 use crate::schema::{from_spark_data_type, parse_spark_data_type_string};
 use crate::spark::connect as sc;
 use crate::sql::new_sql_parser;
@@ -89,13 +87,8 @@ pub(crate) fn from_spark_expression(
         ExprType::ExpressionString(expr) => {
             let mut parser = new_sql_parser(&expr.expression)?;
             match parser.parse_wildcard_expr()? {
-                WildcardExpr::Expr(expr) => {
-                    let provider = EmptyContextProvider::default();
-                    let planner = SqlToRel::new(&provider);
-                    let expr = planner.sql_to_expr(expr, schema, &mut PlannerContext::default())?;
-                    Ok(expr)
-                }
-                WildcardExpr::QualifiedWildcard(ObjectName(name)) => {
+                ast::Expr::Wildcard => Ok(expr::Expr::Wildcard { qualifier: None }),
+                ast::Expr::QualifiedWildcard(ast::ObjectName(name)) => {
                     let qualifier = name
                         .iter()
                         .map(|x| x.value.as_str())
@@ -105,7 +98,12 @@ pub(crate) fn from_spark_expression(
                         qualifier: Some(qualifier),
                     })
                 }
-                WildcardExpr::Wildcard => Ok(expr::Expr::Wildcard { qualifier: None }),
+                expr => {
+                    let provider = EmptyContextProvider::default();
+                    let planner = SqlToRel::new(&provider);
+                    let expr = planner.sql_to_expr(expr, schema, &mut PlannerContext::default())?;
+                    Ok(expr)
+                }
             }
         }
         ExprType::UnresolvedStar(star) => {
@@ -114,8 +112,8 @@ pub(crate) fn from_spark_expression(
                 let mut parser = new_sql_parser(target)?;
                 let expr = parser.parse_wildcard_expr()?;
                 match expr {
-                    WildcardExpr::Expr(_) => Err(SparkError::todo("expression as wildcard target")),
-                    WildcardExpr::QualifiedWildcard(ast::ObjectName(names)) => {
+                    ast::Expr::Wildcard => Ok(expr::Expr::Wildcard { qualifier: None }),
+                    ast::Expr::QualifiedWildcard(ast::ObjectName(names)) => {
                         let qualifier = names
                             .iter()
                             .map(|x| match x {
@@ -131,7 +129,7 @@ pub(crate) fn from_spark_expression(
                             qualifier: Some(qualifier),
                         })
                     }
-                    WildcardExpr::Wildcard => Ok(expr::Expr::Wildcard { qualifier: None }),
+                    _ => Err(SparkError::todo("expression as wildcard target")),
                 }
             } else {
                 Ok(expr::Expr::Wildcard { qualifier: None })
@@ -139,14 +137,20 @@ pub(crate) fn from_spark_expression(
         }
         ExprType::Alias(alias) => {
             let expr = alias.expr.as_ref().required("expression for alias")?;
+            let expr = from_spark_expression(expr, schema)?;
             if let [name] = alias.name.as_slice() {
                 Ok(expr::Expr::Alias(expr::Alias {
-                    expr: Box::new(from_spark_expression(expr, schema)?),
+                    expr: Box::new(expr),
                     relation: None,
                     name: name.to_string(),
                 }))
             } else {
-                Err(SparkError::invalid("one alias name must be specified"))
+                Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                    func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
+                        MultiAlias::new(alias.name.clone()),
+                    ))),
+                    args: vec![expr],
+                }))
             }
         }
         ExprType::Cast(cast) => {
@@ -298,6 +302,8 @@ pub(crate) fn get_scalar_function(
     name: &str,
     mut args: Vec<expr::Expr>,
 ) -> SparkResult<expr::Expr> {
+    use crate::extension::function::explode::Explode;
+
     let op = match name {
         ">" => Some(Operator::Gt),
         ">=" => Some(Operator::GtEq),
@@ -375,16 +381,19 @@ pub(crate) fn get_scalar_function(
         // TODO: contains
         "startswith" => {
             return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func_def: expr::ScalarFunctionDefinition::BuiltIn(
-                    BuiltinScalarFunction::StartsWith,
-                ),
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::StartsWith),
                 args,
             }));
         }
-        // TODO: endswith
+        "endswith" => {
+            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::EndsWith),
+                args,
+            }));
+        }
         "array" => {
             return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func_def: expr::ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
+                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
                 args,
             }));
         }
@@ -444,6 +453,13 @@ pub(crate) fn get_scalar_function(
                 negated: false,
             }));
         }
+        name @ ("explode" | "explode_outer" | "posexplode" | "posexplode_outer") => {
+            let udf = ScalarUDF::from(Explode::new(name));
+            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func_def: ScalarFunctionDefinition::UDF(Arc::new(udf)),
+                args,
+            }));
+        }
         _ => {}
     }
 
@@ -471,7 +487,7 @@ pub(crate) fn get_scalar_function(
         }
         _ => {}
     }
-    Ok(expr::Expr::ScalarFunction(ScalarFunction {
+    Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
         func_def: ScalarFunctionDefinition::BuiltIn(name.parse()?),
         args,
     }))
