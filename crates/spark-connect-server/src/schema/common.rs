@@ -7,9 +7,12 @@ use datafusion::sql::sqlparser::ast::{ColumnDef, Ident};
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::expression::EmptyContextProvider;
+use crate::schema::json::parse_spark_json_data_type;
 use crate::spark::connect as sc;
 use crate::spark::connect::data_type as sdt;
 use crate::sql::new_sql_parser;
+
+static DEFAULT_FIELD_NAME: &str = "value";
 
 pub(crate) fn parse_spark_schema_string(schema: &str) -> SparkResult<SchemaRef> {
     let mut parser = new_sql_parser(schema)?;
@@ -18,7 +21,16 @@ pub(crate) fn parse_spark_schema_string(schema: &str) -> SparkResult<SchemaRef> 
         let planner = SqlToRel::new(&provider);
         Ok(Arc::new(planner.build_schema(dt)?))
     } else {
-        parse_spark_json_schema(schema)
+        let data_type = parse_spark_json_data_type(schema)?;
+        let data_type = from_spark_data_type(&data_type)?;
+        match data_type {
+            adt::DataType::Struct(fields) => Ok(Arc::new(adt::Schema::new(fields))),
+            other => Ok(Arc::new(adt::Schema::new(vec![adt::Field::new(
+                DEFAULT_FIELD_NAME,
+                other,
+                true,
+            )]))),
+        }
     }
 }
 
@@ -40,13 +52,9 @@ pub(crate) fn parse_spark_data_type_string(dt: &str) -> SparkResult<adt::DataTyp
     Ok(schema.field_with_name("a")?.data_type().clone())
 }
 
-pub(crate) fn parse_spark_json_schema(_schema: &str) -> SparkResult<SchemaRef> {
-    Err(SparkError::todo("parse spark json schema"))
-}
-
-// References:
-//   org.apache.spark.sql.util.ArrowUtils#toArrowType
-//   org.apache.spark.sql.connect.common.DataTypeProtoConverter
+/// References:
+///   org.apache.spark.sql.util.ArrowUtils#toArrowType
+///   org.apache.spark.sql.connect.common.DataTypeProtoConverter
 pub(crate) fn from_spark_data_type(data_type: &sc::DataType) -> SparkResult<adt::DataType> {
     let sc::DataType { kind } = data_type;
     let kind = kind.as_ref().required("data type kind")?;
