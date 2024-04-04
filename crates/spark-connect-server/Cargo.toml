@@ -31,6 +31,10 @@ datafusion-expr = { workspace = true }
 async-recursion = { workspace = true }
 async-stream = { workspace = true }
 lazy_static = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+monostate = { workspace = true }
+regex = { workspace = true }
 pyo3 = { workspace = true }
 
 [build-dependencies]
