@@ -260,12 +260,12 @@ pub(crate) fn from_spark_expression(
                 _ => return Err(SparkError::invalid("Expected a Python UDF")),
             };
 
-            // Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-            //     func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
-            //         MultiAlias::new(alias.name.clone()),
-            //     ))),
-            //     args: arguments,
-            // }))
+            Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
+                    MultiAlias::new(alias.name.clone()),
+                ))),
+                args: arguments,
+            }))
 
             // TODO: create_udf is less performant. Look into ScalarUDFImpl:
             //       https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
