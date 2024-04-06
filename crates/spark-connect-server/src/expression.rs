@@ -262,13 +262,13 @@ pub(crate) fn from_spark_expression(
                     return Err(SparkError::invalid("function type must be Python UDF"));
                 }
             };
-            Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
-                    function, // MultiAlias::new(alias.name.clone()), as ref point
-                ))),
-                args: arguments,
-            }))
-            // Ok(expr::Expr::Wildcard { qualifier: None }) // uncomment if you want to test
+            // Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+            //     func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
+            //         function, // MultiAlias::new(alias.name.clone()), as ref point
+            //     ))),
+            //     args: arguments,
+            // }))
+            Ok(expr::Expr::Wildcard { qualifier: None }) // uncomment if you want to test
         }
         ExprType::CallFunction(_) => Err(SparkError::todo("call function")),
         ExprType::Extension(_) => Err(SparkError::unsupported("expression extension")),

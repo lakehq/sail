@@ -10,8 +10,17 @@ RUN apt-get update && \
     protobuf-compiler \
     libprotobuf-dev \
     ca-certificates \
-    python3-dev && \
+    python3-dev \
+    python3-pip \
+    python3-venv && \
     rm -rf /var/lib/apt/lists/*
+
+# Install PySpark
+ARG PYSPARK_VERSION=3.5.1
+ENV PYSPARK_VERSION $PYSPARK_VERSION
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN python3 -m pip install "pyspark==${PYSPARK_VERSION}" # TODO: Look into only capturing pyspark.cloudpickle
 
 # TODO: See if this is necessary
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=${TARGETPLATFORM} \
@@ -32,14 +41,18 @@ FROM debian:bookworm-slim
 
 ENV RUST_LOG=debug
 
-# TODO: See if ca-certificates and python3-dev are needed in the final image
+ENV LAKESAIL_OPENTELEMETRY_COLLECTOR="1"
+
+# TODO: See if ca-certificates needed in the final image for opentelemetry
 RUN apt-get update && \
     apt-get install -y \
-    ca-certificates \
+    ca-certificates  \
     python3-dev && \
     rm -rf /var/lib/apt/lists/*
 
-ENV LAKESAIL_OPENTELEMETRY_COLLECTOR="1"
+# Copy the Python venv from builder with PySpark
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 # TODO: Adjust once we have a proper entrypoint
 COPY --from=builder /app/spark-connect-server /
