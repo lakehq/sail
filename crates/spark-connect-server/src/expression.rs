@@ -241,7 +241,8 @@ pub(crate) fn from_spark_expression(
             Err(SparkError::todo("unresolved named lambda variable"))
         }
         ExprType::CommonInlineUserDefinedFunction(udf) => {
-            // Err(SparkError::todo("unresolved common inline user defined function"))
+            use sc::common_inline_user_defined_function::Function;
+
             let function_name = udf
                 .function_name
                 .as_str();
@@ -255,52 +256,19 @@ pub(crate) fn from_spark_expression(
                 .map(|x| from_spark_expression(x, schema))
                 .collect::<SparkResult<Vec<_>>>()?;
 
-            let python_udf = match &udf.function {
-                Some(sc::common_inline_user_defined_function::Function::PythonUdf(python_udf)) => python_udf,
-                _ => return Err(SparkError::invalid("Expected a Python UDF")),
+            let function = match udf.function.as_ref().required("function type")? {
+                Function::PythonUdf(function) => function,
+                _ => {
+                    return Err(SparkError::invalid("function type must be Python UDF"));
+                }
             };
-
             Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                 func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
-                    MultiAlias::new(alias.name.clone()),
+                    function, // MultiAlias::new(alias.name.clone()), as ref point
                 ))),
                 args: arguments,
             }))
-
-            // TODO: create_udf is less performant. Look into ScalarUDFImpl:
-            //       https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
-            // let udf = create_udf(
-            //     function_name,
-            //     input_types,
-            // );
-            // ...
-            // return scalarudf
-
-
-            // let python_function = Python::with_gil(|py| {
-            //     let cloudpickle = PyModule::import_bound(py, "pyspark.cloudpickle")
-            //         .expect("Unable to import 'pyspark.cloudpickle'")
-            //         .getattr("loads")
-            //         .unwrap();
-            //
-            //     let python_function: PyObject = cloudpickle
-            //         .call1(PyBytes::new_bound(py, python_udf.as_bytes()))
-            //         .map_err(|s| SparkError::custom(format!("cannot pickle {s}")))
-            //         .extract(py)?;
-            //
-            //     // Wrap the deserialized Python UDF in a Rust function
-            //     let rust_function = move |args: Vec<PyObject>| -> PyResult<PyObject> {
-            //         python_function.call_bound(py, args, None)
-            //     };
-            //
-            //     Ok(rust_function)
-            // });
-
-            // let input_types = udf
-            //     .arguments
-            //     .iter()
-            //     .map(|arg| arg.get_type(schema))
-            //     .collect::<Result<Vec<_>, _>>()?;
+            // Ok(expr::Expr::Wildcard { qualifier: None }) // uncomment if you want to test
         }
         ExprType::CallFunction(_) => Err(SparkError::todo("call function")),
         ExprType::Extension(_) => Err(SparkError::unsupported("expression extension")),

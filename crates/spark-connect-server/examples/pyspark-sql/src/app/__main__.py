@@ -42,29 +42,29 @@ if __name__ == "__main__":
     # df = spark.read.json("/tmp/df.json/")
     # print(df.toPandas())
 
-    print(
-        spark.createDataFrame(
-            [
-                Row(a=[1, 2, None], b={"m": 3.0, "n": 4.0}, c="foo"),
-                Row(a=[], b={"p": 1.0}, c="bar"),
-                Row(a=None, b={"q": 2.0}, c="baz"),
-            ]
-        )
-        .select(
-            (F.explode_outer("a") + F.lit(1)).alias("d"),
-            F.posexplode(F.col("a")),
-            F.col("c"),
-        )
-        .toPandas()
-    )
-    print(
-        spark.createDataFrame([Row(a=[[1, 2], None], b={"m": 3.0, "n": 4.0})])
-        .select(
-            F.posexplode_outer(F.explode("a")).alias("p", "a"),
-            F.posexplode("b").alias("q", "k", "v"),
-        )
-        .toPandas()
-    )
+#     print(
+#         spark.createDataFrame(
+#             [
+#                 Row(a=[1, 2, None], b={"m": 3.0, "n": 4.0}, c="foo"),
+#                 Row(a=[], b={"p": 1.0}, c="bar"),
+#                 Row(a=None, b={"q": 2.0}, c="baz"),
+#             ]
+#         )
+#         .select(
+#             (F.explode_outer("a") + F.lit(1)).alias("d"),
+#             F.posexplode(F.col("a")),
+#             F.col("c"),
+#         )
+#         .toPandas()
+#     )
+#     print(
+#         spark.createDataFrame([Row(a=[[1, 2], None], b={"m": 3.0, "n": 4.0})])
+#         .select(
+#             F.posexplode_outer(F.explode("a")).alias("p", "a"),
+#             F.posexplode("b").alias("q", "k", "v"),
+#         )
+#         .toPandas()
+#     )
 
     # FIXME: not working
     # print(df.selectExpr("b.*").toPandas())
