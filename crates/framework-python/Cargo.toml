@@ -1,0 +1,11 @@
+[package]
+name = "framework-python"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+datafusion = { workspace = true }
+datafusion-expr = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+pyo3 = { workspace = true }

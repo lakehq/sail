@@ -3,6 +3,7 @@ members = [
     "crates/hello",
     "crates/spark-connect-server",
     "crates/framework-telemetry",
+    "crates/framework-python",
 ]
 resolver = "2"
 
