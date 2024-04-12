@@ -110,7 +110,8 @@ impl ScalarUDFImpl for PythonUDF {
             let result = python_function.call1(args_tuple)?;
 
             // Convert the result back to a ColumnarValue and return it
-            ColumnarValue::from_array(result.extract()?)
+            Ok(ColumnarValue::from_array(result.extract()?))
+            // Ok(ColumnarValue::Array(result.into_pyarray(py).to_owned()))
         })
     }
 }
