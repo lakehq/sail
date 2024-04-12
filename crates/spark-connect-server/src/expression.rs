@@ -4,9 +4,9 @@ use datafusion::arrow::datatypes::{DataType, IntervalMonthDayNanoType};
 use datafusion::catalog::TableReference;
 use datafusion::common::{Column, DFSchema, ScalarValue};
 use datafusion::config::ConfigOptions;
-use datafusion::logical_expr::{
+use datafusion_expr::{
     expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, GetFieldAccess, GetIndexedField,
-    Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
+    Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF, Signature,
 };
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::sql::sqlparser::ast;
@@ -258,18 +258,46 @@ pub(crate) fn from_spark_expression(
                 .map(|x| from_spark_expression(x, schema))
                 .collect::<SparkResult<Vec<_>>>()?;
 
+            let input_types = udf
+                .arguments
+                .iter()
+                .map(|arg| arg.get_type(schema))
+                .collect::<Result<Vec<_>, _>>()?;
+
             let function = match udf.function.as_ref().required("function type")? {
                 Function::PythonUdf(function) => function,
                 _ => {
                     return Err(SparkError::invalid("function type must be Python UDF"));
                 }
             };
-            Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
-                    PythonUDF::new(function_name, deterministic, function),
-                ))),
-                args: arguments,
-            }))
+
+            let command = function.command.clone();
+            let output_type = from_spark_data_type(
+                &function.output_type.as_ref().required("function output type")?
+            )?;
+            let eval_type = function.eval_type;
+            let python_ver = function.python_ver.clone();
+
+            let python_udf = PythonUDF::new(
+                function_name.to_string(),
+                deterministic,
+                arguments,
+                input_types,
+                command,
+                output_type,
+                eval_type,
+                python_ver,
+            );
+
+            Ok(python_udf.to_scalar_function())
+
+            // Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+            //     func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
+            //         PythonUDF::new(),
+            //     ))),
+            //     args: arguments,
+            // }))
+
             // Ok(expr::Expr::Wildcard { qualifier: None }) // uncomment if you want to test
         }
         ExprType::CallFunction(_) => Err(SparkError::todo("call function")),
