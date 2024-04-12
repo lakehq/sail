@@ -17,6 +17,8 @@ use crate::schema::{from_spark_data_type, parse_spark_data_type_string};
 use crate::spark::connect as sc;
 use crate::sql::new_sql_parser;
 
+use framework_python::udf::PythonUDF;
+
 #[derive(Default)]
 pub(crate) struct EmptyContextProvider {
     options: ConfigOptions,
@@ -262,13 +264,13 @@ pub(crate) fn from_spark_expression(
                     return Err(SparkError::invalid("function type must be Python UDF"));
                 }
             };
-            // Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-            //     func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
-            //         function, // MultiAlias::new(alias.name.clone()), as ref point
-            //     ))),
-            //     args: arguments,
-            // }))
-            Ok(expr::Expr::Wildcard { qualifier: None }) // uncomment if you want to test
+            Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
+                    PythonUDF::new(function_name, deterministic, function),
+                ))),
+                args: arguments,
+            }))
+            // Ok(expr::Expr::Wildcard { qualifier: None }) // uncomment if you want to test
         }
         ExprType::CallFunction(_) => Err(SparkError::todo("call function")),
         ExprType::Extension(_) => Err(SparkError::unsupported("expression extension")),
