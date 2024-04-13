@@ -4,10 +4,7 @@ use datafusion::arrow::datatypes::{DataType, IntervalMonthDayNanoType};
 use datafusion::catalog::TableReference;
 use datafusion::common::{Column, DFSchema, ScalarValue};
 use datafusion::config::ConfigOptions;
-use datafusion_expr::{
-    expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, GetFieldAccess, GetIndexedField,
-    Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF, Signature,
-};
+use datafusion_expr::{expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, GetFieldAccess, GetIndexedField, Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF, Signature, ExprSchemable};
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::sql::sqlparser::ast;
 
@@ -261,7 +258,11 @@ pub(crate) fn from_spark_expression(
             let input_types = udf
                 .arguments
                 .iter()
-                .map(|arg| arg.get_type(schema))
+                .map(|arg|
+                    from_spark_expression(arg, schema)
+                        .expect("Failed to convert Spark expression")
+                        .get_type(schema)
+                )
                 .collect::<Result<Vec<_>, _>>()?;
 
             let function = match udf.function.as_ref().required("function type")? {
@@ -273,7 +274,7 @@ pub(crate) fn from_spark_expression(
 
             let command = function.command.clone();
             let output_type = from_spark_data_type(
-                &function.output_type.as_ref().required("function output type")?
+                function.output_type.as_ref().required("function output type")?
             )?;
             let eval_type = function.eval_type;
             let python_ver = function.python_ver.clone();
