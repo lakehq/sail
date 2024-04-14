@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::any::Any;
 use datafusion::arrow;
 
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, DataType, Field};
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, DataType, Field, Int64Type};
 use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef, PrimitiveArray};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::arrow::pyarrow::{FromPyArrow, PyArrowType, ToPyArrow};
@@ -41,8 +41,8 @@ impl PythonUDF {
         // command_fnc: u8,
         // command_fnc_return_type: u8,
         output_type: ArrowDataType,
-        eval_type: i32,
-        python_ver: String,
+        eval_type: i32, // TODO: Incorporate this
+        python_ver: String, // TODO: Incorporate this
     ) -> Self {
         Self {
             signature: Signature::exact(
@@ -94,6 +94,53 @@ impl ScalarUDFImpl for PythonUDF {
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         // let args = ColumnarValue::values_to_arrays(args)?;
+        println!("args: {:?}", args);
+        println!("self.input_types: {:?}", self.input_types);
+        println!("self.output_type: {:?}", self.output_type);
+        println!("self.eval_type: {:?}", self.eval_type);
+
+        let args = ColumnarValue::values_to_arrays(args)?;
+        if args.len() != 1 {
+            return Err(DataFusionError::Internal(format!(
+                "{} should only be called with a single argument",
+                self.name()
+            )));
+        }
+        let args = &args[0];
+        println!("args after values_to_arrays: {:?}", args);
+        println!("&args[0]: {:?}", args);
+
+        // let args_vec: Vec<_>;
+        let args_vec = match args.data_type() {
+            ArrowDataType::Int64 => {
+                let arrow_arr = args
+                    .as_any()
+                    .downcast_ref::<arrow::array::Int64Array>()
+                    .unwrap();
+                println!("array: {:?}", arrow_arr);
+                let array_vec = arrow_arr
+                    .values()
+                    .to_vec();
+                println!("array_vec: {:?}", array_vec);
+                array_vec
+            }
+            ArrowDataType::Int32 => {
+                unimplemented!()
+            }
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "Unsupported data type {:?}",
+                    args.data_type()
+                )));
+            }
+        };
+        println!("args_vec: {:?}", args_vec);
+        // let args_vec = args_vec
+        //     .iter()
+        //     .map(|&value| vec![value])
+        //     .collect::<Vec<_>>();
+        // let args_vec = args_vec.iter().map(|&value| vec![value]).collect();
+        println!("args_vec: {:?}", args_vec);
 
         Python::with_gil(|py| {
             // let binary_sequence = PyBytes::new(py, &self.command);
@@ -131,107 +178,56 @@ impl ScalarUDFImpl for PythonUDF {
                 return Err(DataFusionError::Execution("Expected a callable Python function".to_string()));
             }
 
-            let py_args = args
-                .iter()
-                .map(|arg|
-                    {
-                        match arg {
-                            ColumnarValue::Array(arr) => {
-                                let arr_data_type = arr.as_ref().data_type();
-                                match arr_data_type {
-                                    ArrowDataType::Int64 => {
-                                        println!("before arrow_arr, arr: {:?}", arr);
-                                        let arrow_arr = arr
-                                            .as_ref()
-                                            .as_any()
-                                            // .downcast_ref::<arrow::array::Int64Array>()
-                                            .downcast_ref::<PrimitiveArray<arrow::datatypes::Int64Type>>()
-                                            .ok_or_else(|| DataFusionError::Execution("expected int64 array".to_string()))
-                                            .unwrap();
+            let mut results = Vec::new();
+            for arg in &args_vec {
+                let args_tuple = PyTuple::new(py, &[arg]);
+                let py_result = python_function
+                    .call1(args_tuple)
+                    .map_err(|e| DataFusionError::Execution(format!("py_result Python Error {:?}", e)))?;
+                let rust_result = match self.output_type {
+                    ArrowDataType::Int32 => {
+                        let value = py_result.extract::<i32>()
+                            .map_err(|e| DataFusionError::Execution(format!("rust_result Python Error {:?}", e)))?;
+                        // Ok(ScalarValue::Int32(Some(value)))
+                        Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(value))))
+                    }
+                    ArrowDataType::Int64 => {
+                        let value = py_result.extract::<i64>()
+                            .map_err(|e| DataFusionError::Execution(format!("rust_result Python Error {:?}", e)))?;
+                        // Ok(ScalarValue::Int64(Some(value)))
+                        Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(value))))
+                    }
+                    _ => Err(DataFusionError::Internal("Unsupported output type".to_string())),
+                }?;
+                results.push(rust_result);
+            }
 
-                                        println!("arrow_arr: {:?}", arrow_arr);
-                                        let arrow_arr = Arc::new(arrow_arr.clone());
-                                        println!("Arc arrow_arr: {:?}", arrow_arr);
-
-                                        let primitive_vector: Vec<i64> = arrow_arr
-                                            .values()
-                                            .to_vec();
-
-                                        println!("primitive_vector: {:?}", primitive_vector);
-
-                                        let py_list = PyList::new(py, &primitive_vector);
-
-                                        println!("py_list: {:?}", py_list);
-
-                                        Ok(py_list.to_object(py))
-                                    }
-                                    _ => Err(DataFusionError::Execution(format!("Unsupported array {:?}", arr))),
-                                }
-                                // Ok(py.None())
-                            }
-                            ColumnarValue::Scalar(scalar) => {
-                                match scalar {
-                                    ScalarValue::Null => Ok(py.None()),
-                                    ScalarValue::Int8(v) => Ok(v.to_object(py)),
-                                    ScalarValue::Int16(v) => Ok(v.to_object(py)),
-                                    ScalarValue::Int32(v) => Ok(v.to_object(py)),
-                                    ScalarValue::Int64(v) => Ok(v.to_object(py)),
-                                    ScalarValue::UInt8(v) => Ok(v.to_object(py)),
-                                    ScalarValue::UInt16(v) => Ok(v.to_object(py)),
-                                    ScalarValue::UInt32(v) => Ok(v.to_object(py)),
-                                    ScalarValue::UInt64(v) => Ok(v.to_object(py)),
-                                    ScalarValue::Float32(v) => Ok(v.to_object(py)),
-                                    ScalarValue::Float64(v) => Ok(v.to_object(py)),
-                                    ScalarValue::Utf8(v) => Ok(v.to_object(py)),
-                                    ScalarValue::LargeUtf8(v) => Ok(v.to_object(py)),
-                                    ScalarValue::Boolean(v) => Ok(v.to_object(py)),
-                                    ScalarValue::Date32(v) => Ok(v.to_object(py)),
-                                    ScalarValue::Date64(v) => Ok(v.to_object(py)),
-                                    ScalarValue::Time32Millisecond(v) => Ok(v.to_object(py)),
-                                    ScalarValue::Time32Second(v) => Ok(v.to_object(py)),
-                                    ScalarValue::Time64Microsecond(v) => Ok(v.to_object(py)),
-                                    ScalarValue::Time64Nanosecond(v) => Ok(v.to_object(py)),
-                                    ScalarValue::IntervalYearMonth(v) => Ok(v.to_object(py)),
-                                    ScalarValue::IntervalDayTime(v) => Ok(v.to_object(py)),
-                                    ScalarValue::DurationSecond(v) => Ok(v.to_object(py)),
-                                    ScalarValue::DurationMillisecond(v) => Ok(v.to_object(py)),
-                                    ScalarValue::DurationMicrosecond(v) => Ok(v.to_object(py)),
-                                    ScalarValue::DurationNanosecond(v) => Ok(v.to_object(py)),
-                                    ScalarValue::List(v) => {
-                                        // Handle this case
-                                        unimplemented!()
-                                        // Ok(py.None())
-                                    }
-                                    _ => Err(DataFusionError::Execution(format!("Unsupported scalar value {:?}", scalar))),
-                                }
-                            }
-                        }
-                    }.unwrap()
-                )
-                .collect::<Vec<_>>();
-
-            println!("py_args: {:?}", py_args);
-            let args_tuple = PyTuple::new(py, &py_args);
-            println!("args_tuple: {:?}", args_tuple);
-
-            println!("BEFORE py_result:");
-            let py_result = python_function
-                .call1(args_tuple)
-                .map_err(|e| DataFusionError::Execution(format!("py_result Python Error {:?}", e)))?;
-
-
-            println!("AFTER py_result: {:?}", py_result);
-            let rust_result = py_result.extract()
-                .map_err(|e| DataFusionError::Execution(format!("rust_result Python Error {:?}", e)))?;
-            Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(rust_result))))
-
-            // let py_result = python_function.get_item(0)
-            //     .map_err(|e| DataFusionError::Execution(format!("Python Error {:?}", e)))?
-            //     .call1(args_tuple)
-            //     .map_err(|e| DataFusionError::Execution(format!("Python Error {:?}", e)))?;
-            // let rust_result = py_result.extract::<i32>()
-            //     .map_err(|e| DataFusionError::Execution(format!("Python Error {:?}", e)))?;
-            // Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(rust_result))))
+            let array_ref = match results[0] {
+                ColumnarValue::Scalar(ScalarValue::Int64(_)) => {
+                    let array_data = arrow::array::Int64Array::from_iter_values(
+                        results.into_iter().filter_map(|value| match value {
+                            ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) => Some(v),
+                            _ => None,
+                        })
+                    );
+                    Arc::new(array_data) as ArrayRef
+                }
+                ColumnarValue::Scalar(ScalarValue::Int32(_)) => {
+                    let array_data = arrow::array::Int32Array::from_iter_values(
+                        results.into_iter().filter_map(|value| match value {
+                            ColumnarValue::Scalar(ScalarValue::Int32(Some(v))) => Some(v),
+                            _ => None,
+                        })
+                    );
+                    Arc::new(array_data) as ArrayRef
+                }
+                _ => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Unsupported data type"
+                    )));
+                }
+            };
+            Ok(ColumnarValue::Array(array_ref))
         })
     }
 }
