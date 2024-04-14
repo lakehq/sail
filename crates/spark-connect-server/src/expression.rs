@@ -244,19 +244,19 @@ pub(crate) fn from_spark_expression(
 
             let function_name = udf
                 .function_name
-                .as_str();
+                .clone();
 
             let deterministic = udf
-                .deterministic;
+                .deterministic
+                .clone();
 
-            let arguments = udf
-                .arguments
+            let arguments_clone = udf.arguments.clone();
+            let arguments = arguments_clone
                 .iter()
                 .map(|x| from_spark_expression(x, schema))
                 .collect::<SparkResult<Vec<_>>>()?;
 
-            let input_types = udf
-                .arguments
+            let input_types = arguments_clone
                 .iter()
                 .map(|arg|
                     from_spark_expression(arg, schema)
@@ -265,24 +265,36 @@ pub(crate) fn from_spark_expression(
                 )
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let function = match udf.function.as_ref().required("function type")? {
+            let function = match udf.function.as_ref().clone().required("function type")? {
                 Function::PythonUdf(function) => function,
                 _ => {
                     return Err(SparkError::invalid("function type must be Python UDF"));
                 }
             };
 
-            let command = function.command.clone();
+            let command = function
+                .command
+                .clone();
+
             let output_type = from_spark_data_type(
-                function.output_type.as_ref().required("function output type")?
+                function
+                    .output_type
+                    .as_ref()
+                    .required("function output type")?
             )?;
-            let eval_type = function.eval_type;
-            let python_ver = function.python_ver.clone();
+
+            let eval_type = function
+                .eval_type
+                .clone();
+
+            let python_ver = function
+                .python_ver
+                .clone();
 
             let python_udf = PythonUDF::new(
                 function_name.to_string(),
                 deterministic,
-                arguments,
+                arguments.clone(),
                 input_types,
                 command,
                 output_type,
@@ -290,16 +302,14 @@ pub(crate) fn from_spark_expression(
                 python_ver,
             );
 
-            Ok(python_udf.to_scalar_function())
+            // Ok(python_udf.to_scalar_function())
 
-            // Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-            //     func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
-            //         PythonUDF::new(),
-            //     ))),
-            //     args: arguments,
-            // }))
-
-            // Ok(expr::Expr::Wildcard { qualifier: None }) // uncomment if you want to test
+            Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
+                    python_udf,
+                ))),
+                args: arguments.clone(),
+            }))
         }
         ExprType::CallFunction(_) => Err(SparkError::todo("call function")),
         ExprType::Extension(_) => Err(SparkError::unsupported("expression extension")),

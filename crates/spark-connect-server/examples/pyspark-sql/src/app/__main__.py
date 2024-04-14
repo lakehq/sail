@@ -68,6 +68,7 @@ if __name__ == "__main__":
 
     # FIXME: not working
     # print(df.selectExpr("b.*").toPandas())
+    print(df.select(F.col("a")).toPandas())
     print(df.select(add_one(F.col("a"))).toPandas())
     # spark.readStream.format("rate").load().writeStream.format("console").start()
 

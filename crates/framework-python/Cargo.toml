@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 framework-proto = { path = "../framework-proto" }
 datafusion = { workspace = true }
+datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

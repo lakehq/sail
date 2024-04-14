@@ -29,7 +29,8 @@ prost-types = "0.12"
 tower = { version = "0.4", features = ["full"] }
 tower-http = { version = "0.4", features = ["full"] }
 uuid = { version = "1.8.0", features = ["v4"] }
-datafusion = "36.0.0"
+datafusion = { version = "36.0.0", features = ["pyarrow"] }
+datafusion-common = { version = "36.0.0", features = ["pyarrow"] }
 datafusion-expr = "36.0.0"
 async-recursion = "1.1.0"
 async-stream = "0.3"
@@ -39,4 +40,5 @@ serde_json = "1.0"
 monostate = "0.1"
 regex = "1.10"
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
-pyo3 = { version = "0.21.1", features = ["auto-initialize"] }
+# 0.21 breaks when datafusion has pyarrow enabled
+pyo3 = { version = "0.20.3", features = ["auto-initialize"] }
