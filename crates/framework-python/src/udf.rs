@@ -93,13 +93,13 @@ impl ScalarUDFImpl for PythonUDF {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        // let args = ColumnarValue::values_to_arrays(args)?;
         println!("args: {:?}", args);
         println!("self.input_types: {:?}", self.input_types);
         println!("self.output_type: {:?}", self.output_type);
         println!("self.eval_type: {:?}", self.eval_type);
 
         let args = ColumnarValue::values_to_arrays(args)?;
+        println!("args after values_to_arrays: {:?}", args);
         if args.len() != 1 {
             return Err(DataFusionError::Internal(format!(
                 "{} should only be called with a single argument",
@@ -107,10 +107,7 @@ impl ScalarUDFImpl for PythonUDF {
             )));
         }
         let args = &args[0];
-        println!("args after values_to_arrays: {:?}", args);
-        println!("&args[0]: {:?}", args);
 
-        // let args_vec: Vec<_>;
         let args_vec = match args.data_type() {
             ArrowDataType::Int64 => {
                 let arrow_arr = args
@@ -135,35 +132,15 @@ impl ScalarUDFImpl for PythonUDF {
             }
         };
         println!("args_vec: {:?}", args_vec);
-        // let args_vec = args_vec
-        //     .iter()
-        //     .map(|&value| vec![value])
-        //     .collect::<Vec<_>>();
-        // let args_vec = args_vec.iter().map(|&value| vec![value]).collect();
-        println!("args_vec: {:?}", args_vec);
 
         Python::with_gil(|py| {
-            // let binary_sequence = PyBytes::new(py, &self.command);
-            // let python_function = PyModule::import(py, pyo3::intern!(py, "pyspark.cloudpickle"))
-            //     .and_then(|m| m.getattr(pyo3::intern!(py, "loads")))
-            //     .and_then(|f| Ok(f.call1((binary_sequence, ))?.to_object(py)))
-            //     // .and_then(|f| Ok(f.call1((binary_sequence, ))))
-            //     .map_err(|e| DataFusionError::Execution(format!("Pickle Error {:?}", e)))?;
-
-            let cloudpickle = PyModule::import(py, "pyspark.cloudpickle") // TODO: make name a variable instead of hardcoding
-                .expect("Unable to import 'pyspark.cloudpickle'")
-                .getattr("loads")
-                .unwrap();
-
             let binary_sequence = PyBytes::new(py, &self.command);
             println!("binary_sequence: {:?}", binary_sequence);
 
-            // let python_function: Py<PyAny> = cloudpickle
-            let python_function_tuple = cloudpickle
-                .call1((binary_sequence, ))
+            let python_function_tuple = PyModule::import(py, pyo3::intern!(py, "pyspark.cloudpickle"))
+                .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
+                .and_then(|loads| Ok(loads.call1((binary_sequence, ))?))
                 .map_err(|e| DataFusionError::Execution(format!("Pickle Error {:?}", e)))?;
-            // .to_object(py);
-            // .unwrap()
 
             let python_function = python_function_tuple.get_item(0)
                 .map_err(|e| DataFusionError::Execution(format!("Pickle Error {:?}", e)))?;
