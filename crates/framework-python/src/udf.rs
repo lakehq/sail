@@ -81,17 +81,6 @@ impl ScalarUDFImpl for PythonUDF {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let input_types = match &self.signature().type_signature {
-            TypeSignature::Exact(types) => types,
-            _ => {
-                return Err(DataFusionError::Internal(format!("Type Signature is not an exact")));
-            }
-        };
-        println!("TypeSignature input_types: {:?}", input_types);
-        println!("self.output_type: {:?}", self.output_type);
-        println!("self.eval_type: {:?}", self.eval_type);
-        println!("args: {:?}", args);
-
         if args.len() != 1 {
             return Err(DataFusionError::Internal(format!(
                 "{} should only be called with a single argument",
@@ -129,11 +118,9 @@ impl ScalarUDFImpl for PythonUDF {
                 unimplemented!("Scalar values are not supported yet")
             }
         };
-        println!("args_vec: {:?}", args_vec);
 
         Python::with_gil(|py| {
             let binary_sequence = PyBytes::new(py, &self.command);
-            println!("binary_sequence: {:?}", binary_sequence);
 
             let python_function_tuple = PyModule::import(py, pyo3::intern!(py, "pyspark.cloudpickle"))
                 .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
@@ -145,9 +132,6 @@ impl ScalarUDFImpl for PythonUDF {
 
             let python_function_return_type = python_function_tuple.get_item(1)
                 .map_err(|e| DataFusionError::Execution(format!("Pickle Error {:?}", e)))?;
-
-            println!("python_function: {:?}", python_function);
-            println!("python_function_return_type: {:?}", python_function_return_type);
 
             if !python_function.is_callable() {
                 return Err(DataFusionError::Execution("Expected a callable Python function".to_string()));
