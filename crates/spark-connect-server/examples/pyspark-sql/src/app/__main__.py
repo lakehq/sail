@@ -66,10 +66,7 @@ if __name__ == "__main__":
         .toPandas()
     )
 
-    print(df.limit(1).select(F.col("a")).toPandas())
     print(df.limit(1).select(add_one(F.col("a"))).toPandas())
-
-    print(df.select(F.col("a")).toPandas())
     print(df.select(add_one(F.col("a"))).toPandas())
 
     # FIXME: not working
