@@ -106,6 +106,7 @@ impl ScalarUDFImpl for PythonUDF {
                 match arr_data_type {
                     DataType::Int64 => {
                         let vec = arr
+                            .as_ref()
                             .as_any()
                             .downcast_ref::<arrow::array::Int64Array>()
                             .unwrap()
@@ -152,53 +153,41 @@ impl ScalarUDFImpl for PythonUDF {
                 return Err(DataFusionError::Execution("Expected a callable Python function".to_string()));
             }
 
-            let mut results = Vec::new();
-            for arg in &args_vec {
-                let args_tuple = PyTuple::new(py, &[arg]);
-                let py_result = python_function
-                    .call1(args_tuple)
-                    .map_err(|e| DataFusionError::Execution(format!("py_result Python Error {:?}", e)))?;
-                let rust_result = match self.output_type {
-                    DataType::Int32 => {
-                        let value = py_result.extract::<i32>()
-                            .map_err(|e| DataFusionError::Execution(format!("rust_result Python Error {:?}", e)))?;
-                        // Ok(ScalarValue::Int32(Some(value)))
-                        Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(value))))
-                    }
-                    DataType::Int64 => {
-                        let value = py_result.extract::<i64>()
-                            .map_err(|e| DataFusionError::Execution(format!("rust_result Python Error {:?}", e)))?;
-                        // Ok(ScalarValue::Int64(Some(value)))
-                        Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(value))))
-                    }
-                    _ => Err(DataFusionError::Internal("Unsupported output type".to_string())),
-                }?;
-                results.push(rust_result);
-            }
-
-            let array_ref = match results[0] {
-                ColumnarValue::Scalar(ScalarValue::Int64(_)) => {
-                    let array_data = arrow::array::Int64Array::from_iter_values(
-                        results.into_iter().filter_map(|value| match value {
-                            ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) => Some(v),
-                            _ => None,
-                        })
-                    );
+            let array_ref = match &self.output_type {
+                DataType::Int32 => {
+                    let results = args_vec
+                        .iter()
+                        .map(|arg| {
+                            let args_tuple = PyTuple::new(py, &[arg]);
+                            let py_result = python_function.call1(args_tuple)
+                                .map_err(|e| DataFusionError::Execution(format!("py_result Python Error {:?}", e)))
+                                .expect("py_result Python Error");
+                            let value = py_result.extract::<i32>()
+                                .map_err(|e| DataFusionError::Execution(format!("rust_result Python Error {:?}", e)))
+                                .expect("rust_result Python Error");
+                            value
+                        }).collect::<Vec<_>>();
+                    let array_data = arrow::array::Int32Array::from_iter_values(results);
                     Arc::new(array_data) as ArrayRef
                 }
-                ColumnarValue::Scalar(ScalarValue::Int32(_)) => {
-                    let array_data = arrow::array::Int32Array::from_iter_values(
-                        results.into_iter().filter_map(|value| match value {
-                            ColumnarValue::Scalar(ScalarValue::Int32(Some(v))) => Some(v),
-                            _ => None,
-                        })
-                    );
+                DataType::Int64 => {
+                    let results = args_vec
+                        .iter()
+                        .map(|arg| {
+                            let args_tuple = PyTuple::new(py, &[arg]);
+                            let py_result = python_function.call1(args_tuple)
+                                .map_err(|e| DataFusionError::Execution(format!("py_result Python Error {:?}", e)))
+                                .expect("py_result Python Error");
+                            let value = py_result.extract::<i64>()
+                                .map_err(|e| DataFusionError::Execution(format!("rust_result Python Error {:?}", e)))
+                                .expect("rust_result Python Error");
+                            value
+                        }).collect::<Vec<_>>();
+                    let array_data = arrow::array::Int64Array::from_iter_values(results);
                     Arc::new(array_data) as ArrayRef
                 }
                 _ => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Unsupported data type"
-                    )));
+                    return Err(DataFusionError::Internal(format!("Unsupported data type")));
                 }
             };
             Ok(ColumnarValue::Array(array_ref))
