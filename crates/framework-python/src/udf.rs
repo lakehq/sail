@@ -9,8 +9,9 @@ use datafusion::arrow::pyarrow::{FromPyArrow, PyArrowType, ToPyArrow};
 use datafusion::common::cast::{as_large_list_array, as_list_array, as_map_array};
 use datafusion_expr::{
     ColumnarValue, FuncMonotonicity, ScalarUDF, ScalarUDFImpl, Signature, expr,
-    ScalarFunctionDefinition, Volatility,
+    ScalarFunctionDefinition, Volatility, TypeSignature,
 };
+use datafusion_expr::type_coercion::functions::data_types;
 
 use pyo3::{PyResult, Python, PyObject, ToPyObject, PyAny};
 use pyo3::prelude::{PyModule, Py};
@@ -23,7 +24,6 @@ pub struct PythonUDF {
 
     // TODO: See what I exactly need. This is a placeholder.
     function_name: String,
-    input_types: Vec<DataType>,
     output_type: DataType,
     eval_type: i32,
     command: Vec<u8>,
@@ -36,8 +36,6 @@ impl PythonUDF {
         deterministic: bool,
         input_types: Vec<DataType>,
         command: Vec<u8>,
-        // command_fnc: u8,
-        // command_fnc_return_type: u8,
         output_type: DataType,
         eval_type: i32, // TODO: Incorporate this
         python_ver: String, // TODO: Incorporate this
@@ -52,7 +50,6 @@ impl PythonUDF {
                 },
             ),
             function_name,
-            input_types,
             command,
             output_type,
             eval_type,
@@ -75,22 +72,26 @@ impl ScalarUDFImpl for PythonUDF {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types != &self.input_types[..] {
-            return Err(DataFusionError::Internal(format!("Input types do not match the expected types")));
-        }
-        // TODO: Use `self.output_type` and `python_function_return_type` (needs to be unpickled))
+        data_types(arg_types, &self.signature())
+            .map_err(|e|
+                DataFusionError::Internal(format!("Input types do not match the expected types {:?}", e))
+            )?;
+
         Ok(self.output_type.clone())
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        println!("args: {:?}", args);
-        println!("self.input_types: {:?}", self.input_types);
+        let input_types = match &self.signature().type_signature {
+            TypeSignature::Exact(types) => types,
+            _ => {
+                return Err(DataFusionError::Internal(format!("Type Signature is not an exact")));
+            }
+        };
+        println!("TypeSignature input_types: {:?}", input_types);
         println!("self.output_type: {:?}", self.output_type);
         println!("self.eval_type: {:?}", self.eval_type);
+        println!("args: {:?}", args);
 
-        // TODO: Check performance of values_to_arrays
-        let args = ColumnarValue::values_to_arrays(args)?;
-        println!("args after values_to_arrays: {:?}", args);
         if args.len() != 1 {
             return Err(DataFusionError::Internal(format!(
                 "{} should only be called with a single argument",
@@ -99,27 +100,32 @@ impl ScalarUDFImpl for PythonUDF {
         }
         let args = &args[0];
 
-        let args_vec = match args.data_type() {
-            DataType::Int64 => {
-                let arrow_arr = args
-                    .as_any()
-                    .downcast_ref::<arrow::array::Int64Array>()
-                    .unwrap();
-                println!("array: {:?}", arrow_arr);
-                let array_vec = arrow_arr
-                    .values()
-                    .to_vec();
-                println!("array_vec: {:?}", array_vec);
-                array_vec
+        let args_vec = match &args {
+            ColumnarValue::Array(arr) => {
+                let arr_data_type = arr.as_ref().data_type();
+                match arr_data_type {
+                    DataType::Int64 => {
+                        let vec = arr
+                            .as_any()
+                            .downcast_ref::<arrow::array::Int64Array>()
+                            .unwrap()
+                            .values()
+                            .to_vec();
+                        vec
+                    }
+                    DataType::Int32 => {
+                        unimplemented!()
+                    }
+                    _ => {
+                        return Err(DataFusionError::Internal(format!(
+                            "Unsupported data type {:?}",
+                            args.data_type()
+                        )));
+                    }
+                }
             }
-            DataType::Int32 => {
-                unimplemented!()
-            }
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "Unsupported data type {:?}",
-                    args.data_type()
-                )));
+            ColumnarValue::Scalar(scalar) => {
+                unimplemented!("Scalar values are not supported yet")
             }
         };
         println!("args_vec: {:?}", args_vec);
