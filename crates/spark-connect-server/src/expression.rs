@@ -240,61 +240,60 @@ pub(crate) fn from_spark_expression(
             Err(SparkError::todo("unresolved named lambda variable"))
         }
         ExprType::CommonInlineUserDefinedFunction(udf) => {
-            use sc::common_inline_user_defined_function::Function;
+            use sc::common_inline_user_defined_function::Function::PythonUdf;
 
-            let function_name = udf
+            let function_name: String = udf
                 .function_name
                 .clone();
 
-            let deterministic = udf
+            let deterministic: bool = udf
                 .deterministic
                 .clone();
 
-            let arguments_clone = udf.arguments.clone();
-            let arguments = arguments_clone
+            let arguments: Vec<expr::Expr> = udf
+                .arguments
+                // .clone()
                 .iter()
                 .map(|x| from_spark_expression(x, schema))
                 .collect::<SparkResult<Vec<_>>>()?;
 
-            let input_types = arguments_clone
+            let input_types: Vec<DataType> = arguments
                 .iter()
-                .map(|arg|
-                    from_spark_expression(arg, schema)
-                        .expect("Failed to convert Spark expression")
-                        .get_type(schema)
-                )
+                .map(|arg| arg.get_type(schema))
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let function = match udf.function.as_ref().clone().required("function type")? {
-                Function::PythonUdf(function) => function,
+            let function = match udf
+                .function
+                .as_ref()
+                .required("udf function")?
+            {
+                PythonUdf(function) => function,
                 _ => {
-                    return Err(SparkError::invalid("function type must be Python UDF"));
+                    return Err(SparkError::invalid("UDF function type must be Python UDF"));
                 }
             };
-
-            let command = function
-                .command
-                .clone();
 
             let output_type = from_spark_data_type(
                 function
                     .output_type
                     .as_ref()
-                    .required("function output type")?
+                    .required("udf function output type")?
             )?;
 
-            let eval_type = function
-                .eval_type
-                .clone();
+            let eval_type: i32 = function
+                .eval_type;
 
-            let python_ver = function
+            let python_ver: String = function
                 .python_ver
                 .clone();
 
+            let command: Vec<u8> = function
+                .command
+                .clone();
+
             let python_udf = PythonUDF::new(
-                function_name.to_string(),
+                function_name,
                 deterministic,
-                arguments.clone(),
                 input_types,
                 command,
                 output_type,
@@ -302,13 +301,11 @@ pub(crate) fn from_spark_expression(
                 python_ver,
             );
 
-            // Ok(python_udf.to_scalar_function())
-
             Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                 func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
                     python_udf,
                 ))),
-                args: arguments.clone(),
+                args: arguments,
             }))
         }
         ExprType::CallFunction(_) => Err(SparkError::todo("call function")),

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::any::Any;
 use datafusion::arrow;
 
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, DataType, Field, Int64Type};
+use datafusion::arrow::datatypes::{DataType, Field, Int64Type};
 use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef, PrimitiveArray};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::arrow::pyarrow::{FromPyArrow, PyArrowType, ToPyArrow};
@@ -23,9 +23,8 @@ pub struct PythonUDF {
 
     // TODO: See what I exactly need. This is a placeholder.
     function_name: String,
-    arguments: Vec<expr::Expr>,
-    input_types: Vec<ArrowDataType>,
-    output_type: ArrowDataType,
+    input_types: Vec<DataType>,
+    output_type: DataType,
     eval_type: i32,
     command: Vec<u8>,
     python_ver: String,
@@ -35,12 +34,11 @@ impl PythonUDF {
     pub fn new(
         function_name: String,
         deterministic: bool,
-        arguments: Vec<expr::Expr>,
-        input_types: Vec<ArrowDataType>,
+        input_types: Vec<DataType>,
         command: Vec<u8>,
         // command_fnc: u8,
         // command_fnc_return_type: u8,
-        output_type: ArrowDataType,
+        output_type: DataType,
         eval_type: i32, // TODO: Incorporate this
         python_ver: String, // TODO: Incorporate this
     ) -> Self {
@@ -54,7 +52,6 @@ impl PythonUDF {
                 },
             ),
             function_name,
-            arguments,
             input_types,
             command,
             output_type,
@@ -62,13 +59,6 @@ impl PythonUDF {
             python_ver,
         }
     }
-
-    // pub fn to_scalar_function(&self) -> expr::Expr {
-    //     expr::Expr::ScalarFunction(expr::ScalarFunction {
-    //         func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(self.clone()))),
-    //         args: self.arguments.clone(),
-    //     })
-    // }
 }
 
 impl ScalarUDFImpl for PythonUDF {
@@ -84,7 +74,7 @@ impl ScalarUDFImpl for PythonUDF {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[ArrowDataType]) -> Result<ArrowDataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types != &self.input_types[..] {
             return Err(DataFusionError::Internal(format!("Input types do not match the expected types")));
         }
@@ -109,7 +99,7 @@ impl ScalarUDFImpl for PythonUDF {
         let args = &args[0];
 
         let args_vec = match args.data_type() {
-            ArrowDataType::Int64 => {
+            DataType::Int64 => {
                 let arrow_arr = args
                     .as_any()
                     .downcast_ref::<arrow::array::Int64Array>()
@@ -121,7 +111,7 @@ impl ScalarUDFImpl for PythonUDF {
                 println!("array_vec: {:?}", array_vec);
                 array_vec
             }
-            ArrowDataType::Int32 => {
+            DataType::Int32 => {
                 unimplemented!()
             }
             _ => {
@@ -162,13 +152,13 @@ impl ScalarUDFImpl for PythonUDF {
                     .call1(args_tuple)
                     .map_err(|e| DataFusionError::Execution(format!("py_result Python Error {:?}", e)))?;
                 let rust_result = match self.output_type {
-                    ArrowDataType::Int32 => {
+                    DataType::Int32 => {
                         let value = py_result.extract::<i32>()
                             .map_err(|e| DataFusionError::Execution(format!("rust_result Python Error {:?}", e)))?;
                         // Ok(ScalarValue::Int32(Some(value)))
                         Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(value))))
                     }
-                    ArrowDataType::Int64 => {
+                    DataType::Int64 => {
                         let value = py_result.extract::<i64>()
                             .map_err(|e| DataFusionError::Execution(format!("rust_result Python Error {:?}", e)))?;
                         // Ok(ScalarValue::Int64(Some(value)))
