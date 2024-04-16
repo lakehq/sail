@@ -88,6 +88,7 @@ impl ScalarUDFImpl for PythonUDF {
         println!("self.output_type: {:?}", self.output_type);
         println!("self.eval_type: {:?}", self.eval_type);
 
+        // TODO: Check performance of values_to_arrays
         let args = ColumnarValue::values_to_arrays(args)?;
         println!("args after values_to_arrays: {:?}", args);
         if args.len() != 1 {

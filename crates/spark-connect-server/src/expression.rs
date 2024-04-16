@@ -247,12 +247,10 @@ pub(crate) fn from_spark_expression(
                 .clone();
 
             let deterministic: bool = udf
-                .deterministic
-                .clone();
+                .deterministic;
 
             let arguments: Vec<expr::Expr> = udf
                 .arguments
-                // .clone()
                 .iter()
                 .map(|x| from_spark_expression(x, schema))
                 .collect::<SparkResult<Vec<_>>>()?;
