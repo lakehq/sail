@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::any::Any;
 use datafusion::arrow;
 
-use datafusion::arrow::datatypes::{DataType, Field, Int64Type};
-use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef, PrimitiveArray};
+use datafusion::arrow::datatypes::{DataType, Field, Int64Type, Int32Type};
+use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef, PrimitiveArray, ArrowPrimitiveType};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::arrow::pyarrow::{FromPyArrow, PyArrowType, ToPyArrow};
 use datafusion::common::cast::{as_large_list_array, as_list_array, as_map_array};
@@ -13,10 +13,10 @@ use datafusion_expr::{
 };
 use datafusion_expr::type_coercion::functions::data_types;
 
-use pyo3::{PyResult, Python, PyObject, ToPyObject, PyAny};
-use pyo3::prelude::{PyModule, Py};
-use pyo3::types::{IntoPyDict, PyBytes, PyTuple, PyList};
-use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyTuple};
+use pyo3::{IntoPy, PyClass};
+use crate::utils::{get_native_values_from_array};
 
 #[derive(Debug, Clone)]
 pub struct PythonUDF {
@@ -91,20 +91,14 @@ impl ScalarUDFImpl for PythonUDF {
 
         let args_vec = match &args {
             ColumnarValue::Array(arr) => {
-                let arr_data_type = arr.as_ref().data_type();
-                match arr_data_type {
+                match &arr.data_type() {
+                    // DataType::Int32 => {
+                    //     // make_array(arr.into_data())
+                    //     get_native_values_from_array::<Int32Type>(&arr)?
+                    // }
                     DataType::Int64 => {
-                        let vec = arr
-                            .as_ref()
-                            .as_any()
-                            .downcast_ref::<arrow::array::Int64Array>()
-                            .unwrap()
-                            .values()
-                            .to_vec();
-                        vec
-                    }
-                    DataType::Int32 => {
-                        unimplemented!()
+                        // make_array(arr.into_data())
+                        get_native_values_from_array::<Int64Type>(&arr)?
                     }
                     _ => {
                         return Err(DataFusionError::Internal(format!(
@@ -142,15 +136,16 @@ impl ScalarUDFImpl for PythonUDF {
                     let results = args_vec
                         .iter()
                         .map(|arg| {
-                            let args_tuple = PyTuple::new(py, &[arg]);
+                            let args_tuple = PyTuple::new(py, [arg]);
                             let py_result = python_function.call1(args_tuple)
                                 .map_err(|e| DataFusionError::Execution(format!("py_result Python Error {:?}", e)))
-                                .expect("py_result Python Error");
-                            let value = py_result.extract::<i32>()
+                                .expect("py_result Python Error")
+                                .extract::<i32>()
                                 .map_err(|e| DataFusionError::Execution(format!("rust_result Python Error {:?}", e)))
                                 .expect("rust_result Python Error");
-                            value
+                            py_result
                         }).collect::<Vec<_>>();
+                    println!("results: {:?}", results);
                     let array_data = arrow::array::Int32Array::from_iter_values(results);
                     Arc::new(array_data) as ArrayRef
                 }
@@ -161,11 +156,11 @@ impl ScalarUDFImpl for PythonUDF {
                             let args_tuple = PyTuple::new(py, &[arg]);
                             let py_result = python_function.call1(args_tuple)
                                 .map_err(|e| DataFusionError::Execution(format!("py_result Python Error {:?}", e)))
-                                .expect("py_result Python Error");
-                            let value = py_result.extract::<i64>()
+                                .expect("py_result Python Error")
+                                .extract::<i64>()
                                 .map_err(|e| DataFusionError::Execution(format!("rust_result Python Error {:?}", e)))
                                 .expect("rust_result Python Error");
-                            value
+                            py_result
                         }).collect::<Vec<_>>();
                     let array_data = arrow::array::Int64Array::from_iter_values(results);
                     Arc::new(array_data) as ArrayRef
