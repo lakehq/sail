@@ -5,7 +5,6 @@ use datafusion::arrow;
 use datafusion::arrow::datatypes::{DataType, Field, Int64Type, Int32Type};
 use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef, PrimitiveArray, ArrowPrimitiveType};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
-use datafusion::arrow::pyarrow::{FromPyArrow, PyArrowType, ToPyArrow};
 use datafusion::common::cast::{as_large_list_array, as_list_array, as_map_array};
 use datafusion_expr::{
     ColumnarValue, FuncMonotonicity, ScalarUDF, ScalarUDFImpl, Signature, expr,
@@ -114,9 +113,9 @@ impl ScalarUDFImpl for PythonUDF {
         };
 
         Python::with_gil(|py| {
-            let binary_sequence = PyBytes::new(py, &self.command);
+            let binary_sequence = PyBytes::new_bound(py, &self.command);
 
-            let python_function_tuple = PyModule::import(py, pyo3::intern!(py, "pyspark.cloudpickle"))
+            let python_function_tuple = PyModule::import_bound(py, pyo3::intern!(py, "pyspark.cloudpickle"))
                 .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
                 .and_then(|loads| Ok(loads.call1((binary_sequence, ))?))
                 .map_err(|e| DataFusionError::Execution(format!("Pickle Error {:?}", e)))?;
@@ -136,7 +135,7 @@ impl ScalarUDFImpl for PythonUDF {
                     let results = args_vec
                         .iter()
                         .map(|arg| {
-                            let args_tuple = PyTuple::new(py, [arg]);
+                            let args_tuple = PyTuple::new_bound(py, [arg]);
                             let py_result = python_function.call1(args_tuple)
                                 .map_err(|e| DataFusionError::Execution(format!("py_result Python Error {:?}", e)))
                                 .expect("py_result Python Error")
@@ -153,7 +152,7 @@ impl ScalarUDFImpl for PythonUDF {
                     let results = args_vec
                         .iter()
                         .map(|arg| {
-                            let args_tuple = PyTuple::new(py, &[arg]);
+                            let args_tuple = PyTuple::new_bound(py, &[arg]);
                             let py_result = python_function.call1(args_tuple)
                                 .map_err(|e| DataFusionError::Execution(format!("py_result Python Error {:?}", e)))
                                 .expect("py_result Python Error")
