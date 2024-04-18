@@ -3,7 +3,7 @@ use std::any::Any;
 use datafusion::arrow;
 
 use datafusion::arrow::datatypes::{DataType, Field, Int64Type, Int32Type};
-use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef, PrimitiveArray, ArrowPrimitiveType};
+use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef, PrimitiveArray, ArrowPrimitiveType, Int32Array, Int64Array, Float32Array, Float64Array};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::common::cast::{as_large_list_array, as_list_array, as_map_array};
 use datafusion_expr::{
@@ -15,7 +15,7 @@ use datafusion_expr::type_coercion::functions::data_types;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyTuple};
 use pyo3::{IntoPy, PyClass};
-use crate::utils::{get_native_values_from_array};
+use crate::utils::{process_array_ref_with_python_function, get_native_values_from_array};
 
 #[derive(Debug, Clone)]
 pub struct PythonUDF {
@@ -86,26 +86,12 @@ impl ScalarUDFImpl for PythonUDF {
                 self.name()
             )));
         }
+
         let args = &args[0];
 
-        let args_vec = match &args {
+        let array_ref = match &args {
             ColumnarValue::Array(arr) => {
-                match &arr.data_type() {
-                    // DataType::Int32 => {
-                    //     // make_array(arr.into_data())
-                    //     get_native_values_from_array::<Int32Type>(&arr)?
-                    // }
-                    DataType::Int64 => {
-                        // make_array(arr.into_data())
-                        get_native_values_from_array::<Int64Type>(&arr)?
-                    }
-                    _ => {
-                        return Err(DataFusionError::Internal(format!(
-                            "Unsupported data type {:?}",
-                            args.data_type()
-                        )));
-                    }
-                }
+                make_array(arr.into_data())
             }
             ColumnarValue::Scalar(scalar) => {
                 unimplemented!("Scalar values are not supported yet")
@@ -130,45 +116,16 @@ impl ScalarUDFImpl for PythonUDF {
                 return Err(DataFusionError::Execution("Expected a callable Python function".to_string()));
             }
 
-            let array_ref = match &self.output_type {
+            let result_array = match &self.output_type {
                 DataType::Int32 => {
-                    let results = args_vec
-                        .iter()
-                        .map(|arg| {
-                            let args_tuple = PyTuple::new_bound(py, [arg]);
-                            let py_result = python_function.call1(args_tuple)
-                                .map_err(|e| DataFusionError::Execution(format!("py_result Python Error {:?}", e)))
-                                .expect("py_result Python Error")
-                                .extract::<i32>()
-                                .map_err(|e| DataFusionError::Execution(format!("rust_result Python Error {:?}", e)))
-                                .expect("rust_result Python Error");
-                            py_result
-                        }).collect::<Vec<_>>();
-                    println!("results: {:?}", results);
-                    let array_data = arrow::array::Int32Array::from_iter_values(results);
-                    Arc::new(array_data) as ArrayRef
+                    process_array_ref_with_python_function::<Int32Type>(&array_ref, py, &python_function)?
                 }
                 DataType::Int64 => {
-                    let results = args_vec
-                        .iter()
-                        .map(|arg| {
-                            let args_tuple = PyTuple::new_bound(py, &[arg]);
-                            let py_result = python_function.call1(args_tuple)
-                                .map_err(|e| DataFusionError::Execution(format!("py_result Python Error {:?}", e)))
-                                .expect("py_result Python Error")
-                                .extract::<i64>()
-                                .map_err(|e| DataFusionError::Execution(format!("rust_result Python Error {:?}", e)))
-                                .expect("rust_result Python Error");
-                            py_result
-                        }).collect::<Vec<_>>();
-                    let array_data = arrow::array::Int64Array::from_iter_values(results);
-                    Arc::new(array_data) as ArrayRef
+                    process_array_ref_with_python_function::<Int64Type>(&array_ref, py, &python_function)?
                 }
-                _ => {
-                    return Err(DataFusionError::Internal(format!("Unsupported data type")));
-                }
+                _ => return Err(DataFusionError::Internal(format!("Unsupported data type"))),
             };
-            Ok(ColumnarValue::Array(array_ref))
+            Ok(ColumnarValue::Array(result_array))
         })
     }
 }
