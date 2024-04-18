@@ -38,9 +38,9 @@ if __name__ == "__main__":
     print(spark.sql("SELECT 1").alias("a").selectExpr("a.*").toPandas())
     df.createOrReplaceTempView("df")
     print(spark.sql("SELECT * FROM df").toPandas())
-    df.write.json("/tmp/df.json")
-    df = spark.read.json("/tmp/df.json/")
-    print(df.toPandas())
+    # df.write.json("/tmp/df.json")
+    # df = spark.read.json("/tmp/df.json/")
+    # print(df.toPandas())
 
     print(
         spark.createDataFrame(
