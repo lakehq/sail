@@ -1,9 +1,8 @@
 use std::any::Any;
 
-use datafusion::arrow::array::{types, NullArray, BooleanArray, TimestampSecondArray, TimestampMillisecondArray, TimestampMicrosecondArray, TimestampNanosecondArray};
-use datafusion::arrow::datatypes::{DataType, TimeUnit};
+use datafusion::arrow::array::types;
+use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
-use datafusion::parquet::basic::NullType;
 use datafusion_expr::{
     ColumnarValue, ScalarUDFImpl, Signature
     , Volatility,
@@ -226,7 +225,6 @@ impl ScalarUDFImpl for PythonUDF {
             if is_scalar {
                 // TODO: Implement this
                 unimplemented!()
-                // Ok(ColumnarValue::Scalar(processed_array))
             } else {
                 Ok(ColumnarValue::Array(processed_array))
             }

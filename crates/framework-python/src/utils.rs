@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{Array, ArrayRef, BooleanArray, NullArray, PrimitiveArray, PrimitiveBuilder, types};
 use datafusion::arrow::datatypes::{ArrowPrimitiveType, DataType};
 use datafusion::common::DataFusionError;
-use pyo3::prelude::{FromPyObject, Py, PyAny, PyAnyMethods, PyModule, Python, ToPyObject};
+use pyo3::prelude::{FromPyObject, Py, PyAny, PyAnyMethods, PyModule, Python, ToPyObject, PyResult};
 use pyo3::types::{PyBytes, PyTuple};
 
 // Helper function to reduce boilerplate in invoke
@@ -172,14 +172,14 @@ pub fn process_array_ref_with_python_function<'py, TBuilder>(
 
 // Add a lifetime specifier 'py to indicate that the lifetime of py is tied to the
 // Python interpreter's context passed as the `py` parameter.
-fn process_elements<'py, TExtract, TBuilder>(
-    array: &PrimitiveArray<TExtract>,
+fn process_elements<'py, TArray, TBuilder>(
+    array: &PrimitiveArray<TArray>,
     py: Python<'py>,
-    python_function: &Py<PyAny>, // Accept Py<PyAny> directly
+    python_function: &Py<PyAny>,
 ) -> Result<ArrayRef, DataFusionError>
     where
-        TExtract: ArrowPrimitiveType,
-        TExtract::Native: ToPyObject + Copy, // Used for extracting values from array_ref
+        TArray: ArrowPrimitiveType,
+        TArray::Native: ToPyObject + Copy, // Used for extracting values from array_ref
         TBuilder: ArrowPrimitiveType,
         TBuilder::Native: ToPyObject + Copy + for<'b> FromPyObject<'b>, // Ensure TBuilder::Native can be extracted directly
 {
@@ -191,11 +191,8 @@ fn process_elements<'py, TExtract, TBuilder>(
             .map_err(|err| DataFusionError::Execution(format!("Python execution error: {:?}", err)))
             .and_then(|result| result.extract::<TBuilder::Native>(py)
                 .map_err(|err| DataFusionError::Execution(format!("Python extraction error: {:?}", err))))?;
-
         builder.append_value(result);
     }
 
-    let array_data = builder.finish();
-
-    Ok(Arc::new(array_data) as ArrayRef)
+    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
