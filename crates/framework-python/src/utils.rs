@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, BooleanArray, NullArray, PrimitiveArray, PrimitiveBuilder, types};
+use datafusion::arrow::array::{Array, ArrayRef, PrimitiveArray, PrimitiveBuilder, types};
 use datafusion::arrow::datatypes::{ArrowPrimitiveType, DataType};
 use datafusion::common::DataFusionError;
-use pyo3::prelude::{FromPyObject, Py, PyAny, PyAnyMethods, PyModule, Python, ToPyObject, PyResult};
+use pyo3::prelude::{FromPyObject, Py, PyAny, PyAnyMethods, PyModule, Python, ToPyObject};
 use pyo3::types::{PyBytes, PyTuple};
 
 // Helper function to reduce boilerplate in invoke
