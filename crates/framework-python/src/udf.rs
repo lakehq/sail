@@ -1,8 +1,9 @@
 use std::any::Any;
 
-use datafusion::arrow::array::Array;
-use datafusion::arrow::datatypes::{DataType, Int32Type, Int64Type};
+use datafusion::arrow::array::{types, NullArray, BooleanArray, TimestampSecondArray, TimestampMillisecondArray, TimestampMicrosecondArray, TimestampNanosecondArray};
+use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion::common::{DataFusionError, Result};
+use datafusion::parquet::basic::NullType;
 use datafusion_expr::{
     ColumnarValue, ScalarUDFImpl, Signature
     , Volatility,
@@ -108,11 +109,116 @@ impl ScalarUDFImpl for PythonUDF {
             let python_function = load_python_function(py, &self.command)?;
 
             let processed_array = match &self.output_type {
+                DataType::Null => {
+                    unimplemented!()
+                }
+                DataType::Boolean => {
+                    unimplemented!()
+                }
+                DataType::Int8 => {
+                    process_array_ref_with_python_function::<types::Int8Type>(&array_ref, py, &python_function)?
+                }
+                DataType::Int16 => {
+                    process_array_ref_with_python_function::<types::Int16Type>(&array_ref, py, &python_function)?
+                }
                 DataType::Int32 => {
-                    process_array_ref_with_python_function::<Int32Type>(&array_ref, py, &python_function)?
+                    process_array_ref_with_python_function::<types::Int32Type>(&array_ref, py, &python_function)?
                 }
                 DataType::Int64 => {
-                    process_array_ref_with_python_function::<Int64Type>(&array_ref, py, &python_function)?
+                    process_array_ref_with_python_function::<types::Int64Type>(&array_ref, py, &python_function)?
+                }
+                DataType::UInt8 => {
+                    process_array_ref_with_python_function::<types::UInt8Type>(&array_ref, py, &python_function)?
+                }
+                DataType::UInt16 => {
+                    process_array_ref_with_python_function::<types::UInt16Type>(&array_ref, py, &python_function)?
+                }
+                DataType::UInt32 => {
+                    process_array_ref_with_python_function::<types::UInt32Type>(&array_ref, py, &python_function)?
+                }
+                DataType::UInt64 => {
+                    process_array_ref_with_python_function::<types::UInt64Type>(&array_ref, py, &python_function)?
+                }
+                DataType::Float16 => {
+                    unimplemented!()
+                    // process_array_ref_with_python_function::<types::Float16Type>(&array_ref, py, &python_function)?
+                }
+                DataType::Float32 => {
+                    process_array_ref_with_python_function::<types::Float32Type>(&array_ref, py, &python_function)?
+                }
+                DataType::Float64 => {
+                    process_array_ref_with_python_function::<types::Float64Type>(&array_ref, py, &python_function)?
+                }
+                DataType::Timestamp(time_unit, None) => {
+                    unimplemented!()
+                }
+                DataType::Date32 => {
+                    process_array_ref_with_python_function::<types::Date32Type>(&array_ref, py, &python_function)?
+                }
+                DataType::Date64 => {
+                    process_array_ref_with_python_function::<types::Date64Type>(&array_ref, py, &python_function)?
+                }
+                DataType::Time32(_) => {
+                    unimplemented!()
+                }
+                DataType::Time64(_) => {
+                    unimplemented!()
+                }
+                DataType::Duration(_) => {
+                    unimplemented!()
+                }
+                DataType::Interval(_) => {
+                    unimplemented!()
+                }
+                DataType::Binary => {
+                    unimplemented!()
+                    // process_array_ref_with_python_function::<types::BinaryType>(&array_ref, py, &python_function)?
+                }
+                DataType::FixedSizeBinary(_) => {
+                    unimplemented!()
+                }
+                DataType::LargeBinary => {
+                    unimplemented!()
+                    // process_array_ref_with_python_function::<types::LargeBinaryType>(&array_ref, py, &python_function)?
+                }
+                DataType::Utf8 => {
+                    unimplemented!()
+                    // process_array_ref_with_python_function::<types::Utf8Type>(&array_ref, py, &python_function)?
+                }
+                DataType::LargeUtf8 => {
+                    unimplemented!()
+                    // process_array_ref_with_python_function::<types::LargeUtf8Type>(&array_ref, py, &python_function)?
+                }
+                DataType::List(_) => {
+                    unimplemented!()
+                }
+                DataType::FixedSizeList(_, _) => {
+                    unimplemented!()
+                }
+                DataType::LargeList(_) => {
+                    unimplemented!()
+                }
+                DataType::Struct(_) => {
+                    unimplemented!()
+                }
+                DataType::Union(_, _) => {
+                    unimplemented!()
+                }
+                DataType::Dictionary(_, _) => {
+                    unimplemented!()
+                }
+                DataType::Decimal128(_, _) => {
+                    process_array_ref_with_python_function::<types::Decimal128Type>(&array_ref, py, &python_function)?
+                }
+                DataType::Decimal256(_, _) => {
+                    unimplemented!()
+                    // process_array_ref_with_python_function::<types::Decimal256Type>(&array_ref, py, &python_function)?
+                }
+                DataType::Map(_, _) => {
+                    unimplemented!()
+                }
+                DataType::RunEndEncoded(_, _) => {
+                    unimplemented!()
                 }
                 _ => return Err(DataFusionError::Internal(format!("Unsupported data type"))),
             };
