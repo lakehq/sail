@@ -73,9 +73,6 @@ pub(crate) fn from_spark_expression(
             if func.is_distinct {
                 return Err(SparkError::unsupported("distinct function"));
             }
-            // if func.is_user_defined_function {
-            //     return Err(SparkError::unsupported("user defined function"));
-            // }
             let args = func
                 .arguments
                 .iter()
