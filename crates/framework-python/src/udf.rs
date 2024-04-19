@@ -1,21 +1,16 @@
-use std::sync::Arc;
 use std::any::Any;
-use datafusion::arrow;
 
-use datafusion::arrow::datatypes::{DataType, Field, Int64Type, Int32Type};
-use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef, PrimitiveArray, ArrowPrimitiveType, Int32Array, Int64Array, Float32Array, Float64Array};
-use datafusion::common::{DataFusionError, Result, ScalarValue};
-use datafusion::common::cast::{as_large_list_array, as_list_array, as_map_array};
+use datafusion::arrow::array::Array;
+use datafusion::arrow::datatypes::{DataType, Int32Type, Int64Type};
+use datafusion::common::{DataFusionError, Result};
 use datafusion_expr::{
-    ColumnarValue, FuncMonotonicity, ScalarUDF, ScalarUDFImpl, Signature, expr,
-    ScalarFunctionDefinition, Volatility, TypeSignature,
+    ColumnarValue, ScalarUDFImpl, Signature
+    , Volatility,
 };
 use datafusion_expr::type_coercion::functions::data_types;
+use pyo3::prelude::{PyAnyMethods, Python};
 
-use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyTuple};
-use pyo3::{IntoPy, PyClass};
-use crate::utils::{process_array_ref_with_python_function, get_native_values_from_array};
+use crate::utils::{load_python_function, process_array_ref_with_python_function};
 
 #[derive(Debug, Clone)]
 pub struct PythonUDF {
@@ -87,36 +82,32 @@ impl ScalarUDFImpl for PythonUDF {
             )));
         }
 
-        let args = &args[0];
+        // let args = &args[0];
+        // let array_ref = match &args {
+        //     ColumnarValue::Array(arr) => {
+        //         make_array(arr.into_data())
+        //     }
+        //     ColumnarValue::Scalar(scalar) => {
+        //         unimplemented!("Scalar values are not supported yet")
+        //     }
+        // };
 
-        let array_ref = match &args {
+        let (array_ref, is_scalar) = match &args[0] {
             ColumnarValue::Array(arr) => {
-                make_array(arr.into_data())
+                (arr.clone(), false)
             }
             ColumnarValue::Scalar(scalar) => {
-                unimplemented!("Scalar values are not supported yet")
+                let arr = scalar.to_array().map_err(|e| {
+                    DataFusionError::Execution(format!("Failed to convert scalar to array: {:?}", e))
+                })?;
+                (arr, true)
             }
         };
 
         Python::with_gil(|py| {
-            let binary_sequence = PyBytes::new_bound(py, &self.command);
+            let python_function = load_python_function(py, &self.command)?;
 
-            let python_function_tuple = PyModule::import_bound(py, pyo3::intern!(py, "pyspark.cloudpickle"))
-                .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
-                .and_then(|loads| Ok(loads.call1((binary_sequence, ))?))
-                .map_err(|e| DataFusionError::Execution(format!("Pickle Error {:?}", e)))?;
-
-            let python_function = python_function_tuple.get_item(0)
-                .map_err(|e| DataFusionError::Execution(format!("Pickle Error {:?}", e)))?;
-
-            let python_function_return_type = python_function_tuple.get_item(1)
-                .map_err(|e| DataFusionError::Execution(format!("Pickle Error {:?}", e)))?;
-
-            if !python_function.is_callable() {
-                return Err(DataFusionError::Execution("Expected a callable Python function".to_string()));
-            }
-
-            let result_array = match &self.output_type {
+            let processed_array = match &self.output_type {
                 DataType::Int32 => {
                     process_array_ref_with_python_function::<Int32Type>(&array_ref, py, &python_function)?
                 }
@@ -125,7 +116,14 @@ impl ScalarUDFImpl for PythonUDF {
                 }
                 _ => return Err(DataFusionError::Internal(format!("Unsupported data type"))),
             };
-            Ok(ColumnarValue::Array(result_array))
+
+            if is_scalar {
+                // TODO: Implement this
+                unimplemented!()
+                // Ok(ColumnarValue::Scalar(processed_array))
+            } else {
+                Ok(ColumnarValue::Array(processed_array))
+            }
         })
     }
 }
