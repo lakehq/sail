@@ -15,6 +15,13 @@ if __name__ == "__main__":
             return None
         return x + 1
 
+    @F.udf(IntegerType())
+    def add_x_y(structured_data):
+        x, y = structured_data.x, structured_data.y
+        if x is None or y is None:
+            return None
+        return x + y
+
     print(spark.range(-1).toPandas())
     print(spark.range(10, 0, -2, 3).toPandas())
     print(spark.createDataFrame([1, 2, 3], schema="long").toPandas())
@@ -70,7 +77,8 @@ if __name__ == "__main__":
     print(df.select(add_one(F.col("a"))).toPandas())
 
     # FIXME: not working
-#     print(df.selectExpr("b.*").toPandas())
-#     spark.readStream.format("rate").load().writeStream.format("console").start()
+    # print(df.select(add_x_y(F.struct(F.col("a"), F.col("a"))).alias("sum")).toPandas())
+    # print(df.selectExpr("b.*").toPandas())
+    # spark.readStream.format("rate").load().writeStream.format("console").start()
 
     spark.stop()
