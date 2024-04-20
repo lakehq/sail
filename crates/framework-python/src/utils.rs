@@ -49,7 +49,7 @@ pub fn process_array_ref_with_python_function<'py, TOutput>(
         TOutput: ArrowPrimitiveType,
         TOutput::Native: FromPyObject<'py>,
 {
-    match array_ref.data_type() {
+    match &array_ref.data_type() {
         DataType::Null => {
             unimplemented!()
         }
@@ -168,7 +168,12 @@ pub fn process_array_ref_with_python_function<'py, TOutput>(
         DataType::RunEndEncoded(_, _) => {
             unimplemented!()
         }
-        _ => Err(DataFusionError::Internal("Unsupported data type".to_string())),
+        _ => {
+            Err(DataFusionError::Internal(format!(
+                "Unsupported DataType: {:?}",
+                array_ref.data_type()
+            )))
+        }
     }
 }
 
@@ -320,7 +325,12 @@ pub fn execute_python_function(
             DataType::RunEndEncoded(_, _) => {
                 unimplemented!()
             }
-            _ => return Err(DataFusionError::Internal(format!("Unsupported data type"))),
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "Unsupported DataType: {:?}",
+                    &output_type
+                )));
+            }
         };
 
         Ok(processed_array)
