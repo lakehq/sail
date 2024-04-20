@@ -40,6 +40,34 @@ pub fn load_python_function(py: Python, command: &[u8]) -> Result<Py<PyAny>, Dat
     Ok(python_function.into())
 }
 
+fn process_elements<'py, TInput, TOutput>(
+    input_array: &PrimitiveArray<TInput>,
+    py: Python<'py>,
+    python_function: &Py<PyAny>,
+) -> Result<ArrayRef, DataFusionError>
+    where
+        TInput: ArrowPrimitiveType,
+        TInput::Native: ToPyObject,
+        TOutput: ArrowPrimitiveType,
+        TOutput::Native: FromPyObject<'py>,
+{
+    let mut builder = PrimitiveBuilder::<TOutput>::with_capacity(input_array.len());
+
+    for &value in input_array.values().iter() {
+        let py_tuple: Bound<PyTuple> = PyTuple::new_bound(py, &[value.to_object(py)]);
+        let result: PyResult<TOutput::Native> = python_function
+            .call1(py, py_tuple)
+            .and_then(|obj| obj.extract(py));
+
+        match result {
+            Ok(native) => builder.append_value(native),
+            Err(py_err) => return Err(convert_pyerr_to_dferror(py_err)),
+        }
+    }
+
+    Ok(Arc::new(builder.finish()) as ArrayRef)
+}
+
 pub fn process_array_ref_with_python_function<'py, TOutput>(
     array_ref: &ArrayRef,
     py: Python<'py>,
@@ -175,34 +203,6 @@ pub fn process_array_ref_with_python_function<'py, TOutput>(
             )))
         }
     }
-}
-
-fn process_elements<'py, TInput, TOutput>(
-    input_array: &PrimitiveArray<TInput>,
-    py: Python<'py>,
-    python_function: &Py<PyAny>,
-) -> Result<ArrayRef, DataFusionError>
-    where
-        TInput: ArrowPrimitiveType,
-        TInput::Native: ToPyObject,
-        TOutput: ArrowPrimitiveType,
-        TOutput::Native: FromPyObject<'py>,
-{
-    let mut builder = PrimitiveBuilder::<TOutput>::with_capacity(input_array.len());
-
-    for &value in input_array.values().iter() {
-        let py_tuple: Bound<PyTuple> = PyTuple::new_bound(py, &[value.to_object(py)]);
-        let result: PyResult<TOutput::Native> = python_function
-            .call1(py, py_tuple)
-            .and_then(|obj| obj.extract(py));
-
-        match result {
-            Ok(native) => builder.append_value(native),
-            Err(py_err) => return Err(convert_pyerr_to_dferror(py_err)),
-        }
-    }
-
-    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
 pub fn execute_python_function(
