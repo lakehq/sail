@@ -238,10 +238,13 @@ pub(crate) fn from_spark_expression(
         }
         ExprType::CommonInlineUserDefinedFunction(udf) => {
             use sc::common_inline_user_defined_function::Function::PythonUdf;
+            use sc::PythonUdf as PythonUDFStruct;
+            use pyo3::prelude::Python;
 
             let function_name: String = udf
                 .function_name
-                .clone();
+                .clone()
+                .to_string();
 
             let deterministic: bool = udf
                 .deterministic;
@@ -257,7 +260,7 @@ pub(crate) fn from_spark_expression(
                 .map(|arg| arg.get_type(schema))
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let function = match udf
+            let function: &PythonUDFStruct = match udf
                 .function
                 .as_ref()
                 .required("udf function")?
@@ -268,7 +271,7 @@ pub(crate) fn from_spark_expression(
                 }
             };
 
-            let output_type = from_spark_data_type(
+            let output_type: DataType = from_spark_data_type(
                 function
                     .output_type
                     .as_ref()
@@ -280,20 +283,32 @@ pub(crate) fn from_spark_expression(
 
             let python_ver: String = function
                 .python_ver
-                .clone();
+                .clone()
+                .to_string();
 
             let command: Vec<u8> = function
                 .command
                 .clone();
 
-            let python_udf = PythonUDF::new(
+            let pyo3_python_version: String = Python::with_gil(|py| {
+                py.version().to_string()
+            });
+
+            if !pyo3_python_version.starts_with(python_ver.as_str()) {
+                return Err(SparkError::invalid(format!(
+                    "Python version mismatch. Version used to compile the UDF must match the version used to run the UDF. Version used to compile the UDF: {:?}. Version used to run the UDF: {:?}",
+                    python_ver,
+                    pyo3_python_version,
+                )));
+            }
+
+            let python_udf: PythonUDF = PythonUDF::new(
                 function_name,
                 deterministic,
                 input_types,
                 command,
                 output_type,
                 eval_type,
-                python_ver,
             );
 
             Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {

@@ -11,13 +11,11 @@ use crate::utils::{execute_python_function, array_ref_to_columnar_value};
 #[derive(Debug, Clone)]
 pub struct PythonUDF {
     signature: Signature,
-
-    // TODO: See what I exactly need. This is a placeholder.
+    // TODO: See what we exactly need from below fields.
     function_name: String,
     output_type: DataType,
     eval_type: i32,
     command: Vec<u8>,
-    python_ver: String,
 }
 
 impl PythonUDF {
@@ -28,7 +26,6 @@ impl PythonUDF {
         command: Vec<u8>,
         output_type: DataType,
         eval_type: i32, // TODO: Incorporate this
-        python_ver: String, // TODO: Incorporate this
     ) -> Self {
         Self {
             signature: Signature::exact(
@@ -43,7 +40,6 @@ impl PythonUDF {
             command,
             output_type,
             eval_type,
-            python_ver,
         }
     }
 }
