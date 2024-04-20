@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, PrimitiveArray, PrimitiveBuilder, types};
 use datafusion::arrow::datatypes::{ArrowPrimitiveType, DataType};
-use datafusion::common::DataFusionError;
+use datafusion::common::{DataFusionError, ScalarValue};
+use datafusion_expr::ColumnarValue;
 use pyo3::prelude::{
     FromPyObject, Py, PyAny, PyAnyMethods, PyModule, Python, ToPyObject, PyResult, Bound,
 };
@@ -324,4 +325,28 @@ pub fn execute_python_function(
 
         Ok(processed_array)
     })
+}
+
+pub fn array_ref_to_columnar_value(
+    array_ref: ArrayRef,
+    data_type: &DataType,
+    is_scalar: bool,
+) -> Result<ColumnarValue, DataFusionError> {
+    if !is_scalar {
+        return Ok(ColumnarValue::Array(array_ref));
+    }
+
+    let scalar_value = match &data_type {
+        DataType::Int64 => {
+            let array = downcast_array_ref::<types::Int64Type>(&array_ref)?;
+            Ok(ScalarValue::Int64(Some(array.value(0))))
+        }
+        _ => {
+            Err(DataFusionError::Internal(format!(
+                "Unsupported DataType: {:?}",
+                data_type
+            )))
+        }
+    }?;
+    Ok(ColumnarValue::Scalar(scalar_value))
 }

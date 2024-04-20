@@ -6,7 +6,7 @@ use datafusion_expr::{
     ColumnarValue, ScalarUDFImpl, Signature, Volatility,
 };
 
-use crate::utils::execute_python_function;
+use crate::utils::{execute_python_function, array_ref_to_columnar_value};
 
 #[derive(Debug, Clone)]
 pub struct PythonUDF {
@@ -93,11 +93,6 @@ impl ScalarUDFImpl for PythonUDF {
             &self.output_type,
         )?;
 
-        if is_scalar {
-            // TODO: Implement this
-            unimplemented!()
-        } else {
-            Ok(ColumnarValue::Array(processed_array))
-        }
+        Ok(array_ref_to_columnar_value(processed_array, &self.output_type, is_scalar)?)
     }
 }
