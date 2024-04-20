@@ -78,9 +78,11 @@ impl ScalarUDFImpl for PythonUDF {
                 (arr.clone(), false)
             }
             ColumnarValue::Scalar(scalar) => {
-                let arr = scalar.to_array().map_err(|e| {
-                    DataFusionError::Execution(format!("Failed to convert scalar to array: {:?}", e))
-                })?;
+                let arr = scalar
+                    .to_array().
+                    map_err(|e| {
+                        DataFusionError::Execution(format!("Failed to convert scalar to array: {:?}", e))
+                    })?;
                 (arr, true)
             }
         };
