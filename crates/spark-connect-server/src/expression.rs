@@ -282,11 +282,11 @@ pub(crate) fn from_spark_expression(
             let eval_type: i32 = function
                 .eval_type;
 
-            let python_ver: &str = &function
-                .python_ver;
-
             let command: &[u8] = &function
                 .command;
+
+            let python_ver: &str = &function
+                .python_ver;
 
             let pyo3_python_version: String = Python::with_gil(|py| {
                 py.version().to_string()
