@@ -340,6 +340,14 @@ pub fn array_ref_to_columnar_value(
         return Ok(ColumnarValue::Array(array_ref));
     }
 
+    let array_ref_len = array_ref.len();
+    if is_scalar && array_ref_len != 1 {
+        return Err(DataFusionError::Internal(format!(
+            "Expected a ScalarValue, but got an array with {} elements",
+            array_ref_len
+        )));
+    }
+
     let scalar_value = match &data_type {
         DataType::Null => {
             unimplemented!()
