@@ -29,7 +29,7 @@ impl PythonUDF {
     ) -> Self {
         Self {
             signature: Signature::exact(
-                input_types.clone(),
+                input_types,
                 // TODO: Check if this is correct. There is also `Volatility::Stable`
                 match deterministic {
                     true => Volatility::Immutable,
