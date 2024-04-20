@@ -65,12 +65,7 @@ impl ScalarUDFImpl for PythonUDF {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        data_types(arg_types, &self.signature())
-            .map_err(|e|
-                DataFusionError::Internal(format!("Input types do not match the expected types {:?}", e))
-            )?;
-
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(self.output_type.clone())
     }
 
