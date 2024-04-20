@@ -68,7 +68,7 @@ impl ScalarUDFImpl for PythonUDF {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         if args.len() != 1 {
             return Err(DataFusionError::Internal(format!(
-                "{} should only be called with a single argument",
+                "{:?} should only be called with a single argument",
                 self.name()
             )));
         }
