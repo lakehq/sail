@@ -10,6 +10,7 @@ use datafusion_expr::{
 };
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::sql::sqlparser::ast;
+use datafusion_common::DataFusionError;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::extension::function::alias::MultiAlias;
@@ -244,31 +245,28 @@ pub(crate) fn from_spark_expression(
             use sc::PythonUdf as PythonUDFStruct;
             use pyo3::prelude::Python;
 
-            let function_name: String = udf
-                .function_name
-                .clone()
-                .to_string();
+            let function_name: &str = &udf
+                .function_name;
 
             let deterministic: bool = udf
                 .deterministic;
 
-            let arguments: Vec<expr::Expr> = udf
+            let arguments: Result<Vec<expr::Expr>, SparkError> = udf
                 .arguments
                 .iter()
                 .map(|x| from_spark_expression(x, schema))
-                .collect::<SparkResult<Vec<_>>>()?;
+                .collect();
+            let arguments = arguments?;
 
-            let input_types: Vec<DataType> = arguments
+
+            let input_types: Result<Vec<DataType>, DataFusionError> = arguments
                 .iter()
                 .map(|arg| arg.get_type(schema))
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect();
+            let input_types = input_types?;
 
-            let function: &PythonUDFStruct = match udf
-                .function
-                .as_ref()
-                .required("udf function")?
-            {
-                PythonUdf(function) => function,
+            let function: &PythonUDFStruct = match &udf.function {
+                Some(PythonUdf(function)) => function,
                 _ => {
                     return Err(SparkError::invalid("UDF function type must be Python UDF"));
                 }
@@ -278,26 +276,23 @@ pub(crate) fn from_spark_expression(
                 function
                     .output_type
                     .as_ref()
-                    .required("udf function output type")?
+                    .required("UDF Function output type")?
             )?;
 
             let eval_type: i32 = function
                 .eval_type;
 
-            let python_ver: String = function
-                .python_ver
-                .clone()
-                .to_string();
+            let python_ver: &str = &function
+                .python_ver;
 
-            let command: Vec<u8> = function
-                .command
-                .clone();
+            let command: &[u8] = &function
+                .command;
 
             let pyo3_python_version: String = Python::with_gil(|py| {
                 py.version().to_string()
             });
 
-            if !pyo3_python_version.starts_with(python_ver.as_str()) {
+            if !pyo3_python_version.starts_with(python_ver) {
                 return Err(SparkError::invalid(format!(
                     "Python version mismatch. Version used to compile the UDF must match the version used to run the UDF. Version used to compile the UDF: {:?}. Version used to run the UDF: {:?}",
                     python_ver,
@@ -306,10 +301,10 @@ pub(crate) fn from_spark_expression(
             }
 
             let python_udf: PythonUDF = PythonUDF::new(
-                function_name,
+                function_name.to_owned(),
                 deterministic,
                 input_types,
-                command,
+                command.to_vec(),
                 output_type,
                 eval_type,
             );
