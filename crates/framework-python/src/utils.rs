@@ -56,58 +56,58 @@ pub fn process_array_ref_with_python_function<'py, TOutput>(
             unimplemented!()
         }
         DataType::Int8 => {
-            let array = downcast_array_ref::<types::Int8Type>(array_ref)?;
-            process_elements::<types::Int8Type, TOutput>(&array, py, python_function)
+            let array = downcast_array_ref::<types::Int8Type>(&array_ref)?;
+            process_elements::<types::Int8Type, TOutput>(&array, py, &python_function)
         }
         DataType::Int16 => {
-            let array = downcast_array_ref::<types::Int16Type>(array_ref)?;
-            process_elements::<types::Int16Type, TOutput>(&array, py, python_function)
+            let array = downcast_array_ref::<types::Int16Type>(&array_ref)?;
+            process_elements::<types::Int16Type, TOutput>(&array, py, &python_function)
         }
         DataType::Int32 => {
-            let array = downcast_array_ref::<types::Int32Type>(array_ref)?;
-            process_elements::<types::Int32Type, TOutput>(&array, py, python_function)
+            let array = downcast_array_ref::<types::Int32Type>(&array_ref)?;
+            process_elements::<types::Int32Type, TOutput>(&array, py, &python_function)
         }
         DataType::Int64 => {
-            let array = downcast_array_ref::<types::Int64Type>(array_ref)?;
-            process_elements::<types::Int64Type, TOutput>(&array, py, python_function)
+            let array = downcast_array_ref::<types::Int64Type>(&array_ref)?;
+            process_elements::<types::Int64Type, TOutput>(&array, py, &python_function)
         }
         DataType::UInt8 => {
-            let array = downcast_array_ref::<types::UInt8Type>(array_ref)?;
-            process_elements::<types::UInt8Type, TOutput>(&array, py, python_function)
+            let array = downcast_array_ref::<types::UInt8Type>(&array_ref)?;
+            process_elements::<types::UInt8Type, TOutput>(&array, py, &python_function)
         }
         DataType::UInt16 => {
-            let array = downcast_array_ref::<types::UInt16Type>(array_ref)?;
-            process_elements::<types::UInt16Type, TOutput>(&array, py, python_function)
+            let array = downcast_array_ref::<types::UInt16Type>(&array_ref)?;
+            process_elements::<types::UInt16Type, TOutput>(&array, py, &python_function)
         }
         DataType::UInt32 => {
-            let array = downcast_array_ref::<types::UInt32Type>(array_ref)?;
-            process_elements::<types::UInt32Type, TOutput>(&array, py, python_function)
+            let array = downcast_array_ref::<types::UInt32Type>(&array_ref)?;
+            process_elements::<types::UInt32Type, TOutput>(&array, py, &python_function)
         }
         DataType::UInt64 => {
-            let array = downcast_array_ref::<types::UInt64Type>(array_ref)?;
-            process_elements::<types::UInt64Type, TOutput>(&array, py, python_function)
+            let array = downcast_array_ref::<types::UInt64Type>(&array_ref)?;
+            process_elements::<types::UInt64Type, TOutput>(&array, py, &python_function)
         }
         DataType::Float16 => {
             unimplemented!()
         }
         DataType::Float32 => {
-            let array = downcast_array_ref::<types::Float32Type>(array_ref)?;
-            process_elements::<types::Float32Type, TOutput>(&array, py, python_function)
+            let array = downcast_array_ref::<types::Float32Type>(&array_ref)?;
+            process_elements::<types::Float32Type, TOutput>(&array, py, &python_function)
         }
         DataType::Float64 => {
-            let array = downcast_array_ref::<types::Float64Type>(array_ref)?;
-            process_elements::<types::Float64Type, TOutput>(&array, py, python_function)
+            let array = downcast_array_ref::<types::Float64Type>(&array_ref)?;
+            process_elements::<types::Float64Type, TOutput>(&array, py, &python_function)
         }
         DataType::Timestamp(time_unit, None) => {
             unimplemented!()
         }
         DataType::Date32 => {
-            let array = downcast_array_ref::<types::Date32Type>(array_ref)?;
-            process_elements::<types::Date32Type, TOutput>(&array, py, python_function)
+            let array = downcast_array_ref::<types::Date32Type>(&array_ref)?;
+            process_elements::<types::Date32Type, TOutput>(&array, py, &python_function)
         }
         DataType::Date64 => {
-            let array = downcast_array_ref::<types::Date64Type>(array_ref)?;
-            process_elements::<types::Date64Type, TOutput>(&array, py, python_function)
+            let array = downcast_array_ref::<types::Date64Type>(&array_ref)?;
+            process_elements::<types::Date64Type, TOutput>(&array, py, &python_function)
         }
         DataType::Time32(_) => {
             unimplemented!()
@@ -155,8 +155,8 @@ pub fn process_array_ref_with_python_function<'py, TOutput>(
             unimplemented!()
         }
         DataType::Decimal128(_, _) => {
-            let array = downcast_array_ref::<types::Decimal128Type>(array_ref)?;
-            process_elements::<types::Decimal128Type, TOutput>(&array, py, python_function)
+            let array = downcast_array_ref::<types::Decimal128Type>(&array_ref)?;
+            process_elements::<types::Decimal128Type, TOutput>(&array, py, &python_function)
         }
         DataType::Decimal256(_, _) => {
             unimplemented!()
