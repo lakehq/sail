@@ -258,7 +258,6 @@ pub(crate) fn from_spark_expression(
                 .collect();
             let arguments = arguments?;
 
-
             let input_types: Result<Vec<DataType>, DataFusionError> = arguments
                 .iter()
                 .map(|arg| arg.get_type(schema))
