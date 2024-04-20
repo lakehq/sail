@@ -4,7 +4,10 @@ use datafusion::arrow::datatypes::{DataType, IntervalMonthDayNanoType};
 use datafusion::catalog::TableReference;
 use datafusion::common::{Column, DFSchema, ScalarValue};
 use datafusion::config::ConfigOptions;
-use datafusion_expr::{expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, GetFieldAccess, GetIndexedField, Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF, Signature, ExprSchemable};
+use datafusion_expr::{
+    expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, GetFieldAccess, GetIndexedField,
+    Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF, ExprSchemable,
+};
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::sql::sqlparser::ast;
 
