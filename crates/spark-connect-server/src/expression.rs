@@ -251,18 +251,16 @@ pub(crate) fn from_spark_expression(
             let deterministic: bool = udf
                 .deterministic;
 
-            let arguments: Result<Vec<expr::Expr>, SparkError> = udf
+            let arguments: Vec<expr::Expr> = udf
                 .arguments
                 .iter()
                 .map(|x| from_spark_expression(x, schema))
-                .collect();
-            let arguments = arguments?;
+                .collect::<SparkResult<Vec<expr::Expr>>>()?;
 
-            let input_types: Result<Vec<DataType>, DataFusionError> = arguments
+            let input_types: Vec<DataType> = arguments
                 .iter()
                 .map(|arg| arg.get_type(schema))
-                .collect();
-            let input_types = input_types?;
+                .collect::<Result<Vec<DataType>, DataFusionError>>()?;
 
             let function: &PythonUDFStruct = match &udf.function {
                 Some(PythonUdf(function)) => function,
