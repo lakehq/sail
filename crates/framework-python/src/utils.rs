@@ -127,7 +127,7 @@ pub fn process_array_ref_with_python_function<'py, TOutput>(
             let array = downcast_array_ref::<types::Float64Type>(&array_ref)?;
             process_elements::<types::Float64Type, TOutput>(&array, py, &python_function)
         }
-        DataType::Timestamp(time_unit, None) => {
+        DataType::Timestamp(_, _) => {
             unimplemented!()
         }
         DataType::Date32 => {
@@ -183,11 +183,11 @@ pub fn process_array_ref_with_python_function<'py, TOutput>(
         DataType::Dictionary(_, _) => {
             unimplemented!()
         }
-        DataType::Decimal128(_, _) => {
+        DataType::Decimal128(precision, scale) => {
             let array = downcast_array_ref::<types::Decimal128Type>(&array_ref)?;
             process_elements::<types::Decimal128Type, TOutput>(&array, py, &python_function)
         }
-        DataType::Decimal256(_, _) => {
+        DataType::Decimal256(precision, scale) => {
             unimplemented!()
         }
         DataType::Map(_, _) => {
@@ -246,7 +246,6 @@ pub fn execute_python_function(
             }
             DataType::Float16 => {
                 unimplemented!()
-                // process_array_ref_with_python_function::<types::Float16Type>(&array_ref, py, &python_function)?
             }
             DataType::Float32 => {
                 process_array_ref_with_python_function::<types::Float32Type>(&array_ref, py, &python_function)?
@@ -254,7 +253,7 @@ pub fn execute_python_function(
             DataType::Float64 => {
                 process_array_ref_with_python_function::<types::Float64Type>(&array_ref, py, &python_function)?
             }
-            DataType::Timestamp(time_unit, None) => {
+            DataType::Timestamp(_, _) => {
                 unimplemented!()
             }
             DataType::Date32 => {
@@ -277,22 +276,18 @@ pub fn execute_python_function(
             }
             DataType::Binary => {
                 unimplemented!()
-                // process_array_ref_with_python_function::<types::BinaryType>(&array_ref, py, &python_function)?
             }
             DataType::FixedSizeBinary(_) => {
                 unimplemented!()
             }
             DataType::LargeBinary => {
                 unimplemented!()
-                // process_array_ref_with_python_function::<types::LargeBinaryType>(&array_ref, py, &python_function)?
             }
             DataType::Utf8 => {
                 unimplemented!()
-                // process_array_ref_with_python_function::<types::Utf8Type>(&array_ref, py, &python_function)?
             }
             DataType::LargeUtf8 => {
                 unimplemented!()
-                // process_array_ref_with_python_function::<types::LargeUtf8Type>(&array_ref, py, &python_function)?
             }
             DataType::List(_) => {
                 unimplemented!()
@@ -312,12 +307,11 @@ pub fn execute_python_function(
             DataType::Dictionary(_, _) => {
                 unimplemented!()
             }
-            DataType::Decimal128(_, _) => {
+            DataType::Decimal128(precision, scale) => {
                 process_array_ref_with_python_function::<types::Decimal128Type>(&array_ref, py, &python_function)?
             }
-            DataType::Decimal256(_, _) => {
+            DataType::Decimal256(precision, scale) => {
                 unimplemented!()
-                // process_array_ref_with_python_function::<types::Decimal256Type>(&array_ref, py, &python_function)?
             }
             DataType::Map(_, _) => {
                 unimplemented!()
@@ -347,9 +341,123 @@ pub fn array_ref_to_columnar_value(
     }
 
     let scalar_value = match &data_type {
+        DataType::Null => {
+            unimplemented!()
+        }
+        DataType::Boolean => {
+            unimplemented!()
+        }
+        DataType::Int8 => {
+            let array = downcast_array_ref::<types::Int8Type>(&array_ref)?;
+            Ok(ScalarValue::Int8(Some(array.value(0))))
+        }
+        DataType::Int16 => {
+            let array = downcast_array_ref::<types::Int16Type>(&array_ref)?;
+            Ok(ScalarValue::Int16(Some(array.value(0))))
+        }
+        DataType::Int32 => {
+            let array = downcast_array_ref::<types::Int32Type>(&array_ref)?;
+            Ok(ScalarValue::Int32(Some(array.value(0))))
+        }
         DataType::Int64 => {
             let array = downcast_array_ref::<types::Int64Type>(&array_ref)?;
             Ok(ScalarValue::Int64(Some(array.value(0))))
+        }
+        DataType::UInt8 => {
+            let array = downcast_array_ref::<types::UInt8Type>(&array_ref)?;
+            Ok(ScalarValue::UInt8(Some(array.value(0))))
+        }
+        DataType::UInt16 => {
+            let array = downcast_array_ref::<types::UInt16Type>(&array_ref)?;
+            Ok(ScalarValue::UInt16(Some(array.value(0))))
+        }
+        DataType::UInt32 => {
+            let array = downcast_array_ref::<types::UInt32Type>(&array_ref)?;
+            Ok(ScalarValue::UInt32(Some(array.value(0))))
+        }
+        DataType::UInt64 => {
+            let array = downcast_array_ref::<types::UInt64Type>(&array_ref)?;
+            Ok(ScalarValue::UInt64(Some(array.value(0))))
+        }
+        DataType::Float16 => {
+            unimplemented!()
+        }
+        DataType::Float32 => {
+            let array = downcast_array_ref::<types::Float32Type>(&array_ref)?;
+            Ok(ScalarValue::Float32(Some(array.value(0))))
+        }
+        DataType::Float64 => {
+            let array = downcast_array_ref::<types::Float64Type>(&array_ref)?;
+            Ok(ScalarValue::Float64(Some(array.value(0))))
+        }
+        DataType::Timestamp(_, _) => {
+            unimplemented!()
+        }
+        DataType::Date32 => {
+            let array = downcast_array_ref::<types::Date32Type>(&array_ref)?;
+            Ok(ScalarValue::Date32(Some(array.value(0))))
+        }
+        DataType::Date64 => {
+            let array = downcast_array_ref::<types::Date64Type>(&array_ref)?;
+            Ok(ScalarValue::Date64(Some(array.value(0))))
+        }
+        DataType::Time32(_) => {
+            unimplemented!()
+        }
+        DataType::Time64(_) => {
+            unimplemented!()
+        }
+        DataType::Duration(_) => {
+            unimplemented!()
+        }
+        DataType::Interval(_) => {
+            unimplemented!()
+        }
+        DataType::Binary => {
+            unimplemented!()
+        }
+        DataType::FixedSizeBinary(_) => {
+            unimplemented!()
+        }
+        DataType::LargeBinary => {
+            unimplemented!()
+        }
+        DataType::Utf8 => {
+            unimplemented!()
+        }
+        DataType::LargeUtf8 => {
+            unimplemented!()
+        }
+        DataType::List(_) => {
+            unimplemented!()
+        }
+        DataType::FixedSizeList(_, _) => {
+            unimplemented!()
+        }
+        DataType::LargeList(_) => {
+            unimplemented!()
+        }
+        DataType::Struct(_) => {
+            unimplemented!()
+        }
+        DataType::Union(_, _) => {
+            unimplemented!()
+        }
+        DataType::Dictionary(_, _) => {
+            unimplemented!()
+        }
+        DataType::Decimal128(precision, scale) => {
+            let array = downcast_array_ref::<types::Decimal128Type>(&array_ref)?;
+            Ok(ScalarValue::Decimal128(Some(array.value(0)), *precision, *scale))
+        }
+        DataType::Decimal256(precision, scale) => {
+            unimplemented!()
+        }
+        DataType::Map(_, _) => {
+            unimplemented!()
+        }
+        DataType::RunEndEncoded(_, _) => {
+            unimplemented!()
         }
         _ => {
             Err(DataFusionError::Internal(format!(
