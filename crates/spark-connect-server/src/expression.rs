@@ -4,13 +4,13 @@ use datafusion::arrow::datatypes::{DataType, IntervalMonthDayNanoType};
 use datafusion::catalog::TableReference;
 use datafusion::common::{Column, DFSchema, ScalarValue};
 use datafusion::config::ConfigOptions;
-use datafusion_expr::{
-    expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, GetFieldAccess, GetIndexedField,
-    Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF, ExprSchemable,
-};
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::sql::sqlparser::ast;
 use datafusion_common::DataFusionError;
+use datafusion_expr::{
+    expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, ExprSchemable, GetFieldAccess,
+    GetIndexedField, Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
+};
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::extension::function::alias::MultiAlias;
@@ -241,15 +241,13 @@ pub(crate) fn from_spark_expression(
             Err(SparkError::todo("unresolved named lambda variable"))
         }
         ExprType::CommonInlineUserDefinedFunction(udf) => {
+            use pyo3::prelude::Python;
             use sc::common_inline_user_defined_function::Function::PythonUdf;
             use sc::PythonUdf as PythonUDFStruct;
-            use pyo3::prelude::Python;
 
-            let function_name: &str = &udf
-                .function_name;
+            let function_name: &str = &udf.function_name;
 
-            let deterministic: bool = udf
-                .deterministic;
+            let deterministic: bool = udf.deterministic;
 
             let arguments: Vec<expr::Expr> = udf
                 .arguments
@@ -273,21 +271,16 @@ pub(crate) fn from_spark_expression(
                 function
                     .output_type
                     .as_ref()
-                    .required("UDF Function output type")?
+                    .required("UDF Function output type")?,
             )?;
 
-            let eval_type: i32 = function
-                .eval_type;
+            let eval_type: i32 = function.eval_type;
 
-            let command: &[u8] = &function
-                .command;
+            let command: &[u8] = &function.command;
 
-            let python_ver: &str = &function
-                .python_ver;
+            let python_ver: &str = &function.python_ver;
 
-            let pyo3_python_version: String = Python::with_gil(|py| {
-                py.version().to_string()
-            });
+            let pyo3_python_version: String = Python::with_gil(|py| py.version().to_string());
 
             if !pyo3_python_version.starts_with(python_ver) {
                 return Err(SparkError::invalid(format!(
@@ -307,9 +300,7 @@ pub(crate) fn from_spark_expression(
             );
 
             Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
-                    python_udf,
-                ))),
+                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(python_udf))),
                 args: arguments,
             }))
         }

@@ -1,17 +1,19 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, PrimitiveArray, PrimitiveBuilder, types};
+use crate::error::convert_pyerr_to_dferror;
+use datafusion::arrow::array::{types, Array, ArrayRef, PrimitiveArray, PrimitiveBuilder};
 use datafusion::arrow::datatypes::{ArrowPrimitiveType, DataType};
 use datafusion::common::{DataFusionError, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use pyo3::prelude::{
-    FromPyObject, Py, PyAny, PyAnyMethods, PyModule, Python, ToPyObject, PyResult, Bound,
+    Bound, FromPyObject, Py, PyAny, PyAnyMethods, PyModule, PyResult, Python, ToPyObject,
 };
 use pyo3::types::{PyBytes, PyTuple};
-use crate::error::convert_pyerr_to_dferror;
 
 // TODO: Move this to a separate module/crate.
-pub fn downcast_array_ref<T: ArrowPrimitiveType>(arr: &ArrayRef) -> Result<&PrimitiveArray<T>, DataFusionError> {
+pub fn downcast_array_ref<T: ArrowPrimitiveType>(
+    arr: &ArrayRef,
+) -> Result<&PrimitiveArray<T>, DataFusionError> {
     let native_values = arr
         .as_ref()
         .as_any()
@@ -25,16 +27,20 @@ pub fn load_python_function(py: Python, command: &[u8]) -> Result<Py<PyAny>, Dat
     let binary_sequence = PyBytes::new_bound(py, command);
 
     // TODO: Turn "pyspark.cloudpickle" to a var.
-    let python_function_tuple = PyModule::import_bound(py, pyo3::intern!(py, "pyspark.cloudpickle"))
-        .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
-        .and_then(|loads| Ok(loads.call1((binary_sequence, ))?))
-        .map_err(|e| DataFusionError::Execution(format!("Pickle Error {:?}", e)))?;
+    let python_function_tuple =
+        PyModule::import_bound(py, pyo3::intern!(py, "pyspark.cloudpickle"))
+            .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
+            .and_then(|loads| Ok(loads.call1((binary_sequence,))?))
+            .map_err(|e| DataFusionError::Execution(format!("Pickle Error {:?}", e)))?;
 
-    let python_function = python_function_tuple.get_item(0)
+    let python_function = python_function_tuple
+        .get_item(0)
         .map_err(|e| DataFusionError::Execution(format!("Pickle Error {:?}", e)))?;
 
     if !python_function.is_callable() {
-        return Err(DataFusionError::Execution("Expected a callable Python function".to_string()));
+        return Err(DataFusionError::Execution(
+            "Expected a callable Python function".to_string(),
+        ));
     }
 
     Ok(python_function.into())
@@ -45,11 +51,11 @@ fn process_elements<'py, TInput, TOutput>(
     py: Python<'py>,
     python_function: &Py<PyAny>,
 ) -> Result<ArrayRef, DataFusionError>
-    where
-        TInput: ArrowPrimitiveType,
-        TInput::Native: ToPyObject,
-        TOutput: ArrowPrimitiveType,
-        TOutput::Native: FromPyObject<'py>,
+where
+    TInput: ArrowPrimitiveType,
+    TInput::Native: ToPyObject,
+    TOutput: ArrowPrimitiveType,
+    TOutput::Native: FromPyObject<'py>,
 {
     let mut builder = PrimitiveBuilder::<TOutput>::with_capacity(input_array.len());
 
@@ -73,9 +79,9 @@ pub fn process_array_ref_with_python_function<'py, TOutput>(
     py: Python<'py>,
     python_function: &Py<PyAny>,
 ) -> Result<ArrayRef, DataFusionError>
-    where
-        TOutput: ArrowPrimitiveType,
-        TOutput::Native: FromPyObject<'py>,
+where
+    TOutput: ArrowPrimitiveType,
+    TOutput::Native: FromPyObject<'py>,
 {
     match &array_ref.data_type() {
         DataType::Null => {
@@ -196,12 +202,10 @@ pub fn process_array_ref_with_python_function<'py, TOutput>(
         DataType::RunEndEncoded(_, _) => {
             unimplemented!()
         }
-        _ => {
-            Err(DataFusionError::Internal(format!(
-                "Unsupported DataType: {:?}",
-                array_ref.data_type()
-            )))
-        }
+        _ => Err(DataFusionError::Internal(format!(
+            "Unsupported DataType: {:?}",
+            array_ref.data_type()
+        ))),
     }
 }
 
@@ -220,48 +224,72 @@ pub fn execute_python_function(
             DataType::Boolean => {
                 unimplemented!()
             }
-            DataType::Int8 => {
-                process_array_ref_with_python_function::<types::Int8Type>(&array_ref, py, &python_function)?
-            }
-            DataType::Int16 => {
-                process_array_ref_with_python_function::<types::Int16Type>(&array_ref, py, &python_function)?
-            }
-            DataType::Int32 => {
-                process_array_ref_with_python_function::<types::Int32Type>(&array_ref, py, &python_function)?
-            }
-            DataType::Int64 => {
-                process_array_ref_with_python_function::<types::Int64Type>(&array_ref, py, &python_function)?
-            }
-            DataType::UInt8 => {
-                process_array_ref_with_python_function::<types::UInt8Type>(&array_ref, py, &python_function)?
-            }
-            DataType::UInt16 => {
-                process_array_ref_with_python_function::<types::UInt16Type>(&array_ref, py, &python_function)?
-            }
-            DataType::UInt32 => {
-                process_array_ref_with_python_function::<types::UInt32Type>(&array_ref, py, &python_function)?
-            }
-            DataType::UInt64 => {
-                process_array_ref_with_python_function::<types::UInt64Type>(&array_ref, py, &python_function)?
-            }
+            DataType::Int8 => process_array_ref_with_python_function::<types::Int8Type>(
+                &array_ref,
+                py,
+                &python_function,
+            )?,
+            DataType::Int16 => process_array_ref_with_python_function::<types::Int16Type>(
+                &array_ref,
+                py,
+                &python_function,
+            )?,
+            DataType::Int32 => process_array_ref_with_python_function::<types::Int32Type>(
+                &array_ref,
+                py,
+                &python_function,
+            )?,
+            DataType::Int64 => process_array_ref_with_python_function::<types::Int64Type>(
+                &array_ref,
+                py,
+                &python_function,
+            )?,
+            DataType::UInt8 => process_array_ref_with_python_function::<types::UInt8Type>(
+                &array_ref,
+                py,
+                &python_function,
+            )?,
+            DataType::UInt16 => process_array_ref_with_python_function::<types::UInt16Type>(
+                &array_ref,
+                py,
+                &python_function,
+            )?,
+            DataType::UInt32 => process_array_ref_with_python_function::<types::UInt32Type>(
+                &array_ref,
+                py,
+                &python_function,
+            )?,
+            DataType::UInt64 => process_array_ref_with_python_function::<types::UInt64Type>(
+                &array_ref,
+                py,
+                &python_function,
+            )?,
             DataType::Float16 => {
                 unimplemented!()
             }
-            DataType::Float32 => {
-                process_array_ref_with_python_function::<types::Float32Type>(&array_ref, py, &python_function)?
-            }
-            DataType::Float64 => {
-                process_array_ref_with_python_function::<types::Float64Type>(&array_ref, py, &python_function)?
-            }
+            DataType::Float32 => process_array_ref_with_python_function::<types::Float32Type>(
+                &array_ref,
+                py,
+                &python_function,
+            )?,
+            DataType::Float64 => process_array_ref_with_python_function::<types::Float64Type>(
+                &array_ref,
+                py,
+                &python_function,
+            )?,
             DataType::Timestamp(_, _) => {
                 unimplemented!()
             }
-            DataType::Date32 => {
-                process_array_ref_with_python_function::<types::Date32Type>(&array_ref, py, &python_function)?
-            }
-            DataType::Date64 => {
-                process_array_ref_with_python_function::<types::Date64Type>(&array_ref, py, &python_function)?
-            }
+            DataType::Date32 => process_array_ref_with_python_function::<types::Date32Type>(
+                &array_ref,
+                py,
+                &python_function,
+            )?,
+            DataType::Date64 => process_array_ref_with_python_function::<types::Date64Type>(
+                &array_ref,
+                py,
+                &python_function,
+            )?,
             DataType::Time32(_) => {
                 unimplemented!()
             }
@@ -307,9 +335,11 @@ pub fn execute_python_function(
             DataType::Dictionary(_, _) => {
                 unimplemented!()
             }
-            DataType::Decimal128(precision, scale) => {
-                process_array_ref_with_python_function::<types::Decimal128Type>(&array_ref, py, &python_function)?
-            }
+            DataType::Decimal128(precision, scale) => process_array_ref_with_python_function::<
+                types::Decimal128Type,
+            >(
+                &array_ref, py, &python_function
+            )?,
             DataType::Decimal256(precision, scale) => {
                 unimplemented!()
             }
@@ -456,7 +486,11 @@ pub fn array_ref_to_columnar_value(
         }
         DataType::Decimal128(precision, scale) => {
             let array = downcast_array_ref::<types::Decimal128Type>(&array_ref)?;
-            Ok(ScalarValue::Decimal128(Some(array.value(0)), *precision, *scale))
+            Ok(ScalarValue::Decimal128(
+                Some(array.value(0)),
+                *precision,
+                *scale,
+            ))
         }
         DataType::Decimal256(precision, scale) => {
             unimplemented!()
@@ -467,12 +501,10 @@ pub fn array_ref_to_columnar_value(
         DataType::RunEndEncoded(_, _) => {
             unimplemented!()
         }
-        _ => {
-            Err(DataFusionError::Internal(format!(
-                "Unsupported DataType: {:?}",
-                data_type
-            )))
-        }
+        _ => Err(DataFusionError::Internal(format!(
+            "Unsupported DataType: {:?}",
+            data_type
+        ))),
     }?;
     Ok(ColumnarValue::Scalar(scalar_value))
 }

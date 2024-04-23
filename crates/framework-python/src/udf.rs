@@ -2,11 +2,9 @@ use std::any::Any;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
-use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
-use crate::utils::{execute_python_function, array_ref_to_columnar_value};
+use crate::utils::{array_ref_to_columnar_value, execute_python_function};
 
 #[derive(Debug, Clone)]
 pub struct PythonUDF {
@@ -70,25 +68,25 @@ impl ScalarUDFImpl for PythonUDF {
         }
 
         let (array_ref, is_scalar) = match &args[0] {
-            ColumnarValue::Array(arr) => {
-                (arr.clone(), false)
-            }
+            ColumnarValue::Array(arr) => (arr.clone(), false),
             ColumnarValue::Scalar(scalar) => {
-                let arr = scalar
-                    .to_array().
-                    map_err(|e| {
-                        DataFusionError::Execution(format!("Failed to convert scalar to array: {:?}", e))
-                    })?;
+                let arr = scalar.to_array().map_err(|e| {
+                    DataFusionError::Execution(format!(
+                        "Failed to convert scalar to array: {:?}",
+                        e
+                    ))
+                })?;
                 (arr, true)
             }
         };
 
-        let processed_array = execute_python_function(
-            &array_ref,
-            &self.command,
-            &self.output_type,
-        )?;
+        let processed_array =
+            execute_python_function(&array_ref, &self.command, &self.output_type)?;
 
-        Ok(array_ref_to_columnar_value(processed_array, &self.output_type, is_scalar)?)
+        Ok(array_ref_to_columnar_value(
+            processed_array,
+            &self.output_type,
+            is_scalar,
+        )?)
     }
 }
