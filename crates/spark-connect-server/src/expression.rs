@@ -74,6 +74,9 @@ pub(crate) fn from_spark_expression(
             Ok(expr::Expr::Column(col))
         }
         ExprType::UnresolvedFunction(func) => {
+            if func.is_user_defined_function {
+                return Err(SparkError::unsupported("user defined function"));
+            }
             if func.is_distinct {
                 return Err(SparkError::unsupported("distinct function"));
             }
