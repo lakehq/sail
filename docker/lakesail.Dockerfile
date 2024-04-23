@@ -20,7 +20,7 @@ ARG PYSPARK_VERSION=3.5.1
 ENV PYSPARK_VERSION $PYSPARK_VERSION
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN python3 -m pip install "pyspark[connect,sql]==${PYSPARK_VERSION}" # TODO: Look into only capturing pyspark.cloudpickle
+RUN python3 -m pip install "pyspark[connect,sql]==${PYSPARK_VERSION}"
 
 # TODO: See if this is necessary
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=${TARGETPLATFORM} \
