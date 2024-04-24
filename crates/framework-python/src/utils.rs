@@ -213,6 +213,7 @@ pub fn execute_python_function(
     output_type: &DataType,
 ) -> Result<ArrayRef, DataFusionError> {
     Python::with_gil(|py| {
+        // TODO: Avoid loading the function on every batch.
         let python_function = load_python_function(py, &function_bytes)?;
 
         let processed_array = match &output_type {
