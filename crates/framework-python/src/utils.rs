@@ -84,12 +84,12 @@ where
     TOutput::Native: FromPyObject<'py>,
 {
     match &array_ref.data_type() {
-        DataType::Null => {
-            unimplemented!()
-        }
-        DataType::Boolean => {
-            unimplemented!()
-        }
+        DataType::Null => Err(DataFusionError::NotImplemented(
+            "DataType::Null".to_string(),
+        )),
+        DataType::Boolean => Err(DataFusionError::NotImplemented(
+            "DataType::Boolean".to_string(),
+        )),
         DataType::Int8 => {
             let array = downcast_array_ref::<types::Int8Type>(&array_ref)?;
             process_elements::<types::Int8Type, TOutput>(&array, py, &python_function)
@@ -122,9 +122,9 @@ where
             let array = downcast_array_ref::<types::UInt64Type>(&array_ref)?;
             process_elements::<types::UInt64Type, TOutput>(&array, py, &python_function)
         }
-        DataType::Float16 => {
-            unimplemented!()
-        }
+        DataType::Float16 => Err(DataFusionError::NotImplemented(
+            "DataType::Float16".to_string(),
+        )),
         DataType::Float32 => {
             let array = downcast_array_ref::<types::Float32Type>(&array_ref)?;
             process_elements::<types::Float32Type, TOutput>(&array, py, &python_function)
@@ -133,9 +133,9 @@ where
             let array = downcast_array_ref::<types::Float64Type>(&array_ref)?;
             process_elements::<types::Float64Type, TOutput>(&array, py, &python_function)
         }
-        DataType::Timestamp(_, _) => {
-            unimplemented!()
-        }
+        DataType::Timestamp(_, _) => Err(DataFusionError::NotImplemented(
+            "DataType::Timestamp".to_string(),
+        )),
         DataType::Date32 => {
             let array = downcast_array_ref::<types::Date32Type>(&array_ref)?;
             process_elements::<types::Date32Type, TOutput>(&array, py, &python_function)
@@ -144,64 +144,62 @@ where
             let array = downcast_array_ref::<types::Date64Type>(&array_ref)?;
             process_elements::<types::Date64Type, TOutput>(&array, py, &python_function)
         }
-        DataType::Time32(_) => {
-            unimplemented!()
-        }
-        DataType::Time64(_) => {
-            unimplemented!()
-        }
-        DataType::Duration(_) => {
-            unimplemented!()
-        }
-        DataType::Interval(_) => {
-            unimplemented!()
-        }
-        DataType::Binary => {
-            unimplemented!()
-        }
-        DataType::FixedSizeBinary(_) => {
-            unimplemented!()
-        }
-        DataType::LargeBinary => {
-            unimplemented!()
-        }
-        DataType::Utf8 => {
-            unimplemented!()
-        }
-        DataType::LargeUtf8 => {
-            unimplemented!()
-        }
-        DataType::List(_) => {
-            unimplemented!()
-        }
-        DataType::FixedSizeList(_, _) => {
-            unimplemented!()
-        }
-        DataType::LargeList(_) => {
-            unimplemented!()
-        }
-        DataType::Struct(_) => {
-            unimplemented!()
-        }
-        DataType::Union(_, _) => {
-            unimplemented!()
-        }
-        DataType::Dictionary(_, _) => {
-            unimplemented!()
-        }
+        DataType::Time32(_) => Err(DataFusionError::NotImplemented(
+            "DataType::Time32".to_string(),
+        )),
+        DataType::Time64(_) => Err(DataFusionError::NotImplemented(
+            "DataType::Time64".to_string(),
+        )),
+        DataType::Duration(_) => Err(DataFusionError::NotImplemented(
+            "DataType::Duration".to_string(),
+        )),
+        DataType::Interval(_) => Err(DataFusionError::NotImplemented(
+            "DataType::Interval".to_string(),
+        )),
+        DataType::Binary => Err(DataFusionError::NotImplemented(
+            "DataType::Binary".to_string(),
+        )),
+        DataType::FixedSizeBinary(_) => Err(DataFusionError::NotImplemented(
+            "DataType::FixedSizeBinary".to_string(),
+        )),
+        DataType::LargeBinary => Err(DataFusionError::NotImplemented(
+            "DataType::LargeBinary".to_string(),
+        )),
+        DataType::Utf8 => Err(DataFusionError::NotImplemented(
+            "DataType::Utf8".to_string(),
+        )),
+        DataType::LargeUtf8 => Err(DataFusionError::NotImplemented(
+            "DataType::LargeUtf8".to_string(),
+        )),
+        DataType::List(_) => Err(DataFusionError::NotImplemented(
+            "DataType::List".to_string(),
+        )),
+        DataType::FixedSizeList(_, _) => Err(DataFusionError::NotImplemented(
+            "DataType::FixedSizeList".to_string(),
+        )),
+        DataType::LargeList(_) => Err(DataFusionError::NotImplemented(
+            "DataType::LargeList".to_string(),
+        )),
+        DataType::Struct(_) => Err(DataFusionError::NotImplemented(
+            "DataType::Struct".to_string(),
+        )),
+        DataType::Union(_, _) => Err(DataFusionError::NotImplemented(
+            "DataType::Union".to_string(),
+        )),
+        DataType::Dictionary(_, _) => Err(DataFusionError::NotImplemented(
+            "DataType::Dictionary".to_string(),
+        )),
         DataType::Decimal128(precision, scale) => {
             let array = downcast_array_ref::<types::Decimal128Type>(&array_ref)?;
             process_elements::<types::Decimal128Type, TOutput>(&array, py, &python_function)
         }
-        DataType::Decimal256(precision, scale) => {
-            unimplemented!()
-        }
-        DataType::Map(_, _) => {
-            unimplemented!()
-        }
-        DataType::RunEndEncoded(_, _) => {
-            unimplemented!()
-        }
+        DataType::Decimal256(precision, scale) => Err(DataFusionError::NotImplemented(
+            "DataType::Decimal256".to_string(),
+        )),
+        DataType::Map(_, _) => Err(DataFusionError::NotImplemented("DataType::Map".to_string())),
+        DataType::RunEndEncoded(_, _) => Err(DataFusionError::NotImplemented(
+            "DataType::RunEndEncoded".to_string(),
+        )),
         _ => Err(DataFusionError::Internal(format!(
             "Unsupported DataType: {:?}",
             array_ref.data_type()
@@ -219,11 +217,15 @@ pub fn execute_python_function(
 
         let processed_array = match &output_type {
             DataType::Null => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::Null".to_string(),
+                ))
+            }?,
             DataType::Boolean => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::Boolean".to_string(),
+                ))
+            }?,
             DataType::Int8 => process_array_ref_with_python_function::<types::Int8Type>(
                 &array_ref,
                 py,
@@ -265,8 +267,10 @@ pub fn execute_python_function(
                 &python_function,
             )?,
             DataType::Float16 => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::Float16".to_string(),
+                ))
+            }?,
             DataType::Float32 => process_array_ref_with_python_function::<types::Float32Type>(
                 &array_ref,
                 py,
@@ -278,8 +282,10 @@ pub fn execute_python_function(
                 &python_function,
             )?,
             DataType::Timestamp(_, _) => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::Timestamp".to_string(),
+                ))
+            }?,
             DataType::Date32 => process_array_ref_with_python_function::<types::Date32Type>(
                 &array_ref,
                 py,
@@ -291,64 +297,98 @@ pub fn execute_python_function(
                 &python_function,
             )?,
             DataType::Time32(_) => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::Time32".to_string(),
+                ))
+            }?,
             DataType::Time64(_) => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::Time64".to_string(),
+                ))
+            }?,
             DataType::Duration(_) => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::Duration".to_string(),
+                ))
+            }?,
             DataType::Interval(_) => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::Interval".to_string(),
+                ))
+            }?,
             DataType::Binary => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::Binary".to_string(),
+                ))
+            }?,
             DataType::FixedSizeBinary(_) => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::FixedSizeBinary".to_string(),
+                ))
+            }?,
             DataType::LargeBinary => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::LargeBinary".to_string(),
+                ))
+            }?,
             DataType::Utf8 => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::Utf8".to_string(),
+                ))
+            }?,
             DataType::LargeUtf8 => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::LargeUtf8".to_string(),
+                ))
+            }?,
             DataType::List(_) => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::List".to_string(),
+                ))
+            }?,
             DataType::FixedSizeList(_, _) => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::FixedSizeList".to_string(),
+                ))
+            }?,
             DataType::LargeList(_) => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::LargeList".to_string(),
+                ))
+            }?,
             DataType::Struct(_) => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::Struct".to_string(),
+                ))
+            }?,
             DataType::Union(_, _) => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::Union".to_string(),
+                ))
+            }?,
             DataType::Dictionary(_, _) => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::Dictionary".to_string(),
+                ))
+            }?,
             DataType::Decimal128(precision, scale) => process_array_ref_with_python_function::<
                 types::Decimal128Type,
             >(
                 &array_ref, py, &python_function
             )?,
             DataType::Decimal256(precision, scale) => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::Decimal256".to_string(),
+                ))
+            }?,
             DataType::Map(_, _) => {
-                unimplemented!()
+                { Err(DataFusionError::NotImplemented("DataType::Map".to_string())) }?
             }
             DataType::RunEndEncoded(_, _) => {
-                unimplemented!()
-            }
+                Err(DataFusionError::NotImplemented(
+                    "DataType::RunEndEncoded".to_string(),
+                ))
+            }?,
             _ => {
                 return Err(DataFusionError::Internal(format!(
                     "Unsupported DataType: {:?}",
@@ -379,12 +419,12 @@ pub fn array_ref_to_columnar_value(
     }
 
     let scalar_value = match &data_type {
-        DataType::Null => {
-            unimplemented!()
-        }
-        DataType::Boolean => {
-            unimplemented!()
-        }
+        DataType::Null => Err(DataFusionError::NotImplemented(
+            "DataType::Null".to_string(),
+        )),
+        DataType::Boolean => Err(DataFusionError::NotImplemented(
+            "DataType::Boolean".to_string(),
+        )),
         DataType::Int8 => {
             let array = downcast_array_ref::<types::Int8Type>(&array_ref)?;
             Ok(ScalarValue::Int8(Some(array.value(0))))
@@ -417,9 +457,9 @@ pub fn array_ref_to_columnar_value(
             let array = downcast_array_ref::<types::UInt64Type>(&array_ref)?;
             Ok(ScalarValue::UInt64(Some(array.value(0))))
         }
-        DataType::Float16 => {
-            unimplemented!()
-        }
+        DataType::Float16 => Err(DataFusionError::NotImplemented(
+            "DataType::Float16".to_string(),
+        )),
         DataType::Float32 => {
             let array = downcast_array_ref::<types::Float32Type>(&array_ref)?;
             Ok(ScalarValue::Float32(Some(array.value(0))))
@@ -428,9 +468,9 @@ pub fn array_ref_to_columnar_value(
             let array = downcast_array_ref::<types::Float64Type>(&array_ref)?;
             Ok(ScalarValue::Float64(Some(array.value(0))))
         }
-        DataType::Timestamp(_, _) => {
-            unimplemented!()
-        }
+        DataType::Timestamp(_, _) => Err(DataFusionError::NotImplemented(
+            "DataType::Timestamp".to_string(),
+        )),
         DataType::Date32 => {
             let array = downcast_array_ref::<types::Date32Type>(&array_ref)?;
             Ok(ScalarValue::Date32(Some(array.value(0))))
@@ -439,51 +479,51 @@ pub fn array_ref_to_columnar_value(
             let array = downcast_array_ref::<types::Date64Type>(&array_ref)?;
             Ok(ScalarValue::Date64(Some(array.value(0))))
         }
-        DataType::Time32(_) => {
-            unimplemented!()
-        }
-        DataType::Time64(_) => {
-            unimplemented!()
-        }
-        DataType::Duration(_) => {
-            unimplemented!()
-        }
-        DataType::Interval(_) => {
-            unimplemented!()
-        }
-        DataType::Binary => {
-            unimplemented!()
-        }
-        DataType::FixedSizeBinary(_) => {
-            unimplemented!()
-        }
-        DataType::LargeBinary => {
-            unimplemented!()
-        }
-        DataType::Utf8 => {
-            unimplemented!()
-        }
-        DataType::LargeUtf8 => {
-            unimplemented!()
-        }
-        DataType::List(_) => {
-            unimplemented!()
-        }
-        DataType::FixedSizeList(_, _) => {
-            unimplemented!()
-        }
-        DataType::LargeList(_) => {
-            unimplemented!()
-        }
-        DataType::Struct(_) => {
-            unimplemented!()
-        }
-        DataType::Union(_, _) => {
-            unimplemented!()
-        }
-        DataType::Dictionary(_, _) => {
-            unimplemented!()
-        }
+        DataType::Time32(_) => Err(DataFusionError::NotImplemented(
+            "DataType::Time32".to_string(),
+        )),
+        DataType::Time64(_) => Err(DataFusionError::NotImplemented(
+            "DataType::Time64".to_string(),
+        )),
+        DataType::Duration(_) => Err(DataFusionError::NotImplemented(
+            "DataType::Duration".to_string(),
+        )),
+        DataType::Interval(_) => Err(DataFusionError::NotImplemented(
+            "DataType::Interval".to_string(),
+        )),
+        DataType::Binary => Err(DataFusionError::NotImplemented(
+            "DataType::Binary".to_string(),
+        )),
+        DataType::FixedSizeBinary(_) => Err(DataFusionError::NotImplemented(
+            "DataType::FixedSizeBinary".to_string(),
+        )),
+        DataType::LargeBinary => Err(DataFusionError::NotImplemented(
+            "DataType::LargeBinary".to_string(),
+        )),
+        DataType::Utf8 => Err(DataFusionError::NotImplemented(
+            "DataType::Utf8".to_string(),
+        )),
+        DataType::LargeUtf8 => Err(DataFusionError::NotImplemented(
+            "DataType::LargeUtf8".to_string(),
+        )),
+        DataType::List(_) => Err(DataFusionError::NotImplemented(
+            "DataType::List".to_string(),
+        )),
+        DataType::FixedSizeList(_, _) => Err(DataFusionError::NotImplemented(
+            "DataType::FixedSizeList".to_string(),
+        )),
+        DataType::LargeList(_) => Err(DataFusionError::NotImplemented(
+            "DataType::LargeList".to_string(),
+        )),
+        DataType::Struct(_) => Err(DataFusionError::NotImplemented(
+            "DataType::Struct".to_string(),
+        )),
+        DataType::Union(_, _) => Err(DataFusionError::NotImplemented(
+            "DataType::Union".to_string(),
+        )),
+        DataType::Dictionary(_, _) => Err(DataFusionError::NotImplemented(
+            "DataType::Dictionary".to_string(),
+        )),
         DataType::Decimal128(precision, scale) => {
             let array = downcast_array_ref::<types::Decimal128Type>(&array_ref)?;
             Ok(ScalarValue::Decimal128(
@@ -492,15 +532,13 @@ pub fn array_ref_to_columnar_value(
                 *scale,
             ))
         }
-        DataType::Decimal256(precision, scale) => {
-            unimplemented!()
-        }
-        DataType::Map(_, _) => {
-            unimplemented!()
-        }
-        DataType::RunEndEncoded(_, _) => {
-            unimplemented!()
-        }
+        DataType::Decimal256(precision, scale) => Err(DataFusionError::NotImplemented(
+            "DataType::Decimal256".to_string(),
+        )),
+        DataType::Map(_, _) => Err(DataFusionError::NotImplemented("DataType::Map".to_string())),
+        DataType::RunEndEncoded(_, _) => Err(DataFusionError::NotImplemented(
+            "DataType::RunEndEncoded".to_string(),
+        )),
         _ => Err(DataFusionError::Internal(format!(
             "Unsupported DataType: {:?}",
             data_type
