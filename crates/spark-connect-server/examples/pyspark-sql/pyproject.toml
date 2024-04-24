@@ -9,7 +9,7 @@ packages = [{ include = "app", from = "src" }]
 
 [tool.poetry.dependencies]
 python = "~3.10"
-pyspark = { version = "^3.5.0", extras = ["connect"] }
+pyspark = { version = "^3.5.0", extras = ["connect", "sql"] }
 
 [tool.poetry.group.dev.dependencies]
 isort = "^5.12.0"

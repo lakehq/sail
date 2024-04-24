@@ -15,7 +15,7 @@ fn expensive_work() -> &'static str {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_telemetry(true)?;
+    init_telemetry()?;
     println!("Hello, world!");
 
     trace!(

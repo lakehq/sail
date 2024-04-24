@@ -4,18 +4,21 @@ use datafusion::arrow::datatypes::{DataType, IntervalMonthDayNanoType};
 use datafusion::catalog::TableReference;
 use datafusion::common::{Column, DFSchema, ScalarValue};
 use datafusion::config::ConfigOptions;
-use datafusion::logical_expr::{
-    expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, GetFieldAccess, GetIndexedField,
-    Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
-};
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::sql::sqlparser::ast;
+use datafusion_common::DataFusionError;
+use datafusion_expr::{
+    expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, ExprSchemable, GetFieldAccess,
+    GetIndexedField, Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
+};
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::extension::function::alias::MultiAlias;
 use crate::schema::{from_spark_data_type, parse_spark_data_type_string};
 use crate::spark::connect as sc;
 use crate::sql::new_sql_parser;
+
+use framework_python::udf::PythonUDF;
 
 #[derive(Default)]
 pub(crate) struct EmptyContextProvider {
@@ -71,11 +74,11 @@ pub(crate) fn from_spark_expression(
             Ok(expr::Expr::Column(col))
         }
         ExprType::UnresolvedFunction(func) => {
-            if func.is_distinct {
-                return Err(SparkError::unsupported("distinct function"));
-            }
             if func.is_user_defined_function {
                 return Err(SparkError::unsupported("user defined function"));
+            }
+            if func.is_distinct {
+                return Err(SparkError::unsupported("distinct function"));
             }
             let args = func
                 .arguments
@@ -240,8 +243,69 @@ pub(crate) fn from_spark_expression(
         ExprType::UnresolvedNamedLambdaVariable(_) => {
             Err(SparkError::todo("unresolved named lambda variable"))
         }
-        ExprType::CommonInlineUserDefinedFunction(_) => {
-            Err(SparkError::todo("common inline user defined function"))
+        ExprType::CommonInlineUserDefinedFunction(udf) => {
+            use pyo3::prelude::Python;
+            use sc::common_inline_user_defined_function::Function::PythonUdf;
+            use sc::PythonUdf as PythonUDFStruct;
+
+            let function_name: &str = &udf.function_name;
+
+            let deterministic: bool = udf.deterministic;
+
+            let arguments: Vec<expr::Expr> = udf
+                .arguments
+                .iter()
+                .map(|x| from_spark_expression(x, schema))
+                .collect::<SparkResult<Vec<expr::Expr>>>()?;
+
+            let input_types: Vec<DataType> = arguments
+                .iter()
+                .map(|arg| arg.get_type(schema))
+                .collect::<Result<Vec<DataType>, DataFusionError>>()?;
+
+            let function: &PythonUDFStruct = match &udf.function {
+                Some(PythonUdf(function)) => function,
+                _ => {
+                    return Err(SparkError::invalid("UDF function type must be Python UDF"));
+                }
+            };
+
+            let output_type: DataType = from_spark_data_type(
+                function
+                    .output_type
+                    .as_ref()
+                    .required("UDF Function output type")?,
+            )?;
+
+            let eval_type: i32 = function.eval_type;
+
+            let command: &[u8] = &function.command;
+
+            let python_ver: &str = &function.python_ver;
+
+            let pyo3_python_version: String = Python::with_gil(|py| py.version().to_string());
+
+            if !pyo3_python_version.starts_with(python_ver) {
+                return Err(SparkError::invalid(format!(
+                    "Python version mismatch. Version used to compile the UDF must match the version used to run the UDF. Version used to compile the UDF: {:?}. Version used to run the UDF: {:?}",
+                    python_ver,
+                    pyo3_python_version,
+                )));
+            }
+
+            let python_udf: PythonUDF = PythonUDF::new(
+                function_name.to_owned(),
+                deterministic,
+                input_types,
+                command.to_vec(),
+                output_type,
+                eval_type,
+            );
+
+            Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(python_udf))),
+                args: arguments,
+            }))
         }
         ExprType::CallFunction(_) => Err(SparkError::todo("call function")),
         ExprType::Extension(_) => Err(SparkError::unsupported("expression extension")),
