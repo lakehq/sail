@@ -141,11 +141,9 @@ pub(crate) async fn handle_execute_write_operation(
         return Err(SparkError::unsupported("bucketing"));
     }
 
+    // TODO: option compatibility
     let mut table_options = TableOptions::default_from_session_config(ctx.state().config_options());
     table_options.alter_with_string_hash_map(&write.options)?;
-    // let table_options = ctx.state().default_table_options();
-    // TODO: option compatibility
-    // let options = CopyOptions::SQLOptions(StatementOptions::from(&write.options));
     let plan = from_spark_relation(&ctx, &relation).await?;
     let plan = match write.save_type.required("save type")? {
         SaveType::Path(path) => {
