@@ -1,22 +1,22 @@
 use std::sync::Arc;
 
+use crate::error::{ProtoFieldExt, SparkError, SparkResult};
+use crate::extension::function::alias::MultiAlias;
+use crate::schema::{from_spark_data_type, parse_spark_data_type_string};
+use crate::spark::connect as sc;
+use crate::sql::new_sql_parser;
 use datafusion::arrow::datatypes::{DataType, IntervalMonthDayNanoType};
 use datafusion::catalog::TableReference;
 use datafusion::common::{Column, DFSchema, ScalarValue};
 use datafusion::config::ConfigOptions;
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::sql::sqlparser::ast;
+use datafusion::{functions, functions_array};
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
     expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, ExprSchemable, GetFieldAccess,
     GetIndexedField, Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
 };
-
-use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::extension::function::alias::MultiAlias;
-use crate::schema::{from_spark_data_type, parse_spark_data_type_string};
-use crate::spark::connect as sc;
-use crate::sql::new_sql_parser;
 
 use framework_python::udf::PythonUDF;
 
@@ -54,6 +54,18 @@ impl ContextProvider for EmptyContextProvider {
 
     fn options(&self) -> &ConfigOptions {
         &self.options
+    }
+
+    fn udfs_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn udafs_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn udwfs_names(&self) -> Vec<String> {
+        Vec::new()
     }
 }
 
@@ -444,10 +456,13 @@ pub(crate) fn get_scalar_function(
         }
         // TODO: contains
         "startswith" => {
-            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::StartsWith),
-                args,
-            }));
+            if args.len() != 2 {
+                return Err(SparkError::invalid("binary operator requires 2 arguments"));
+            }
+            return Ok(functions::expr_fn::starts_with(
+                args[0].clone(),
+                args[1].clone(),
+            ));
         }
         "endswith" => {
             return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
@@ -456,10 +471,7 @@ pub(crate) fn get_scalar_function(
             }));
         }
         "array" => {
-            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
-                args,
-            }));
+            return Ok(functions_array::expr_fn::make_array(args.clone()));
         }
         "avg" => {
             return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
@@ -468,6 +480,7 @@ pub(crate) fn get_scalar_function(
                 distinct: false,
                 filter: None,
                 order_by: None,
+                null_treatment: None,
             }));
         }
         "sum" => {
@@ -477,6 +490,7 @@ pub(crate) fn get_scalar_function(
                 distinct: false,
                 filter: None,
                 order_by: None,
+                null_treatment: None,
             }));
         }
         "count" => {
@@ -486,6 +500,7 @@ pub(crate) fn get_scalar_function(
                 distinct: false,
                 filter: None,
                 order_by: None,
+                null_treatment: None,
             }));
         }
         "max" => {
@@ -495,6 +510,7 @@ pub(crate) fn get_scalar_function(
                 distinct: false,
                 filter: None,
                 order_by: None,
+                null_treatment: None,
             }));
         }
         "min" => {
@@ -504,6 +520,7 @@ pub(crate) fn get_scalar_function(
                 distinct: false,
                 filter: None,
                 order_by: None,
+                null_treatment: None,
             }));
         }
         "in" => {
@@ -516,6 +533,12 @@ pub(crate) fn get_scalar_function(
                 list: args,
                 negated: false,
             }));
+        }
+        "abs" => {
+            if args.len() != 1 {
+                return Err(SparkError::invalid("unary operator requires 1 argument"));
+            }
+            return Ok(functions::expr_fn::abs(args[0].clone()));
         }
         name @ ("explode" | "explode_outer" | "posexplode" | "posexplode_outer") => {
             let udf = ScalarUDF::from(Explode::new(name));

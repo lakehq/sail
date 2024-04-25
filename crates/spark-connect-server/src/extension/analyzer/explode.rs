@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion::common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
+use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion::common::{Column, DataFusionError, Result, UnnestOptions};
 use datafusion::logical_expr::builder::unnest_with_options;
 use datafusion::logical_expr::{
@@ -166,27 +166,27 @@ impl ExplodeRewriter {
 }
 
 impl TreeNodeRewriter for ExplodeRewriter {
-    type N = Expr;
+    type Node = Expr;
 
-    fn pre_visit(&mut self, _: &Expr) -> Result<RewriteRecursion> {
+    fn f_down(&mut self, node: Expr) -> Result<Transformed<Expr>> {
         self.depth += 1;
-        Ok(RewriteRecursion::Continue)
+        Ok(Transformed::no(node))
     }
 
-    fn mutate(&mut self, node: Expr) -> Result<Expr> {
+    fn f_up(&mut self, node: Expr) -> Result<Transformed<Expr>> {
         let nodes = self.mutate_internal(node)?;
         self.depth -= 1;
         if self.depth == 0 {
             self.expr.extend(nodes);
             // returns a dummy expression which is not used
-            Ok(Expr::Column(Column::new_unqualified("")))
+            Ok(Transformed::yes(Expr::Column(Column::new_unqualified(""))))
         } else {
             if nodes.len() != 1 {
                 return Err(DataFusionError::Plan(
                     "multi-output explode cannot appear in nested expression".to_string(),
                 ));
             }
-            return Ok(nodes[0].clone());
+            return Ok(Transformed::yes(nodes[0].clone()));
         }
     }
 }
