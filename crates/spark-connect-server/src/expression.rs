@@ -456,6 +456,9 @@ pub(crate) fn get_scalar_function(
         }
         // TODO: contains
         "startswith" => {
+            if args.len() != 2 {
+                return Err(SparkError::invalid("binary operator requires 2 arguments"));
+            }
             return Ok(functions::expr_fn::starts_with(
                 args[0].clone(),
                 args[1].clone(),
@@ -532,6 +535,9 @@ pub(crate) fn get_scalar_function(
             }));
         }
         "abs" => {
+            if args.len() != 1 {
+                return Err(SparkError::invalid("unary operator requires 1 argument"));
+            }
             return Ok(functions::expr_fn::abs(args[0].clone()));
         }
         name @ ("explode" | "explode_outer" | "posexplode" | "posexplode_outer") => {
