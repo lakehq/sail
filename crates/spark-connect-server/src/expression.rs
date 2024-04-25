@@ -531,6 +531,9 @@ pub(crate) fn get_scalar_function(
                 negated: false,
             }));
         }
+        "abs" => {
+            return Ok(functions::expr_fn::abs(args[0].clone()));
+        }
         name @ ("explode" | "explode_outer" | "posexplode" | "posexplode_outer") => {
             let udf = ScalarUDF::from(Explode::new(name));
             return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
