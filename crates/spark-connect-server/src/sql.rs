@@ -75,6 +75,7 @@ impl SparkDialect {
             having: None,
             named_window: vec![],
             qualify: None,
+            value_table_mode: None,
         }));
         let query = Query {
             with: None,

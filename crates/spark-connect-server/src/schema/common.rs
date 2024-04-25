@@ -261,5 +261,9 @@ pub(crate) fn to_spark_data_type(data_type: &adt::DataType) -> SparkResult<sc::D
             })
         }
         adt::DataType::RunEndEncoded(_, _) => Err(SparkError::unsupported("run end encoded")),
+        adt::DataType::BinaryView => Err(SparkError::unsupported("BinaryView")),
+        adt::DataType::Utf8View => Err(SparkError::unsupported("Utf8View")),
+        adt::DataType::ListView(_) => Err(SparkError::unsupported("ListView")),
+        adt::DataType::LargeListView(_) => Err(SparkError::unsupported("LargeListView")),
     }
 }
