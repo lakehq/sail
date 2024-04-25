@@ -7,9 +7,11 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNode};
-use datafusion::physical_expr::{Partitioning, PhysicalSortExpr};
+use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
+use datafusion::physical_plan::{
+    DisplayAs, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
+};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use tonic::async_trait;
 use tonic::codegen::tokio_stream;
@@ -23,6 +25,7 @@ struct RangeExec {
     range: Range,
     num_partitions: u32,
     schema: SchemaRef,
+    cache: PlanProperties,
 }
 
 impl DisplayAs for RangeExec {
@@ -40,16 +43,8 @@ impl ExecutionPlan for RangeExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.num_partitions as usize)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -116,10 +111,17 @@ impl ExtensionPlanner for RangePlanner {
                 "RangePlanner can only handle RangeNode".to_string(),
             )
         })?;
+        let schema: SchemaRef = Arc::new(UserDefinedLogicalNode::schema(node).as_ref().into());
+        let cache = PlanProperties::new(
+            EquivalenceProperties::new(schema.clone()),
+            Partitioning::UnknownPartitioning(node.num_partitions() as usize),
+            ExecutionMode::Bounded,
+        );
         Ok(Some(Arc::new(RangeExec {
             range: node.range().clone(),
             num_partitions: node.num_partitions(),
-            schema: Arc::new(UserDefinedLogicalNode::schema(node).as_ref().into()),
+            schema: schema,
+            cache: cache,
         })))
     }
 }

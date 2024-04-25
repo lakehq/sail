@@ -2,11 +2,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use datafusion::common::file_options::StatementOptions;
 use datafusion::common::{FileType, TableReference};
 use datafusion::dataframe::DataFrame;
-use datafusion::logical_expr::dml::CopyOptions;
+use datafusion::datasource::file_format::arrow::ArrowFormat;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
+use datafusion_common::config::{FormatOptions, TableOptions};
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
@@ -140,8 +140,12 @@ pub(crate) async fn handle_execute_write_operation(
     if let Some(_) = write.bucket_by {
         return Err(SparkError::unsupported("bucketing"));
     }
+
+    let mut table_options = TableOptions::default_from_session_config(ctx.state().config_options());
+    table_options.alter_with_string_hash_map(&write.options)?;
+    // let table_options = ctx.state().default_table_options();
     // TODO: option compatibility
-    let options = CopyOptions::SQLOptions(StatementOptions::from(&write.options));
+    // let options = CopyOptions::SQLOptions(StatementOptions::from(&write.options));
     let plan = from_spark_relation(&ctx, &relation).await?;
     let plan = match write.save_type.required("save type")? {
         SaveType::Path(path) => {
@@ -152,11 +156,23 @@ pub(crate) async fn handle_execute_write_operation(
                 format!("{}/", path)
             };
             let source = write.source.required("source")?;
-            let format = match source.as_str() {
-                "json" => FileType::JSON,
-                "parquet" => FileType::PARQUET,
-                "csv" => FileType::CSV,
-                "arrow" => FileType::ARROW,
+            let format_options = match source.as_str() {
+                "json" => {
+                    table_options.set_file_format(FileType::JSON);
+                    FormatOptions::JSON(table_options.json)
+                }
+                "parquet" => {
+                    table_options.set_file_format(FileType::PARQUET);
+                    FormatOptions::PARQUET(table_options.parquet)
+                }
+                "csv" => {
+                    table_options.set_file_format(FileType::CSV);
+                    FormatOptions::CSV(table_options.csv)
+                }
+                "arrow" => {
+                    table_options.set_file_format(FileType::ARROW);
+                    FormatOptions::ARROW
+                }
                 _ => {
                     return Err(SparkError::invalid(format!(
                         "unsupported source: {}",
@@ -164,10 +180,16 @@ pub(crate) async fn handle_execute_write_operation(
                     )))
                 }
             };
-            LogicalPlanBuilder::copy_to(plan, path, format, options)
-                .or_else(|e| Err(SparkError::from(e)))?
-                .build()
-                .or_else(|e| Err(SparkError::from(e)))?
+            LogicalPlanBuilder::copy_to(
+                plan,
+                path,
+                format_options,
+                write.options,
+                write.partitioning_columns,
+            )
+            .or_else(|e| Err(SparkError::from(e)))?
+            .build()
+            .or_else(|e| Err(SparkError::from(e)))?
         }
         SaveType::Table(_) => {
             return Err(SparkError::todo("save table"));
