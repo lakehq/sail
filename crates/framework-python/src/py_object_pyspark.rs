@@ -23,7 +23,6 @@ impl<'de> Visitor<'de> for PyObjectVisitor {
         Python::with_gil(|py| {
             PyModule::import_bound(py, pyo3::intern!(py, "pyspark.cloudpickle"))
                 .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
-                // .and_then(|loads| Ok(loads.call1((v,))?.to_object(py)))
                 .and_then(|loads| loads.call1((v,)))
                 .map(|py_obj| PythonObjectWrapper {
                     obj: py_obj.to_object(py),
@@ -36,23 +35,14 @@ impl<'de> Visitor<'de> for PyObjectVisitor {
     where
         E: de::Error,
     {
-        Python::with_gil(|py| {
-            PyModule::import_bound(py, pyo3::intern!(py, "pyspark.cloudpickle"))
-                .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
-                // .and_then(|loads| Ok(loads.call1((v,))?.to_object(py)))
-                .and_then(|loads| loads.call1((v,)))
-                .map(|py_obj| PythonObjectWrapper {
-                    obj: py_obj.to_object(py),
-                })
-                .map_err(|e| de::Error::custom(format!("Pickle Error: {:?}", e)))
-        })
+        self.visit_bytes(v)
     }
 
     fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        self.visit_borrowed_bytes(&v)
+        self.visit_bytes(&v)
     }
 }
 
