@@ -8,4 +8,5 @@ datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 serde = { workspace = true }
+serde_bytes = { workspace = true }
 pyo3 = { workspace = true }
