@@ -30,20 +30,6 @@ impl<'de> Visitor<'de> for PyObjectVisitor {
                 .map_err(|e| de::Error::custom(format!("Pickle Error: {:?}", e)))
         })
     }
-
-    fn visit_borrowed_bytes<E>(self, v: &'de [u8]) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        self.visit_bytes(v)
-    }
-
-    fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        self.visit_bytes(&v)
-    }
 }
 
 impl<'de> Deserialize<'de> for PythonObjectWrapper {
