@@ -200,10 +200,18 @@ where
         DataType::RunEndEncoded(_, _) => Err(DataFusionError::NotImplemented(
             "DataType::RunEndEncoded".to_string(),
         )),
-        _ => Err(DataFusionError::Internal(format!(
-            "Unsupported DataType: {:?}",
-            array_ref.data_type()
-        ))),
+        DataType::BinaryView => Err(DataFusionError::NotImplemented(
+            "DataType::BinaryView".to_string(),
+        )),
+        DataType::Utf8View => Err(DataFusionError::NotImplemented(
+            "DataType::Utf8View".to_string(),
+        )),
+        DataType::ListView(_) => Err(DataFusionError::NotImplemented(
+            "DataType::ListView".to_string(),
+        )),
+        DataType::LargeListView(_) => Err(DataFusionError::NotImplemented(
+            "DataType::LargeListView".to_string(),
+        )),
     }
 }
 
@@ -390,12 +398,26 @@ pub fn execute_python_function(
                     "DataType::RunEndEncoded".to_string(),
                 ))
             }?,
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "Unsupported DataType: {:?}",
-                    &output_type
-                )));
-            }
+            DataType::BinaryView => {
+                Err(DataFusionError::NotImplemented(
+                    "DataType::BinaryView".to_string(),
+                ))
+            }?,
+            DataType::Utf8View => {
+                Err(DataFusionError::NotImplemented(
+                    "DataType::Utf8View".to_string(),
+                ))
+            }?,
+            DataType::ListView(_) => {
+                Err(DataFusionError::NotImplemented(
+                    "DataType::ListView".to_string(),
+                ))
+            }?,
+            DataType::LargeListView(_) => {
+                Err(DataFusionError::NotImplemented(
+                    "DataType::LargeListView".to_string(),
+                ))
+            }?,
         };
 
         Ok(processed_array)
@@ -540,10 +562,18 @@ pub fn array_ref_to_columnar_value(
         DataType::RunEndEncoded(_, _) => Err(DataFusionError::NotImplemented(
             "DataType::RunEndEncoded".to_string(),
         )),
-        _ => Err(DataFusionError::Internal(format!(
-            "Unsupported DataType: {:?}",
-            data_type
-        ))),
+        DataType::BinaryView => Err(DataFusionError::NotImplemented(
+            "DataType::BinaryView".to_string(),
+        )),
+        DataType::Utf8View => Err(DataFusionError::NotImplemented(
+            "DataType::Utf8View".to_string(),
+        )),
+        DataType::ListView(_) => Err(DataFusionError::NotImplemented(
+            "DataType::ListView".to_string(),
+        )),
+        DataType::LargeListView(_) => Err(DataFusionError::NotImplemented(
+            "DataType::LargeListView".to_string(),
+        )),
     }?;
     Ok(ColumnarValue::Scalar(scalar_value))
 }
