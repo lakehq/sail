@@ -3,6 +3,7 @@ use std::any::Any;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use pyo3::prelude::PyObject;
 
 use crate::utils::{array_ref_to_columnar_value, execute_python_function};
 
@@ -13,7 +14,7 @@ pub struct PythonUDF {
     function_name: String,
     output_type: DataType,
     eval_type: i32,
-    command: Vec<u8>,
+    python_function: PyObject,
 }
 
 impl PythonUDF {
@@ -21,7 +22,7 @@ impl PythonUDF {
         function_name: String,
         deterministic: bool,
         input_types: Vec<DataType>,
-        command: Vec<u8>,
+        python_function: PyObject,
         output_type: DataType,
         eval_type: i32, // TODO: Incorporate this
     ) -> Self {
@@ -35,7 +36,7 @@ impl PythonUDF {
                 },
             ),
             function_name,
-            command,
+            python_function,
             output_type,
             eval_type,
         }
@@ -81,7 +82,7 @@ impl ScalarUDFImpl for PythonUDF {
         };
 
         let processed_array =
-            execute_python_function(&array_ref, &self.command, &self.output_type)?;
+            execute_python_function(&array_ref, &self.python_function, &self.output_type)?;
 
         Ok(array_ref_to_columnar_value(
             processed_array,

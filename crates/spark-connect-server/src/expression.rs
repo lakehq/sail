@@ -18,8 +18,6 @@ use datafusion_expr::{
     GetIndexedField, Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
 };
 
-use framework_python::udf::PythonUDF;
-
 #[derive(Default)]
 pub(crate) struct EmptyContextProvider {
     options: ConfigOptions,
@@ -256,6 +254,8 @@ pub(crate) fn from_spark_expression(
             Err(SparkError::todo("unresolved named lambda variable"))
         }
         ExprType::CommonInlineUserDefinedFunction(udf) => {
+            use framework_python::py_function_pyspark::deserialize_py_function_pyspark;
+            use framework_python::udf::PythonUDF;
             use pyo3::prelude::Python;
             use sc::common_inline_user_defined_function::Function::PythonUdf;
             use sc::PythonUdf as PythonUDFStruct;
@@ -305,11 +305,16 @@ pub(crate) fn from_spark_expression(
                 )));
             }
 
+            let python_obj_wrapper = deserialize_py_function_pyspark(command).map_err(|e| {
+                SparkError::invalid(format!("Python UDF deserialization error: {:?}", e))
+            })?;
+            let python_function = python_obj_wrapper.function;
+
             let python_udf: PythonUDF = PythonUDF::new(
                 function_name.to_owned(),
                 deterministic,
                 input_types,
-                command.to_vec(),
+                python_function,
                 output_type,
                 eval_type,
             );
