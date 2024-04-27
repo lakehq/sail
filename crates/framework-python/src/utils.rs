@@ -5,10 +5,8 @@ use datafusion::arrow::array::{types, Array, ArrayRef, PrimitiveArray, Primitive
 use datafusion::arrow::datatypes::{ArrowPrimitiveType, DataType};
 use datafusion::common::{DataFusionError, ScalarValue};
 use datafusion_expr::ColumnarValue;
-use pyo3::prelude::{
-    Bound, FromPyObject, Py, PyAny, PyAnyMethods, PyModule, PyResult, Python, ToPyObject,
-};
-use pyo3::types::{PyBytes, PyTuple};
+use pyo3::prelude::{Bound, FromPyObject, Py, PyAny, PyAnyMethods, PyResult, Python, ToPyObject};
+use pyo3::types::PyTuple;
 
 // TODO: Move this to a separate module/crate.
 pub fn downcast_array_ref<T: ArrowPrimitiveType>(
@@ -21,29 +19,6 @@ pub fn downcast_array_ref<T: ArrowPrimitiveType>(
         .ok_or_else(|| DataFusionError::Internal("Failed to downcast input array".to_string()))?;
 
     Ok(native_values)
-}
-
-pub fn load_python_function(py: Python, command: &[u8]) -> Result<Py<PyAny>, DataFusionError> {
-    let binary_sequence = PyBytes::new_bound(py, command);
-
-    // TODO: Turn "pyspark.cloudpickle" to a var.
-    let python_function_tuple =
-        PyModule::import_bound(py, pyo3::intern!(py, "pyspark.cloudpickle"))
-            .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
-            .and_then(|loads| Ok(loads.call1((binary_sequence,))?))
-            .map_err(|e| DataFusionError::Execution(format!("Pickle Error {:?}", e)))?;
-
-    let python_function = python_function_tuple
-        .get_item(0)
-        .map_err(|e| DataFusionError::Execution(format!("Pickle Error {:?}", e)))?;
-
-    if !python_function.is_callable() {
-        return Err(DataFusionError::Execution(
-            "Expected a callable Python function".to_string(),
-        ));
-    }
-
-    Ok(python_function.into())
 }
 
 fn process_elements<'py, TInput, TOutput>(

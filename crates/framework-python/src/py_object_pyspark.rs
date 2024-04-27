@@ -1,4 +1,6 @@
-use pyo3::prelude::{PyAnyMethods, PyModule, PyObject, Python, ToPyObject};
+use datafusion_common::DataFusionError;
+use pyo3::prelude::{Py, PyAny, PyAnyMethods, PyModule, PyObject, Python, ToPyObject};
+use pyo3::types::PyBytes;
 use serde::de::{self, value::BorrowedBytesDeserializer, Deserialize, Deserializer, Visitor};
 use serde_bytes::Bytes;
 
@@ -48,4 +50,26 @@ pub fn deserialize_py_object_pyspark(
     let deserializer: BorrowedBytesDeserializer<de::value::Error> =
         BorrowedBytesDeserializer::new(bytes);
     PythonObjectWrapper::deserialize(deserializer)
+}
+
+pub fn load_python_function(py: Python, command: &[u8]) -> Result<Py<PyAny>, DataFusionError> {
+    let binary_sequence = PyBytes::new_bound(py, command);
+
+    let python_function_tuple =
+        PyModule::import_bound(py, pyo3::intern!(py, "pyspark.cloudpickle"))
+            .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
+            .and_then(|loads| Ok(loads.call1((binary_sequence,))?))
+            .map_err(|e| DataFusionError::Execution(format!("Pickle Error {:?}", e)))?;
+
+    let python_function = python_function_tuple
+        .get_item(0)
+        .map_err(|e| DataFusionError::Execution(format!("Pickle Error {:?}", e)))?;
+
+    if !python_function.is_callable() {
+        return Err(DataFusionError::Execution(
+            "Expected a callable Python function".to_string(),
+        ));
+    }
+
+    Ok(python_function.into())
 }
