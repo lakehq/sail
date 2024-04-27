@@ -6,7 +6,8 @@ use serde_bytes::Bytes;
 
 #[derive(Debug, Clone)]
 pub struct PythonObjectWrapper {
-    pub obj: PyObject,
+    pub function: PyObject,
+    pub return_type: PyObject,
 }
 
 struct PyObjectVisitor;
@@ -26,10 +27,15 @@ impl<'de> Visitor<'de> for PyObjectVisitor {
             PyModule::import_bound(py, pyo3::intern!(py, "pyspark.cloudpickle"))
                 .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
                 .and_then(|loads| loads.call1((v,)))
-                .map(|py_obj| PythonObjectWrapper {
-                    obj: py_obj.to_object(py),
+                .and_then(|py_tuple| {
+                    let obj = py_tuple.get_item(0).map(|item| item.to_object(py));
+                    let return_type = py_tuple.get_item(1).map(|item| item.to_object(py));
+                    Ok(PythonObjectWrapper {
+                        function: obj?,
+                        return_type: return_type?,
+                    })
                 })
-                .map_err(|e| de::Error::custom(format!("Pickle Error: {:?}", e)))
+                .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))
         })
     }
 }

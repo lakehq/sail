@@ -305,20 +305,16 @@ pub(crate) fn from_spark_expression(
                 )));
             }
 
-            let python_function_deserialized =
-                deserialize_py_object_pyspark(command).map_err(|e| {
-                    SparkError::invalid(format!("Python UDF deserialization error: {:?}", e))
-                })?;
-            println!(
-                "Python function deserialized: {:?}",
-                python_function_deserialized
-            );
+            let python_obj_wrapper = deserialize_py_object_pyspark(command).map_err(|e| {
+                SparkError::invalid(format!("Python UDF deserialization error: {:?}", e))
+            })?;
+            let python_function = python_obj_wrapper.function;
 
             let python_udf: PythonUDF = PythonUDF::new(
                 function_name.to_owned(),
                 deterministic,
                 input_types,
-                command.to_vec(),
+                python_function,
                 output_type,
                 eval_type,
             );

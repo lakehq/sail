@@ -5,7 +5,7 @@ use datafusion::arrow::array::{types, Array, ArrayRef, PrimitiveArray, Primitive
 use datafusion::arrow::datatypes::{ArrowPrimitiveType, DataType};
 use datafusion::common::{DataFusionError, ScalarValue};
 use datafusion_expr::ColumnarValue;
-use pyo3::prelude::{Bound, FromPyObject, Py, PyAny, PyAnyMethods, PyResult, Python, ToPyObject};
+use pyo3::prelude::{Bound, FromPyObject, PyObject, PyResult, Python, ToPyObject};
 use pyo3::types::PyTuple;
 
 // TODO: Move this to a separate module/crate.
@@ -24,7 +24,7 @@ pub fn downcast_array_ref<T: ArrowPrimitiveType>(
 fn process_elements<'py, TInput, TOutput>(
     input_array: &PrimitiveArray<TInput>,
     py: Python<'py>,
-    python_function: &Py<PyAny>,
+    python_function: &PyObject,
 ) -> Result<ArrayRef, DataFusionError>
 where
     TInput: ArrowPrimitiveType,
@@ -52,7 +52,7 @@ where
 pub fn process_array_ref_with_python_function<'py, TOutput>(
     array_ref: &ArrayRef,
     py: Python<'py>,
-    python_function: &Py<PyAny>,
+    python_function: &PyObject,
 ) -> Result<ArrayRef, DataFusionError>
 where
     TOutput: ArrowPrimitiveType,
@@ -192,13 +192,10 @@ where
 
 pub fn execute_python_function(
     array_ref: &ArrayRef,
-    function_bytes: &[u8],
+    python_function: &PyObject,
     output_type: &DataType,
 ) -> Result<ArrayRef, DataFusionError> {
     Python::with_gil(|py| {
-        // TODO: Avoid loading the function on every batch.
-        let python_function = load_python_function(py, &function_bytes)?;
-
         let processed_array = match &output_type {
             DataType::Null => {
                 Err(DataFusionError::NotImplemented(
