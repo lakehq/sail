@@ -30,6 +30,7 @@ uuid = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-functions-array = { workspace = true }
 async-recursion = { workspace = true }
 async-stream = { workspace = true }
 lazy_static = { workspace = true }
