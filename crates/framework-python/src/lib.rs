@@ -1,3 +1,3 @@
-pub mod py_object_pyspark;
+pub mod py_function_pyspark;
 pub mod udf;
 mod utils;

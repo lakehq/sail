@@ -254,7 +254,7 @@ pub(crate) fn from_spark_expression(
             Err(SparkError::todo("unresolved named lambda variable"))
         }
         ExprType::CommonInlineUserDefinedFunction(udf) => {
-            use framework_python::py_object_pyspark::deserialize_py_object_pyspark;
+            use framework_python::py_function_pyspark::deserialize_py_function_pyspark;
             use framework_python::udf::PythonUDF;
             use pyo3::prelude::Python;
             use sc::common_inline_user_defined_function::Function::PythonUdf;
@@ -305,7 +305,7 @@ pub(crate) fn from_spark_expression(
                 )));
             }
 
-            let python_obj_wrapper = deserialize_py_object_pyspark(command).map_err(|e| {
+            let python_obj_wrapper = deserialize_py_function_pyspark(command).map_err(|e| {
                 SparkError::invalid(format!("Python UDF deserialization error: {:?}", e))
             })?;
             let python_function = python_obj_wrapper.function;
