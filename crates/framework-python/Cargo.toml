@@ -11,3 +11,4 @@ datafusion-functions-array = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 pyo3 = { workspace = true }
+arrow = { workspace = true }

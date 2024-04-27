@@ -39,6 +39,7 @@ serde_json = { workspace = true }
 monostate = { workspace = true }
 regex = { workspace = true }
 pyo3 = { workspace = true }
+arrow = { workspace = true }
 
 [build-dependencies]
 tonic-build = { workspace = true }
