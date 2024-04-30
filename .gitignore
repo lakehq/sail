@@ -40,3 +40,6 @@ Chart.lock
 *.tar
 *.gz
 *.tgz
+
+# Spark
+spark/
