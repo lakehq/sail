@@ -45,3 +45,9 @@ regex = "1.10"
 pyo3 = { version = "0.21.2", features = ["auto-initialize"] }
 # Should be the equivalent of enabling the pyarrow feature in datafusion since we already have pyo3 in the workspace
 arrow = { version = "51.0.0", features = ["ffi"] }
+
+# Dunno if either work when specified the workspace, just saw the flags in arrow docs https://crates.io/crates/arrow
+[workspace.build]
+rustflags = ["-C", "target-cpu=native", "-C", "target-feature=-prefer-256-bit"]
+[build]
+rustflags = ["-C", "target-cpu=native", "-C", "target-feature=-prefer-256-bit"]
