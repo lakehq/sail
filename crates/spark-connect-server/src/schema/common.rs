@@ -235,7 +235,7 @@ pub(crate) fn to_spark_data_type(data_type: &adt::DataType) -> SparkResult<sc::D
                 type_variation_reference: 0,
             })),
         }),
-        adt::DataType::Decimal256(precision, scale) => Err(SparkError::unsupported("decimal256")),
+        adt::DataType::Decimal256(_, _) => Err(SparkError::unsupported("decimal256")),
         adt::DataType::Map(field, _sorted) => {
             let (key_type, value_type, value_contains_null) = match field.data_type() {
                 adt::DataType::Struct(s) => {

@@ -13,6 +13,7 @@ pub struct PythonUDF {
     // TODO: See what we exactly need from below fields.
     function_name: String,
     output_type: DataType,
+    #[allow(dead_code)]
     eval_type: i32,
     python_function: PyObject,
 }

@@ -4,7 +4,6 @@ use std::task::{Context, Poll};
 
 use datafusion::common::{FileType, TableReference};
 use datafusion::dataframe::DataFrame;
-use datafusion::datasource::file_format::arrow::ArrowFormat;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_common::config::{FormatOptions, TableOptions};
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;

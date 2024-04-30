@@ -168,11 +168,11 @@ where
         DataType::Dictionary(_, _) => Err(DataFusionError::NotImplemented(
             "DataType::Dictionary".to_string(),
         )),
-        DataType::Decimal128(precision, scale) => {
+        DataType::Decimal128(_, _) => {
             let array = downcast_array_ref::<types::Decimal128Type>(&array_ref)?;
             process_elements::<types::Decimal128Type, TOutput>(&array, &python_function)
         }
-        DataType::Decimal256(precision, scale) => Err(DataFusionError::NotImplemented(
+        DataType::Decimal256(_, _) => Err(DataFusionError::NotImplemented(
             "DataType::Decimal256".to_string(),
         )),
         DataType::Map(_, _) => Err(DataFusionError::NotImplemented("DataType::Map".to_string())),
@@ -342,10 +342,10 @@ pub fn execute_python_function(
                 "DataType::Dictionary".to_string(),
             ))
         }?,
-        DataType::Decimal128(precision, scale) => process_array_ref_with_python_function::<
+        DataType::Decimal128(_, _) => process_array_ref_with_python_function::<
             types::Decimal128Type,
         >(&array_ref, &python_function)?,
-        DataType::Decimal256(precision, scale) => {
+        DataType::Decimal256(_, _) => {
             Err(DataFusionError::NotImplemented(
                 "DataType::Decimal256".to_string(),
             ))
@@ -514,7 +514,7 @@ pub fn array_ref_to_columnar_value(
                 *scale,
             ))
         }
-        DataType::Decimal256(precision, scale) => Err(DataFusionError::NotImplemented(
+        DataType::Decimal256(_, _) => Err(DataFusionError::NotImplemented(
             "DataType::Decimal256".to_string(),
         )),
         DataType::Map(_, _) => Err(DataFusionError::NotImplemented("DataType::Map".to_string())),
