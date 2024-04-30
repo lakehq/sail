@@ -1,0 +1,3 @@
+# Recommendation from arrow docs https://crates.io/crates/arrow
+[build]
+rustflags = "-C target-cpu=native"
