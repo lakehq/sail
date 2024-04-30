@@ -1,3 +1,4 @@
+use framework_python::init_python;
 use tonic::codegen::http;
 use tower::ServiceBuilder;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
@@ -10,6 +11,7 @@ use spark_connect_server::spark::connect::spark_connect_service_server::SparkCon
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_telemetry()?;
+    init_python()?;
 
     // A secure connection can be handled by a gateway in production.
     let address = "0.0.0.0:50051".parse()?;
