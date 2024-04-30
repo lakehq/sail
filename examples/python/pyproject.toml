@@ -1,15 +1,15 @@
 [tool.poetry]
-name = "pyspark-sql"
+name = "framework-examples"
 version = "0.0.1"
-description = "PySpark code sample for Spark Connect"
+description = "LakeSail framework examples"
 authors = ["LakeSail <hello@lakesail.com>"]
 readme = "README.md"
 license = "Apache-2.0"
 packages = [{ include = "app", from = "src" }]
 
 [tool.poetry.dependencies]
-python = "~3.10"
-pyspark = { version = "^3.5.0", extras = ["connect", "sql"] }
+python = "~3.11"
+pyspark = { version = "3.5.1", extras = ["connect", "sql"] }
 
 [tool.poetry.group.dev.dependencies]
 isort = "^5.12.0"
