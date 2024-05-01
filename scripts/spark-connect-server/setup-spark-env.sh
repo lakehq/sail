@@ -2,7 +2,7 @@
 
 set -euo 'pipefail'
 
-cd "${SPARK_PROJECT_PATH}" || exit
+cd "${SPARK_PROJECT_PATH}"
 
 git checkout v3.5.1 && git add . && git stash
 git apply "${FRAMEWORK_PROJECT_PATH}"/scripts/spark-connect-server/spark-3.5.1.patch
