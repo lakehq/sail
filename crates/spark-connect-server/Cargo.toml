@@ -3,8 +3,6 @@ name = "spark-connect-server"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 framework-telemetry = { path = "../framework-telemetry" }
 framework-python = { path = "../framework-python" }
@@ -30,6 +28,7 @@ uuid = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-functions-array = { workspace = true }
 async-recursion = { workspace = true }
 async-stream = { workspace = true }
 lazy_static = { workspace = true }
@@ -38,6 +37,7 @@ serde_json = { workspace = true }
 monostate = { workspace = true }
 regex = { workspace = true }
 pyo3 = { workspace = true }
+arrow = { workspace = true }
 
 [build-dependencies]
 tonic-build = { workspace = true }

@@ -32,22 +32,10 @@ git clone git@github.com:apache/spark.git
 In the remainder of this document, `${SPARK_PROJECT_PATH}` refers to the absolute path of the Spark project,
 while `${FRAMEWORK_PROJECT_PATH}` refers to the absolute path of the LakeSail framework project.
 
-Run the following commands to patch the Spark project and set up a virtual environment.
+Run the following command to patch the Spark project and set up a virtual environment.
 
 ```bash
-cd "${SPARK_PROJECT_PATH}"
-
-git checkout v3.5.1
-git apply "${FRAMEWORK_PROJECT_PATH}"/scripts/spark-3.5.1.patch
-
-# Create a directory for test logs. This directory is in `.gitignore`.
-mkdir -p logs
-
-python -m venv venv
-echo '*' > venv/.gitignore
-source venv/bin/activate
-pip install --upgrade pip
-pip install --upgrade -r python/requirements.txt
+"${FRAMEWORK_PROJECT_PATH}"/scripts/spark-connect-server/setup-spark-env.sh
 ```
 
 ### Python Examples Setup
@@ -55,9 +43,7 @@ pip install --upgrade -r python/requirements.txt
 Run the following commands to set up a virtual environment for the Python examples.
 
 ```bash
-cd "${FRAMEWORK_PROJECT_PATH}"/examples/python
-
-poetry install
+cd "${FRAMEWORK_PROJECT_PATH}"/examples/python && poetry install
 ```
 
 ### Running the Spark Connect Server
@@ -65,17 +51,7 @@ poetry install
 Use the following commands to build and run the Spark Connect server powered by the framework.
 
 ```bash
-cd "${FRAMEWORK_PROJECT_PATH}"
-
-source examples/python/.venv/bin/activate
-
-export RUST_LOG=spark_connect_server=debug
-export RUST_BACKTRACE=full
-# We have to set `PYTHONPATH` even if we are using the virtual environment.
-# This is because the Python executable is the Rust program itself, and there is
-# no `pyvenv.cfg` at its required location (one directory above the executable).
-export PYTHONPATH="examples/python/.venv/lib/python3.11/site-packages"
-cargo run -p spark-connect-server
+"${FRAMEWORK_PROJECT_PATH}"/scripts/spark-connect-server/run-framework-server.sh
 ```
 
 You can run the Python examples in another terminal.
@@ -86,8 +62,7 @@ Please refer to `examples/python/README.md` for more information.
 After running the Spark Connect server, start another terminal and use the following commands to run the Spark tests.
 
 ```bash
-cd "${SPARK_PROJECT_PATH}"
-source venv/bin/activate
+cd "${SPARK_PROJECT_PATH}" && source venv/bin/activate
 
 # Run the tests and write the output to a log file.
 # It takes a few minutes to run the tests.
