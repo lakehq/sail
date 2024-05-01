@@ -70,7 +70,6 @@ env SPARK_TESTING_REMOTE_PORT=50051 \
   SPARK_LOCAL_IP=127.0.0.1 \
   python/run-pytest.sh \
   python/pyspark/sql/tests/connect/ \
-  --full-trace \
   > logs/test.log
 
 # The following are a few useful commands for development.
