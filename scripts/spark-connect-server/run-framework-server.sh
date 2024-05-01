@@ -2,7 +2,7 @@
 
 set -euo 'pipefail'
 
-cd "${FRAMEWORK_PROJECT_PATH}" || exit
+cd "${FRAMEWORK_PROJECT_PATH}"
 
 source "${FRAMEWORK_PROJECT_PATH}"/examples/python/.venv/bin/activate
 
