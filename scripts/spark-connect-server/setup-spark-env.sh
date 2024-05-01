@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -euo 'pipefail'
+
 cd "${SPARK_PROJECT_PATH}" || exit
 
 git checkout v3.5.1

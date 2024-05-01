@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -euo 'pipefail'
+
 cd "${FRAMEWORK_PROJECT_PATH}" || exit
 
 source examples/python/.venv/bin/activate
