@@ -72,6 +72,17 @@ pub(crate) async fn from_spark_relation(
             let is_streaming = read.is_streaming;
             match read.read_type.as_ref().required("read type")? {
                 ReadType::NamedTable(named_table) => {
+                    println!("state.session_id: {:?}", &state.session_id());
+                    println!("state.scalar_functions: {:?}", &state.scalar_functions());
+                    println!(
+                        "state.aggregate_functions: {:?}",
+                        &state.aggregate_functions()
+                    );
+                    println!("state.window_functions: {:?}", &state.window_functions());
+                    println!("state.config: {:?}", &state.config());
+                    println!("state.execution_props: {:?}", &state.execution_props());
+                    println!("state.runtime_env: {:?}", &state.runtime_env());
+
                     // return Err(SparkError::todo("NamedTable"));
                     let table_name: &str = &named_table.unparsed_identifier;
                     let dialect: GenericDialect = GenericDialect {};
