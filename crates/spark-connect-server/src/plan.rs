@@ -6,7 +6,7 @@ use async_recursion::async_recursion;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
-use datafusion::common::ParamValues;
+use datafusion::common::{DFSchemaRef, ParamValues};
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -18,6 +18,9 @@ use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
 use datafusion::sql::parser::Statement;
+use datafusion::sql::sqlparser::ast::Ident;
+use datafusion::sql::sqlparser::dialect::GenericDialect;
+use datafusion::sql::sqlparser::parser::Parser;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::expression::{from_spark_expression, from_spark_literal_to_scalar};
@@ -27,6 +30,7 @@ use crate::extension::analyzer::wildcard::rewrite_wildcard;
 use crate::schema::parse_spark_schema_string;
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
+use crate::spark::connect::Relation;
 use crate::sql::new_sql_parser;
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
@@ -54,22 +58,32 @@ pub(crate) async fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatc
 #[async_recursion]
 pub(crate) async fn from_spark_relation(
     ctx: &SessionContext,
-    relation: &sc::Relation,
+    relation: &Relation,
 ) -> SparkResult<LogicalPlan> {
     use crate::spark::connect::relation::RelType;
 
-    let sc::Relation { common, rel_type } = relation;
-    let _ = common;
+    let Relation { common, rel_type } = relation;
     let state = ctx.state();
     let rel_type = rel_type.as_ref().required("relation type")?;
     match rel_type {
         RelType::Read(read) => {
             use sc::read::ReadType;
 
-            let _ = read.is_streaming;
+            let is_streaming = read.is_streaming;
             match read.read_type.as_ref().required("read type")? {
-                ReadType::NamedTable(_) => {
-                    return Err(SparkError::todo("named table read type"));
+                ReadType::NamedTable(named_table) => {
+                    let table_name: &str = &named_table.unparsed_identifier;
+                    let dialect: GenericDialect = GenericDialect {};
+                    let mut parser: Parser = Parser::new(&dialect).try_with_sql(table_name)?;
+                    let multipart_identifier: Vec<Ident> = parser.parse_multipart_identifier()?;
+
+                    Ok(LogicalPlan::Extension(Extension {
+                        node: Arc::new(crate::extension::logical::UnresolvedRelationNode::try_new(
+                            multipart_identifier,
+                            named_table.options.clone(),
+                            is_streaming,
+                        )?),
+                    }))
                 }
                 ReadType::DataSource(source) => {
                     let urls = source.paths.clone().to_urls()?;
@@ -410,8 +424,19 @@ pub(crate) async fn from_spark_relation(
                 Arc::new(input),
             )?))
         }
-        RelType::Tail(_) => {
-            return Err(SparkError::todo("tail"));
+        RelType::Tail(tail) => {
+            let input: &Box<Relation> = tail.input.as_ref().required("limit input")?;
+            let input: LogicalPlan = from_spark_relation(ctx, input).await?;
+            let schema: &DFSchemaRef = input.schema();
+            println!("schema: {:?}", schema);
+            println!("Schema fields: {:?}", schema.fields());
+            println!("Schema fields: {:?}", schema.metadata());
+            let limit: i32 = tail.limit;
+            Ok(LogicalPlan::Limit(plan::Limit {
+                skip: 0, // TODO: THIS SHOULDNT BE 0!! JUST TESTING
+                fetch: Some(limit as usize),
+                input: Arc::new(input),
+            }))
         }
         RelType::WithColumns(columns) => {
             let input = columns.input.as_ref().required("input relation")?;
