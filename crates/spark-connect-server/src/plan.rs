@@ -72,6 +72,7 @@ pub(crate) async fn from_spark_relation(
             let is_streaming = read.is_streaming;
             match read.read_type.as_ref().required("read type")? {
                 ReadType::NamedTable(named_table) => {
+                    // return Err(SparkError::todo("NamedTable"));
                     let table_name: &str = &named_table.unparsed_identifier;
                     let dialect: GenericDialect = GenericDialect {};
                     let mut parser: Parser = Parser::new(&dialect).try_with_sql(table_name)?;
@@ -175,6 +176,10 @@ pub(crate) async fn from_spark_relation(
         RelType::Limit(limit) => {
             let input = limit.input.as_ref().required("limit input")?;
             let input = from_spark_relation(ctx, input).await?;
+            println!(
+                "RelType::Limit CHECK HERE INPUT: {:?}, LIMIT: {:?}",
+                input, limit.limit
+            );
             Ok(LogicalPlan::Limit(plan::Limit {
                 skip: 0,
                 fetch: Some(limit.limit as usize),
@@ -266,10 +271,11 @@ pub(crate) async fn from_spark_relation(
         }
         RelType::Offset(offset) => {
             let input = offset.input.as_ref().required("offset input")?;
+            let input = from_spark_relation(ctx, input).await?;
             Ok(LogicalPlan::Limit(plan::Limit {
                 skip: offset.offset as usize,
                 fetch: None,
-                input: Arc::new(from_spark_relation(ctx, input).await?),
+                input: Arc::new(input),
             }))
         }
         RelType::Deduplicate(dedup) => {
