@@ -48,6 +48,18 @@ impl UnresolvedRelationNode {
             schema,
         })
     }
+
+    pub fn multipart_identifier(&self) -> &Vec<Ident> {
+        &self.multipart_identifier
+    }
+
+    pub fn options(&self) -> &HashMap<String, String> {
+        &self.options
+    }
+
+    pub fn is_streaming(&self) -> bool {
+        self.is_streaming
+    }
 }
 
 impl UserDefinedLogicalNodeCore for UnresolvedRelationNode {

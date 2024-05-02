@@ -427,11 +427,8 @@ pub(crate) async fn from_spark_relation(
         RelType::Tail(tail) => {
             let input: &Box<Relation> = tail.input.as_ref().required("limit input")?;
             let input: LogicalPlan = from_spark_relation(ctx, input).await?;
-            let schema: &DFSchemaRef = input.schema();
-            println!("schema: {:?}", schema);
-            println!("Schema fields: {:?}", schema.fields());
-            println!("Schema fields: {:?}", schema.metadata());
             let limit: i32 = tail.limit;
+            println!("CHECK HERE INPUT: {:?}, LIMIT: {:?}", input, limit);
             Ok(LogicalPlan::Limit(plan::Limit {
                 skip: 0, // TODO: THIS SHOULDNT BE 0!! JUST TESTING
                 fetch: Some(limit as usize),
