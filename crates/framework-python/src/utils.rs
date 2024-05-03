@@ -1,3 +1,4 @@
+use arrow::array::{as_boolean_array, as_null_array, BooleanArray, NullArray};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{types, Array, ArrayRef, PrimitiveArray, PrimitiveBuilder};
@@ -63,12 +64,18 @@ where
     TOutput::Native: for<'b> FromPyObject<'b>,
 {
     match &array_ref.data_type() {
-        DataType::Null => Err(DataFusionError::NotImplemented(
-            "DataType::Null".to_string(),
-        )),
-        DataType::Boolean => Err(DataFusionError::NotImplemented(
-            "DataType::Boolean".to_string(),
-        )),
+        DataType::Null => {
+            Err(DataFusionError::NotImplemented(
+                "DataType::Null".to_string(),
+            ))
+            // let array = as_null_array(&array_ref);
+        }
+        DataType::Boolean => {
+            Err(DataFusionError::NotImplemented(
+                "DataType::Boolean".to_string(),
+            ))
+            // let array = as_boolean_array(&array_ref);
+        }
         DataType::Int8 => {
             let array = downcast_array_ref::<types::Int8Type>(&array_ref)?;
             process_elements::<types::Int8Type, TOutput>(&array, &python_function)
@@ -401,12 +408,11 @@ pub fn array_ref_to_columnar_value(
     }
 
     let scalar_value = match &data_type {
-        DataType::Null => Err(DataFusionError::NotImplemented(
-            "DataType::Null".to_string(),
-        )),
-        DataType::Boolean => Err(DataFusionError::NotImplemented(
-            "DataType::Boolean".to_string(),
-        )),
+        DataType::Null => Ok(ScalarValue::Null),
+        DataType::Boolean => {
+            let array = as_boolean_array(&array_ref);
+            Ok(ScalarValue::Boolean(Some(array.value(0))))
+        }
         DataType::Int8 => {
             let array = downcast_array_ref::<types::Int8Type>(&array_ref)?;
             Ok(ScalarValue::Int8(Some(array.value(0))))
