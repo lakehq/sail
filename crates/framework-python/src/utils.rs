@@ -2,7 +2,7 @@ use arrow::array::{as_boolean_array, as_null_array, BooleanArray, NullArray};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{types, Array, ArrayRef, PrimitiveArray, PrimitiveBuilder};
-use datafusion::arrow::datatypes::{ArrowPrimitiveType, DataType};
+use datafusion::arrow::datatypes::{ArrowPrimitiveType, DataType, TimeUnit};
 use datafusion::common::{DataFusionError, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use pyo3::prelude::{Bound, FromPyObject, PyObject, PyResult, Python, ToPyObject};
@@ -119,9 +119,33 @@ where
             let array = downcast_array_ref::<types::Float64Type>(&array_ref)?;
             process_elements::<types::Float64Type, TOutput>(&array, &python_function)
         }
-        DataType::Timestamp(_, _) => Err(DataFusionError::NotImplemented(
-            "DataType::Timestamp".to_string(),
-        )),
+        DataType::Timestamp(unit, _) => match unit {
+            TimeUnit::Second => {
+                let array = downcast_array_ref::<types::TimestampSecondType>(&array_ref)?;
+                process_elements::<types::TimestampSecondType, TOutput>(&array, &python_function)
+            }
+            TimeUnit::Millisecond => {
+                let array = downcast_array_ref::<types::TimestampMillisecondType>(&array_ref)?;
+                process_elements::<types::TimestampMillisecondType, TOutput>(
+                    &array,
+                    &python_function,
+                )
+            }
+            TimeUnit::Microsecond => {
+                let array = downcast_array_ref::<types::TimestampMicrosecondType>(&array_ref)?;
+                process_elements::<types::TimestampMicrosecondType, TOutput>(
+                    &array,
+                    &python_function,
+                )
+            }
+            TimeUnit::Nanosecond => {
+                let array = downcast_array_ref::<types::TimestampNanosecondType>(&array_ref)?;
+                process_elements::<types::TimestampNanosecondType, TOutput>(
+                    &array,
+                    &python_function,
+                )
+            }
+        },
         DataType::Date32 => {
             let array = downcast_array_ref::<types::Date32Type>(&array_ref)?;
             process_elements::<types::Date32Type, TOutput>(&array, &python_function)
@@ -261,10 +285,21 @@ pub fn execute_python_function(
             &array_ref,
             &python_function,
         )?,
-        DataType::Timestamp(_, _) => {
-            Err(DataFusionError::NotImplemented(
-                "DataType::Timestamp".to_string(),
-            ))
+        DataType::Timestamp(unit, _) => {
+            match unit {
+                TimeUnit::Second => process_array_ref_with_python_function::<
+                    types::TimestampSecondType,
+                >(&array_ref, &python_function),
+                TimeUnit::Millisecond => process_array_ref_with_python_function::<
+                    types::TimestampMillisecondType,
+                >(&array_ref, &python_function),
+                TimeUnit::Microsecond => process_array_ref_with_python_function::<
+                    types::TimestampMicrosecondType,
+                >(&array_ref, &python_function),
+                TimeUnit::Nanosecond => process_array_ref_with_python_function::<
+                    types::TimestampNanosecondType,
+                >(&array_ref, &python_function),
+            }
         }?,
         DataType::Date32 => process_array_ref_with_python_function::<types::Date32Type>(
             &array_ref,
@@ -456,9 +491,36 @@ pub fn array_ref_to_columnar_value(
             let array = downcast_array_ref::<types::Float64Type>(&array_ref)?;
             Ok(ScalarValue::Float64(Some(array.value(0))))
         }
-        DataType::Timestamp(_, _) => Err(DataFusionError::NotImplemented(
-            "DataType::Timestamp".to_string(),
-        )),
+        DataType::Timestamp(unit, timezone) => match unit {
+            TimeUnit::Second => {
+                let array = downcast_array_ref::<types::TimestampSecondType>(&array_ref)?;
+                Ok(ScalarValue::TimestampSecond(
+                    Some(array.value(0)),
+                    timezone.clone(),
+                ))
+            }
+            TimeUnit::Millisecond => {
+                let array = downcast_array_ref::<types::TimestampMillisecondType>(&array_ref)?;
+                Ok(ScalarValue::TimestampMillisecond(
+                    Some(array.value(0)),
+                    timezone.clone(),
+                ))
+            }
+            TimeUnit::Microsecond => {
+                let array = downcast_array_ref::<types::TimestampMicrosecondType>(&array_ref)?;
+                Ok(ScalarValue::TimestampMicrosecond(
+                    Some(array.value(0)),
+                    timezone.clone(),
+                ))
+            }
+            TimeUnit::Nanosecond => {
+                let array = downcast_array_ref::<types::TimestampNanosecondType>(&array_ref)?;
+                Ok(ScalarValue::TimestampNanosecond(
+                    Some(array.value(0)),
+                    timezone.clone(),
+                ))
+            }
+        },
         DataType::Date32 => {
             let array = downcast_array_ref::<types::Date32Type>(&array_ref)?;
             Ok(ScalarValue::Date32(Some(array.value(0))))
