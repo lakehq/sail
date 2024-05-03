@@ -340,7 +340,18 @@ pub(crate) fn from_spark_literal_to_scalar(
         LiteralType::Long(x) => Ok(ScalarValue::Int64(Some(*x))),
         LiteralType::Float(x) => Ok(ScalarValue::Float32(Some(*x))),
         LiteralType::Double(x) => Ok(ScalarValue::Float64(Some(*x))),
-        LiteralType::Decimal(_) => Err(SparkError::todo("literal decimal")),
+        LiteralType::Decimal(x) => {
+            let (value, precision, scale) = match x.value.parse::<i128>() {
+                Ok(v) => (v, x.precision() as u8, x.scale() as i8),
+                Err(_) => {
+                    return Err(SparkError::invalid(format!(
+                        "Failed to parse decimal value {:?}",
+                        Some(x.value.clone())
+                    )));
+                }
+            };
+            Ok(ScalarValue::Decimal128(Some(value), precision, scale))
+        }
         LiteralType::String(x) => Ok(ScalarValue::Utf8(Some(x.clone()))),
         LiteralType::Date(x) => Ok(ScalarValue::Date32(Some(*x))),
         // TODO: timezone
