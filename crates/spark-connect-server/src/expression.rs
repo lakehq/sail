@@ -104,7 +104,7 @@ pub(crate) fn from_spark_expression(
                 ast::Expr::QualifiedWildcard(ast::ObjectName(name)) => {
                     let qualifier = name
                         .iter()
-                        .map(|x| x.value.as_str())
+                        .map(|x| x.to_string())
                         .collect::<Vec<_>>()
                         .join(".");
                     Ok(expr::Expr::Wildcard {
@@ -129,14 +129,8 @@ pub(crate) fn from_spark_expression(
                     ast::Expr::QualifiedWildcard(ast::ObjectName(names)) => {
                         let qualifier = names
                             .iter()
-                            .map(|x| match x {
-                                ast::Ident {
-                                    value,
-                                    quote_style: None,
-                                } => Ok(value.as_str()),
-                                _ => Err(SparkError::todo("quoted identifier")),
-                            })
-                            .collect::<Result<Vec<_>, _>>()?
+                            .map(|x| x.to_string())
+                            .collect::<Vec<_>>()
                             .join(".");
                         Ok(expr::Expr::Wildcard {
                             qualifier: Some(qualifier),
