@@ -1,3 +1,4 @@
+use arrow::datatypes::{Schema, SchemaRef};
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
@@ -6,13 +7,15 @@ use async_recursion::async_recursion;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
-use datafusion::common::{DFSchemaRef, ParamValues};
+use datafusion::common::{ParamValues, TableReference};
+use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion::datasource::provider_as_source;
+use datafusion::datasource::provider::DefaultTableFactory;
+use datafusion::datasource::{provider_as_source, DefaultTableSource};
 use datafusion::execution::context::{DataFilePaths, SessionContext};
 use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
@@ -21,6 +24,7 @@ use datafusion::sql::parser::Statement;
 use datafusion::sql::sqlparser::ast::Ident;
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
+use datafusion_expr::LogicalPlanBuilder;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::expression::{from_spark_expression, from_spark_literal_to_scalar};
@@ -55,6 +59,46 @@ pub(crate) async fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatc
     Ok(output)
 }
 
+#[derive(Default, Clone, Debug)]
+struct CaseInsensitiveStringMap(HashMap<String, String>);
+impl CaseInsensitiveStringMap {
+    fn new(map: &HashMap<String, String>) -> Self {
+        let mut case_insensitive_map = HashMap::new();
+        for (key, value) in map {
+            case_insensitive_map.insert(key.to_lowercase(), value.clone());
+        }
+        CaseInsensitiveStringMap(case_insensitive_map)
+    }
+
+    fn insert(&mut self, key: String, value: String) {
+        self.0.insert(key.to_lowercase(), value);
+    }
+
+    fn get(&self, key: &str) -> Option<&String> {
+        self.0.get(&key.to_lowercase())
+    }
+}
+
+#[derive(Clone, Debug)]
+struct UnresolvedRelation {
+    multipart_identifier: Vec<String>,
+    options: CaseInsensitiveStringMap,
+    is_streaming: bool,
+}
+impl UnresolvedRelation {
+    fn new(
+        multipart_identifier: Vec<String>,
+        options: CaseInsensitiveStringMap,
+        is_streaming: bool,
+    ) -> Self {
+        UnresolvedRelation {
+            multipart_identifier,
+            options,
+            is_streaming,
+        }
+    }
+}
+
 #[async_recursion]
 pub(crate) async fn from_spark_relation(
     ctx: &SessionContext,
@@ -70,32 +114,55 @@ pub(crate) async fn from_spark_relation(
             use sc::read::ReadType;
 
             let is_streaming = read.is_streaming;
-            match read.read_type.as_ref().required("read type")? {
+            match &read.read_type.as_ref().required("read type")? {
                 ReadType::NamedTable(named_table) => {
-                    println!("state.session_id: {:?}", &state.session_id());
-                    println!("state.scalar_functions: {:?}", &state.scalar_functions());
-                    println!(
-                        "state.aggregate_functions: {:?}",
-                        &state.aggregate_functions()
+                    let unparsed_identifier: &String = &named_table.unparsed_identifier;
+                    let options: &HashMap<String, String> = &named_table.options;
+
+                    let case_insensitive_options: CaseInsensitiveStringMap =
+                        CaseInsensitiveStringMap::new(options);
+
+                    let multipart_identifier: Vec<String> = Parser::new(&GenericDialect {})
+                        .try_with_sql(unparsed_identifier)?
+                        .parse_multipart_identifier()?
+                        .into_iter()
+                        .map(|ident| ident.value)
+                        .collect();
+
+                    let table_reference: TableReference = match multipart_identifier.len() {
+                        0 => {
+                            return Err(SparkError::invalid("No table name found in NamedTable"));
+                        }
+                        1 => TableReference::Bare {
+                            table: multipart_identifier[0].clone().into(),
+                        },
+                        2 => TableReference::Partial {
+                            schema: multipart_identifier[0].clone().into(),
+                            table: multipart_identifier[1].clone().into(),
+                        },
+                        _ => TableReference::Full {
+                            catalog: multipart_identifier[0].clone().into(),
+                            schema: multipart_identifier[1].clone().into(),
+                            table: multipart_identifier[2].clone().into(),
+                        },
+                    };
+
+                    let unresolved_relation: UnresolvedRelation = UnresolvedRelation::new(
+                        multipart_identifier.clone(),
+                        case_insensitive_options,
+                        is_streaming,
                     );
-                    println!("state.window_functions: {:?}", &state.window_functions());
-                    println!("state.config: {:?}", &state.config());
-                    println!("state.execution_props: {:?}", &state.execution_props());
-                    println!("state.runtime_env: {:?}", &state.runtime_env());
 
-                    // return Err(SparkError::todo("NamedTable"));
-                    let table_name: &str = &named_table.unparsed_identifier;
-                    let dialect: GenericDialect = GenericDialect {};
-                    let mut parser: Parser = Parser::new(&dialect).try_with_sql(table_name)?;
-                    let multipart_identifier: Vec<Ident> = parser.parse_multipart_identifier()?;
+                    let schema: SchemaRef = Arc::new(Schema::empty());
+                    Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                        multipart_identifier.last().unwrap().clone(),
+                        Arc::new(DefaultTableSource::new(Arc::new(EmptyTable::new(schema)))),
+                        None,
+                        vec![],
+                        None,
+                    )?))
 
-                    Ok(LogicalPlan::Extension(Extension {
-                        node: Arc::new(crate::extension::logical::UnresolvedRelationNode::try_new(
-                            multipart_identifier,
-                            named_table.options.clone(),
-                            is_streaming,
-                        )?),
-                    }))
+                    // return Err(SparkError::invalid("empty data source paths"));
                 }
                 ReadType::DataSource(source) => {
                     let urls = source.paths.clone().to_urls()?;
@@ -232,8 +299,7 @@ pub(crate) async fn from_spark_relation(
             pos_args,
         }) => {
             let statement = new_sql_parser(query)?.parse_one_statement()?;
-            let plan = ctx
-                .state()
+            let plan = state
                 .statement_to_plan(Statement::Statement(Box::new(statement)))
                 .await?;
             if pos_args.len() == 0 && args.len() == 0 {
