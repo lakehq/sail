@@ -101,8 +101,6 @@ impl ExtensionPlanner for UnresolvedRelationPlanner {
             Partitioning::UnknownPartitioning(1),
             ExecutionMode::Bounded,
         );
-        println!("CHECK HERE logical_inputs: {:?}", logical_inputs);
-        println!("CHECK HERE physical_inputs: {:?}", physical_inputs);
         Ok(Some(Arc::new(UnresolvedRelationExec {
             multipart_identifier: node.multipart_identifier().clone(),
             options: node.options().clone(),

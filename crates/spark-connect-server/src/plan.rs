@@ -254,10 +254,6 @@ pub(crate) async fn from_spark_relation(
         RelType::Limit(limit) => {
             let input = limit.input.as_ref().required("limit input")?;
             let input = from_spark_relation(ctx, input).await?;
-            println!(
-                "RelType::Limit CHECK HERE INPUT: {:?}, LIMIT: {:?}",
-                input, limit.limit
-            );
             Ok(LogicalPlan::Limit(plan::Limit {
                 skip: 0,
                 fetch: Some(limit.limit as usize),
@@ -511,7 +507,6 @@ pub(crate) async fn from_spark_relation(
             let input: &Box<Relation> = tail.input.as_ref().required("limit input")?;
             let input: LogicalPlan = from_spark_relation(ctx, input).await?;
             let limit: i32 = tail.limit;
-            println!("CHECK HERE INPUT: {:?}, LIMIT: {:?}", input, limit);
             Ok(LogicalPlan::Limit(plan::Limit {
                 skip: 0, // TODO: THIS SHOULDNT BE 0!! JUST TESTING
                 fetch: Some(limit as usize),
