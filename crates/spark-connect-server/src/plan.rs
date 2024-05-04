@@ -21,10 +21,10 @@ use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
 use datafusion::sql::parser::Statement;
-use datafusion::sql::sqlparser::ast::Ident;
-use datafusion::sql::sqlparser::dialect::GenericDialect;
-use datafusion::sql::sqlparser::parser::Parser;
 use datafusion_expr::LogicalPlanBuilder;
+use sqlparser::ast::Ident;
+use sqlparser::dialect::GenericDialect;
+use sqlparser::parser::Parser;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::expression::{from_spark_expression, from_spark_literal_to_scalar};

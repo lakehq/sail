@@ -1,8 +1,8 @@
 use std::sync::PoisonError;
 
 use datafusion::common::DataFusionError;
-use datafusion::sql::sqlparser;
 use prost::DecodeError;
+use sqlparser;
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
 use tokio::task::JoinError;

@@ -12,7 +12,6 @@ use datafusion::catalog::TableReference;
 use datafusion::common::{Column, DFSchema, ScalarValue};
 use datafusion::config::ConfigOptions;
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion::sql::sqlparser::ast;
 use datafusion::{functions, functions_array};
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::DataFusionError;
@@ -20,6 +19,7 @@ use datafusion_expr::{
     expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, ExprSchemable, GetFieldAccess,
     GetIndexedField, Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
 };
+use sqlparser::ast;
 
 #[derive(Default)]
 pub(crate) struct EmptyContextProvider {

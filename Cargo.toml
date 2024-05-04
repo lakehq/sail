@@ -28,7 +28,7 @@ prost-types = "0.12"
 tower = { version = "0.4", features = ["full"] }
 tower-http = { version = "0.4", features = ["full"] }
 uuid = { version = "1.8.0", features = ["v4"] }
-datafusion = { version = "37.1.0" }
+datafusion = { version = "37.1.0", features = ["serde"] }
 datafusion-common = { version = "37.1.0", features = ["object_store"] }
 datafusion-expr = "37.1.0"
 datafusion-functions-array = "37.1.0"
@@ -45,3 +45,5 @@ regex = "1.10"
 pyo3 = { version = "0.21.2", features = ["auto-initialize"] }
 # Should be the equivalent of enabling the pyarrow feature in datafusion since we already have pyo3 in the workspace
 arrow = { version = "51.0.0", features = ["ffi"] }
+# 0.44.0 is the version that DataFusion 37.1.0 uses (DataFusion does not have serde enabled)
+sqlparser = { version = "0.44.0", features = ["serde", "visitor"] }

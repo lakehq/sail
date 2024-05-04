@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use datafusion::common::{DFSchema, DFSchemaRef};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
-use datafusion::sql::sqlparser::ast::Ident;
+use sqlparser::ast::Ident;
 
 use crate::error::SparkResult;
 

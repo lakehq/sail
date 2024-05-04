@@ -14,8 +14,8 @@ use datafusion::physical_plan::{
     DisplayAs, EmptyRecordBatchStream, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
 };
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion::sql::sqlparser::ast::Ident;
 use datafusion_common::DFSchemaRef;
+use sqlparser::ast::Ident;
 use tonic::async_trait;
 use tonic::codegen::tokio_stream;
 
