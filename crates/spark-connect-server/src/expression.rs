@@ -12,6 +12,7 @@ use datafusion::config::ConfigOptions;
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::sql::sqlparser::ast;
 use datafusion::{functions, functions_array};
+use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
     expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, ExprSchemable, GetFieldAccess,
@@ -362,9 +363,39 @@ pub(crate) fn from_spark_literal_to_scalar(
         ))),
         LiteralType::YearMonthInterval(x) => Ok(ScalarValue::IntervalYearMonth(Some(*x))),
         LiteralType::DayTimeInterval(x) => Ok(ScalarValue::IntervalDayTime(Some(*x))),
-        LiteralType::Array(_) => Err(SparkError::todo("literal array")),
+        LiteralType::Array(array) => {
+            let element_type: &sc::DataType =
+                array.element_type.as_ref().required("array element type")?;
+            let element_type: DataType = from_spark_data_type(element_type)?;
+            let scalars: Vec<ScalarValue> = array
+                .elements
+                .iter()
+                .map(|literal| from_spark_literal_to_scalar(literal))
+                .collect::<SparkResult<Vec<_>>>()?;
+            Ok(ScalarValue::List(ScalarValue::new_list(
+                &scalars,
+                &element_type,
+            )))
+        }
         LiteralType::Map(_) => Err(SparkError::todo("literal map")),
-        LiteralType::Struct(_) => Err(SparkError::todo("literal struct")),
+        LiteralType::Struct(r#struct) => {
+            let struct_type: &sc::DataType =
+                r#struct.struct_type.as_ref().required("struct type")?;
+            let struct_type: DataType = from_spark_data_type(struct_type)?;
+
+            let fields = match struct_type {
+                DataType::Struct(fields) => fields,
+                _ => return Err(SparkError::invalid("expected struct type")),
+            };
+
+            let mut builder: ScalarStructBuilder = ScalarStructBuilder::new();
+            for (literal, field) in r#struct.elements.iter().zip(fields.iter()) {
+                let scalar = from_spark_literal_to_scalar(literal)?;
+                builder = builder.with_scalar(field, scalar);
+            }
+
+            Ok(builder.build()?)
+        }
     }
 }
 
