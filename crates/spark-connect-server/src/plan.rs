@@ -116,53 +116,53 @@ pub(crate) async fn from_spark_relation(
             let is_streaming = read.is_streaming;
             match &read.read_type.as_ref().required("read type")? {
                 ReadType::NamedTable(named_table) => {
-                    let unparsed_identifier: &String = &named_table.unparsed_identifier;
-                    let options: &HashMap<String, String> = &named_table.options;
+                    // let unparsed_identifier: &String = &named_table.unparsed_identifier;
+                    // let options: &HashMap<String, String> = &named_table.options;
+                    //
+                    // let case_insensitive_options: CaseInsensitiveStringMap =
+                    //     CaseInsensitiveStringMap::new(options);
+                    //
+                    // let multipart_identifier: Vec<String> = Parser::new(&GenericDialect {})
+                    //     .try_with_sql(unparsed_identifier)?
+                    //     .parse_multipart_identifier()?
+                    //     .into_iter()
+                    //     .map(|ident| ident.value)
+                    //     .collect();
+                    //
+                    // let table_reference: TableReference = match multipart_identifier.len() {
+                    //     0 => {
+                    //         return Err(SparkError::invalid("No table name found in NamedTable"));
+                    //     }
+                    //     1 => TableReference::Bare {
+                    //         table: multipart_identifier[0].clone().into(),
+                    //     },
+                    //     2 => TableReference::Partial {
+                    //         schema: multipart_identifier[0].clone().into(),
+                    //         table: multipart_identifier[1].clone().into(),
+                    //     },
+                    //     _ => TableReference::Full {
+                    //         catalog: multipart_identifier[0].clone().into(),
+                    //         schema: multipart_identifier[1].clone().into(),
+                    //         table: multipart_identifier[2].clone().into(),
+                    //     },
+                    // };
+                    //
+                    // let unresolved_relation: UnresolvedRelation = UnresolvedRelation::new(
+                    //     multipart_identifier.clone(),
+                    //     case_insensitive_options,
+                    //     is_streaming,
+                    // );
+                    //
+                    // let schema: SchemaRef = Arc::new(Schema::empty());
+                    // Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                    //     multipart_identifier.last().unwrap().clone(),
+                    //     Arc::new(DefaultTableSource::new(Arc::new(EmptyTable::new(schema)))),
+                    //     None,
+                    //     vec![],
+                    //     None,
+                    // )?))
 
-                    let case_insensitive_options: CaseInsensitiveStringMap =
-                        CaseInsensitiveStringMap::new(options);
-
-                    let multipart_identifier: Vec<String> = Parser::new(&GenericDialect {})
-                        .try_with_sql(unparsed_identifier)?
-                        .parse_multipart_identifier()?
-                        .into_iter()
-                        .map(|ident| ident.value)
-                        .collect();
-
-                    let table_reference: TableReference = match multipart_identifier.len() {
-                        0 => {
-                            return Err(SparkError::invalid("No table name found in NamedTable"));
-                        }
-                        1 => TableReference::Bare {
-                            table: multipart_identifier[0].clone().into(),
-                        },
-                        2 => TableReference::Partial {
-                            schema: multipart_identifier[0].clone().into(),
-                            table: multipart_identifier[1].clone().into(),
-                        },
-                        _ => TableReference::Full {
-                            catalog: multipart_identifier[0].clone().into(),
-                            schema: multipart_identifier[1].clone().into(),
-                            table: multipart_identifier[2].clone().into(),
-                        },
-                    };
-
-                    let unresolved_relation: UnresolvedRelation = UnresolvedRelation::new(
-                        multipart_identifier.clone(),
-                        case_insensitive_options,
-                        is_streaming,
-                    );
-
-                    let schema: SchemaRef = Arc::new(Schema::empty());
-                    Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
-                        multipart_identifier.last().unwrap().clone(),
-                        Arc::new(DefaultTableSource::new(Arc::new(EmptyTable::new(schema)))),
-                        None,
-                        vec![],
-                        None,
-                    )?))
-
-                    // return Err(SparkError::invalid("empty data source paths"));
+                    return Err(SparkError::invalid("empty data source paths"));
                 }
                 ReadType::DataSource(source) => {
                     let urls = source.paths.clone().to_urls()?;
