@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::extension::function::alias::MultiAlias;
+use crate::extension::function::contains::Contains;
 use crate::schema::{from_spark_data_type, parse_spark_data_type_string};
 use crate::spark::connect as sc;
 use crate::sql::new_sql_parser;
@@ -493,7 +494,12 @@ pub(crate) fn get_scalar_function(
                 escape_char: None,
             }));
         }
-        // TODO: contains
+        "contains" => {
+            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(Contains::new()))),
+                args: args,
+            }));
+        }
         "startswith" => {
             if args.len() != 2 {
                 return Err(SparkError::invalid("binary operator requires 2 arguments"));
