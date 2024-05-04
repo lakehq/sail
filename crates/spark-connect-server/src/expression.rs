@@ -382,8 +382,7 @@ pub(crate) fn from_spark_literal_to_scalar(
             let struct_type: &sc::DataType =
                 r#struct.struct_type.as_ref().required("struct type")?;
             let struct_type: DataType = from_spark_data_type(struct_type)?;
-
-            let fields = match struct_type {
+            let fields = match &struct_type {
                 DataType::Struct(fields) => fields,
                 _ => return Err(SparkError::invalid("expected struct type")),
             };
@@ -393,7 +392,6 @@ pub(crate) fn from_spark_literal_to_scalar(
                 let scalar = from_spark_literal_to_scalar(literal)?;
                 builder = builder.with_scalar(field, scalar);
             }
-
             Ok(builder.build()?)
         }
     }
