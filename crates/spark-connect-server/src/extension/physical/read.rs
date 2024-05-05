@@ -1,23 +1,17 @@
 use std::any::Any;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNode};
 use datafusion::physical_expr::EquivalenceProperties;
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, EmptyRecordBatchStream, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
 };
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::DFSchemaRef;
-use sqlparser::ast::Ident;
 use tonic::async_trait;
-use tonic::codegen::tokio_stream;
 
 use crate::extension::logical::{UnresolvedRelation, UnresolvedRelationNode};
 
