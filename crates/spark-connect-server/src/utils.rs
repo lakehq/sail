@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 pub(crate) struct CaseInsensitiveStringMap(HashMap<String, String>);
 
 impl CaseInsensitiveStringMap {
-    fn new(map: &HashMap<String, String>) -> Self {
+    pub fn new(map: &HashMap<String, String>) -> Self {
         let mut case_insensitive_map = HashMap::new();
         for (key, value) in map {
             case_insensitive_map.insert(key.to_lowercase(), value.clone());
@@ -13,11 +13,11 @@ impl CaseInsensitiveStringMap {
         CaseInsensitiveStringMap(case_insensitive_map)
     }
 
-    fn insert(&mut self, key: String, value: String) {
+    pub fn insert(&mut self, key: String, value: String) {
         self.0.insert(key.to_lowercase(), value);
     }
 
-    fn get(&self, key: &str) -> Option<&String> {
+    pub fn get(&self, key: &str) -> Option<&String> {
         self.0.get(&key.to_lowercase())
     }
 }
