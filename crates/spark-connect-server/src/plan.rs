@@ -59,46 +59,6 @@ pub(crate) async fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatc
     Ok(output)
 }
 
-#[derive(Default, Clone, Debug)]
-struct CaseInsensitiveStringMap(HashMap<String, String>);
-impl CaseInsensitiveStringMap {
-    fn new(map: &HashMap<String, String>) -> Self {
-        let mut case_insensitive_map = HashMap::new();
-        for (key, value) in map {
-            case_insensitive_map.insert(key.to_lowercase(), value.clone());
-        }
-        CaseInsensitiveStringMap(case_insensitive_map)
-    }
-
-    fn insert(&mut self, key: String, value: String) {
-        self.0.insert(key.to_lowercase(), value);
-    }
-
-    fn get(&self, key: &str) -> Option<&String> {
-        self.0.get(&key.to_lowercase())
-    }
-}
-
-#[derive(Clone, Debug)]
-struct UnresolvedRelation {
-    multipart_identifier: Vec<String>,
-    options: CaseInsensitiveStringMap,
-    is_streaming: bool,
-}
-impl UnresolvedRelation {
-    fn new(
-        multipart_identifier: Vec<String>,
-        options: CaseInsensitiveStringMap,
-        is_streaming: bool,
-    ) -> Self {
-        UnresolvedRelation {
-            multipart_identifier,
-            options,
-            is_streaming,
-        }
-    }
-}
-
 #[async_recursion]
 pub(crate) async fn from_spark_relation(
     ctx: &SessionContext,
