@@ -1,10 +1,15 @@
-use arrow::array::{as_boolean_array, as_null_array, BooleanArray, NullArray};
+use arrow::array::{
+    as_boolean_array, as_null_array, as_struct_array, BooleanArray, NullArray, StructArray,
+};
+use arrow::buffer::NullBuffer;
+use arrow::datatypes::Fields;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{types, Array, ArrayRef, PrimitiveArray, PrimitiveBuilder};
 use datafusion::arrow::datatypes::{ArrowPrimitiveType, DataType, TimeUnit};
 use datafusion::common::{DataFusionError, ScalarValue};
 use datafusion_expr::ColumnarValue;
+use polars_arrow::array::StructArray as PolarsStructArray;
 use pyo3::prelude::{Bound, FromPyObject, PyObject, PyResult, Python, ToPyObject};
 use pyo3::types::PyTuple;
 
@@ -35,7 +40,7 @@ where
 
     Python::with_gil(|py| {
         for &value in input_array.values().iter() {
-            let py_tuple: Bound<PyTuple> = PyTuple::new_bound(py, &[value]);
+            let py_tuple: Bound<PyTuple> = PyTuple::new_bound(py, &[value.to_object(py)]);
             let result: PyResult<TOutput::Native> = python_function
                 .call1(py, py_tuple)
                 .and_then(|obj| obj.extract(py));
@@ -190,9 +195,37 @@ where
         DataType::LargeList(_) => Err(DataFusionError::NotImplemented(
             "DataType::LargeList".to_string(),
         )),
-        DataType::Struct(_) => Err(DataFusionError::NotImplemented(
-            "DataType::Struct".to_string(),
-        )),
+        DataType::Struct(_fields) => {
+            Err(DataFusionError::NotImplemented(
+                "DataType::Struct".to_string(),
+            ))
+            // let array = as_struct_array(&array_ref);
+            //
+            // let array: PolarsStructArray = PolarsStructArray::from(array_ref.into());
+            // // let sliced_array = array.slice(0, 1);
+            //
+            // let mut builder = PrimitiveBuilder::<TOutput>::with_capacity(1);
+            //
+            // Python::with_gil(|py| {
+            //     let py_tuple: Bound<PyTuple> = PyTuple::new_bound(py, &array);
+            //     // let py_tuple = pyo3::types::PyList::new_bound(py, &array);
+            //     let result: PyResult<TOutput::Native> = python_function
+            //         .call1(py, py_tuple)
+            //         .and_then(|obj| obj.extract(py));
+            //     match result {
+            //         Ok(native) => builder.append_value(native),
+            //         Err(py_err) => {
+            //             return Err(DataFusionError::Execution(format!(
+            //                 "Failed to extract Rust type from Python return value: {:?}",
+            //                 py_err
+            //             )))
+            //         }
+            //     }
+            //     Ok(())
+            // })?;
+            //
+            // Ok(Arc::new(builder.finish()) as ArrayRef)
+        }
         DataType::Union(_, _) => Err(DataFusionError::NotImplemented(
             "DataType::Union".to_string(),
         )),
@@ -565,9 +598,10 @@ pub fn array_ref_to_columnar_value(
         DataType::LargeList(_) => Err(DataFusionError::NotImplemented(
             "DataType::LargeList".to_string(),
         )),
-        DataType::Struct(_) => Err(DataFusionError::NotImplemented(
-            "DataType::Struct".to_string(),
-        )),
+        DataType::Struct(_fields) => {
+            let array: StructArray = as_struct_array(&array_ref).clone();
+            Ok(ScalarValue::Struct(Arc::new(array)))
+        }
         DataType::Union(_, _) => Err(DataFusionError::NotImplemented(
             "DataType::Union".to_string(),
         )),
