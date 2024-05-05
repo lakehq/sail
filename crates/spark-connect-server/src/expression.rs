@@ -658,6 +658,9 @@ pub(crate) fn get_scalar_function(
                 args,
             }));
         }
+        "timestamp" | "to_timestamp" => {
+            return Ok(functions::expr_fn::to_timestamp_micros(args.clone()));
+        }
         _ => {}
     }
 
