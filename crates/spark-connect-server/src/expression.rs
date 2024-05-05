@@ -531,13 +531,8 @@ pub(crate) fn get_scalar_function(
             }));
         }
         "startswith" => {
-            if args.len() != 2 {
-                return Err(SparkError::invalid("binary operator requires 2 arguments"));
-            }
-            return Ok(functions::expr_fn::starts_with(
-                args[0].clone(),
-                args[1].clone(),
-            ));
+            let (left, right) = get_two_arguments(args)?;
+            return Ok(functions::expr_fn::starts_with(*left, *right));
         }
         "endswith" => {
             return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
@@ -546,43 +541,27 @@ pub(crate) fn get_scalar_function(
             }));
         }
         "array" => {
-            return Ok(functions_array::expr_fn::make_array(args.clone()));
+            return Ok(functions_array::expr_fn::make_array(args));
         }
         "array_has" | "array_contains" => {
-            if args.len() != 2 {
-                return Err(SparkError::invalid("binary operator requires 2 arguments"));
-            }
-            return Ok(functions_array::expr_fn::array_has(
-                args[0].clone(),
-                args[1].clone(),
-            ));
+            let (left, right) = get_two_arguments(args)?;
+            return Ok(functions_array::expr_fn::array_has(*left, *right));
         }
         "array_has_all" | "array_contains_all" => {
-            if args.len() != 2 {
-                return Err(SparkError::invalid("binary operator requires 2 arguments"));
-            }
-            return Ok(functions_array::expr_fn::array_has_all(
-                args[0].clone(),
-                args[1].clone(),
-            ));
+            let (left, right) = get_two_arguments(args)?;
+            return Ok(functions_array::expr_fn::array_has_all(*left, *right));
         }
         "array_has_any" | "array_contains_any" => {
-            if args.len() != 2 {
-                return Err(SparkError::invalid("binary operator requires 2 arguments"));
-            }
-            return Ok(functions_array::expr_fn::array_has_any(
-                args[0].clone(),
-                args[1].clone(),
-            ));
+            let (left, right) = get_two_arguments(args)?;
+            return Ok(functions_array::expr_fn::array_has_any(*left, *right));
         }
         "array_repeat" => {
-            if args.len() != 2 {
-                return Err(SparkError::invalid("array_repeat requires 2 arguments"));
-            }
-            return Ok(functions_array::expr_fn::array_repeat(
-                args[0].clone(),
-                args[1].clone(),
-            ));
+            let (element, count) = get_two_arguments(args)?;
+            let count = expr::Expr::Cast(expr::Cast {
+                expr: count,
+                data_type: DataType::Int64,
+            });
+            return Ok(functions_array::expr_fn::array_repeat(*element, count));
         }
         "avg" => {
             return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
@@ -646,10 +625,8 @@ pub(crate) fn get_scalar_function(
             }));
         }
         "abs" => {
-            if args.len() != 1 {
-                return Err(SparkError::invalid("unary operator requires 1 argument"));
-            }
-            return Ok(functions::expr_fn::abs(args[0].clone()));
+            let expr = get_one_argument(args)?;
+            return Ok(functions::expr_fn::abs(*expr));
         }
         name @ ("explode" | "explode_outer" | "posexplode" | "posexplode_outer") => {
             let udf = ScalarUDF::from(Explode::new(name));
@@ -657,25 +634,6 @@ pub(crate) fn get_scalar_function(
                 func_def: ScalarFunctionDefinition::UDF(Arc::new(udf)),
                 args,
             }));
-        }
-        "timestamp" | "to_timestamp" => {
-            return Ok(functions::expr_fn::to_timestamp_micros(args.clone()));
-        }
-        _ => {}
-    }
-
-    match name {
-        "array_repeat" => {
-            if args.len() != 2 {
-                return Err(SparkError::invalid("array_repeat requires 2 arguments"));
-            }
-            // DataFusion requires the repeat count to be int64.
-            let count = args.pop().unwrap();
-            let count = expr::Expr::Cast(expr::Cast {
-                expr: Box::new(count),
-                data_type: DataType::Int64,
-            });
-            args.push(count);
         }
         "regexp_replace" => {
             if args.len() != 3 {
@@ -686,8 +644,15 @@ pub(crate) fn get_scalar_function(
                 "g".to_string(),
             ))));
         }
+        "timestamp" | "to_timestamp" => {
+            return Ok(functions::expr_fn::to_timestamp_micros(args));
+        }
+        "unix_timestamp" | "to_unixtime" => {
+            return Ok(functions::expr_fn::to_unixtime(args));
+        }
         _ => {}
     }
+
     Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
         func_def: ScalarFunctionDefinition::BuiltIn(name.parse()?),
         args,
