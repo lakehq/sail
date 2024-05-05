@@ -106,11 +106,14 @@ pub(crate) fn from_spark_data_type(data_type: &sc::DataType) -> SparkResult<adt:
         sdt::Kind::Char(_) => Ok(adt::DataType::Utf8),
         sdt::Kind::VarChar(_) => Ok(adt::DataType::Utf8),
         sdt::Kind::Date(_) => Ok(adt::DataType::Date32),
-        sdt::Kind::Timestamp(_) => Ok(adt::DataType::Timestamp(
-            adt::TimeUnit::Microsecond,
+        sdt::Kind::Timestamp(_) => {
             // TODO: should we use "spark.sql.session.timeZone"?
-            None,
-        )),
+            let timezone: Arc<str> = Arc::from("UTC");
+            Ok(adt::DataType::Timestamp(
+                adt::TimeUnit::Microsecond,
+                Some(timezone),
+            ))
+        }
         sdt::Kind::TimestampNtz(_) => {
             Ok(adt::DataType::Timestamp(adt::TimeUnit::Microsecond, None))
         }

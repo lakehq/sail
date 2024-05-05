@@ -357,8 +357,11 @@ pub(crate) fn from_spark_literal_to_scalar(
         }
         LiteralType::String(x) => Ok(ScalarValue::Utf8(Some(x.clone()))),
         LiteralType::Date(x) => Ok(ScalarValue::Date32(Some(*x))),
-        // TODO: timezone
-        LiteralType::Timestamp(x) => Ok(ScalarValue::TimestampMicrosecond(Some(*x), None)),
+        LiteralType::Timestamp(x) => {
+            // TODO: should we use "spark.sql.session.timeZone"?
+            let timezone: Arc<str> = Arc::from("UTC");
+            Ok(ScalarValue::TimestampMicrosecond(Some(*x), Some(timezone)))
+        }
         LiteralType::TimestampNtz(x) => Ok(ScalarValue::TimestampMicrosecond(Some(*x), None)),
         LiteralType::CalendarInterval(x) => Ok(ScalarValue::IntervalMonthDayNano(Some(
             IntervalMonthDayNanoType::make_value(x.months, x.days, x.microseconds * 1000),
