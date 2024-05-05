@@ -171,7 +171,7 @@ pub(crate) fn new_sql_parser(sql: &str) -> Result<SparkSqlParser, ParserError> {
     Ok(SparkSqlParser { parser })
 }
 
-impl SparkSqlParser<'_> {
+impl<'a> SparkSqlParser<'a> {
     pub(crate) fn parse_one_statement(&mut self) -> Result<Statement, ParserError> {
         let mut statements = self.parser.parse_statements()?;
         if statements.len() > 1 {
