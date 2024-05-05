@@ -548,6 +548,42 @@ pub(crate) fn get_scalar_function(
         "array" => {
             return Ok(functions_array::expr_fn::make_array(args.clone()));
         }
+        "array_has" | "array_contains" => {
+            if args.len() != 2 {
+                return Err(SparkError::invalid("binary operator requires 2 arguments"));
+            }
+            return Ok(functions_array::expr_fn::array_has(
+                args[0].clone(),
+                args[1].clone(),
+            ));
+        }
+        "array_has_all" | "array_contains_all" => {
+            if args.len() != 2 {
+                return Err(SparkError::invalid("binary operator requires 2 arguments"));
+            }
+            return Ok(functions_array::expr_fn::array_has_all(
+                args[0].clone(),
+                args[1].clone(),
+            ));
+        }
+        "array_has_any" | "array_contains_any" => {
+            if args.len() != 2 {
+                return Err(SparkError::invalid("binary operator requires 2 arguments"));
+            }
+            return Ok(functions_array::expr_fn::array_has_any(
+                args[0].clone(),
+                args[1].clone(),
+            ));
+        }
+        "array_repeat" => {
+            if args.len() != 2 {
+                return Err(SparkError::invalid("array_repeat requires 2 arguments"));
+            }
+            return Ok(functions_array::expr_fn::array_repeat(
+                args[0].clone(),
+                args[1].clone(),
+            ));
+        }
         "avg" => {
             return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
                 func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Avg),
