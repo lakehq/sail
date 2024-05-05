@@ -19,13 +19,11 @@ use sqlparser::ast::Ident;
 use tonic::async_trait;
 use tonic::codegen::tokio_stream;
 
-use crate::extension::logical::UnresolvedRelationNode;
+use crate::extension::logical::{UnresolvedRelation, UnresolvedRelationNode};
 
 #[derive(Debug)]
 struct UnresolvedRelationExec {
-    multipart_identifier: Vec<Ident>,
-    options: HashMap<String, String>,
-    is_streaming: bool,
+    unresolved_relation: UnresolvedRelation,
     schema: SchemaRef,
     cache: PlanProperties,
 }
@@ -83,8 +81,8 @@ impl ExtensionPlanner for UnresolvedRelationPlanner {
         &self,
         _planner: &dyn PhysicalPlanner,
         node: &dyn UserDefinedLogicalNode,
-        logical_inputs: &[&LogicalPlan],
-        physical_inputs: &[Arc<dyn ExecutionPlan>],
+        _logical_inputs: &[&LogicalPlan],
+        _physical_inputs: &[Arc<dyn ExecutionPlan>],
         _session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let node: &UnresolvedRelationNode = node
@@ -102,11 +100,9 @@ impl ExtensionPlanner for UnresolvedRelationPlanner {
             ExecutionMode::Bounded,
         );
         Ok(Some(Arc::new(UnresolvedRelationExec {
-            multipart_identifier: node.multipart_identifier().clone(),
-            options: node.options().clone(),
-            is_streaming: node.is_streaming(),
-            schema,
-            cache,
+            unresolved_relation: node.unresolved_relation().clone(),
+            schema: schema,
+            cache: cache,
         })))
     }
 }
