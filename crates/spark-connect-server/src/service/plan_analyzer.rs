@@ -95,9 +95,7 @@ pub(crate) async fn handle_analyze_ddl_parse(
     _session: Arc<Session>,
     request: DdlParseRequest,
 ) -> SparkResult<DdlParseResponse> {
-    println!("CHECK HERE BEFORE schema");
     let schema = parse_spark_schema_string(request.ddl_string.as_str())?;
-    println!("CHECK HERE schema: {:?}", schema);
     Ok(DdlParseResponse {
         parsed: Some(to_spark_schema(schema)?),
     })

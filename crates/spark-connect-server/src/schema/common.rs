@@ -15,21 +15,14 @@ use crate::sql::new_sql_parser;
 static DEFAULT_FIELD_NAME: &str = "value";
 
 pub(crate) fn parse_spark_schema_string(schema: &str) -> SparkResult<SchemaRef> {
-    println!("CHECK HERE BEFORE parser");
     let mut parser = new_sql_parser(schema)?;
-    println!("CHECK HERE AFTER parser");
     if let Ok(dt) = parser.parse_spark_schema() {
-        println!("CHECK HERE INSIDE OK");
         let provider = EmptyContextProvider::default();
         let planner = SqlToRel::new(&provider);
-        println!("CHECK HERE BEFORE RETURN: {:?}", dt);
         Ok(Arc::new(planner.build_schema(dt)?))
     } else {
-        println!("CHECK HERE INSIDE ELSE");
         let data_type = parse_spark_json_data_type(schema)?;
-        println!("CHECK HERE AFTER DT1");
         let data_type = from_spark_data_type(&data_type)?;
-        println!("CHECK HERE AFTER DT1");
         match data_type {
             adt::DataType::Struct(fields) => Ok(Arc::new(adt::Schema::new(fields))),
             other => Ok(Arc::new(adt::Schema::new(vec![adt::Field::new(
