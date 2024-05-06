@@ -33,6 +33,7 @@ jobs:
         run: |
           echo "env_key=spark-${{ inputs.spark_version }}-java-${{ inputs.java_version }}-python-${{ inputs.python_version }}" >> "$GITHUB_OUTPUT"
           echo "commit_hash=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "pip_cache_dir=$(pip cache dir)" >> "$GITHUB_OUTPUT"
         shell: bash
 
       - uses: actions/cache@v4
@@ -62,22 +63,23 @@ jobs:
           python-version: ${{ inputs.python_version }}
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
-        name: Install poetry
-        run: pip install poetry
-
-      - if: steps.cache-logs.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: |
             ~/.m2/repository
+            ${{ steps.info.outputs.pip_cache_dir }}
             examples/python/.venv
             opt/spark/venv
+            opt/spark/target
           key: spark-tests-env-${{ runner.os }}-${{ steps.info.outputs.env_key }}-${{ hashFiles('scripts/spark-tests/**', 'examples/python/pyproject.toml', 'examples/python/poetry.toml') }}
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        name: Install poetry
+        run: pip install poetry
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         name: Set up test environment
         run: |
-          set -e
           git -C opt/spark apply ../../scripts/spark-tests/spark-${{ inputs.spark_version }}.patch
           scripts/spark-tests/setup-spark-env.sh
           poetry -C examples/python install
@@ -99,18 +101,16 @@ jobs:
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         name: Run Spark tests
         run: |
-          set -e
           cd opt/spark
           source venv/bin/activate
           export SPARK_TESTING_REMOTE_PORT=50051
           export SPARK_LOCAL_IP=127.0.0.1
-          # The pytext exit code is ignored due to the pipe.
-          # This is intentional, since we want the job to complete successfully.
+          # We ignore the pytext exit code so that the job can complete successfully.
           python/run-pytest.sh \
             --tb=no -rN --disable-warnings \
             --report-log=logs/test.jsonl \
             python/pyspark/sql/tests/connect/ \
-            | tee logs/test.log
+            | tee logs/test.log || true
         shell: bash
 
       - name: Upload test logs
