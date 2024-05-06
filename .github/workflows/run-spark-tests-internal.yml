@@ -78,7 +78,7 @@ jobs:
         name: Set up test environment
         run: |
           set -e
-          git -C opt/spark apply scripts/spark-tests/spark-${{ inputs.spark_version }}.patch
+          git -C opt/spark apply ../../scripts/spark-tests/spark-${{ inputs.spark_version }}.patch
           scripts/spark-tests/setup-spark-env.sh
           poetry -C examples/python install
         shell: bash

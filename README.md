@@ -26,7 +26,7 @@ one for the Spark project and the other for the framework Python examples.
 Run the following command to clone the Spark project.
 
 ```bash
-git clone git@github.com:apache/spark.git
+git clone git@github.com:apache/spark.git opt/spark
 ```
 
 In the remainder of this document, `${SPARK_PROJECT_PATH}` refers to the absolute path of the Spark project,
@@ -37,7 +37,7 @@ You need to make sure your working directory is clean before applying the patch.
 
 ```bash
 git -C opt/spark checkout v3.5.1
-git -C opt/spark apply scripts/spark-tests/spark-3.5.1.patch
+git -C opt/spark apply ../../scripts/spark-tests/spark-3.5.1.patch
 scripts/spark-connect-server/setup-spark-env.sh
 ```
 
