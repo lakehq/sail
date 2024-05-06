@@ -15,6 +15,9 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
 
+      - name: Format check
+        run: cargo fmt -- --check
+
       - name: Build
         run: cargo build
 

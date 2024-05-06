@@ -11,7 +11,9 @@ cd "${project_path}"/opt/spark
 ./build/mvn \
   --batch-mode \
   -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn \
-  -Pconnect -Phive -DskipTests package
+  -Dmaven.test.skip \
+  -DskipTests \
+  -Phive package
 
 # Create a directory for test logs. This directory is in `.gitignore`.
 mkdir -p logs

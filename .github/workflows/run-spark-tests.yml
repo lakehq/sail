@@ -3,44 +3,46 @@ on:
   workflow_call:
 
 jobs:
-  run:
+  run-current:
     uses: ./.github/workflows/run-spark-tests-internal.yml
     with:
       ref: ${{ github.ref }}
+      name: current
 
   run-baseline:
     uses: ./.github/workflows/run-spark-tests-internal.yml
     with:
-      ref: ${{ github.head_ref }}
+      # FIXME: use the correct ref
+      # ref: ${{ github.head_ref }}
+      ref: ${{ github.ref }}
+      name: baseline
     # Test the baseline commit only after the current commit has been tested successfully.
     # The baseline also runs faster when the Spark environment is cached by the previous tests.
     needs:
-      - run
+      - run-current
 
   report:
     runs-on: ubuntu-latest
     needs:
-      - run
+      - run-current
       - run-baseline
     steps:
       - name: Install jq
         run: |
-          cd /tmp
-          wget "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64"
-          mv jq-linux-amd64 /usr/local/bin/jq
+          wget -q -O /usr/local/bin/jq "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64"
           chmod +x /usr/local/bin/jq
           jq --version
 
-      - name: Download test logs
+      - name: Download current test logs
         uses: actions/download-artifact@v4
         with:
-          name: test-logs-${{ github.ref }}
+          name: test-logs-current
           path: logs/current
 
-      - name: Download test logs for baseline
+      - name: Download baseline test logs
         uses: actions/download-artifact@v4
         with:
-          name: test-logs-${{ github.head_ref }}
+          name: test-logs-baseline
           path: logs/baseline
 
       - name: Generate test report
