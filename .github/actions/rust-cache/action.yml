@@ -1,0 +1,31 @@
+name: Set up Rust build cache
+description: Set up a cache for Rust dependencies and build artifacts
+runs:
+  using: composite
+  steps:
+    - name: Show Rust version
+      id: version
+      run: |
+        rustc -vV
+        RUST_RELEASE=$(rustc -vV | sed -ne 's/^release: *//p')
+        echo "release=$RUST_RELEASE" >> "$GITHUB_OUTPUT"
+      shell: bash
+
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/
+          target/**/build/
+          target/**/deps/
+          target/**/.fingerprint/
+        key: rust-cache-${{ steps.version.outputs.release }}-${{ runner.os }}-${{ hashFiles('**/Cargo.toml') }}
+
+    # Incremental compilation is not beneficial for CI builds.
+    # So we turn it off to speed up the build and reduce the cache size.
+    - name: Turn off incremental compilation
+      run: |
+        echo CARGO_INCREMENTAL=0 >> "$GITHUB_ENV"
+      shell: bash
