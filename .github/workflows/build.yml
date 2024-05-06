@@ -16,7 +16,7 @@ jobs:
       - uses: ./.github/actions/rust-cache
 
       - name: Build
-        run: cargo build --debug
+        run: cargo build
 
       - name: Test
         run: cargo test

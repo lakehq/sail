@@ -21,7 +21,7 @@ runs:
           target/**/build/
           target/**/deps/
           target/**/.fingerprint/
-        key: rust-cache-${{ steps.version.outputs.release }}-${{ runner.os }}-${{ hashFiles('**/Cargo.toml') }}
+        key: rust-cache-${{ runner.os }}-${{ steps.version.outputs.release }}-${{ hashFiles('**/Cargo.toml') }}
 
     # Incremental compilation is not beneficial for CI builds.
     # So we turn it off to speed up the build and reduce the cache size.
