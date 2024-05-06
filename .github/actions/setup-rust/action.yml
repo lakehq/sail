@@ -5,15 +5,20 @@ runs:
   steps:
     - name: Install protoc
       run: |
-        apt-get install protobuf-compiler
+        sudo apt-get update
+        sudo apt-get install protobuf-compiler
       shell: bash
 
-    - name: Show Rust version
-      id: version
+    - name: Show versions
+      id: versions
       run: |
+        set -x
+        protoc --version
+        python -V
         rustc -vV
+        set +x
         RUST_RELEASE=$(rustc -vV | sed -ne 's/^release: *//p')
-        echo "release=$RUST_RELEASE" >> "$GITHUB_OUTPUT"
+        echo "rust_release=$RUST_RELEASE" >> "$GITHUB_OUTPUT"
       shell: bash
 
     - uses: actions/cache@v4
@@ -26,7 +31,7 @@ runs:
           target/**/build/
           target/**/deps/
           target/**/.fingerprint/
-        key: rust-cache-${{ runner.os }}-${{ steps.version.outputs.release }}-${{ hashFiles('**/Cargo.toml') }}
+        key: rust-cache-${{ runner.os }}-${{ steps.versions.outputs.rust_release }}-${{ hashFiles('**/Cargo.toml') }}
 
     # Incremental compilation is not beneficial for CI builds.
     # So we turn it off to speed up the build and reduce the cache size.
