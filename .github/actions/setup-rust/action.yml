@@ -1,12 +1,18 @@
 name: Rust setup
 description: Prepare Rust build environment and build cache
+inputs:
+  protoc_version:
+    description: Protobuf compiler version
+    default: "26.1"
 runs:
   using: composite
   steps:
     - name: Install protoc
       run: |
-        sudo apt-get update
-        sudo apt-get install protobuf-compiler
+        cd /tmp
+        wget "https://github.com/protocolbuffers/protobuf/releases/download/v${{ inputs.protoc_version }}/protoc-${{ inputs.protoc_version }}-linux-x86_64.zip"
+        sudo unzip protoc-${{ inputs.protoc_version }}-linux-x86_64.zip -d /usr/local 'bin/*' 'include/*'
+        rm protoc-${{ inputs.protoc_version }}-linux-x86_64.zip
       shell: bash
 
     - name: Show versions
