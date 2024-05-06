@@ -526,7 +526,7 @@ pub(crate) fn get_scalar_function(
             }));
         }
         "contains" => {
-            // TODO: Finish implementing this
+            // TODO: Validate that this works
             return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                 func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(Contains::new()))),
                 args: args,
