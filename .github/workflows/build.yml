@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ./.github/actions/rust-cache
+      - uses: ./.github/actions/setup-rust
 
       - name: Build
         run: cargo build

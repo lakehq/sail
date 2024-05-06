@@ -1,8 +1,13 @@
-name: Set up Rust build cache
-description: Set up a cache for Rust dependencies and build artifacts
+name: Rust setup
+description: Prepare Rust build environment and build cache
 runs:
   using: composite
   steps:
+    - name: Install protoc
+      run: |
+        apt-get install protobuf-compiler
+      shell: bash
+
     - name: Show Rust version
       id: version
       run: |
