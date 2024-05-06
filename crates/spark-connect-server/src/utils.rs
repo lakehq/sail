@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 #[derive(Default, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CaseInsensitiveStringMap(HashMap<String, String>);
 
+// TODO: Move to a more appropriate location and write tests.
 impl CaseInsensitiveStringMap {
     pub fn new(map: &HashMap<String, String>) -> Self {
         let mut case_insensitive_map = HashMap::new();
