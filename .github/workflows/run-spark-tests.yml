@@ -27,6 +27,8 @@ jobs:
       - run-current
       - run-baseline
     steps:
+      - uses: actions/checkout@v4
+
       - name: Install jq
         run: |
           wget -q -O /usr/local/bin/jq "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64"
