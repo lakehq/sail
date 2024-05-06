@@ -2,10 +2,9 @@
 
 set -euo 'pipefail'
 
-cd "${SPARK_PROJECT_PATH}"
+project_path="$(dirname "$0")/../.."
 
-git checkout v3.5.1 && git add . && git stash
-git apply "${FRAMEWORK_PROJECT_PATH}"/scripts/spark-connect-server/spark-3.5.1.patch
+cd "${project_path}"/opt/spark
 
 # Build the Spark project.
 ./build/mvn -Pconnect -Phive -DskipTests clean package

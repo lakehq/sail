@@ -9,6 +9,7 @@ runs:
   steps:
     - name: Install protoc
       run: |
+        set -e
         cd /tmp
         wget "https://github.com/protocolbuffers/protobuf/releases/download/v${{ inputs.protoc_version }}/protoc-${{ inputs.protoc_version }}-linux-x86_64.zip"
         sudo unzip protoc-${{ inputs.protoc_version }}-linux-x86_64.zip -d /usr/local 'bin/*' 'include/*'
@@ -18,7 +19,7 @@ runs:
     - name: Show versions
       id: versions
       run: |
-        set -x
+        set -ex
         protoc --version
         python -V
         rustc -vV
@@ -37,7 +38,7 @@ runs:
           target/**/build/
           target/**/deps/
           target/**/.fingerprint/
-        key: rust-cache-${{ runner.os }}-${{ steps.versions.outputs.rust_release }}-${{ hashFiles('**/Cargo.toml') }}
+        key: setup-rust-${{ runner.os }}-${{ steps.versions.outputs.rust_release }}-${{ hashFiles('**/Cargo.toml') }}
 
     # Incremental compilation is not beneficial for CI builds.
     # So we turn it off to speed up the build and reduce the cache size.

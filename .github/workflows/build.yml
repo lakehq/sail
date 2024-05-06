@@ -20,3 +20,9 @@ jobs:
 
       - name: Test
         run: cargo test
+
+  run-spark-tests:
+    uses: ./.github/workflows/run-spark-tests.yml
+    if: github.event_name == 'pull_request'
+    needs:
+      - build
