@@ -19,6 +19,7 @@ use datafusion_expr::{
     expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, ExprSchemable, GetFieldAccess,
     GetIndexedField, Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
 };
+use framework_python::py_function_pyspark::PyFunctionWrapper;
 use sqlparser::ast;
 
 #[derive(Default)]
@@ -302,9 +303,10 @@ pub(crate) fn from_spark_expression(
                 )));
             }
 
-            let python_obj_wrapper = deserialize_py_function_pyspark(command).map_err(|e| {
-                SparkError::invalid(format!("Python UDF deserialization error: {:?}", e))
-            })?;
+            let python_obj_wrapper: PyFunctionWrapper = deserialize_py_function_pyspark(command)
+                .map_err(|e| {
+                    SparkError::invalid(format!("Python UDF deserialization error: {:?}", e))
+                })?;
             let python_function = python_obj_wrapper.function;
 
             let python_udf: PythonUDF = PythonUDF::new(
