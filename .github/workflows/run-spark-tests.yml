@@ -9,7 +9,7 @@ jobs:
   run-current:
     uses: ./.github/workflows/run-spark-tests-internal.yml
     with:
-      ref: ${{ github.ref }}
+      ref: '2fde1dd06b00bd0f4ffca75c2f6b8a59e554d158' # ${{ github.ref }}
       name: current
 
   run-baseline:
@@ -17,7 +17,7 @@ jobs:
     with:
       # FIXME: use the correct ref
       # ref: ${{ github.head_ref }}
-      ref: ${{ github.ref }}
+      ref: '2fde1dd06b00bd0f4ffca75c2f6b8a59e554d158' # ${{ github.ref }}
       name: baseline
     # Test the baseline commit only after the current commit has been tested successfully.
     # The baseline also runs faster when the Spark environment is cached by the previous tests.
