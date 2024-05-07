@@ -38,9 +38,9 @@ jobs:
           echo "env_key=spark-${{ inputs.spark_version }}-java-${{ inputs.java_version }}-python-${{ inputs.python_version }}" >> "$GITHUB_OUTPUT"
           echo "commit_hash=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "pip_cache_dir=$(pip cache dir)" >> "$GITHUB_OUTPUT"
-        shell: bash
 
       - uses: actions/cache@v4
+        name: Cache test logs
         id: cache-logs
         with:
           path: |
@@ -49,11 +49,16 @@ jobs:
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
+        name: Checkout Spark
         with:
           repository: apache/spark
           path: opt/spark
           ref: v${{ inputs.spark_version }}
           fetch-depth: 1
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        name: Patch Spark
+        run: git -C opt/spark apply ../../scripts/spark-tests/spark-${{ inputs.spark_version }}.patch
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         uses: actions/setup-java@v4
@@ -75,29 +80,29 @@ jobs:
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         uses: actions/cache@v4
+        name: Cache test environment
+        id: cache-env
         with:
           path: |
-            ~/.m2/repository
             ${{ steps.info.outputs.pip_cache_dir }}
             examples/python/.venv
             opt/spark/venv
-            opt/spark/target
+            opt/spark/**/target/**.jar
           key: spark-tests-env-${{ runner.os }}-${{ steps.info.outputs.env_key }}-${{ hashFiles('scripts/spark-tests/**', 'examples/python/pyproject.toml', 'examples/python/poetry.toml') }}
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
-        name: Install poetry
+        name: Install Poetry
         run: pip install poetry
 
-      - if: steps.cache-logs.outputs.cache-hit != 'true'
+      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-env.outputs.cache-hit != 'true'
         name: Set up test environment
         run: |
-          git -C opt/spark apply ../../scripts/spark-tests/spark-${{ inputs.spark_version }}.patch
           scripts/spark-tests/setup-spark-env.sh
           poetry -C examples/python install
-        shell: bash
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         uses: ./.github/actions/setup-rust
+        name: Set up Rust
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         name: Build
@@ -106,7 +111,6 @@ jobs:
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         name: Run Spark Connect server
         run: nohup scripts/spark-tests/run-server.sh > /dev/null 2>&1 < /dev/null &
-        shell: bash
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         name: Wait for Spark Connect server to start
@@ -117,6 +121,7 @@ jobs:
         run: |
           cd opt/spark
           source venv/bin/activate
+          mkdir -p logs
           export SPARK_TESTING_REMOTE_PORT=50051
           export SPARK_LOCAL_IP=127.0.0.1
           # We ignore the pytext exit code so that the job can complete successfully.
@@ -125,7 +130,6 @@ jobs:
             --report-log=logs/test.jsonl \
             python/pyspark/sql/tests/connect/ \
             | tee logs/test.log || true
-        shell: bash
 
       - name: Upload test logs
         uses: actions/upload-artifact@v4

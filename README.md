@@ -29,16 +29,13 @@ Run the following command to clone the Spark project.
 git clone git@github.com:apache/spark.git opt/spark
 ```
 
-In the remainder of this document, `${SPARK_PROJECT_PATH}` refers to the absolute path of the Spark project,
-while `${FRAMEWORK_PROJECT_PATH}` refers to the absolute path of the LakeSail framework project.
-
-Run the following command to patch the Spark project and set up a virtual environment.
+Run the following command to patch the Spark project and set up the Spark environment.
 You need to make sure your working directory is clean before applying the patch.
 
 ```bash
 git -C opt/spark checkout v3.5.1
 git -C opt/spark apply ../../scripts/spark-tests/spark-3.5.1.patch
-scripts/spark-connect-server/setup-spark-env.sh
+scripts/spark-tests/setup-spark-env.sh
 ```
 
 ### Python Examples Setup
@@ -67,6 +64,9 @@ After running the Spark Connect server, start another terminal and use the follo
 ```bash
 cd opt/spark
 source venv/bin/activate
+
+# Create a directory for test logs. This directory is in `.gitignore`.
+mkdir -p logs
 
 # Run the tests and write the output to a log file.
 # It takes a few minutes to run the tests.

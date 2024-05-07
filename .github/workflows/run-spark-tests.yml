@@ -53,4 +53,3 @@ jobs:
             --slurpfile baseline logs/baseline/test.jsonl \
             logs/current/test.jsonl
           # TODO: truncate text if too long
-        shell: bash
