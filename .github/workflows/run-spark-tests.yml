@@ -1,6 +1,8 @@
 name: Run Spark tests and generate a test report
 on:
   workflow_call:
+permissions:
+  pull-requests: write
 
 jobs:
   run-current:
@@ -39,17 +41,20 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: test-logs-current
-          path: logs/current
+          path: /tmp/current
 
       - name: Download baseline test logs
         uses: actions/download-artifact@v4
         with:
           name: test-logs-baseline
-          path: logs/baseline
+          path: /tmp/baseline
 
       - name: Generate test report
         run: |
-          jq -r -f scripts/spark-tests/count-errors.jq \
-            --slurpfile baseline logs/baseline/test.jsonl \
-            logs/current/test.jsonl
-          # TODO: truncate text if too long
+          scripts/spark-tests/generate-test-report.sh /tmp/current /tmp/baseline \
+          > /tmp/test-report.md
+
+      - name: Publish test report
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: /tmp/test-report.md

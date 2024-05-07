@@ -86,6 +86,9 @@ jq -r -f scripts/spark-tests/count-errors.jq \
   --slurpfile baseline logs/baseline.jsonl \
   logs/test.jsonl | less
 
+# Show a sorted list of passed tests.
+jq -r -f scripts/spark-tests/show-passed-tests.jq logs/test.jsonl | less
+
 # Start an interactive console with a local PySpark session.
 env SPARK_PREPEND_CLASSES=1 bin/pyspark
 ```

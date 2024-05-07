@@ -130,6 +130,8 @@ jobs:
             --report-log=logs/test.jsonl \
             python/pyspark/sql/tests/connect/ \
             | tee logs/test.log || true
+          echo "${{ steps.info.outputs.commit_hash }}" > logs/commit
+          echo "${{ inputs.ref }}" > logs/ref
 
       - name: Upload test logs
         uses: actions/upload-artifact@v4
