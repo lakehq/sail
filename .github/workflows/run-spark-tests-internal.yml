@@ -98,7 +98,6 @@ jobs:
             ${{ steps.info.outputs.pip_cache_dir }}
             examples/python/.venv
             opt/spark/venv
-            opt/spark/**/target/**.jar
           key: spark-tests-env-${{ runner.os }}-${{ steps.info.outputs.env_key }}-${{ hashFiles('scripts/spark-tests/**', 'examples/python/pyproject.toml', 'examples/python/poetry.toml') }}
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
