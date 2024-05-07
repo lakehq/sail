@@ -6,29 +6,28 @@ permissions:
   pull-requests: write
 
 jobs:
-  run-current:
+  test-current:
     uses: ./.github/workflows/run-spark-tests-internal.yml
     with:
       ref: ${{ github.ref }}
       name: current
 
-  run-baseline:
+  test-baseline:
     uses: ./.github/workflows/run-spark-tests-internal.yml
     with:
-      # FIXME: use the correct ref
-      # ref: ${{ github.head_ref }}
+      # FIXME: use `${{ github.head_ref }}`
       ref: ${{ github.ref }}
       name: baseline
     # Test the baseline commit only after the current commit has been tested successfully.
     # The baseline also runs faster when the Spark environment is cached by the previous tests.
     needs:
-      - run-current
+      - test-current
 
   report:
     runs-on: ubuntu-latest
     needs:
-      - run-current
-      - run-baseline
+      - test-current
+      - test-baseline
     steps:
       - uses: actions/checkout@v4
 

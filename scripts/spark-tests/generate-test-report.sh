@@ -73,7 +73,7 @@ jq -r -f "${project_path}/scripts/spark-tests/count-errors.jq" \
 printf '<details>\n'
 printf '<summary>Error Counts</summary>\n\n'
 printf '```text\n'
-show_raw_text "${tmp_dir}/errors.txt" 400
+show_raw_text "${tmp_dir}/errors.txt" 40000
 printf '```\n\n'
 printf '</details>\n'
 
@@ -91,6 +91,6 @@ printf '\n'
 printf '<details>\n'
 printf '<summary>Passed Test Changes</summary>\n\n'
 printf '```diff\n'
-show_raw_text "${tmp_dir}/passed-tests.diff" 100
+show_raw_text "${tmp_dir}/passed-tests.diff" 10000
 printf '```\n\n'
 printf '</details>\n'
