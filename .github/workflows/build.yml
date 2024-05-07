@@ -18,6 +18,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # When the workflow is triggered by a pull request event, the commit on the feature branch
+          # is a parent of the merge commit. So we need a fetch depth of 2 to get the parent commit message.
           fetch-depth: 2
 
       - name: Get job information

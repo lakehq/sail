@@ -37,7 +37,6 @@ jobs:
         run: |
           echo "env_key=spark-${{ inputs.spark_version }}-java-${{ inputs.java_version }}-python-${{ inputs.python_version }}" >> "$GITHUB_OUTPUT"
           echo "commit_hash=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "pip_cache_dir=$(pip cache dir)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/cache@v4
         name: Cache test logs
@@ -87,7 +86,7 @@ jobs:
         with:
           path: |
             opt/spark/**/target/**.jar
-          key: spark-tests-jars-${{ runner.os }}-spark-${{ inputs.spark_version }}-${{ hashFiles('scripts/spark-tests/spark-${{ inputs.spark_version }}.patch', 'scripts/spark-tests/build-spark-jars.sh') }}
+          key: ${{ format('spark-tests-jars-{0}-spark-{1}-{2}', runner.os, inputs.spark_version, hashFiles(format('scripts/spark-tests/spark-{0}.patch', inputs.spark_version), 'scripts/spark-tests/build-spark-jars.sh')) }}
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         uses: actions/cache@v4
@@ -95,24 +94,20 @@ jobs:
         id: cache-env
         with:
           path: |
-            ${{ steps.info.outputs.pip_cache_dir }}
             examples/python/.venv
             opt/spark/venv
           key: spark-tests-env-${{ runner.os }}-${{ steps.info.outputs.env_key }}-${{ hashFiles('scripts/spark-tests/**', 'examples/python/pyproject.toml', 'examples/python/poetry.toml') }}
 
-      - if: steps.cache-logs.outputs.cache-hit != 'true'
-        name: Install Poetry
-        run: pip install poetry
-
       - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-jars.outputs.cache-hit != 'true'
         name: Build Spark jars
         run: |
-          scripts/spark-tests/build-spark-jars.sh
+          # scripts/spark-tests/build-spark-jars.sh
 
       - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-env.outputs.cache-hit != 'true'
         name: Set up test environment
         run: |
           scripts/spark-tests/setup-spark-env.sh
+          pip install poetry
           poetry -C examples/python install
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'

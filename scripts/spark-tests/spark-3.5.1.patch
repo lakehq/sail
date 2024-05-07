@@ -208,7 +208,7 @@ index 00000000000..bd71cf7fa59
 +export PYSPARK_DRIVER_PYTHON="python"
 +export PYARROW_IGNORE_TIMEZONE="1"
 +
-+"${SPARK_HOME}"/bin/pyspark pytest  "$@"
++"${SPARK_HOME}"/bin/pyspark pytest "$@"
 diff --git a/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/encoders/ExpressionEncoderSuite.scala b/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/encoders/ExpressionEncoderSuite.scala
 index 724a91806c7..e66d049c79d 100644
 --- a/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/encoders/ExpressionEncoderSuite.scala
