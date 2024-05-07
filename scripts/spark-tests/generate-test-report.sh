@@ -38,15 +38,23 @@ function show_test_summary() {
     "$(tail -n 1 "${dir}/test.log" | sed -e 's/^=* *//' -e 's/ *=*$//' | tr -d '\n')"
 }
 
-function show_raw_text() {
+function show_code_block() {
   # A GitHub comment has a maximum length of 65536 characters.
   # So we need to truncate the text if it is too long.
   file="$1"
-  limit="$2"
-  # We remove '```' to avoid issue in the Markdown code block.
+  language="$2"
+  limit="$3"
+  if [ "$(wc -c < "${file}")" -eq 0 ]; then
+      printf '(empty)\n\n'
+      return
+  fi
+  printf '```%s\n' "${language}"
+  # We remove '```' from the raw content to avoid issue in the Markdown code block.
   head -c "${limit}" "${file}" | sed -e 's/```//g'
-  if [ "$(wc -c < "${file}")" -gt "${limit}" ]; then
-      printf '[truncated]\n'
+  if [ "$(wc -c < "${file}")" -le "${limit}" ]; then
+    printf '```\n\n'
+  else
+    printf '\n```\n\n(truncated)\n\n'
   fi
 }
 
@@ -72,10 +80,8 @@ jq -r -f "${project_path}/scripts/spark-tests/count-errors.jq" \
 
 printf '<details>\n'
 printf '<summary>Error Counts</summary>\n\n'
-printf '```text\n'
-show_raw_text "${tmp_dir}/errors.txt" 40000
-printf '```\n\n'
-printf '</details>\n'
+show_code_block "${tmp_dir}/errors.txt" "text" 40000
+printf '</details>\n\n'
 
 mkdir "${tmp_dir}/passed-tests"
 jq -r -f "${project_path}/scripts/spark-tests/show-passed-tests.jq" \
@@ -87,10 +93,7 @@ pushd "${tmp_dir}/passed-tests" > /dev/null
 diff -u baseline current > ../passed-tests.diff || true
 popd > /dev/null
 
-printf '\n'
 printf '<details>\n'
 printf '<summary>Passed Test Changes</summary>\n\n'
-printf '```diff\n'
-show_raw_text "${tmp_dir}/passed-tests.diff" 10000
-printf '```\n\n'
+show_code_block "${tmp_dir}/passed-tests.diff" "diff" 10000
 printf '</details>\n'
