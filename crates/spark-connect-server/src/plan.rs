@@ -77,29 +77,28 @@ pub(crate) async fn from_spark_relation(
             let is_streaming = read.is_streaming;
             match &read.read_type.as_ref().required("read type")? {
                 ReadType::NamedTable(named_table) => {
+                    return Err(SparkError::todo("ReadType::NamedTable"));
                     // TODO: Complete the implementation.
-                    let unparsed_identifier: &String = &named_table.unparsed_identifier;
-                    let options: &HashMap<String, String> = &named_table.options;
-
-                    let case_insensitive_options: CaseInsensitiveStringMap =
-                        CaseInsensitiveStringMap::new(&options);
-
-                    let multipart_identifier: Vec<String> = Parser::new(&GenericDialect {})
-                        .try_with_sql(unparsed_identifier)?
-                        .parse_multipart_identifier()?
-                        .into_iter()
-                        .map(|ident| ident.to_string())
-                        .collect();
-
-                    Ok(LogicalPlan::Extension(Extension {
-                        node: Arc::new(crate::extension::logical::UnresolvedRelationNode::try_new(
-                            multipart_identifier,
-                            case_insensitive_options,
-                            is_streaming,
-                        )?),
-                    }))
-
-                    // return Err(SparkError::invalid("empty data source paths"));
+                    // let unparsed_identifier: &String = &named_table.unparsed_identifier;
+                    // let options: &HashMap<String, String> = &named_table.options;
+                    //
+                    // let case_insensitive_options: CaseInsensitiveStringMap =
+                    //     CaseInsensitiveStringMap::new(&options);
+                    //
+                    // let multipart_identifier: Vec<String> = Parser::new(&GenericDialect {})
+                    //     .try_with_sql(unparsed_identifier)?
+                    //     .parse_multipart_identifier()?
+                    //     .into_iter()
+                    //     .map(|ident| ident.to_string())
+                    //     .collect();
+                    //
+                    // Ok(LogicalPlan::Extension(Extension {
+                    //     node: Arc::new(crate::extension::logical::UnresolvedRelationNode::try_new(
+                    //         multipart_identifier,
+                    //         case_insensitive_options,
+                    //         is_streaming,
+                    //     )?),
+                    // }))
                 }
                 ReadType::DataSource(source) => {
                     let urls = source.paths.clone().to_urls()?;
@@ -441,14 +440,7 @@ pub(crate) async fn from_spark_relation(
             )?))
         }
         RelType::Tail(tail) => {
-            let input: &Box<Relation> = tail.input.as_ref().required("limit input")?;
-            let input: LogicalPlan = from_spark_relation(ctx, input).await?;
-            let limit: i32 = tail.limit;
-            Ok(LogicalPlan::Limit(plan::Limit {
-                skip: 0, // TODO: THIS SHOULDNT BE 0!! JUST TESTING
-                fetch: Some(limit as usize),
-                input: Arc::new(input),
-            }))
+            return Err(SparkError::todo("tail"));
         }
         RelType::WithColumns(columns) => {
             let input = columns.input.as_ref().required("input relation")?;
