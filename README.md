@@ -35,6 +35,7 @@ You need to make sure your working directory is clean before applying the patch.
 ```bash
 git -C opt/spark checkout v3.5.1
 git -C opt/spark apply ../../scripts/spark-tests/spark-3.5.1.patch
+scripts/spark-tests/build-spark-jars.sh
 scripts/spark-tests/setup-spark-env.sh
 ```
 
