@@ -17,6 +17,8 @@ jobs:
       run_spark_tests: ${{ github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.info.outputs.run_spark_tests == 'true') }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - name: Get job information
         id: info
