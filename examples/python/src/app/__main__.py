@@ -9,11 +9,13 @@ if __name__ == "__main__":
     pd.set_option("display.max_rows", None)
     pd.set_option("display.max_columns", None)
 
+
     @F.udf(IntegerType())
     def add_one(x):
         if x is None:
             return None
         return x + 1
+
 
     @F.udf(IntegerType())
     def add_x_y(structured_data):
@@ -21,6 +23,7 @@ if __name__ == "__main__":
         if x is None or y is None:
             return None
         return x + y
+
 
     print(spark.range(-1).toPandas())
     print(spark.range(10, 0, -2, 3).toPandas())
@@ -80,5 +83,10 @@ if __name__ == "__main__":
     # print(df.select(add_x_y(F.struct(F.col("a"), F.col("a"))).alias("sum")).toPandas())
     # print(df.selectExpr("b.*").toPandas())
     # spark.readStream.format("rate").load().writeStream.format("console").start()
+    # df.write.saveAsTable("meow")
+    # expression: contains
+    # expression: LiteralType::Array
+    # expression: LiteralType::Struct
+    # expression: LiteralType::Map
 
     spark.stop()

@@ -407,7 +407,7 @@ pub(crate) fn from_spark_literal_to_scalar(
             //     Box::new(),
             //     Box::new()
             // ))
-            Err(SparkError::todo("literal map"))
+            Err(SparkError::todo("CHECK HERE UNIT TEST LiteralType::Map"))
         }
         LiteralType::Struct(r#struct) => {
             // TODO: Validate that this works
