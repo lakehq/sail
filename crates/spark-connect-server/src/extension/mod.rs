@@ -20,10 +20,9 @@ impl QueryPlanner for ExtensionQueryPlanner {
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
-        let planner = DefaultPhysicalPlanner::with_extension_planners(vec![
-            // Arc::new(physical::UnresolvedRelationPlanner {}),
-            Arc::new(physical::RangePlanner {}),
-        ]);
+        let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
+            physical::RangePlanner {},
+        )]);
         planner
             .create_physical_plan(logical_plan, session_state)
             .await

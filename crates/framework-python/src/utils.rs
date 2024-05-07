@@ -1,22 +1,12 @@
-use arrow::array::{
-    as_boolean_array, as_null_array, as_struct_array, ArrayData, BooleanArray, NullArray,
-    StructArray,
-};
-use arrow::buffer::NullBuffer;
-use arrow::datatypes::{Field, Fields};
+use arrow::array::{as_boolean_array, as_struct_array, StructArray};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{types, Array, ArrayRef, PrimitiveArray, PrimitiveBuilder};
 use datafusion::arrow::datatypes::{ArrowPrimitiveType, DataType, TimeUnit};
 use datafusion::common::{DataFusionError, ScalarValue};
-use datafusion_expr::{ColumnarValue, Expr};
-use polars_arrow::array::{Arrow2Arrow, StructArray as PolarsStructArray};
-use polars_arrow::datatypes::{
-    ArrowDataType as PolarsArrowDataType, Field as PolarsField, Metadata as PolarsMetadata,
-};
-use pyo3::prelude::{Bound, FromPyObject, PyObject, PyResult, Python, ToPyObject, *};
-use pyo3::types::{PyDict, PyString, PyTuple};
-use pyo3::IntoPy;
+use datafusion_expr::ColumnarValue;
+use pyo3::prelude::{Bound, FromPyObject, PyObject, PyResult, Python, ToPyObject};
+use pyo3::types::PyTuple;
 
 // TODO: Move this to a separate module/crate.
 pub fn downcast_array_ref<T: ArrowPrimitiveType>(
@@ -200,35 +190,9 @@ where
         DataType::LargeList(_) => Err(DataFusionError::NotImplemented(
             "DataType::LargeList".to_string(),
         )),
-        DataType::Struct(fields) => {
-            // Err(DataFusionError::NotImplemented(
-            //     "DataType::Struct".to_string(),
-            // ))
-            let array: PolarsStructArray = Arrow2Arrow::from_data(&array_ref.into_data());
-            let mut builder = PrimitiveBuilder::<TOutput>::with_capacity(array_ref.len());
-            Python::with_gil(|py| {
-                for &value in array.values().iter() {
-                    // let test = value.clone().into();
-                    let test: ArrayData = Arrow2Arrow::to_data(&value.clone().into());
-                    let py_tuple: Bound<PyTuple> = PyTuple::new_bound(py, &test.into_py(py));
-                    // let py_tuple = pyo3::types::PyList::new_bound(py, &array);
-                    let result: PyResult<TOutput::Native> = python_function
-                        .call1(py, py_tuple)
-                        .and_then(|obj| obj.extract(py));
-                    match result {
-                        Ok(native) => builder.append_value(native),
-                        Err(py_err) => {
-                            return Err(DataFusionError::Execution(format!(
-                                "Failed to extract Rust type from Python return value: {:?}",
-                                py_err
-                            )))
-                        }
-                    }
-                }
-                Ok(())
-            })?;
-            Ok(Arc::new(builder.finish()) as ArrayRef)
-        }
+        DataType::Struct(_fields) => Err(DataFusionError::NotImplemented(
+            "DataType::Struct".to_string(),
+        )),
         DataType::Union(_, _) => Err(DataFusionError::NotImplemented(
             "DataType::Union".to_string(),
         )),
