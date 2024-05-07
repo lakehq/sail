@@ -21,7 +21,7 @@ jobs:
     # Test the base branch only after the head branch has been tested successfully.
     # The base test also runs faster since the Spark environment is likely cached by the head test.
     needs:
-      - test-base
+      - test-head
 
   report:
     runs-on: ubuntu-latest
