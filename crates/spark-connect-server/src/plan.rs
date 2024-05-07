@@ -68,8 +68,8 @@ pub(crate) async fn from_spark_relation(
         RelType::Read(read) => {
             use sc::read::ReadType;
 
-            let is_streaming = read.is_streaming;
-            match &read.read_type.as_ref().required("read type")? {
+            let _is_streaming = read.is_streaming;
+            match read.read_type.as_ref().required("read type")? {
                 ReadType::NamedTable(named_table) => {
                     let unparsed_identifier: &String = &named_table.unparsed_identifier;
                     let options: &HashMap<String, String> = &named_table.options;
