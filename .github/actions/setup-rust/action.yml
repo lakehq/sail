@@ -9,17 +9,15 @@ runs:
   steps:
     - name: Install protoc
       run: |
-        set -e
-        cd /tmp
-        wget "https://github.com/protocolbuffers/protobuf/releases/download/v${{ inputs.protoc_version }}/protoc-${{ inputs.protoc_version }}-linux-x86_64.zip"
-        sudo unzip protoc-${{ inputs.protoc_version }}-linux-x86_64.zip -d /usr/local 'bin/*' 'include/*'
-        rm protoc-${{ inputs.protoc_version }}-linux-x86_64.zip
+        wget -q -O /tmp/protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${{ inputs.protoc_version }}/protoc-${{ inputs.protoc_version }}-linux-x86_64.zip"
+        sudo unzip /tmp/protoc.zip -d /usr/local 'bin/*' 'include/*'
+        rm /tmp/protoc.zip
       shell: bash
 
     - name: Show versions
       id: versions
       run: |
-        set -ex
+        set -x
         protoc --version
         python -V
         rustc -vV
