@@ -21,6 +21,7 @@ jobs:
       - name: Get job information
         id: info
         run: |
+          git log -1 --oneline
           echo "run_spark_tests=$(git log -1 --oneline | grep -q -i 'spark tests' && printf 'true' || printf 'false')" >> "$GITHUB_OUTPUT"
 
 #      - uses: ./.github/actions/setup-rust
