@@ -1,4 +1,3 @@
-use arrow::datatypes::{Schema, SchemaRef};
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
@@ -7,24 +6,18 @@ use async_recursion::async_recursion;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
-use datafusion::common::{ParamValues, TableReference};
-use datafusion::datasource::empty::EmptyTable;
+use datafusion::common::ParamValues;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion::datasource::provider::DefaultTableFactory;
-use datafusion::datasource::{provider_as_source, DefaultTableSource};
+use datafusion::datasource::provider_as_source;
 use datafusion::execution::context::{DataFilePaths, SessionContext};
 use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
 use datafusion::sql::parser::Statement;
-use datafusion_expr::LogicalPlanBuilder;
-use sqlparser::ast::Ident;
-use sqlparser::dialect::GenericDialect;
-use sqlparser::parser::Parser;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::expression::{from_spark_expression, from_spark_literal_to_scalar};
@@ -36,7 +29,6 @@ use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::Relation;
 use crate::sql::new_sql_parser;
-use crate::utils::CaseInsensitiveStringMap;
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
     let cursor = Cursor::new(data);
