@@ -1,4 +1,3 @@
-use arrow::array::{DictionaryArray, ListArray};
 use std::sync::Arc;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
@@ -385,30 +384,7 @@ pub(crate) fn from_spark_literal_to_scalar(
                 &element_type,
             )))
         }
-        LiteralType::Map(map) => {
-            // let key_type: &sc::DataType = map.key_type.as_ref().required("map key type")?;
-            // let key_type: DataType = from_spark_data_type(key_type)?;
-            // let value_type: &sc::DataType = map.value_type.as_ref().required("map value type")?;
-            // let value_type: DataType = from_spark_data_type(value_type)?;
-            //
-            // let mut keys: Vec<ScalarValue> = Vec::new();
-            // let mut values: Vec<ScalarValue> = Vec::new();
-            // for (key, value) in map.keys.iter().zip(map.values.iter()) {
-            //     let key_scalar: ScalarValue = from_spark_literal_to_scalar(key)?;
-            //     let value_scalar: ScalarValue = from_spark_literal_to_scalar(value)?;
-            //     keys.push(key_scalar);
-            //     values.push(value_scalar);
-            // }
-            //
-            // let keys_array = ScalarValue::new_list(&keys, &key_type);
-            // let values_array = ScalarValue::List(ScalarValue::new_list(&values, &value_type));
-            //
-            // Ok(ScalarValue::Dictionary(
-            //     Box::new(),
-            //     Box::new()
-            // ))
-            Err(SparkError::todo("CHECK HERE UNIT TEST LiteralType::Map"))
-        }
+        LiteralType::Map(map) => Err(SparkError::todo("CHECK HERE UNIT TEST LiteralType::Map")),
         LiteralType::Struct(r#struct) => {
             // TODO: Validate that this works
             let struct_type: &sc::DataType =
