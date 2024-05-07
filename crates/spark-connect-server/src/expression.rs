@@ -454,6 +454,7 @@ pub(crate) fn get_scalar_function(
         return Ok(expr::Expr::BinaryExpr(expr::BinaryExpr { left, op, right }));
     }
 
+    // TODO: Add all functions::expr_fn and all functions_array::expr_fn
     match name {
         "isnull" => {
             let expr = get_one_argument(args)?;
