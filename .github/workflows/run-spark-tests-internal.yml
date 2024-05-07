@@ -45,7 +45,7 @@ jobs:
         with:
           path: |
             opt/spark/logs
-          key: spark-tests-logs-${{ runner.os }}-${{ steps.info.outputs.env_key }}-${{ steps.info.outputs.commit_hash }}
+          key: spark-tests-logs-${{ runner.os }}-${{ steps.info.outputs.env_key }}-b5480d0a525bde1256a39e46f4d336a172f67d0b
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
