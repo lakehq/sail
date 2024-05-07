@@ -6,18 +6,20 @@ use async_recursion::async_recursion;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
-use datafusion::common::ParamValues;
+use datafusion::common::{ParamValues, TableReference};
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion::datasource::provider_as_source;
+use datafusion::datasource::{provider_as_source, ViewTable};
 use datafusion::execution::context::{DataFilePaths, SessionContext};
 use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
 use datafusion::sql::parser::Statement;
+use sqlparser::dialect::GenericDialect;
+use sqlparser::parser::Parser;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::expression::{from_spark_expression, from_spark_literal_to_scalar};
@@ -29,6 +31,7 @@ use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::Relation;
 use crate::sql::new_sql_parser;
+use crate::utils::CaseInsensitiveStringMap;
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
     let cursor = Cursor::new(data);
@@ -91,6 +94,39 @@ pub(crate) async fn from_spark_relation(
                     //         is_streaming,
                     //     )?),
                     // }))
+
+                    // let unparsed_identifier: &String = &named_table.unparsed_identifier;
+                    // let options: &HashMap<String, String> = &named_table.options;
+                    // let multipart_identifier: Vec<String> = Parser::new(&GenericDialect {})
+                    //     .try_with_sql(unparsed_identifier)?
+                    //     .parse_multipart_identifier()?
+                    //     .into_iter()
+                    //     .map(|ident| ident.to_string())
+                    //     .collect();
+                    // let table_reference: TableReference = match multipart_identifier.len() {
+                    //     0 => {
+                    //         return Err(SparkError::invalid("No table name found in NamedTable"));
+                    //     }
+                    //     1 => TableReference::Bare {
+                    //         table: multipart_identifier[0].clone().into(),
+                    //     },
+                    //     2 => TableReference::Partial {
+                    //         schema: multipart_identifier[0].clone().into(),
+                    //         table: multipart_identifier[1].clone().into(),
+                    //     },
+                    //     _ => TableReference::Full {
+                    //         catalog: multipart_identifier[0].clone().into(),
+                    //         schema: multipart_identifier[1].clone().into(),
+                    //         table: multipart_identifier[2].clone().into(),
+                    //     },
+                    // };
+                    // Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                    //     table_reference,
+                    //     table_source,
+                    //     None,
+                    //     vec![],
+                    //     None,
+                    // )?))
                 }
                 ReadType::DataSource(source) => {
                     let urls = source.paths.clone().to_urls()?;
