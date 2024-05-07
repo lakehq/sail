@@ -439,7 +439,7 @@ pub(crate) async fn from_spark_relation(
                 Arc::new(input),
             )?))
         }
-        RelType::Tail(tail) => {
+        RelType::Tail(_tail) => {
             return Err(SparkError::todo("tail"));
         }
         RelType::WithColumns(columns) => {
