@@ -61,6 +61,7 @@ pub(crate) async fn from_spark_relation(
     use crate::spark::connect::relation::RelType;
 
     let Relation { common, rel_type } = relation;
+    let _common = common;
     let state = ctx.state();
     let rel_type = rel_type.as_ref().required("relation type")?;
     match rel_type {
