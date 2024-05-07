@@ -21,9 +21,8 @@ jobs:
       - name: Get job information
         id: info
         run: |
-          git log -1 --oneline
-          echo "${{ github.event.pull_request.head.sha }}"
-          echo "run_spark_tests=$(git log -1 --oneline | grep -q -i 'spark tests' && printf 'true' || printf 'false')" >> "$GITHUB_OUTPUT"
+          export commit="${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "run_spark_tests=$(git show --pretty='format:%s' -s "$commit" | grep -q -i 'spark tests' && printf 'true' || printf 'false')" >> "$GITHUB_OUTPUT"
 
 #      - uses: ./.github/actions/setup-rust
 #
@@ -35,13 +34,6 @@ jobs:
 #
 #      - name: Test
 #        run: cargo test
-
-  debug:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "${{ needs.build.outputs.run_spark_tests }}"
-    needs:
-      - build
 
   run-spark-tests:
     uses: ./.github/workflows/run-spark-tests.yml

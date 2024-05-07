@@ -3,12 +3,12 @@
 set -euo 'pipefail'
 
 if [ "$#" -ne 2 ]; then
-    echo "Usage: $0 <current> <baseline>"
+    echo "Usage: $0 <head-test-logs> <base-test-logs>"
     exit 1
 fi
 
-current="$1"
-baseline="$2"
+head_dir="$1"
+base_dir="$2"
 
 project_path="$(dirname "$0")/../.."
 tmp_dir="$(mktemp -d)"
@@ -62,21 +62,21 @@ printf '### Spark Test Report\n\n'
 
 printf '#### Commit Information\n\n'
 
-show_commit_info 'Current' "$current"
-show_commit_info 'Baseline' "$baseline"
+show_commit_info 'Head' "$head_dir"
+show_commit_info 'Base' "$base_dir"
 
 printf '\n'
 printf '#### Test Summary\n\n'
 
-show_test_summary 'Current' "$current"
-show_test_summary 'Baseline' "$baseline"
+show_test_summary 'Head' "$head_dir"
+show_test_summary 'Base' "$base_dir"
 
 printf '\n'
 printf '#### Test Details\n\n'
 
 jq -r -f "${project_path}/scripts/spark-tests/count-errors.jq" \
-  --slurpfile baseline "$baseline/test.jsonl" \
-  "$current/test.jsonl" > "${tmp_dir}/errors.txt"
+  --slurpfile baseline "$base_dir/test.jsonl" \
+  "$head_dir/test.jsonl" > "${tmp_dir}/errors.txt"
 
 printf '<details>\n'
 printf '<summary>Error Counts</summary>\n\n'
@@ -85,12 +85,12 @@ printf '</details>\n\n'
 
 mkdir "${tmp_dir}/passed-tests"
 jq -r -f "${project_path}/scripts/spark-tests/show-passed-tests.jq" \
-  "$baseline/test.jsonl" > "${tmp_dir}/passed-tests/baseline"
+  "$base_dir/test.jsonl" > "${tmp_dir}/passed-tests/base"
 jq -r -f "${project_path}/scripts/spark-tests/show-passed-tests.jq" \
-  "$current/test.jsonl" > "${tmp_dir}/passed-tests/current"
+  "$head_dir/test.jsonl" > "${tmp_dir}/passed-tests/head"
 
 pushd "${tmp_dir}/passed-tests" > /dev/null
-diff -u baseline current > ../passed-tests.diff || true
+diff -u base head > ../passed-tests.diff || true
 popd > /dev/null
 
 printf '<details>\n'

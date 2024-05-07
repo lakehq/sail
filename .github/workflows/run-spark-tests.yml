@@ -6,28 +6,28 @@ permissions:
   pull-requests: write
 
 jobs:
-  test-current:
+  test-head:
     uses: ./.github/workflows/run-spark-tests-internal.yml
     with:
       ref: ${{ github.ref }}
-      name: current
+      name: head
 
-  test-baseline:
+  test-base:
     uses: ./.github/workflows/run-spark-tests-internal.yml
     with:
-      # FIXME: use `${{ github.head_ref }}`
+      # FIXME: use `${{ github.base_ref }}`
       ref: ${{ github.ref }}
-      name: baseline
-    # Test the baseline commit only after the current commit has been tested successfully.
-    # The baseline also runs faster when the Spark environment is cached by the previous tests.
+      name: base
+    # Test the base branch only after the head branch has been tested successfully.
+    # The base test also runs faster since the Spark environment is likely cached by the head test.
     needs:
-      - test-current
+      - test-base
 
   report:
     runs-on: ubuntu-latest
     needs:
-      - test-current
-      - test-baseline
+      - test-head
+      - test-base
     steps:
       - uses: actions/checkout@v4
 
@@ -37,21 +37,21 @@ jobs:
           chmod +x /usr/local/bin/jq
           jq --version
 
-      - name: Download current test logs
+      - name: Download head test logs
         uses: actions/download-artifact@v4
         with:
-          name: test-logs-current
-          path: /tmp/current
+          name: test-logs-head
+          path: /tmp/head
 
-      - name: Download baseline test logs
+      - name: Download base test logs
         uses: actions/download-artifact@v4
         with:
-          name: test-logs-baseline
-          path: /tmp/baseline
+          name: test-logs-base
+          path: /tmp/base
 
       - name: Generate test report
         run: |
-          scripts/spark-tests/generate-test-report.sh /tmp/current /tmp/baseline \
+          scripts/spark-tests/generate-test-report.sh /tmp/head /tmp/base \
           > /tmp/test-report.md
 
       - name: Publish test report
