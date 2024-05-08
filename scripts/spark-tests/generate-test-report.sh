@@ -21,8 +21,8 @@ function clean_up() {
 }
 
 function show_commit_info() {
-  name="$1"
-  dir="$2"
+  local name="$1"
+  local dir="$2"
   # shellcheck disable=SC2016
   printf '* **%s**: `%s` (`%s`)\n' \
     "${name}" \
@@ -31,8 +31,8 @@ function show_commit_info() {
 }
 
 function show_test_summary() {
-  name="$1"
-  dir="$2"
+  local name="$1"
+  local dir="$2"
   printf '* **%s**: %s\n' \
     "${name}" \
     "$(tail -n 1 "${dir}/test.log" | sed -e 's/^=* *//' -e 's/ *=*$//' | tr -d '\n')"
@@ -41,9 +41,9 @@ function show_test_summary() {
 function show_code_block() {
   # A GitHub comment has a maximum length of 65536 characters.
   # So we need to truncate the text if it is too long.
-  file="$1"
-  language="$2"
-  limit="$3"
+  local file="$1"
+  local language="$2"
+  local limit="$3"
   if [ "$(wc -c < "${file}")" -eq 0 ]; then
       printf '(empty)\n\n'
       return

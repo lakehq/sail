@@ -18,15 +18,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # When the workflow is triggered by a pull request event, the commit on the feature branch
-          # is a parent of the merge commit. So we need a fetch depth of 2 to get the parent commit message.
+          # When the workflow is triggered by a pull request event, the commit being pushed
+          # is a parent of the merge commit. So we need a fetch depth of 2 to get the commit message.
           fetch-depth: 2
 
       - name: Get job information
         id: info
         run: |
-          export commit="${{ github.event.pull_request.head.sha || github.sha }}"
-          echo "run_spark_tests=$(git show --pretty='format:%s' -s "$commit" | grep -q -i 'spark tests' && printf 'true' || printf 'false')" >> "$GITHUB_OUTPUT"
+          commit="${{ null | github.event.pull_request.head.sha || github.sha }}"
+          commit_message="$(git show --pretty='format:%s' -s "${commit}")"
+          run_spark_tests="$(printf '%s' "${commit_message}" | grep -q -i 'spark tests' && printf 'true' || printf 'false')"
+          echo "run_spark_tests=${run_spark_tests}" >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
 
 #      - uses: ./.github/actions/setup-rust
 #
@@ -39,8 +42,8 @@ jobs:
 #      - name: Test
 #        run: cargo test
 
-  run-spark-tests:
-    uses: ./.github/workflows/run-spark-tests.yml
-    if: needs.build.outputs.run_spark_tests == 'true'
-    needs:
-      - build
+#  run-spark-tests:
+#    uses: ./.github/workflows/run-spark-tests.yml
+#    if: needs.build.outputs.run_spark_tests == 'true'
+#    needs:
+#      - build

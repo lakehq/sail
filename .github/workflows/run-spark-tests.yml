@@ -41,18 +41,20 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: test-logs-head
-          path: /tmp/head
+          path: /tmp/test-head
 
       - name: Download base test logs
         uses: actions/download-artifact@v4
         with:
           name: test-logs-base
-          path: /tmp/base
+          path: /tmp/test-base
 
       - name: Generate test report
         run: |
-          scripts/spark-tests/generate-test-report.sh /tmp/head /tmp/base \
+          scripts/spark-tests/generate-test-report.sh \
+          /tmp/test-head /tmp/test-base \
           > /tmp/test-report.md
+          cat /tmp/test-report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish test report
         uses: marocchino/sticky-pull-request-comment@v2

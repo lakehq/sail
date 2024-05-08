@@ -86,6 +86,7 @@ jobs:
         with:
           path: |
             opt/spark/**/target/**.jar
+          # We must use `format()` to define the key here since nested variable substitution is not supported.
           key: ${{ format('spark-tests-jars-{0}-spark-{1}-{2}', runner.os, inputs.spark_version, hashFiles(format('scripts/spark-tests/spark-{0}.patch', inputs.spark_version), 'scripts/spark-tests/build-spark-jars.sh')) }}
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
