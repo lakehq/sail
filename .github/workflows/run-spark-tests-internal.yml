@@ -103,7 +103,6 @@ jobs:
       - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-jars.outputs.cache-hit != 'true'
         name: Build Spark jars
         run: |
-          exit 1
           scripts/spark-tests/build-spark-jars.sh
 
       - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-env.outputs.cache-hit != 'true'

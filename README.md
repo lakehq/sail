@@ -93,3 +93,6 @@ jq -r -f scripts/spark-tests/show-passed-tests.jq logs/test.jsonl | less
 # Start an interactive console with a local PySpark session.
 env SPARK_PREPEND_CLASSES=1 bin/pyspark
 ```
+
+The Spark tests are also triggered in GitHub Actions for pull requests,
+either when the pull request is opened or when the commit message contains `[spark tests]` (case-insensitive).
