@@ -91,7 +91,7 @@ jq -r -f scripts/spark-tests/count-errors.jq \
 jq -r -f scripts/spark-tests/show-passed-tests.jq logs/test.jsonl | less
 
 # Start an interactive console with a local PySpark session.
-env SPARK_PREPEND_CLASSES=1 bin/pyspark
+env SPARK_LOCAL_IP=127.0.0.1 SPARK_PREPEND_CLASSES=1 bin/pyspark
 ```
 
 The Spark tests are also triggered in GitHub Actions for pull requests,
