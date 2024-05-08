@@ -40,7 +40,7 @@ function show_test_summary() {
 
 function show_code_block() {
   # A GitHub comment has a maximum length of 65536 characters.
-  # So we need to truncate the text if it is too long.
+  # So we need to truncate the content if it is too long.
   local file="$1"
   local language="$2"
   local limit="$3"
@@ -94,6 +94,6 @@ diff -u base head > ../passed-tests.diff || true
 popd > /dev/null
 
 printf '<details>\n'
-printf '<summary>Passed Test Changes</summary>\n\n'
+printf '<summary>Passed Tests Diff</summary>\n\n'
 show_code_block "${tmp_dir}/passed-tests.diff" "diff" 10000
 printf '</details>\n'
