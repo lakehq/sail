@@ -1,7 +1,9 @@
-use arrow::array::{as_boolean_array, as_struct_array, StructArray};
 use std::sync::Arc;
 
-use datafusion::arrow::array::{types, Array, ArrayRef, PrimitiveArray, PrimitiveBuilder};
+use datafusion::arrow::array::{
+    as_boolean_array, as_struct_array, types, Array, ArrayRef, PrimitiveArray, PrimitiveBuilder,
+    StructArray,
+};
 use datafusion::arrow::datatypes::{ArrowPrimitiveType, DataType, TimeUnit};
 use datafusion::common::{DataFusionError, ScalarValue};
 use datafusion_expr::ColumnarValue;
