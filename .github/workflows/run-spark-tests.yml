@@ -1,4 +1,5 @@
 name: Run Spark tests
+
 on:
   workflow_call:
     inputs:
