@@ -1,6 +1,15 @@
-name: Run Spark tests and generate a test report
+name: Run Spark tests
 on:
   workflow_call:
+    inputs:
+      head_ref:
+        description: The Git head ref to run the tests on
+        type: string
+        required: true
+      base_ref:
+        description: The Git base ref to run the tests on
+        type: string
+        required: true
 permissions:
   contents: read
   pull-requests: write
@@ -9,14 +18,13 @@ jobs:
   test-head:
     uses: ./.github/workflows/run-spark-tests-internal.yml
     with:
-      ref: ${{ github.ref }}
+      ref: ${{ inputs.head_ref }}
       name: head
 
   test-base:
     uses: ./.github/workflows/run-spark-tests-internal.yml
     with:
-      # FIXME: use `${{ github.base_ref }}`
-      ref: ${{ github.ref }}
+      ref: ${{ inputs.base_ref }}
       name: base
     # Test the base branch only after the head branch has been tested successfully.
     # The base test also runs faster since the Spark environment is likely cached by the head test.
