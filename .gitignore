@@ -41,5 +41,5 @@ Chart.lock
 *.gz
 *.tgz
 
-# Spark
-spark/
+# Optional third-party libraries
+/opt/

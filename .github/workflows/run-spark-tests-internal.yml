@@ -1,0 +1,154 @@
+name: Run Spark tests (internal)
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The Git ref to run the tests on
+        type: string
+        required: true
+      name:
+        description: The name of the test run
+        type: string
+        required: true
+      spark_version:
+        description: The Spark version to test
+        type: string
+        default: "3.5.1"
+      java_version:
+        description: Java version
+        type: string
+        default: "17"
+      python_version:
+        description: Python version
+        type: string
+        default: "3.11"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Get job information
+        id: info
+        run: |
+          commit_hash="$(git rev-parse HEAD)"
+          echo "env_key=spark-${{ inputs.spark_version }}-java-${{ inputs.java_version }}-python-${{ inputs.python_version }}" >> "$GITHUB_OUTPUT"
+          echo "commit_hash=${commit_hash}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        name: Cache test logs
+        id: cache-logs
+        with:
+          path: |
+            opt/spark/logs
+          key: spark-tests-logs-${{ runner.os }}-${{ steps.info.outputs.env_key }}-${{ steps.info.outputs.commit_hash }}
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        name: Checkout Spark
+        with:
+          repository: apache/spark
+          path: opt/spark
+          ref: v${{ inputs.spark_version }}
+          fetch-depth: 1
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        name: Patch Spark
+        run: git -C opt/spark apply ../../scripts/spark-tests/spark-${{ inputs.spark_version }}.patch
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: "corretto"
+          java-version: ${{ inputs.java_version }}
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        name: Install grpc_health_probe
+        run: |
+          wget -q -O /usr/local/bin/grpc_health_probe "https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.26/grpc_health_probe-linux-amd64"
+          chmod +x /usr/local/bin/grpc_health_probe
+          grpc_health_probe -version
+
+      # Building Spark jars is slow (~40 minutes on GitHub Linux runners),
+      # so we create a dedicated cache for them to increase the cache hit rate.
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        name: Cache Spark jars
+        id: cache-jars
+        with:
+          path: |
+            opt/spark/**/target/**/*.jar
+            opt/spark/**/target/**/classes
+          # We must use `format()` to define the key here since nested variable substitution is not supported.
+          key: ${{ format('spark-tests-jars-{0}-spark-{1}-{2}', runner.os, inputs.spark_version, hashFiles(format('scripts/spark-tests/spark-{0}.patch', inputs.spark_version), 'scripts/spark-tests/build-spark-jars.sh')) }}
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        name: Cache test environment
+        id: cache-env
+        with:
+          path: |
+            examples/python/.venv
+            opt/spark/venv
+          key: spark-tests-env-${{ runner.os }}-${{ steps.info.outputs.env_key }}-${{ hashFiles('scripts/spark-tests/**', 'examples/python/pyproject.toml', 'examples/python/poetry.toml') }}
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-jars.outputs.cache-hit != 'true'
+        name: Build Spark jars
+        run: |
+          scripts/spark-tests/build-spark-jars.sh
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-env.outputs.cache-hit != 'true'
+        name: Set up test environment
+        run: |
+          scripts/spark-tests/setup-spark-env.sh
+          pip install poetry
+          poetry -C examples/python install
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        uses: ./.github/actions/setup-rust
+        name: Set up Rust
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        name: Build
+        run: cargo build
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        name: Run Spark Connect server
+        run: nohup scripts/spark-tests/run-server.sh > /dev/null 2>&1 < /dev/null &
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        name: Wait for Spark Connect server to start
+        run: scripts/spark-tests/wait-for-server.sh
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        name: Run Spark tests
+        run: |
+          cd opt/spark
+          source venv/bin/activate
+          mkdir -p logs
+          export SPARK_TESTING_REMOTE_PORT=50051
+          export SPARK_LOCAL_IP=127.0.0.1
+          # We ignore the pytext exit code so that the job can complete successfully.
+          python/run-pytest.sh \
+            --tb=no -rN --disable-warnings \
+            --report-log=logs/test.jsonl \
+            python/pyspark/sql/tests/connect/ \
+            | tee logs/test.log || true
+          echo "${{ steps.info.outputs.commit_hash }}" > logs/commit
+          echo "${{ inputs.ref }}" > logs/ref
+
+      - name: Upload test logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ inputs.name }}
+          path: opt/spark/logs
+          retention-days: 7
