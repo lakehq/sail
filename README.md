@@ -39,6 +39,13 @@ scripts/spark-tests/build-spark-jars.sh
 scripts/spark-tests/setup-spark-env.sh
 ```
 
+You can use the following commands to update the Spark patch with your local modification.
+
+```bash
+git -C opt/spark add .
+git -C opt/spark diff --staged -p > scripts/spark-tests/spark-3.5.1.patch
+```
+
 ### Python Examples Setup
 
 Run the following commands to set up a virtual environment for the Python examples.
@@ -60,37 +67,43 @@ Please refer to `examples/python/README.md` for more information.
 
 ### Running Spark Tests
 
-After running the Spark Connect server, start another terminal and use the following commands to run the Spark tests.
+After running the Spark Connect server, start another terminal and use the following command to run the Spark tests.
+The test logs will be written to `opt/spark/logs/<name>` where `<name>` is defined by
+the `TEST_RUN_NAME` environment variable whose default value is `latest`.
+
+```bash
+scripts/spark-tests/run-tests.sh
+```
+
+You can pass arguments to the script, which will be forwarded to `pytest`.
+If no arguments are passed, the script will run a default set of tests for Spark Connect.
+You can also use `PYTEST_` environment variables to customize the test execution.
+For example, `PYTEST_ADDOPTS="-k <expression>"` can be used to run specific tests matching `<expression>`.
+
+The following are useful commands to analyze test logs.
+
+(1) Get the error counts for failed tests.
+
+```bash
+# You can remove the `--slurpfile baseline opt/spark/logs/baseline/test.jsonl` arguments
+# if you do not have baseline test logs.
+jq -r -f scripts/spark-tests/count-errors.jq \
+  --slurpfile baseline opt/spark/logs/baseline/test.jsonl \
+  opt/spark/logs/latest/test.jsonl | less
+```
+
+(2) Show a sorted list of passed tests.
+
+```bash
+jq -r -f scripts/spark-tests/show-passed-tests.jq \
+  opt/spark/logs/latest/test.jsonl | less
+```
+
+You can use the following commands to start a local PySpark session.
 
 ```bash
 cd opt/spark
 source venv/bin/activate
-
-# Create a directory for test logs. This directory is in `.gitignore`.
-mkdir -p logs
-
-# Run the tests and write the output to a log file.
-# It takes a few minutes to run the tests.
-env SPARK_TESTING_REMOTE_PORT=50051 \
-  SPARK_LOCAL_IP=127.0.0.1 \
-  python/run-pytest.sh \
-  --tb=no -rN --disable-warnings \
-  --report-log=logs/test.jsonl \
-  python/pyspark/sql/tests/connect/
-
-# The following are a few useful commands for development.
-
-# Get the distribution of error details for failed tests.
-# The `--slurpfile baseline logs/baseline.jsonl` arguments are optional
-# if you do not have a baseline test log file.
-jq -r -f scripts/spark-tests/count-errors.jq \
-  --slurpfile baseline logs/baseline.jsonl \
-  logs/test.jsonl | less
-
-# Show a sorted list of passed tests.
-jq -r -f scripts/spark-tests/show-passed-tests.jq logs/test.jsonl | less
-
-# Start an interactive console with a local PySpark session.
 env SPARK_LOCAL_IP=127.0.0.1 SPARK_PREPEND_CLASSES=1 bin/pyspark
 ```
 

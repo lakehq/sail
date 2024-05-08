@@ -87,10 +87,32 @@ index 7b1aafbefeb..cfdd4ccaec1 100644
              from pyspark.sql.session import SparkSession as PySparkSession
  
 diff --git a/python/pyspark/sql/tests/connect/test_connect_basic.py b/python/pyspark/sql/tests/connect/test_connect_basic.py
-index 2904eb42587..1263b642524 100644
+index 2904eb42587..1226f5021a8 100644
 --- a/python/pyspark/sql/tests/connect/test_connect_basic.py
 +++ b/python/pyspark/sql/tests/connect/test_connect_basic.py
-@@ -3328,6 +3328,7 @@ class SparkConnectSessionTests(ReusedConnectTestCase):
+@@ -110,6 +110,11 @@ class SparkConnectSQLTestCase(ReusedConnectTestCase, SQLTestUtils, PandasOnSpark
+         cls.spark_connect_clean_up_test_data()
+         # Load test data
+         cls.spark_connect_load_test_data()
++        # Load test data for connect
++        _spark = cls.spark
++        cls.spark = cls.connect
++        cls.spark_connect_load_test_data()
++        cls.spark = _spark
+ 
+     @classmethod
+     def tearDownClass(cls):
+@@ -144,8 +149,7 @@ class SparkConnectSQLTestCase(ReusedConnectTestCase, SQLTestUtils, PandasOnSpark
+                 StructField("lastname", StringType(), True),
+             ]
+         )
+-        emptyRDD = cls.spark.sparkContext.emptyRDD()
+-        empty_df = cls.spark.createDataFrame(emptyRDD, empty_table_schema)
++        empty_df = cls.spark.createDataFrame([], empty_table_schema)
+         empty_df.write.saveAsTable(cls.tbl_name_empty)
+ 
+     @classmethod
+@@ -3328,6 +3332,7 @@ class SparkConnectSessionTests(ReusedConnectTestCase):
          )
          spark.stop()
  
@@ -98,7 +120,7 @@ index 2904eb42587..1263b642524 100644
      def test_can_create_multiple_sessions_to_different_remotes(self):
          self.spark.stop()
          self.assertIsNotNone(self.spark._client)
-@@ -3347,6 +3348,7 @@ class SparkConnectSessionTests(ReusedConnectTestCase):
+@@ -3347,6 +3352,7 @@ class SparkConnectSessionTests(ReusedConnectTestCase):
              self.assertIn("Create a new SparkSession is only supported with SparkConnect.", str(e))
  
  

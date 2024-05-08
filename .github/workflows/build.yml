@@ -1,4 +1,5 @@
 name: Build
+
 on:
   push:
     branches:
@@ -14,7 +15,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     outputs:
-      run_spark_tests: ${{ github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.info.outputs.run_spark_tests == 'true') }}
+      run_spark_tests: ${{ steps.info.outputs.run_spark_tests }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,6 +44,12 @@ jobs:
 
   run-spark-tests:
     uses: ./.github/workflows/run-spark-tests.yml
-    if: needs.build.outputs.run_spark_tests == 'true'
+    if: |
+      (github.event_name == 'pull_request' && github.event.action == 'opened') ||
+      (github.event_name == 'pull_request' && needs.build.outputs.run_spark_tests == 'true') ||
+      github.event_name == 'push'
     needs:
       - build
+    with:
+      head_ref: ${{ github.event_name == 'pull_request' && github.ref || github.event.after || github.sha }}
+      base_ref: ${{ github.event_name == 'pull_request' && github.base_ref || github.event.before || github.sha }}

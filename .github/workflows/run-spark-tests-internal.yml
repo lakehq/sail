@@ -24,6 +24,15 @@ on:
         type: string
         default: "3.11"
 
+# All the scripts used in this workflow come from the commit specified by `inputs.ref`,
+# which can be different from the commit that defines the workflow.
+# We assume that the scripts are compatible with the workflow definition between the two commits.
+# Otherwise, we may encounter errors such as "file not found" when the workflow invokes
+# a script that does not exist in the commit being tested.
+# Therefore, when you have both script changes and workflow changes, you should consider
+# separating them into two pull requests. For example, you can add a script in one pull request
+# and update the workflow to invoke the script in a follow-up pull request.
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -132,23 +141,13 @@ jobs:
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         name: Run Spark tests
         run: |
-          cd opt/spark
-          source venv/bin/activate
-          mkdir -p logs
-          export SPARK_TESTING_REMOTE_PORT=50051
-          export SPARK_LOCAL_IP=127.0.0.1
-          # We ignore the pytext exit code so that the job can complete successfully.
-          python/run-pytest.sh \
-            --tb=no -rN --disable-warnings \
-            --report-log=logs/test.jsonl \
-            python/pyspark/sql/tests/connect/ \
-            | tee logs/test.log || true
-          echo "${{ steps.info.outputs.commit_hash }}" > logs/commit
-          echo "${{ inputs.ref }}" > logs/ref
+          export TEST_RUN_GIT_COMMIT="${{ steps.info.outputs.commit_hash }}"
+          export TEST_RUN_GIT_REF="${{ inputs.ref }}"
+          scripts/spark-tests/run-tests.sh
 
       - name: Upload test logs
         uses: actions/upload-artifact@v4
         with:
           name: test-logs-${{ inputs.name }}
-          path: opt/spark/logs
+          path: opt/spark/logs/latest
           retention-days: 7
