@@ -39,6 +39,13 @@ scripts/spark-tests/build-spark-jars.sh
 scripts/spark-tests/setup-spark-env.sh
 ```
 
+You can use the following commands to update the Spark patch with your local modification.
+
+```bash
+git -C opt/spark add .
+git -C opt/spark diff --staged -p > scripts/spark-tests/spark-3.5.1.patch
+```
+
 ### Python Examples Setup
 
 Run the following commands to set up a virtual environment for the Python examples.
