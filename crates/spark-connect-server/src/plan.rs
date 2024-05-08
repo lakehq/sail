@@ -6,7 +6,8 @@ use async_recursion::async_recursion;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
-use datafusion::common::ParamValues;
+use datafusion::common::{ParamValues, TableReference};
+use datafusion::dataframe::DataFrame;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -27,6 +28,7 @@ use crate::extension::analyzer::wildcard::rewrite_wildcard;
 use crate::schema::parse_spark_schema_string;
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
+use crate::spark::connect::Relation;
 use crate::sql::new_sql_parser;
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
@@ -54,22 +56,29 @@ pub(crate) async fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatc
 #[async_recursion]
 pub(crate) async fn from_spark_relation(
     ctx: &SessionContext,
-    relation: &sc::Relation,
+    relation: &Relation,
 ) -> SparkResult<LogicalPlan> {
     use crate::spark::connect::relation::RelType;
 
-    let sc::Relation { common, rel_type } = relation;
-    let _ = common;
+    let Relation { common, rel_type } = relation;
+    let _common = common;
     let state = ctx.state();
     let rel_type = rel_type.as_ref().required("relation type")?;
     match rel_type {
         RelType::Read(read) => {
             use sc::read::ReadType;
 
-            let _ = read.is_streaming;
+            let _is_streaming = read.is_streaming;
             match read.read_type.as_ref().required("read type")? {
-                ReadType::NamedTable(_) => {
-                    return Err(SparkError::todo("named table read type"));
+                ReadType::NamedTable(named_table) => {
+                    let unparsed_identifier: &String = &named_table.unparsed_identifier;
+                    let options: &HashMap<String, String> = &named_table.options;
+                    if !options.is_empty() {
+                        return Err(SparkError::unsupported("table options"));
+                    }
+                    let table_reference = TableReference::from(unparsed_identifier);
+                    let df: DataFrame = ctx.table(table_reference.clone()).await?;
+                    Ok(df.into_optimized_plan()?)
                 }
                 ReadType::DataSource(source) => {
                     let urls = source.paths.clone().to_urls()?;
@@ -202,8 +211,7 @@ pub(crate) async fn from_spark_relation(
             pos_args,
         }) => {
             let statement = new_sql_parser(query)?.parse_one_statement()?;
-            let plan = ctx
-                .state()
+            let plan = state
                 .statement_to_plan(Statement::Statement(Box::new(statement)))
                 .await?;
             if pos_args.len() == 0 && args.len() == 0 {
@@ -252,10 +260,11 @@ pub(crate) async fn from_spark_relation(
         }
         RelType::Offset(offset) => {
             let input = offset.input.as_ref().required("offset input")?;
+            let input = from_spark_relation(ctx, input).await?;
             Ok(LogicalPlan::Limit(plan::Limit {
                 skip: offset.offset as usize,
                 fetch: None,
-                input: Arc::new(from_spark_relation(ctx, input).await?),
+                input: Arc::new(input),
             }))
         }
         RelType::Deduplicate(dedup) => {
@@ -410,7 +419,7 @@ pub(crate) async fn from_spark_relation(
                 Arc::new(input),
             )?))
         }
-        RelType::Tail(_) => {
+        RelType::Tail(_tail) => {
             return Err(SparkError::todo("tail"));
         }
         RelType::WithColumns(columns) => {

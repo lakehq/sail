@@ -1,5 +1,6 @@
 use std::any::Any;
 
+use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -82,7 +83,7 @@ impl ScalarUDFImpl for PythonUDF {
             }
         };
 
-        let processed_array =
+        let processed_array: ArrayRef =
             execute_python_function(&array_ref, &self.python_function, &self.output_type)?;
 
         Ok(array_ref_to_columnar_value(

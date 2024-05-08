@@ -38,6 +38,9 @@ monostate = { workspace = true }
 regex = { workspace = true }
 pyo3 = { workspace = true }
 arrow = { workspace = true }
+sqlparser = { workspace = true }
+polars = { workspace = true }
+polars-arrow = { workspace = true }
 
 [build-dependencies]
 tonic-build = { workspace = true }

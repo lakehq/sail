@@ -1,7 +1,8 @@
+use arrow::array::{as_boolean_array, as_struct_array, StructArray};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{types, Array, ArrayRef, PrimitiveArray, PrimitiveBuilder};
-use datafusion::arrow::datatypes::{ArrowPrimitiveType, DataType};
+use datafusion::arrow::datatypes::{ArrowPrimitiveType, DataType, TimeUnit};
 use datafusion::common::{DataFusionError, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use pyo3::prelude::{Bound, FromPyObject, PyObject, PyResult, Python, ToPyObject};
@@ -34,7 +35,7 @@ where
 
     Python::with_gil(|py| {
         for &value in input_array.values().iter() {
-            let py_tuple: Bound<PyTuple> = PyTuple::new_bound(py, &[value]);
+            let py_tuple: Bound<PyTuple> = PyTuple::new_bound(py, &[value.to_object(py)]);
             let result: PyResult<TOutput::Native> = python_function
                 .call1(py, py_tuple)
                 .and_then(|obj| obj.extract(py));
@@ -63,12 +64,18 @@ where
     TOutput::Native: for<'b> FromPyObject<'b>,
 {
     match &array_ref.data_type() {
-        DataType::Null => Err(DataFusionError::NotImplemented(
-            "DataType::Null".to_string(),
-        )),
-        DataType::Boolean => Err(DataFusionError::NotImplemented(
-            "DataType::Boolean".to_string(),
-        )),
+        DataType::Null => {
+            Err(DataFusionError::NotImplemented(
+                "DataType::Null".to_string(),
+            ))
+            // let array = as_null_array(&array_ref);
+        }
+        DataType::Boolean => {
+            Err(DataFusionError::NotImplemented(
+                "DataType::Boolean".to_string(),
+            ))
+            // let array = as_boolean_array(&array_ref);
+        }
         DataType::Int8 => {
             let array = downcast_array_ref::<types::Int8Type>(&array_ref)?;
             process_elements::<types::Int8Type, TOutput>(&array, &python_function)
@@ -112,9 +119,33 @@ where
             let array = downcast_array_ref::<types::Float64Type>(&array_ref)?;
             process_elements::<types::Float64Type, TOutput>(&array, &python_function)
         }
-        DataType::Timestamp(_, _) => Err(DataFusionError::NotImplemented(
-            "DataType::Timestamp".to_string(),
-        )),
+        DataType::Timestamp(unit, _) => match unit {
+            TimeUnit::Second => {
+                let array = downcast_array_ref::<types::TimestampSecondType>(&array_ref)?;
+                process_elements::<types::TimestampSecondType, TOutput>(&array, &python_function)
+            }
+            TimeUnit::Millisecond => {
+                let array = downcast_array_ref::<types::TimestampMillisecondType>(&array_ref)?;
+                process_elements::<types::TimestampMillisecondType, TOutput>(
+                    &array,
+                    &python_function,
+                )
+            }
+            TimeUnit::Microsecond => {
+                let array = downcast_array_ref::<types::TimestampMicrosecondType>(&array_ref)?;
+                process_elements::<types::TimestampMicrosecondType, TOutput>(
+                    &array,
+                    &python_function,
+                )
+            }
+            TimeUnit::Nanosecond => {
+                let array = downcast_array_ref::<types::TimestampNanosecondType>(&array_ref)?;
+                process_elements::<types::TimestampNanosecondType, TOutput>(
+                    &array,
+                    &python_function,
+                )
+            }
+        },
         DataType::Date32 => {
             let array = downcast_array_ref::<types::Date32Type>(&array_ref)?;
             process_elements::<types::Date32Type, TOutput>(&array, &python_function)
@@ -159,7 +190,7 @@ where
         DataType::LargeList(_) => Err(DataFusionError::NotImplemented(
             "DataType::LargeList".to_string(),
         )),
-        DataType::Struct(_) => Err(DataFusionError::NotImplemented(
+        DataType::Struct(_fields) => Err(DataFusionError::NotImplemented(
             "DataType::Struct".to_string(),
         )),
         DataType::Union(_, _) => Err(DataFusionError::NotImplemented(
@@ -254,10 +285,21 @@ pub fn execute_python_function(
             &array_ref,
             &python_function,
         )?,
-        DataType::Timestamp(_, _) => {
-            Err(DataFusionError::NotImplemented(
-                "DataType::Timestamp".to_string(),
-            ))
+        DataType::Timestamp(unit, _) => {
+            match unit {
+                TimeUnit::Second => process_array_ref_with_python_function::<
+                    types::TimestampSecondType,
+                >(&array_ref, &python_function),
+                TimeUnit::Millisecond => process_array_ref_with_python_function::<
+                    types::TimestampMillisecondType,
+                >(&array_ref, &python_function),
+                TimeUnit::Microsecond => process_array_ref_with_python_function::<
+                    types::TimestampMicrosecondType,
+                >(&array_ref, &python_function),
+                TimeUnit::Nanosecond => process_array_ref_with_python_function::<
+                    types::TimestampNanosecondType,
+                >(&array_ref, &python_function),
+            }
         }?,
         DataType::Date32 => process_array_ref_with_python_function::<types::Date32Type>(
             &array_ref,
@@ -401,12 +443,11 @@ pub fn array_ref_to_columnar_value(
     }
 
     let scalar_value = match &data_type {
-        DataType::Null => Err(DataFusionError::NotImplemented(
-            "DataType::Null".to_string(),
-        )),
-        DataType::Boolean => Err(DataFusionError::NotImplemented(
-            "DataType::Boolean".to_string(),
-        )),
+        DataType::Null => Ok(ScalarValue::Null),
+        DataType::Boolean => {
+            let array = as_boolean_array(&array_ref);
+            Ok(ScalarValue::Boolean(Some(array.value(0))))
+        }
         DataType::Int8 => {
             let array = downcast_array_ref::<types::Int8Type>(&array_ref)?;
             Ok(ScalarValue::Int8(Some(array.value(0))))
@@ -450,9 +491,36 @@ pub fn array_ref_to_columnar_value(
             let array = downcast_array_ref::<types::Float64Type>(&array_ref)?;
             Ok(ScalarValue::Float64(Some(array.value(0))))
         }
-        DataType::Timestamp(_, _) => Err(DataFusionError::NotImplemented(
-            "DataType::Timestamp".to_string(),
-        )),
+        DataType::Timestamp(unit, timezone) => match unit {
+            TimeUnit::Second => {
+                let array = downcast_array_ref::<types::TimestampSecondType>(&array_ref)?;
+                Ok(ScalarValue::TimestampSecond(
+                    Some(array.value(0)),
+                    timezone.clone(),
+                ))
+            }
+            TimeUnit::Millisecond => {
+                let array = downcast_array_ref::<types::TimestampMillisecondType>(&array_ref)?;
+                Ok(ScalarValue::TimestampMillisecond(
+                    Some(array.value(0)),
+                    timezone.clone(),
+                ))
+            }
+            TimeUnit::Microsecond => {
+                let array = downcast_array_ref::<types::TimestampMicrosecondType>(&array_ref)?;
+                Ok(ScalarValue::TimestampMicrosecond(
+                    Some(array.value(0)),
+                    timezone.clone(),
+                ))
+            }
+            TimeUnit::Nanosecond => {
+                let array = downcast_array_ref::<types::TimestampNanosecondType>(&array_ref)?;
+                Ok(ScalarValue::TimestampNanosecond(
+                    Some(array.value(0)),
+                    timezone.clone(),
+                ))
+            }
+        },
         DataType::Date32 => {
             let array = downcast_array_ref::<types::Date32Type>(&array_ref)?;
             Ok(ScalarValue::Date32(Some(array.value(0))))
@@ -497,9 +565,10 @@ pub fn array_ref_to_columnar_value(
         DataType::LargeList(_) => Err(DataFusionError::NotImplemented(
             "DataType::LargeList".to_string(),
         )),
-        DataType::Struct(_) => Err(DataFusionError::NotImplemented(
-            "DataType::Struct".to_string(),
-        )),
+        DataType::Struct(_fields) => {
+            let array: StructArray = as_struct_array(&array_ref).clone();
+            Ok(ScalarValue::Struct(Arc::new(array)))
+        }
         DataType::Union(_, _) => Err(DataFusionError::NotImplemented(
             "DataType::Union".to_string(),
         )),

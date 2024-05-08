@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::extension::function::alias::MultiAlias;
+use crate::extension::function::contains::Contains;
 use crate::schema::{from_spark_data_type, parse_spark_data_type_string};
 use crate::spark::connect as sc;
 use crate::sql::new_sql_parser;
@@ -10,13 +11,15 @@ use datafusion::catalog::TableReference;
 use datafusion::common::{Column, DFSchema, ScalarValue};
 use datafusion::config::ConfigOptions;
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion::sql::sqlparser::ast;
 use datafusion::{functions, functions_array};
+use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
     expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, ExprSchemable, GetFieldAccess,
     GetIndexedField, Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
 };
+use framework_python::py_function_pyspark::PyFunctionWrapper;
+use sqlparser::ast;
 
 #[derive(Default)]
 pub(crate) struct EmptyContextProvider {
@@ -104,7 +107,7 @@ pub(crate) fn from_spark_expression(
                 ast::Expr::QualifiedWildcard(ast::ObjectName(name)) => {
                     let qualifier = name
                         .iter()
-                        .map(|x| x.value.as_str())
+                        .map(|x| x.to_string())
                         .collect::<Vec<_>>()
                         .join(".");
                     Ok(expr::Expr::Wildcard {
@@ -129,14 +132,8 @@ pub(crate) fn from_spark_expression(
                     ast::Expr::QualifiedWildcard(ast::ObjectName(names)) => {
                         let qualifier = names
                             .iter()
-                            .map(|x| match x {
-                                ast::Ident {
-                                    value,
-                                    quote_style: None,
-                                } => Ok(value.as_str()),
-                                _ => Err(SparkError::todo("quoted identifier")),
-                            })
-                            .collect::<Result<Vec<_>, _>>()?
+                            .map(|x| x.to_string())
+                            .collect::<Vec<_>>()
                             .join(".");
                         Ok(expr::Expr::Wildcard {
                             qualifier: Some(qualifier),
@@ -305,9 +302,10 @@ pub(crate) fn from_spark_expression(
                 )));
             }
 
-            let python_obj_wrapper = deserialize_py_function_pyspark(command).map_err(|e| {
-                SparkError::invalid(format!("Python UDF deserialization error: {:?}", e))
-            })?;
+            let python_obj_wrapper: PyFunctionWrapper = deserialize_py_function_pyspark(command)
+                .map_err(|e| {
+                    SparkError::invalid(format!("Python UDF deserialization error: {:?}", e))
+                })?;
             let python_function = python_obj_wrapper.function;
 
             let python_udf: PythonUDF = PythonUDF::new(
@@ -346,20 +344,64 @@ pub(crate) fn from_spark_literal_to_scalar(
         LiteralType::Long(x) => Ok(ScalarValue::Int64(Some(*x))),
         LiteralType::Float(x) => Ok(ScalarValue::Float32(Some(*x))),
         LiteralType::Double(x) => Ok(ScalarValue::Float64(Some(*x))),
-        LiteralType::Decimal(_) => Err(SparkError::todo("literal decimal")),
+        LiteralType::Decimal(x) => {
+            let (value, precision, scale) = match x.value.parse::<i128>() {
+                Ok(v) => (v, x.precision() as u8, x.scale() as i8),
+                Err(_) => {
+                    return Err(SparkError::invalid(format!(
+                        "Failed to parse decimal value {:?}",
+                        Some(x.value.clone())
+                    )));
+                }
+            };
+            Ok(ScalarValue::Decimal128(Some(value), precision, scale))
+        }
         LiteralType::String(x) => Ok(ScalarValue::Utf8(Some(x.clone()))),
         LiteralType::Date(x) => Ok(ScalarValue::Date32(Some(*x))),
-        // TODO: timezone
-        LiteralType::Timestamp(x) => Ok(ScalarValue::TimestampMicrosecond(Some(*x), None)),
+        LiteralType::Timestamp(x) => {
+            // TODO: should we use "spark.sql.session.timeZone"?
+            let timezone: Arc<str> = Arc::from("UTC");
+            Ok(ScalarValue::TimestampMicrosecond(Some(*x), Some(timezone)))
+        }
         LiteralType::TimestampNtz(x) => Ok(ScalarValue::TimestampMicrosecond(Some(*x), None)),
         LiteralType::CalendarInterval(x) => Ok(ScalarValue::IntervalMonthDayNano(Some(
             IntervalMonthDayNanoType::make_value(x.months, x.days, x.microseconds * 1000),
         ))),
         LiteralType::YearMonthInterval(x) => Ok(ScalarValue::IntervalYearMonth(Some(*x))),
         LiteralType::DayTimeInterval(x) => Ok(ScalarValue::IntervalDayTime(Some(*x))),
-        LiteralType::Array(_) => Err(SparkError::todo("literal array")),
-        LiteralType::Map(_) => Err(SparkError::todo("literal map")),
-        LiteralType::Struct(_) => Err(SparkError::todo("literal struct")),
+        LiteralType::Array(array) => {
+            // TODO: Validate that this works
+            let element_type: &sc::DataType =
+                array.element_type.as_ref().required("array element type")?;
+            let element_type: DataType = from_spark_data_type(element_type)?;
+            let scalars: Vec<ScalarValue> = array
+                .elements
+                .iter()
+                .map(|literal| from_spark_literal_to_scalar(literal))
+                .collect::<SparkResult<Vec<_>>>()?;
+            Ok(ScalarValue::List(ScalarValue::new_list(
+                &scalars,
+                &element_type,
+            )))
+        }
+        LiteralType::Map(map) => Err(SparkError::todo("CHECK HERE UNIT TEST LiteralType::Map")),
+        LiteralType::Struct(r#struct) => {
+            // TODO: Validate that this works
+            let struct_type: &sc::DataType =
+                r#struct.struct_type.as_ref().required("struct type")?;
+            let struct_type: DataType = from_spark_data_type(struct_type)?;
+            let fields = match &struct_type {
+                DataType::Struct(fields) => fields,
+                _ => return Err(SparkError::invalid("expected struct type")),
+            };
+
+            let mut builder: ScalarStructBuilder = ScalarStructBuilder::new();
+            for (literal, field) in r#struct.elements.iter().zip(fields.iter()) {
+                let scalar = from_spark_literal_to_scalar(literal)?;
+                builder = builder.with_scalar(field, scalar);
+            }
+            Ok(builder.build()?)
+        }
     }
 }
 
@@ -412,6 +454,7 @@ pub(crate) fn get_scalar_function(
         return Ok(expr::Expr::BinaryExpr(expr::BinaryExpr { left, op, right }));
     }
 
+    // TODO: Add all functions::expr_fn and all functions_array::expr_fn
     match name {
         "isnull" => {
             let expr = get_one_argument(args)?;
@@ -459,15 +502,16 @@ pub(crate) fn get_scalar_function(
                 escape_char: None,
             }));
         }
-        // TODO: contains
+        "contains" => {
+            // TODO: Validate that this works
+            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(Contains::new()))),
+                args: args,
+            }));
+        }
         "startswith" => {
-            if args.len() != 2 {
-                return Err(SparkError::invalid("binary operator requires 2 arguments"));
-            }
-            return Ok(functions::expr_fn::starts_with(
-                args[0].clone(),
-                args[1].clone(),
-            ));
+            let (left, right) = get_two_arguments(args)?;
+            return Ok(functions::expr_fn::starts_with(*left, *right));
         }
         "endswith" => {
             return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
@@ -476,7 +520,27 @@ pub(crate) fn get_scalar_function(
             }));
         }
         "array" => {
-            return Ok(functions_array::expr_fn::make_array(args.clone()));
+            return Ok(functions_array::expr_fn::make_array(args));
+        }
+        "array_has" | "array_contains" => {
+            let (left, right) = get_two_arguments(args)?;
+            return Ok(functions_array::expr_fn::array_has(*left, *right));
+        }
+        "array_has_all" | "array_contains_all" => {
+            let (left, right) = get_two_arguments(args)?;
+            return Ok(functions_array::expr_fn::array_has_all(*left, *right));
+        }
+        "array_has_any" | "array_contains_any" => {
+            let (left, right) = get_two_arguments(args)?;
+            return Ok(functions_array::expr_fn::array_has_any(*left, *right));
+        }
+        "array_repeat" => {
+            let (element, count) = get_two_arguments(args)?;
+            let count = expr::Expr::Cast(expr::Cast {
+                expr: count,
+                data_type: DataType::Int64,
+            });
+            return Ok(functions_array::expr_fn::array_repeat(*element, count));
         }
         "avg" => {
             return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
@@ -540,10 +604,8 @@ pub(crate) fn get_scalar_function(
             }));
         }
         "abs" => {
-            if args.len() != 1 {
-                return Err(SparkError::invalid("unary operator requires 1 argument"));
-            }
-            return Ok(functions::expr_fn::abs(args[0].clone()));
+            let expr = get_one_argument(args)?;
+            return Ok(functions::expr_fn::abs(*expr));
         }
         name @ ("explode" | "explode_outer" | "posexplode" | "posexplode_outer") => {
             let udf = ScalarUDF::from(Explode::new(name));
@@ -551,22 +613,6 @@ pub(crate) fn get_scalar_function(
                 func_def: ScalarFunctionDefinition::UDF(Arc::new(udf)),
                 args,
             }));
-        }
-        _ => {}
-    }
-
-    match name {
-        "array_repeat" => {
-            if args.len() != 2 {
-                return Err(SparkError::invalid("array_repeat requires 2 arguments"));
-            }
-            // DataFusion requires the repeat count to be int64.
-            let count = args.pop().unwrap();
-            let count = expr::Expr::Cast(expr::Cast {
-                expr: Box::new(count),
-                data_type: DataType::Int64,
-            });
-            args.push(count);
         }
         "regexp_replace" => {
             if args.len() != 3 {
@@ -577,8 +623,15 @@ pub(crate) fn get_scalar_function(
                 "g".to_string(),
             ))));
         }
+        "timestamp" | "to_timestamp" => {
+            return Ok(functions::expr_fn::to_timestamp_micros(args));
+        }
+        "unix_timestamp" | "to_unixtime" => {
+            return Ok(functions::expr_fn::to_unixtime(args));
+        }
         _ => {}
     }
+
     Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
         func_def: ScalarFunctionDefinition::BuiltIn(name.parse()?),
         args,

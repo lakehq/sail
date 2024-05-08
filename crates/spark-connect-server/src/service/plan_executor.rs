@@ -20,7 +20,7 @@ use crate::session::Session;
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::{ResponseType, ResultComplete};
 use crate::spark::connect::relation;
-use crate::spark::connect::write_operation::{SaveMode, SaveType};
+use crate::spark::connect::write_operation::{save_table::TableSaveMethod, SaveMode, SaveType};
 use crate::spark::connect::{
     CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
     CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, Relation, SqlCommand,
@@ -129,7 +129,7 @@ pub(crate) async fn handle_execute_write_operation(
 ) -> SparkResult<ExecutePlanResponseStream> {
     let relation = write.input.required("input")?;
     let ctx = session.context();
-    let _ = SaveMode::try_from(write.mode).required("save mode")?;
+    let _save_mode = SaveMode::try_from(write.mode).required("save mode")?;
     if !write.sort_column_names.is_empty() {
         return Err(SparkError::unsupported("sort column names"));
     }
@@ -188,8 +188,37 @@ pub(crate) async fn handle_execute_write_operation(
             .build()
             .or_else(|e| Err(SparkError::from(e)))?
         }
-        SaveType::Table(_) => {
-            return Err(SparkError::todo("save table"));
+        SaveType::Table(save) => {
+            let table_name: &String = &save.table_name;
+            let table_ref = TableReference::from(table_name);
+            let save_method =
+                TableSaveMethod::try_from(save.save_method).required("save method")?;
+
+            match save_method {
+                TableSaveMethod::SaveAsTable => {
+                    let df = DataFrame::new(ctx.state(), plan.clone());
+                    ctx.register_table(table_ref, df.into_view())?;
+                    plan
+                }
+                TableSaveMethod::InsertInto => {
+                    return Err(SparkError::todo("insert into"));
+                    // LogicalPlanBuilder::insert_into(
+                    //     plan,
+                    //     table_ref,
+                    //     df.schema(),
+                    //     true, // TODO: use _save_mode
+                    // )
+                    //     .or_else(|e| Err(SparkError::from(e)))?
+                    //     .build()
+                    //     .or_else(|e| Err(SparkError::from(e)))?
+                }
+                _ => {
+                    return Err(SparkError::invalid(format!(
+                        "WriteOperation:SaveTable:TableSaveMethod not supported: {}",
+                        save_method.as_str_name()
+                    )))
+                }
+            }
         }
     };
     handle_execute_plan(session, plan, metadata).await

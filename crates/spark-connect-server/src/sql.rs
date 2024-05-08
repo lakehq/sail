@@ -1,12 +1,12 @@
-use datafusion::sql::sqlparser::ast::{
+use sqlparser::ast::{
     ColumnDef, DataType, Expr, GroupByExpr, Ident, Query, Select, SetExpr, Statement, TableFactor,
     TableWithJoins, Values,
 };
-use datafusion::sql::sqlparser::dialect::Dialect;
-use datafusion::sql::sqlparser::keywords;
-use datafusion::sql::sqlparser::keywords::Keyword;
-use datafusion::sql::sqlparser::parser::{Parser, ParserError};
-use datafusion::sql::sqlparser::tokenizer::{Token, Word};
+use sqlparser::dialect::Dialect;
+use sqlparser::keywords;
+use sqlparser::keywords::Keyword;
+use sqlparser::parser::{Parser, ParserError};
+use sqlparser::tokenizer::{Token, Word};
 
 #[derive(Debug)]
 struct SparkDialect {}
@@ -171,7 +171,7 @@ pub(crate) fn new_sql_parser(sql: &str) -> Result<SparkSqlParser, ParserError> {
     Ok(SparkSqlParser { parser })
 }
 
-impl SparkSqlParser<'_> {
+impl<'a> SparkSqlParser<'a> {
     pub(crate) fn parse_one_statement(&mut self) -> Result<Statement, ParserError> {
         let mut statements = self.parser.parse_statements()?;
         if statements.len() > 1 {
@@ -217,7 +217,7 @@ impl SparkSqlParser<'_> {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::sql::sqlparser::test_utils::TestedDialects;
+    use sqlparser::test_utils::TestedDialects;
 
     fn spark() -> TestedDialects {
         TestedDialects {
