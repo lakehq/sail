@@ -1,0 +1,46 @@
+name: Rust setup
+description: Prepare Rust build environment and build cache
+inputs:
+  protoc_version:
+    description: Protobuf compiler version
+    default: "26.1"
+runs:
+  using: composite
+  steps:
+    - name: Install protoc
+      run: |
+        wget -q -O /tmp/protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${{ inputs.protoc_version }}/protoc-${{ inputs.protoc_version }}-linux-x86_64.zip"
+        sudo unzip /tmp/protoc.zip -d /usr/local 'bin/*' 'include/*'
+        rm /tmp/protoc.zip
+      shell: bash
+
+    - name: Show versions
+      id: versions
+      run: |
+        set -x
+        protoc --version
+        python -V
+        rustc -vV
+        set +x
+        rust_release="$(rustc -vV | sed -ne 's/^release: *//p')"
+        echo "rust_release=${rust_release}" >> "$GITHUB_OUTPUT"
+      shell: bash
+
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/
+          target/**/build/
+          target/**/deps/
+          target/**/.fingerprint/
+        key: setup-rust-${{ runner.os }}-${{ steps.versions.outputs.rust_release }}-${{ hashFiles('**/Cargo.toml') }}
+
+    # Incremental compilation is not beneficial for CI builds.
+    # So we turn it off to speed up the build and reduce the cache size.
+    - name: Turn off incremental compilation
+      run: |
+        echo CARGO_INCREMENTAL=0 >> "$GITHUB_ENV"
+      shell: bash

@@ -26,16 +26,17 @@ one for the Spark project and the other for the framework Python examples.
 Run the following command to clone the Spark project.
 
 ```bash
-git clone git@github.com:apache/spark.git
+git clone git@github.com:apache/spark.git opt/spark
 ```
 
-In the remainder of this document, `${SPARK_PROJECT_PATH}` refers to the absolute path of the Spark project,
-while `${FRAMEWORK_PROJECT_PATH}` refers to the absolute path of the LakeSail framework project.
-
-Run the following command to patch the Spark project and set up a virtual environment.
+Run the following command to patch the Spark project and set up the Spark environment.
+You need to make sure your working directory is clean before applying the patch.
 
 ```bash
-"${FRAMEWORK_PROJECT_PATH}"/scripts/spark-connect-server/setup-spark-env.sh
+git -C opt/spark checkout v3.5.1
+git -C opt/spark apply ../../scripts/spark-tests/spark-3.5.1.patch
+scripts/spark-tests/build-spark-jars.sh
+scripts/spark-tests/setup-spark-env.sh
 ```
 
 ### Python Examples Setup
@@ -43,7 +44,7 @@ Run the following command to patch the Spark project and set up a virtual enviro
 Run the following commands to set up a virtual environment for the Python examples.
 
 ```bash
-cd "${FRAMEWORK_PROJECT_PATH}"/examples/python && poetry install
+poetry -C examples/python install
 ```
 
 ### Running the Spark Connect Server
@@ -51,7 +52,7 @@ cd "${FRAMEWORK_PROJECT_PATH}"/examples/python && poetry install
 Use the following commands to build and run the Spark Connect server powered by the framework.
 
 ```bash
-"${FRAMEWORK_PROJECT_PATH}"/scripts/spark-connect-server/run-framework-server.sh
+scripts/spark-tests/run-server.sh
 ```
 
 You can run the Python examples in another terminal.
@@ -62,27 +63,36 @@ Please refer to `examples/python/README.md` for more information.
 After running the Spark Connect server, start another terminal and use the following commands to run the Spark tests.
 
 ```bash
-cd "${SPARK_PROJECT_PATH}" && source venv/bin/activate
+cd opt/spark
+source venv/bin/activate
+
+# Create a directory for test logs. This directory is in `.gitignore`.
+mkdir -p logs
 
 # Run the tests and write the output to a log file.
 # It takes a few minutes to run the tests.
 env SPARK_TESTING_REMOTE_PORT=50051 \
   SPARK_LOCAL_IP=127.0.0.1 \
   python/run-pytest.sh \
-  python/pyspark/sql/tests/connect/ \
-  > logs/test.log
+  --tb=no -rN --disable-warnings \
+  --report-log=logs/test.jsonl \
+  python/pyspark/sql/tests/connect/
 
 # The following are a few useful commands for development.
 
 # Get the distribution of error details for failed tests.
-# This does not include tests failed due to assertion errors.
-# You can replace the last `less` with `awk '{ sum += $1 } END { print sum }'`
-# to get the total number of failed tests.
-cat logs/test.log | sed -n -e 's/^E.*\tdetails = "\(.*\)"/\1/p' | sort | uniq -c | sort -k1,1r | less
+# The `--slurpfile baseline logs/baseline.jsonl` arguments are optional
+# if you do not have a baseline test log file.
+jq -r -f scripts/spark-tests/count-errors.jq \
+  --slurpfile baseline logs/baseline.jsonl \
+  logs/test.jsonl | less
 
-# Compare failed tests between two runs.
-diff -u <(cat logs/test.1.log | grep "^FAILED") <(cat logs/test.2.log | grep "^FAILED") | less
+# Show a sorted list of passed tests.
+jq -r -f scripts/spark-tests/show-passed-tests.jq logs/test.jsonl | less
 
 # Start an interactive console with a local PySpark session.
-env SPARK_PREPEND_CLASSES=1 bin/pyspark
+env SPARK_LOCAL_IP=127.0.0.1 SPARK_PREPEND_CLASSES=1 bin/pyspark
 ```
+
+The Spark tests are also triggered in GitHub Actions for pull requests,
+either when the pull request is opened or when the commit message contains `[spark tests]` (case-insensitive).

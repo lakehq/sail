@@ -161,10 +161,10 @@ index 703690bf7f9..78a69ba076b 100644
  
 diff --git a/python/requirements.txt b/python/requirements.txt
 new file mode 100644
-index 00000000000..2d7ae408700
+index 00000000000..3336b125605
 --- /dev/null
 +++ b/python/requirements.txt
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,25 @@
 +pandas==2.0.3
 +pyarrow==12.0.1
 +scikit-learn==1.1.*
@@ -186,13 +186,10 @@ index 00000000000..2d7ae408700
 +protobuf==3.20.3
 +googleapis-common-protos==1.56.4
 +
-+torch
-+torchvision
-+torcheval
-+
 +pytest
 +pytest-xdist
 +pytest-timeout
++pytest-reportlog
 diff --git a/python/run-pytest.sh b/python/run-pytest.sh
 new file mode 100755
 index 00000000000..bd71cf7fa59
