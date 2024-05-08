@@ -25,8 +25,8 @@ jobs:
       - name: Get job information
         id: info
         run: |
-          commit="${{ null || github.event.push.ref || github.event.pull_request.head.sha || github.sha }}"
-          commit_message="$(git show --pretty='format:%s' -s "${commit}")"
+          commit="${{ github.event.pull_request.head.sha || github.sha }}"
+          commit_message="$(git show --pretty='format:%s' -s "${commit}"^)"
           run_spark_tests="$(printf '%s' "${commit_message}" | grep -q -i 'spark tests' && printf 'true' || printf 'false')"
           echo "run_spark_tests=${run_spark_tests}" >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
