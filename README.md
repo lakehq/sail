@@ -68,6 +68,11 @@ the `TEST_RUN_NAME` environment variable whose default value is `latest`.
 scripts/spark-tests/run-tests.sh
 ```
 
+You can pass arguments to the script, which will be forwarded to `pytest`.
+If no arguments are passed, the script will run a default set of tests for Spark Connect.
+You can also use `PYTEST_` environment variables to customize the test execution.
+For example, `PYTEST_ADDOPTS="-k <expression>"` can be used to run specific tests matching `<expression>`.
+
 The following are useful commands to analyze test logs.
 
 (1) Get the error counts for failed tests.

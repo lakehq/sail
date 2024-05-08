@@ -16,11 +16,18 @@ mkdir -p "${logs_dir}"
 export SPARK_TESTING_REMOTE_PORT=50051
 export SPARK_LOCAL_IP=127.0.0.1
 
+pytest_args=("$@")
+
+if [ "${#pytest_args[@]}" -eq 0 ]; then
+  # We run Spark Connect tests by default.
+  pytest_args+=("python/pyspark/sql/tests/connect/")
+fi
+
 # We ignore the pytext exit code so that the command can complete successfully.
 python/run-pytest.sh \
   --tb=no -rN --disable-warnings \
   --report-log="${logs_dir}/test.jsonl" \
-  python/pyspark/sql/tests/connect/ \
+  "${pytest_args[@]}" \
   | tee "${logs_dir}/test.log" || true
 
 echo "${TEST_RUN_GIT_COMMIT:-unknown}" > "${logs_dir}/commit"
