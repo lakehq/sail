@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::py_data_type::to_pyobject;
 use datafusion::arrow::array::{
     as_boolean_array, as_struct_array, types, Array, ArrayRef, PrimitiveArray, PrimitiveBuilder,
     StructArray,
@@ -192,9 +193,35 @@ where
         DataType::LargeList(_) => Err(DataFusionError::NotImplemented(
             "DataType::LargeList".to_string(),
         )),
-        DataType::Struct(_fields) => Err(DataFusionError::NotImplemented(
-            "DataType::Struct".to_string(),
-        )),
+        DataType::Struct(_fields) => {
+            let struct_array = as_struct_array(array_ref);
+            println!("CHECK HERE Struct array: {:?}", struct_array);
+            let mut builder = PrimitiveBuilder::<TOutput>::with_capacity(struct_array.len());
+            Python::with_gil(|py| {
+                let code = r#"
+class Struct:
+    pass
+"#;
+                py.run_bound(code, None, None).unwrap();
+                for i in 0..struct_array.len() {
+                    let pyobject = to_pyobject(py, struct_array, i).unwrap();
+                    let result: PyResult<TOutput::Native> = python_function
+                        .call1(py, PyTuple::new_bound(py, &[pyobject]))
+                        .and_then(|obj| obj.extract(py));
+                    match result {
+                        Ok(native) => builder.append_value(native),
+                        Err(py_err) => {
+                            return Err(DataFusionError::Execution(format!(
+                                "Failed to extract Rust type from Python return value: {:?}",
+                                py_err
+                            )))
+                        }
+                    }
+                }
+                Ok(())
+            })?;
+            Ok(Arc::new(builder.finish()) as ArrayRef)
+        }
         DataType::Union(_, _) => Err(DataFusionError::NotImplemented(
             "DataType::Union".to_string(),
         )),

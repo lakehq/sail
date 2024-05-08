@@ -629,6 +629,16 @@ pub(crate) fn get_scalar_function(
         "unix_timestamp" | "to_unixtime" => {
             return Ok(functions::expr_fn::to_unixtime(args));
         }
+        "struct" => {
+            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
+                    datafusion::functions::core::r#struct::StructFunc::new(),
+                ))),
+                args: args,
+            }));
+            // let test = args[0].clone();
+            // return Ok(functions::expr_fn::r#struct(test));
+        }
         _ => {}
     }
 
