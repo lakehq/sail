@@ -73,18 +73,18 @@ The following are useful commands to analyze test logs.
 (1) Get the error counts for failed tests.
 
 ```bash
-# You can remove the `--slurpfile baseline logs/baseline/test.jsonl` arguments
+# You can remove the `--slurpfile baseline opt/spark/logs/baseline/test.jsonl` arguments
 # if you do not have baseline test logs.
 jq -r -f scripts/spark-tests/count-errors.jq \
-  --slurpfile baseline logs/baseline/test.jsonl \
-  logs/latest/test.jsonl | less
+  --slurpfile baseline opt/spark/logs/baseline/test.jsonl \
+  opt/spark/logs/latest/test.jsonl | less
 ```
 
 (2) Show a sorted list of passed tests.
 
 ```bash
 jq -r -f scripts/spark-tests/show-passed-tests.jq \
-  logs/latest/test.jsonl | less
+  opt/spark/logs/latest/test.jsonl | less
 ```
 
 You can use the following commands to start a local PySpark session.
