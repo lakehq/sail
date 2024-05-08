@@ -51,6 +51,4 @@ jobs:
       - build
     with:
       head_ref: ${{ github.event_name == 'pull_request' && github.ref || github.event.after || github.sha }}
-      # FIXME
-      base_ref: ${{ github.ref }}
-      # base_ref: ${{ github.event_name == 'pull_request' && github.base_ref || github.event.before || github.sha }}
+      base_ref: ${{ github.event_name == 'pull_request' && github.base_ref || github.event.before || github.sha }}
