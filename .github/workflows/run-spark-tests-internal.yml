@@ -86,8 +86,8 @@ jobs:
         id: cache-jars
         with:
           path: |
-            opt/spark/assembly/target/scala-*/jars
-            opt/spark/launcher/target/scala-*/classes
+            opt/spark/**/target/**/*.jar
+            opt/spark/**/target/**/classes
           # We must use `format()` to define the key here since nested variable substitution is not supported.
           key: ${{ format('spark-tests-jars-{0}-spark-{1}-{2}', runner.os, inputs.spark_version, hashFiles(format('scripts/spark-tests/spark-{0}.patch', inputs.spark_version), 'scripts/spark-tests/build-spark-jars.sh')) }}
 
