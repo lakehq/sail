@@ -108,6 +108,8 @@ jobs:
       - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-env.outputs.cache-hit != 'true'
         name: Set up test environment
         run: |
+          find opt/spark -name '*.jar'
+          exit 1
           scripts/spark-tests/setup-spark-env.sh
           pip install poetry
           poetry -C examples/python install

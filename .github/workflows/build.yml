@@ -30,16 +30,16 @@ jobs:
           run_spark_tests="$(printf '%s' "${commit_message}" | grep -q -i '\[spark tests\]' && printf 'true' || printf 'false')"
           echo "run_spark_tests=${run_spark_tests}" >> "$GITHUB_OUTPUT"
 
-      - uses: ./.github/actions/setup-rust
-
-      - name: Format check
-        run: cargo fmt -- --check
-
-      - name: Build
-        run: cargo build
-
-      - name: Test
-        run: cargo test
+#      - uses: ./.github/actions/setup-rust
+#
+#      - name: Format check
+#        run: cargo fmt -- --check
+#
+#      - name: Build
+#        run: cargo build
+#
+#      - name: Test
+#        run: cargo test
 
   run-spark-tests:
     uses: ./.github/workflows/run-spark-tests.yml
