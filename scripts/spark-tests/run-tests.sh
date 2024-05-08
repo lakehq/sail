@@ -16,7 +16,7 @@ mkdir -p "${logs_dir}"
 export SPARK_TESTING_REMOTE_PORT=50051
 export SPARK_LOCAL_IP=127.0.0.1
 
-# We ignore the pytext exit code so that the job can complete successfully.
+# We ignore the pytext exit code so that the command can complete successfully.
 python/run-pytest.sh \
   --tb=no -rN --disable-warnings \
   --report-log="${logs_dir}/test.jsonl" \
