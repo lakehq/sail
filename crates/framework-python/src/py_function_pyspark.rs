@@ -1,5 +1,6 @@
 use pyo3::prelude::{PyAnyMethods, PyModule, PyObject, Python, ToPyObject};
-use serde::de::{self, value::BorrowedBytesDeserializer, Deserialize, Deserializer, Visitor};
+use serde::de::{self, Deserializer, IntoDeserializer, Visitor};
+use serde::Deserialize;
 use serde_bytes::Bytes;
 
 #[derive(Debug, Clone)]
@@ -51,7 +52,5 @@ pub fn deserialize_py_function_pyspark(
     command: &[u8],
 ) -> Result<PyFunctionWrapper, de::value::Error> {
     let bytes = Bytes::new(command);
-    let deserializer: BorrowedBytesDeserializer<de::value::Error> =
-        BorrowedBytesDeserializer::new(bytes);
-    PyFunctionWrapper::deserialize(deserializer)
+    PyFunctionWrapper::deserialize(bytes.into_deserializer())
 }
