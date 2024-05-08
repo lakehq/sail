@@ -35,8 +35,9 @@ jobs:
       - name: Get job information
         id: info
         run: |
+          commit_hash="$(git rev-parse HEAD)"
           echo "env_key=spark-${{ inputs.spark_version }}-java-${{ inputs.java_version }}-python-${{ inputs.python_version }}" >> "$GITHUB_OUTPUT"
-          echo "commit_hash=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "commit_hash=${commit_hash}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/cache@v4
         name: Cache test logs
@@ -102,7 +103,8 @@ jobs:
       - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-jars.outputs.cache-hit != 'true'
         name: Build Spark jars
         run: |
-          # scripts/spark-tests/build-spark-jars.sh
+          exit 1
+          scripts/spark-tests/build-spark-jars.sh
 
       - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-env.outputs.cache-hit != 'true'
         name: Set up test environment
