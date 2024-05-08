@@ -45,7 +45,7 @@ jobs:
     uses: ./.github/workflows/run-spark-tests.yml
     if: |
       (github.event_name == 'pull_request' && github.event.action == 'opened') ||
-      (github.event_name == 'pull_request' && steps.info.outputs.run_spark_tests == 'true') ||
+      (github.event_name == 'pull_request' && needs.build.outputs.run_spark_tests == 'true') ||
       github.event_name == 'push'
     needs:
       - build
