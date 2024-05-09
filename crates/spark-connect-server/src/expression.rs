@@ -622,6 +622,12 @@ pub(crate) fn get_scalar_function(
             args.push(expr::Expr::Literal(ScalarValue::Utf8(Some(
                 "g".to_string(),
             ))));
+            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
+                    functions::regex::regexpreplace::RegexpReplaceFunc::new(),
+                ))),
+                args: args,
+            }));
         }
         "timestamp" | "to_timestamp" => {
             return Ok(functions::expr_fn::to_timestamp_micros(args));

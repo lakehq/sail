@@ -80,6 +80,10 @@ If no arguments are passed, the script will run a default set of tests for Spark
 You can also use `PYTEST_` environment variables to customize the test execution.
 For example, `PYTEST_ADDOPTS="-k <expression>"` can be used to run specific tests matching `<expression>`.
 
+```bash
+scripts/spark-tests/run-tests.sh python/pyspark/sql/tests/connect/ -v -k test_something
+```
+
 The following are useful commands to analyze test logs.
 
 (1) Get the error counts for failed tests.
