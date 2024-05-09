@@ -194,7 +194,6 @@ where
         )),
         DataType::Struct(_fields) => {
             let struct_array = as_struct_array(array_ref);
-            println!("CHECK HERE Struct array: {:?}", struct_array);
             let mut builder = PrimitiveBuilder::<TOutput>::with_capacity(struct_array.len());
             Python::with_gil(|py| {
                 let code = r#"

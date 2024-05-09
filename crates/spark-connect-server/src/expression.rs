@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::extension::function::alias::MultiAlias;
 use crate::extension::function::contains::Contains;
+use crate::extension::function::struct_function::StructFunction;
 use crate::schema::{from_spark_data_type, parse_spark_data_type_string};
 use crate::spark::connect as sc;
 use crate::sql::new_sql_parser;
@@ -93,6 +94,7 @@ pub(crate) fn from_spark_expression(
             if func.is_distinct {
                 return Err(SparkError::unsupported("distinct function"));
             }
+
             let args = func
                 .arguments
                 .iter()
@@ -636,14 +638,20 @@ pub(crate) fn get_scalar_function(
             return Ok(functions::expr_fn::to_unixtime(args));
         }
         "struct" => {
+            let field_names: Vec<String> = args.iter().map(|x| {
+                match x {
+                    expr::Expr::Column(column) => Ok(column.name.to_string()),
+                    _ => {
+                        Err(SparkError::invalid("get_scalar_function: struct function should have expr::Expr::Column as arguments"))
+                    }
+                }.unwrap()
+            }).collect::<Vec<String>>();
             return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                 func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
-                    datafusion::functions::core::r#struct::StructFunc::new(),
+                    StructFunction::new(field_names),
                 ))),
                 args: args,
             }));
-            // let test = args[0].clone();
-            // return Ok(functions::expr_fn::r#struct(test));
         }
         _ => {}
     }

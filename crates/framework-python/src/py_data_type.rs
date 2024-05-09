@@ -69,17 +69,12 @@ pub fn to_pyobject(py: Python<'_>, array: &dyn Array, i: usize) -> PyResult<PyOb
             values.into_py(py)
         }
         DataType::Struct(fields) => {
-            println!("CHECK HERE FIELDS: {:?}", fields);
             let array = as_struct_array(array);
             let object = py.eval_bound("Struct()", None, None)?;
-            // let pydict = PyDict::new_bound(py);
             for (j, field) in fields.iter().enumerate() {
                 let value = to_pyobject(py, array.column(j).as_ref(), i)?;
                 object.setattr(field.name().as_str(), value)?;
-                // pydict.set_item(field.name().as_str(), value.clone())?;
-                // pydict.setattr(field.name().as_str(), value.clone())?;
             }
-            // pydict.into()
             object.into()
         }
         _ => todo!(),
