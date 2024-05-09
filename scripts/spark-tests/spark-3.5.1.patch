@@ -154,6 +154,19 @@ index e1ec97928f7..76dd13a6867 100644
  
      def _test_apply_in_pandas_with_state_basic(self, func, check_results):
          input_path = tempfile.mkdtemp()
+diff --git a/python/pyspark/testing/sqlutils.py b/python/pyspark/testing/sqlutils.py
+index 077d854b1dd..513a8f5d516 100644
+--- a/python/pyspark/testing/sqlutils.py
++++ b/python/pyspark/testing/sqlutils.py
+@@ -84,7 +84,7 @@ class ExamplePointUDT(UserDefinedType):
+ 
+     @classmethod
+     def module(cls):
+-        return "pyspark.sql.tests"
++        return "pyspark.testing.sqlutils"
+ 
+     @classmethod
+     def scalaUDT(cls):
 diff --git a/python/pyspark/tests/test_install_spark.py b/python/pyspark/tests/test_install_spark.py
 index e980a17673f..00dcc32d431 100644
 --- a/python/pyspark/tests/test_install_spark.py
