@@ -1,3 +1,5 @@
+use arrow::array::RecordBatchOptions;
+use arrow::error::ArrowError;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
@@ -25,7 +27,7 @@ use crate::expression::{from_spark_expression, from_spark_literal_to_scalar};
 use crate::extension::analyzer::alias::rewrite_multi_alias;
 use crate::extension::analyzer::explode::rewrite_explode;
 use crate::extension::analyzer::wildcard::rewrite_wildcard;
-use crate::schema::parse_spark_schema_string;
+use crate::schema::{cast_record_batch, parse_spark_schema_string};
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::Relation;
@@ -240,11 +242,17 @@ pub(crate) async fn from_spark_relation(
             } else {
                 vec![]
             };
-            let schema = if let [batch, ..] = batches.as_slice() {
-                batch.schema()
+            let (schema, batches) = if let Some(schema) = local.schema.as_ref() {
+                let schema = parse_spark_schema_string(schema)?;
+                let batches = batches
+                    .into_iter()
+                    .map(|b| cast_record_batch(b, schema.clone()))
+                    .collect::<SparkResult<_>>()?;
+                (schema, batches)
+            } else if let [batch, ..] = batches.as_slice() {
+                (batch.schema(), batches)
             } else {
-                let schema = local.schema.as_ref().required("local relation schema")?;
-                parse_spark_schema_string(schema)?
+                return Err(SparkError::invalid("missing schema for local relation"));
             };
             let provider = datafusion::datasource::MemTable::try_new(schema, vec![batches])?;
             Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
