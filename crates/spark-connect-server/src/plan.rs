@@ -1,5 +1,3 @@
-use arrow::array::RecordBatchOptions;
-use arrow::error::ArrowError;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;

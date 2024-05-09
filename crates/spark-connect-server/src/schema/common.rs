@@ -116,12 +116,12 @@ pub(crate) fn from_spark_fields(fields: &Vec<sdt::StructField>) -> SparkResult<F
         .map(|field| -> SparkResult<adt::Field> {
             let name = field.name.as_str();
             let data_type = field.data_type.as_ref().required("data type")?;
-            let metadata: HashMap<String, String> = if let Some(m) = &field.metadata {
-                serde_json::from_str(m)?
+            let metadata: Option<HashMap<String, String>> = if let Some(m) = &field.metadata {
+                Some(serde_json::from_str(m)?)
             } else {
-                HashMap::new()
+                None
             };
-            let field = from_spark_field(name, data_type, field.nullable, Some(metadata))?;
+            let field = from_spark_field(name, data_type, field.nullable, metadata)?;
             Ok(field)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -211,12 +211,7 @@ pub(crate) fn from_spark_data_type(data_type: &sc::DataType) -> SparkResult<Spar
         }
         sdt::Kind::Udt(udt) => {
             let sql_type = udt.sql_type.as_ref().required("UDT SQL type")?;
-            let r#type = match from_spark_data_type(sql_type)? {
-                SparkDataType::BuiltIn(t) => t,
-                SparkDataType::UserDefined { .. } => {
-                    return Err(SparkError::invalid("user-defined type cannot be nested"));
-                }
-            };
+            let r#type = from_spark_built_in_data_type(sql_type)?;
             Ok(SparkDataType::UserDefined {
                 r#type,
                 jvm_class: udt.jvm_class.clone(),
