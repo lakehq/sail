@@ -1,6 +1,6 @@
 use pyo3::prelude::{PyAnyMethods, PyModule, PyObject, Python, ToPyObject};
-use serde::de::{self, Deserializer, IntoDeserializer, Visitor};
-use serde::Deserialize;
+use serde::de::{self, IntoDeserializer, Visitor};
+use serde::{Deserialize, Deserializer};
 use serde_bytes::Bytes;
 
 #[derive(Debug, Clone)]
