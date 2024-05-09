@@ -70,22 +70,19 @@ index 67ab6e378ce..8ae8d90e609 100644
          spark_df = self.spark.createDataFrame(
              [
 diff --git a/python/pyspark/sql/connect/client/core.py b/python/pyspark/sql/connect/client/core.py
-index 7b1aafbefeb..cfdd4ccaec1 100644
+index 7b1aafbefeb..20ecc6f19a6 100644
 --- a/python/pyspark/sql/connect/client/core.py
 +++ b/python/pyspark/sql/connect/client/core.py
-@@ -161,6 +161,12 @@ class ChannelBuilder:
+@@ -176,6 +176,9 @@ class ChannelBuilder:
  
-     @staticmethod
-     def default_port() -> int:
-+        if v := os.environ.get("SPARK_TESTING_REMOTE_PORT"):
-+            return int(v)
-+        return ChannelBuilder._actual_default_port()
-+
-+    @staticmethod
-+    def _actual_default_port() -> int:
-         if "SPARK_TESTING" in os.environ:
-             from pyspark.sql.session import SparkSession as PySparkSession
+             # 'spark.local.connect' is set when we use the local mode in Spark Connect.
+             if session is not None and session.conf.get("spark.local.connect", "0") == "1":
++                # override the remote port via the environment variable
++                if v := os.environ.get("SPARK_TESTING_REMOTE_PORT"):
++                    return int(v)
  
+                 jvm = PySparkSession._instantiatedSession._jvm  # type: ignore[union-attr]
+                 return getattr(
 diff --git a/python/pyspark/sql/tests/connect/test_connect_basic.py b/python/pyspark/sql/tests/connect/test_connect_basic.py
 index 2904eb42587..1226f5021a8 100644
 --- a/python/pyspark/sql/tests/connect/test_connect_basic.py
