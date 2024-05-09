@@ -116,7 +116,11 @@ pub(crate) fn from_spark_fields(fields: &Vec<sdt::StructField>) -> SparkResult<F
         .map(|field| -> SparkResult<adt::Field> {
             let name = field.name.as_str();
             let data_type = field.data_type.as_ref().required("data type")?;
-            let metadata = field.metadata.as_ref().map(|m| serde_json::from_str(m)).transpose()?;
+            let metadata = field
+                .metadata
+                .as_ref()
+                .map(|m| serde_json::from_str(m))
+                .transpose()?;
             let field = from_spark_field(name, data_type, field.nullable, metadata)?;
             Ok(field)
         })
