@@ -1,4 +1,4 @@
-use pyo3::prelude::{PyAnyMethods, PyModule, PyObject, Python, ToPyObject};
+use pyo3::prelude::*;
 use serde::de::{self, IntoDeserializer, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_bytes::Bytes;

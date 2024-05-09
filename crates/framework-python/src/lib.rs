@@ -1,4 +1,4 @@
-use pyo3::prelude::{PyResult, Python};
+use pyo3::prelude::*;
 
 pub mod py_data_type;
 pub mod py_function_pyspark;

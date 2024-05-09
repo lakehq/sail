@@ -3,11 +3,10 @@ use crate::utils::process_array_ref_with_python_function;
 use datafusion::arrow::array::{as_struct_array, types, ArrayRef, PrimitiveArray, StructArray, *};
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion_common::DataFusionError;
-use pyo3::types::PyTuple;
 use pyo3::{
-    prelude::{pyclass, pymethods, IntoPy, PyAnyMethods, PyObject, PyResult, Python, ToPyObject},
-    types::{PyBytes, PyDict, PyList},
-    Bound, PyTypeInfo,
+    prelude::*,
+    types::{PyBytes, PyDict, PyList, PyTuple},
+    PyTypeInfo,
 };
 use serde::{Deserialize, Serialize};
 use serde_bytes::Bytes;

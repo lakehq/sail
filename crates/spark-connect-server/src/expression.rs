@@ -253,7 +253,7 @@ pub(crate) fn from_spark_expression(
         ExprType::CommonInlineUserDefinedFunction(udf) => {
             use framework_python::py_function_pyspark::deserialize_py_function_pyspark;
             use framework_python::udf::PythonUDF;
-            use pyo3::prelude::Python;
+            use pyo3::prelude::*;
             use sc::common_inline_user_defined_function::Function::PythonUdf;
             use sc::PythonUdf as PythonUDFStruct;
 

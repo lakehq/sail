@@ -4,7 +4,7 @@ use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use pyo3::prelude::PyObject;
+use pyo3::prelude::*;
 
 use crate::utils::{array_ref_to_columnar_value, execute_python_function};
 

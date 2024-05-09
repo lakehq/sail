@@ -8,8 +8,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::datatypes::{ArrowPrimitiveType, DataType, TimeUnit};
 use datafusion::common::{DataFusionError, ScalarValue};
 use datafusion_expr::ColumnarValue;
-use pyo3::prelude::{Bound, FromPyObject, PyObject, PyResult, Python, ToPyObject};
-use pyo3::types::PyTuple;
+use pyo3::{prelude::*, types::PyTuple};
 
 // TODO: Move this to a separate module/crate.
 pub fn downcast_array_ref<T: ArrowPrimitiveType>(
