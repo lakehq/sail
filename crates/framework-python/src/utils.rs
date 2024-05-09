@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use crate::py_data_type::to_pyobject;
 use datafusion::arrow::array::{
-    as_boolean_array, as_struct_array, types, Array, ArrayRef, PrimitiveArray, PrimitiveBuilder,
-    StructArray,
+    as_boolean_array, as_null_array, as_struct_array, types, Array, ArrayRef, PrimitiveArray,
+    PrimitiveBuilder, StructArray,
 };
 use datafusion::arrow::datatypes::{ArrowPrimitiveType, DataType, TimeUnit};
 use datafusion::common::{DataFusionError, ScalarValue};
@@ -67,16 +67,56 @@ where
 {
     match &array_ref.data_type() {
         DataType::Null => {
-            Err(DataFusionError::NotImplemented(
-                "DataType::Null".to_string(),
-            ))
-            // let array = as_null_array(&array_ref);
+            // Err(DataFusionError::NotImplemented(
+            //     "DataType::Null".to_string(),
+            // ))
+            let null_array = as_null_array(&array_ref);
+            let mut builder = PrimitiveBuilder::<TOutput>::with_capacity(null_array.len());
+            Python::with_gil(|py| {
+                for i in 0..null_array.len() {
+                    let pyobject = to_pyobject(py, null_array, i).unwrap();
+                    let result: PyResult<TOutput::Native> = python_function
+                        .call1(py, PyTuple::new_bound(py, &[pyobject]))
+                        .and_then(|obj| obj.extract(py));
+                    match result {
+                        Ok(native) => builder.append_value(native),
+                        Err(py_err) => {
+                            return Err(DataFusionError::Execution(format!(
+                                "Failed to extract Rust type from Python return value: {:?}",
+                                py_err
+                            )))
+                        }
+                    }
+                }
+                Ok(())
+            })?;
+            Ok(Arc::new(builder.finish()) as ArrayRef)
         }
         DataType::Boolean => {
-            Err(DataFusionError::NotImplemented(
-                "DataType::Boolean".to_string(),
-            ))
-            // let array = as_boolean_array(&array_ref);
+            // Err(DataFusionError::NotImplemented(
+            //     "DataType::Boolean".to_string(),
+            // ))
+            let bool_array = as_boolean_array(&array_ref);
+            let mut builder = PrimitiveBuilder::<TOutput>::with_capacity(bool_array.len());
+            Python::with_gil(|py| {
+                for i in 0..bool_array.len() {
+                    let pyobject = to_pyobject(py, bool_array, i).unwrap();
+                    let result: PyResult<TOutput::Native> = python_function
+                        .call1(py, PyTuple::new_bound(py, &[pyobject]))
+                        .and_then(|obj| obj.extract(py));
+                    match result {
+                        Ok(native) => builder.append_value(native),
+                        Err(py_err) => {
+                            return Err(DataFusionError::Execution(format!(
+                                "Failed to extract Rust type from Python return value: {:?}",
+                                py_err
+                            )))
+                        }
+                    }
+                }
+                Ok(())
+            })?;
+            Ok(Arc::new(builder.finish()) as ArrayRef)
         }
         DataType::Int8 => {
             let array = downcast_array_ref::<types::Int8Type>(&array_ref)?;
