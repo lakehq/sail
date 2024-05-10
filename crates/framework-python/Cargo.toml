@@ -12,6 +12,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_bytes = { workspace = true }
 pyo3 = { workspace = true }
+arrow = { workspace = true }
 sqlparser = { workspace = true }
 polars = { workspace = true }
 polars-arrow = { workspace = true }
