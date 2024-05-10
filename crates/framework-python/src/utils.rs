@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::partial_python_udf::PartialPythonUDF;
 use crate::py_data_type::to_pyobject;
 use datafusion::arrow::array::{
     as_boolean_array, as_null_array, as_struct_array, types, Array, ArrayRef, PrimitiveArray,
@@ -25,7 +26,7 @@ pub fn downcast_array_ref<T: ArrowPrimitiveType>(
 
 fn process_elements<'py, TInput, TOutput>(
     input_array: &PrimitiveArray<TInput>,
-    python_function: &PyObject,
+    python_function: &PartialPythonUDF,
 ) -> Result<ArrayRef, DataFusionError>
 where
     TInput: ArrowPrimitiveType,
@@ -36,11 +37,18 @@ where
     let mut builder = PrimitiveBuilder::<TOutput>::with_capacity(input_array.len());
 
     Python::with_gil(|py| {
+        let python_function = python_function
+            .0
+            .clone_ref(py)
+            .into_bound(py)
+            .get_item(0)
+            .unwrap();
+
         for &value in input_array.values().iter() {
             let py_tuple: Bound<PyTuple> = PyTuple::new_bound(py, &[value.to_object(py)]);
             let result: PyResult<TOutput::Native> = python_function
-                .call1(py, py_tuple)
-                .and_then(|obj| obj.extract(py));
+                .call1(py_tuple)
+                .and_then(|obj| obj.extract());
             match result {
                 Ok(native) => builder.append_value(native),
                 Err(py_err) => {
@@ -59,7 +67,7 @@ where
 
 pub fn process_array_ref_with_python_function<TOutput>(
     array_ref: &ArrayRef,
-    python_function: &PyObject,
+    python_function: &PartialPythonUDF,
 ) -> Result<ArrayRef, DataFusionError>
 where
     TOutput: ArrowPrimitiveType,
@@ -73,11 +81,17 @@ where
             let null_array = as_null_array(&array_ref);
             let mut builder = PrimitiveBuilder::<TOutput>::with_capacity(null_array.len());
             Python::with_gil(|py| {
+                let python_function = python_function
+                    .0
+                    .clone_ref(py)
+                    .into_bound(py)
+                    .get_item(0)
+                    .unwrap();
                 for i in 0..null_array.len() {
                     let pyobject = to_pyobject(py, null_array, i).unwrap();
                     let result: PyResult<TOutput::Native> = python_function
-                        .call1(py, PyTuple::new_bound(py, &[pyobject]))
-                        .and_then(|obj| obj.extract(py));
+                        .call1(PyTuple::new_bound(py, &[pyobject]))
+                        .and_then(|obj| obj.extract());
                     match result {
                         Ok(native) => builder.append_value(native),
                         Err(py_err) => {
@@ -99,11 +113,17 @@ where
             let bool_array = as_boolean_array(&array_ref);
             let mut builder = PrimitiveBuilder::<TOutput>::with_capacity(bool_array.len());
             Python::with_gil(|py| {
+                let python_function = python_function
+                    .0
+                    .clone_ref(py)
+                    .into_bound(py)
+                    .get_item(0)
+                    .unwrap();
                 for i in 0..bool_array.len() {
                     let pyobject = to_pyobject(py, bool_array, i).unwrap();
                     let result: PyResult<TOutput::Native> = python_function
-                        .call1(py, PyTuple::new_bound(py, &[pyobject]))
-                        .and_then(|obj| obj.extract(py));
+                        .call1(PyTuple::new_bound(py, &[pyobject]))
+                        .and_then(|obj| obj.extract());
                     match result {
                         Ok(native) => builder.append_value(native),
                         Err(py_err) => {
@@ -241,11 +261,17 @@ class Struct:
     pass
 "#;
                 py.run_bound(code, None, None).unwrap();
+                let python_function = python_function
+                    .0
+                    .clone_ref(py)
+                    .into_bound(py)
+                    .get_item(0)
+                    .unwrap();
                 for i in 0..struct_array.len() {
                     let pyobject = to_pyobject(py, struct_array, i).unwrap();
                     let result: PyResult<TOutput::Native> = python_function
-                        .call1(py, PyTuple::new_bound(py, &[pyobject]))
-                        .and_then(|obj| obj.extract(py));
+                        .call1(PyTuple::new_bound(py, &[pyobject]))
+                        .and_then(|obj| obj.extract());
                     match result {
                         Ok(native) => builder.append_value(native),
                         Err(py_err) => {
@@ -294,7 +320,7 @@ class Struct:
 
 pub fn execute_python_function(
     array_ref: &ArrayRef,
-    python_function: &PyObject,
+    python_function: &PartialPythonUDF,
     output_type: &DataType,
 ) -> Result<ArrayRef, DataFusionError> {
     let processed_array = match &output_type {

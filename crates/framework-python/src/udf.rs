@@ -1,5 +1,6 @@
 use std::any::Any;
 
+use crate::partial_python_udf::PartialPythonUDF;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
@@ -16,7 +17,7 @@ pub struct PythonUDF {
     output_type: DataType,
     #[allow(dead_code)]
     eval_type: i32,
-    python_function: PyObject,
+    python_function: PartialPythonUDF,
 }
 
 impl PythonUDF {
@@ -24,7 +25,7 @@ impl PythonUDF {
         function_name: String,
         deterministic: bool,
         input_types: Vec<DataType>,
-        python_function: PyObject,
+        python_function: PartialPythonUDF,
         output_type: DataType,
         eval_type: i32, // TODO: Incorporate this
     ) -> Self {

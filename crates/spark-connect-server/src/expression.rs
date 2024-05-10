@@ -19,7 +19,7 @@ use datafusion_expr::{
     expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, ExprSchemable, GetFieldAccess,
     GetIndexedField, Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
 };
-use framework_python::py_function_pyspark::PyFunctionWrapper;
+use framework_python::partial_python_udf::PartialPythonUDF;
 use sqlparser::ast;
 
 #[derive(Default)]
@@ -253,7 +253,7 @@ pub(crate) fn from_spark_expression(
             Err(SparkError::todo("unresolved named lambda variable"))
         }
         ExprType::CommonInlineUserDefinedFunction(udf) => {
-            use framework_python::py_function_pyspark::deserialize_py_function_pyspark;
+            use framework_python::partial_python_udf::deserialize_partial_python_udf;
             use framework_python::udf::PythonUDF;
             use pyo3::prelude::*;
             use sc::common_inline_user_defined_function::Function::PythonUdf;
@@ -304,11 +304,10 @@ pub(crate) fn from_spark_expression(
                 )));
             }
 
-            let python_obj_wrapper: PyFunctionWrapper = deserialize_py_function_pyspark(command)
+            let python_function: PartialPythonUDF = deserialize_partial_python_udf(command)
                 .map_err(|e| {
                     SparkError::invalid(format!("Python UDF deserialization error: {:?}", e))
                 })?;
-            let python_function = python_obj_wrapper.function;
 
             let python_udf: PythonUDF = PythonUDF::new(
                 function_name.to_owned(),
