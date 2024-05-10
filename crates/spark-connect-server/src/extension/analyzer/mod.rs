@@ -6,6 +6,7 @@ use datafusion::logical_expr::{Expr, ScalarFunctionDefinition, ScalarUDF};
 pub(crate) mod alias;
 pub(crate) mod explode;
 pub(crate) mod wildcard;
+pub(crate) mod window;
 
 fn expr_to_udf(expr: &Expr) -> Option<(&Arc<ScalarUDF>, &Vec<Expr>)> {
     match expr {

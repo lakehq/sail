@@ -77,6 +77,12 @@ impl From<JoinError> for SparkError {
     }
 }
 
+impl From<DecodeError> for SparkError {
+    fn from(error: DecodeError) -> Self {
+        SparkError::InvalidArgument(error.to_string())
+    }
+}
+
 pub trait ProtoFieldExt<T> {
     fn required(self, description: impl Into<String>) -> SparkResult<T>;
 }
