@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::extension::function::alias::MultiAlias;
 use crate::extension::function::contains::Contains;
-use crate::schema::{from_spark_data_type, parse_spark_data_type_string};
+use crate::schema::{from_spark_built_in_data_type, parse_spark_data_type_string};
 use crate::spark::connect as sc;
 use crate::sql::new_sql_parser;
 use datafusion::arrow::datatypes::{DataType, IntervalMonthDayNanoType};
@@ -169,7 +169,7 @@ pub(crate) fn from_spark_expression(
             let expr = cast.expr.as_ref().required("expression for cast")?;
             let data_type = cast.cast_to_type.as_ref().required("data type for cast")?;
             let data_type = match data_type {
-                CastToType::Type(t) => from_spark_data_type(&t)?,
+                CastToType::Type(t) => from_spark_built_in_data_type(&t)?,
                 CastToType::TypeStr(s) => parse_spark_data_type_string(s)?,
             };
             Ok(expr::Expr::Cast(expr::Cast {
@@ -279,7 +279,7 @@ pub(crate) fn from_spark_expression(
                 }
             };
 
-            let output_type: DataType = from_spark_data_type(
+            let output_type: DataType = from_spark_built_in_data_type(
                 function
                     .output_type
                     .as_ref()
@@ -373,7 +373,7 @@ pub(crate) fn from_spark_literal_to_scalar(
             // TODO: Validate that this works
             let element_type: &sc::DataType =
                 array.element_type.as_ref().required("array element type")?;
-            let element_type: DataType = from_spark_data_type(element_type)?;
+            let element_type: DataType = from_spark_built_in_data_type(element_type)?;
             let scalars: Vec<ScalarValue> = array
                 .elements
                 .iter()
@@ -389,7 +389,7 @@ pub(crate) fn from_spark_literal_to_scalar(
             // TODO: Validate that this works
             let struct_type: &sc::DataType =
                 r#struct.struct_type.as_ref().required("struct type")?;
-            let struct_type: DataType = from_spark_data_type(struct_type)?;
+            let struct_type: DataType = from_spark_built_in_data_type(struct_type)?;
             let fields = match &struct_type {
                 DataType::Struct(fields) => fields,
                 _ => return Err(SparkError::invalid("expected struct type")),
