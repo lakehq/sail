@@ -96,11 +96,9 @@ impl ScalarUDFImpl for PythonUDF {
         let array_len = array_ref.len().clone();
         let array_data_type = array_ref.data_type().clone();
         let mut builder: Box<dyn ArrayBuilder> = make_builder(&self.output_type, array_len);
-        // .as_any_mut()
-        // .downcast_mut::<Int32Builder>()
-        // .unwrap();
 
         let processed_array = Python::with_gil(|py| {
+            let mut results: Vec<Bound<PyAny>> = vec![];
             let python_function = self
                 .python_function
                 .0
@@ -109,21 +107,23 @@ impl ScalarUDFImpl for PythonUDF {
                 .get_item(0)
                 .unwrap();
 
-            let py_args = array_ref.into_data().to_pyarrow(py).unwrap();
+            let py_args = array_ref
+                .into_data()
+                .to_pyarrow(py)
+                .unwrap()
+                .call_method0(py, pyo3::intern!(py, "to_pylist"))
+                .unwrap()
+                .clone_ref(py)
+                .into_bound(py);
 
-            let py_args = match array_data_type {
-                DataType::Struct(_) => py_args.clone_ref(py).into_bound(py),
-                _ => py_args
-                    .call_method0(py, pyo3::intern!(py, "to_pylist"))
-                    .unwrap()
-                    .clone_ref(py)
-                    .into_bound(py),
-            };
-
-            // .call_method0(py, pyo3::intern!(py, "to_pylist"))
-            // .unwrap()
-            // .clone_ref(py)
-            // .into_bound(py);
+            // let py_args = match array_data_type {
+            //     DataType::Struct(_) => py_args.clone_ref(py).into_bound(py),
+            //     _ => py_args
+            //         .call_method0(py, pyo3::intern!(py, "to_pylist"))
+            //         .unwrap()
+            //         .clone_ref(py)
+            //         .into_bound(py),
+            // };
 
             for i in 0..array_len {
                 let py_arg: Bound<PyAny> = py_args.get_item(i).unwrap();
@@ -133,28 +133,24 @@ impl ScalarUDFImpl for PythonUDF {
                     .map_err(|e| DataFusionError::Execution(format!("{e:?}")))
                     .unwrap();
 
-                builder_append_pyany(builder.as_any_mut(), result, &self.output_type).unwrap();
+                results.push(result);
 
-                // let kwargs = PyDict::new_bound(py);
-                // kwargs
-                //     .set_item("type", self.output_type.to_pyarrow(py).unwrap())
-                //     .unwrap();
-                //
-                // let result = PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
-                //     .and_then(|pyarrow| pyarrow.getattr(pyo3::intern!(py, "array")))
-                //     .and_then(|array| array.call(([result],), Some(&kwargs)))
-                //     .unwrap();
-                // builder
-                //     .as_any_mut()
-                //     .downcast_mut::<Int32Builder>()
-                //     .unwrap()
-                //     .append_value(result.extract().unwrap())
+                // builder_append_pyany(builder.as_any_mut(), result, &self.output_type).unwrap();
             }
 
-            // // TODO: This is now native python object so the line below breaks.
-            // let array_data = ArrayData::from_pyarrow_bound(&result).unwrap();
-            // make_array(array_data)
-            Arc::new(builder.finish()) as ArrayRef
+            let kwargs: Bound<PyDict> = PyDict::new_bound(py);
+            kwargs
+                .set_item("type", self.output_type.to_pyarrow(py).unwrap())
+                .unwrap();
+
+            let result: Bound<PyAny> = PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
+                .and_then(|pyarrow| pyarrow.getattr(pyo3::intern!(py, "array")))
+                .and_then(|array| array.call((results,), Some(&kwargs)))
+                .unwrap();
+
+            let array_data = ArrayData::from_pyarrow_bound(&result).unwrap();
+            make_array(array_data)
+            // Arc::new(builder.finish()) as ArrayRef
         });
 
         // let array = downcast_array_ref::<types::Int32Type>(&processed_array)?;
