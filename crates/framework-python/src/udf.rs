@@ -1,9 +1,11 @@
 use arrow::array::types;
 use std::any::Any;
+use std::sync::Arc;
 
 use crate::partial_python_udf::PartialPythonUDF;
-use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::array::{make_array, make_builder, Array, ArrayData, ArrayRef};
+use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+use datafusion::common::arrow::array::builder::*;
 use datafusion::common::{DataFusionError, Result};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -91,6 +93,13 @@ impl ScalarUDFImpl for PythonUDF {
             }
         };
 
+        let array_len = array_ref.len().clone();
+        let array_data_type = array_ref.data_type().clone();
+        let mut builder: Box<dyn ArrayBuilder> = make_builder(&self.output_type, array_len);
+        // .as_any_mut()
+        // .downcast_mut::<Int32Builder>()
+        // .unwrap();
+
         let processed_array = Python::with_gil(|py| {
             let python_function = self
                 .python_function
@@ -100,36 +109,52 @@ impl ScalarUDFImpl for PythonUDF {
                 .get_item(0)
                 .unwrap();
 
-            let py_args = array_ref
-                .into_data()
-                .to_pyarrow(py)
-                .unwrap()
-                .call_method0(py, pyo3::intern!(py, "to_pylist"))
-                .unwrap()
-                .clone_ref(py)
-                .into_bound(py)
-                .get_item(0) // TODO: Build array out of output data type.
-                .unwrap();
-            let py_args = PyTuple::new_bound(py, &[py_args]);
+            let py_args = array_ref.into_data().to_pyarrow(py).unwrap();
 
-            let result = python_function
-                .call1(py_args)
-                .map_err(|e| DataFusionError::Execution(format!("{e:?}")))
-                .unwrap();
+            let py_args = match array_data_type {
+                DataType::Struct(_) => py_args.clone_ref(py).into_bound(py),
+                _ => py_args
+                    .call_method0(py, pyo3::intern!(py, "to_pylist"))
+                    .unwrap()
+                    .clone_ref(py)
+                    .into_bound(py),
+            };
 
-            let kwargs = PyDict::new_bound(py);
-            kwargs
-                .set_item("type", self.output_type.to_pyarrow(py).unwrap())
-                .unwrap();
+            // .call_method0(py, pyo3::intern!(py, "to_pylist"))
+            // .unwrap()
+            // .clone_ref(py)
+            // .into_bound(py);
 
-            let result = PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
-                .and_then(|pyarrow| pyarrow.getattr(pyo3::intern!(py, "array")))
-                .and_then(|array| array.call(([result],), Some(&kwargs)))
-                .unwrap();
+            for i in 0..array_len {
+                let py_arg: Bound<PyAny> = py_args.get_item(i).unwrap();
+                let py_arg: Bound<PyTuple> = PyTuple::new_bound(py, &[py_arg]);
+                let result: Bound<PyAny> = python_function
+                    .call1(py_arg)
+                    .map_err(|e| DataFusionError::Execution(format!("{e:?}")))
+                    .unwrap();
 
-            // TODO: This is now native python object so the line below breaks.
-            let array_data = ArrayData::from_pyarrow_bound(&result).unwrap();
-            make_array(array_data)
+                builder_append_pyany(builder.as_any_mut(), result, &self.output_type).unwrap();
+
+                // let kwargs = PyDict::new_bound(py);
+                // kwargs
+                //     .set_item("type", self.output_type.to_pyarrow(py).unwrap())
+                //     .unwrap();
+                //
+                // let result = PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
+                //     .and_then(|pyarrow| pyarrow.getattr(pyo3::intern!(py, "array")))
+                //     .and_then(|array| array.call(([result],), Some(&kwargs)))
+                //     .unwrap();
+                // builder
+                //     .as_any_mut()
+                //     .downcast_mut::<Int32Builder>()
+                //     .unwrap()
+                //     .append_value(result.extract().unwrap())
+            }
+
+            // // TODO: This is now native python object so the line below breaks.
+            // let array_data = ArrayData::from_pyarrow_bound(&result).unwrap();
+            // make_array(array_data)
+            Arc::new(builder.finish()) as ArrayRef
         });
 
         // let array = downcast_array_ref::<types::Int32Type>(&processed_array)?;
@@ -142,5 +167,168 @@ impl ScalarUDFImpl for PythonUDF {
             &self.output_type,
             is_scalar,
         )?)
+    }
+}
+
+pub fn builder_append_pyany(
+    builder: &mut dyn Any,
+    pyany: Bound<PyAny>,
+    datatype: &DataType,
+) -> Result<()> {
+    match datatype {
+        DataType::Null => Ok(builder.downcast_mut::<NullBuilder>().unwrap().append_null()),
+        DataType::Boolean => Ok(builder
+            .downcast_mut::<BooleanBuilder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Int8 => Ok(builder
+            .downcast_mut::<Int8Builder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Int16 => Ok(builder
+            .downcast_mut::<Int16Builder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Int32 => Ok(builder
+            .downcast_mut::<Int32Builder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Int64 => Ok(builder
+            .downcast_mut::<Int64Builder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::UInt8 => Ok(builder
+            .downcast_mut::<UInt8Builder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::UInt16 => Ok(builder
+            .downcast_mut::<UInt16Builder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::UInt32 => Ok(builder
+            .downcast_mut::<UInt32Builder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::UInt64 => Ok(builder
+            .downcast_mut::<UInt64Builder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Float16 => Err(DataFusionError::Execution(
+            "DataType::Float16 is not supported by Python".to_string(),
+        )),
+        DataType::Float32 => Ok(builder
+            .downcast_mut::<Float32Builder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Float64 => Ok(builder
+            .downcast_mut::<Float64Builder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Binary => Err(DataFusionError::Execution(
+            "DataType::Binary is not supported by Python".to_string(),
+        )),
+        DataType::LargeBinary => Err(DataFusionError::Execution(
+            "DataType::LargeBinary is not supported by Python".to_string(),
+        )),
+        DataType::FixedSizeBinary(_len) => Err(DataFusionError::Execution(
+            "DataType::FixedSizeBinary is not supported by Python".to_string(),
+        )),
+        DataType::Decimal128(_p, _s) => Ok(builder
+            .downcast_mut::<Decimal128Builder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Decimal256(_p, _s) => Err(DataFusionError::Execution(
+            "DataType::Decimal256 is not supported by Python".to_string(),
+        )),
+        DataType::Utf8 => Err(DataFusionError::Execution(
+            "DataType::Utf8 is not supported by Python".to_string(),
+        )),
+        DataType::LargeUtf8 => Err(DataFusionError::Execution(
+            "DataType::LargeUtf8 is not supported by Python".to_string(),
+        )),
+        DataType::Date32 => Ok(builder
+            .downcast_mut::<Date32Builder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Date64 => Ok(builder
+            .downcast_mut::<Date64Builder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Time32(TimeUnit::Second) => Ok(builder
+            .downcast_mut::<Time32SecondBuilder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Time32(TimeUnit::Millisecond) => Ok(builder
+            .downcast_mut::<Time32MillisecondBuilder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Time64(TimeUnit::Microsecond) => Ok(builder
+            .downcast_mut::<Time64MicrosecondBuilder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Time64(TimeUnit::Nanosecond) => Ok(builder
+            .downcast_mut::<Time64NanosecondBuilder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Timestamp(TimeUnit::Second, _tz) => Ok(builder
+            .downcast_mut::<TimestampSecondBuilder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Timestamp(TimeUnit::Millisecond, _tz) => Ok(builder
+            .downcast_mut::<TimestampMillisecondBuilder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Timestamp(TimeUnit::Microsecond, _tz) => Ok(builder
+            .downcast_mut::<TimestampMicrosecondBuilder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Timestamp(TimeUnit::Nanosecond, _tz) => Ok(builder
+            .downcast_mut::<TimestampNanosecondBuilder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Interval(IntervalUnit::YearMonth) => Ok(builder
+            .downcast_mut::<IntervalYearMonthBuilder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Interval(IntervalUnit::DayTime) => Ok(builder
+            .downcast_mut::<IntervalDayTimeBuilder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Interval(IntervalUnit::MonthDayNano) => Ok(builder
+            .downcast_mut::<IntervalMonthDayNanoBuilder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Duration(TimeUnit::Second) => Ok(builder
+            .downcast_mut::<DurationSecondBuilder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Duration(TimeUnit::Millisecond) => Ok(builder
+            .downcast_mut::<DurationMillisecondBuilder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Duration(TimeUnit::Microsecond) => Ok(builder
+            .downcast_mut::<DurationMicrosecondBuilder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::Duration(TimeUnit::Nanosecond) => Ok(builder
+            .downcast_mut::<DurationNanosecondBuilder>()
+            .unwrap()
+            .append_value(pyany.extract().unwrap())),
+        DataType::List(_field) => Err(DataFusionError::NotImplemented(
+            "TODO: DataType::List".to_string(),
+        )),
+        DataType::LargeList(_field) => Err(DataFusionError::NotImplemented(
+            "TODO: DataType::LargeList".to_string(),
+        )),
+        DataType::Map(_field, _) => Err(DataFusionError::NotImplemented(
+            "TODO: DataType::Map".to_string(),
+        )),
+        DataType::Struct(_fields) => Err(DataFusionError::NotImplemented(
+            "TODO: DataType::Struct".to_string(),
+        )),
+        t => Err(DataFusionError::NotImplemented(format!(
+            "Not supported: DataType::{:?}",
+            t
+        ))),
     }
 }
