@@ -1,3 +1,4 @@
+use arrow::array::types;
 use std::any::Any;
 
 use crate::partial_python_udf::PartialPythonUDF;
@@ -6,11 +7,14 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use pyo3::{prelude::*, types::PyTuple};
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PyTuple},
+};
 
 use crate::pyarrow::{FromPyArrow, ToPyArrow};
 
-use crate::utils::{array_ref_to_columnar_value, execute_python_function};
+use crate::utils::{array_ref_to_columnar_value, downcast_array_ref, execute_python_function};
 
 #[derive(Debug, Clone)]
 pub struct PythonUDF {
@@ -106,23 +110,31 @@ impl ScalarUDFImpl for PythonUDF {
                 .into_bound(py)
                 .get_item(0) // TODO: Build array out of output data type.
                 .unwrap();
-            let py_args = PyTuple::new_bound(py, [py_args]);
+            let py_args = PyTuple::new_bound(py, &[py_args]);
 
             let result = python_function
                 .call1(py_args)
                 .map_err(|e| DataFusionError::Execution(format!("{e:?}")))
                 .unwrap();
-            //     .extract::<i32>()
-            //     .unwrap();
-            // result
+
+            let kwargs = PyDict::new_bound(py);
+            kwargs
+                .set_item("type", self.output_type.to_pyarrow(py).unwrap())
+                .unwrap();
+
+            let result = PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
+                .and_then(|pyarrow| pyarrow.getattr(pyo3::intern!(py, "array")))
+                .and_then(|array| array.call(([result],), Some(&kwargs)))
+                .unwrap();
 
             // TODO: This is now native python object so the line below breaks.
             let array_data = ArrayData::from_pyarrow_bound(&result).unwrap();
             make_array(array_data)
         });
-        //
+
+        // let array = downcast_array_ref::<types::Int32Type>(&processed_array)?;
         // Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(
-        //     processed_array,
+        //     array.value(0),
         // ))))
 
         Ok(array_ref_to_columnar_value(
