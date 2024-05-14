@@ -1,7 +1,7 @@
 use std::any::Any;
 
 use crate::partial_python_udf::PartialPythonUDF;
-use datafusion::arrow::array::{make_array, Array, ArrayData};
+use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -91,52 +91,70 @@ impl ScalarUDFImpl for PythonUDF {
 
         let array_len = array_ref.len().clone();
 
-        let processed_array = Python::with_gil(|py| {
+        let processed_array: Result<ArrayRef, DataFusionError> = Python::with_gil(|py| {
             let mut results: Vec<Bound<PyAny>> = vec![];
+
             let python_function = self
                 .python_function
                 .0
                 .clone_ref(py)
                 .into_bound(py)
                 .get_item(0)
-                .unwrap();
+                .map_err(|err| DataFusionError::Internal(format!("{:?}", err)))?;
 
             let py_args = array_ref
                 .into_data()
                 .to_pyarrow(py)
-                .unwrap()
+                .map_err(|err| DataFusionError::Internal(format!("{:?}", err)))?
                 .call_method0(py, pyo3::intern!(py, "to_pylist"))
-                .unwrap()
+                .map_err(|err| DataFusionError::Internal(format!("{:?}", err)))?
                 .clone_ref(py)
                 .into_bound(py);
 
             for i in 0..array_len {
                 let py_arg: Bound<PyAny> = py_args.get_item(i).unwrap();
                 let py_arg: Bound<PyTuple> = PyTuple::new_bound(py, &[py_arg]);
-                let result: Bound<PyAny> = python_function
+                let result = python_function
                     .call1(py_arg)
-                    .map_err(|e| DataFusionError::Execution(format!("{e:?}")))
-                    .unwrap();
+                    .map_err(|e| DataFusionError::Execution(format!("{e:?}")))?;
 
                 results.push(result);
+
+                // match result {
+                //     Ok(result) => results.push(result),
+                //     Err(py_err) => {
+                //         return Err(DataFusionError::Execution(format!(
+                //             "Error while calling Python UDF: {:?}",
+                //             py_err
+                //         )))
+                //     }
+                // }
             }
+
+            let pyarrow_output_type = self
+                .output_type
+                .to_pyarrow(py)
+                .map_err(|err| DataFusionError::Internal(format!("{:?}", err)))?;
 
             let kwargs: Bound<PyDict> = PyDict::new_bound(py);
             kwargs
-                .set_item("type", self.output_type.to_pyarrow(py).unwrap())
-                .unwrap();
+                .set_item("type", pyarrow_output_type)
+                .map_err(|err| DataFusionError::Internal(format!("{:?}", err)))?;
 
             let result: Bound<PyAny> = PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
                 .and_then(|pyarrow| pyarrow.getattr(pyo3::intern!(py, "array")))
                 .and_then(|array| array.call((results,), Some(&kwargs)))
-                .unwrap();
+                .map_err(|err| DataFusionError::Internal(format!("{:?}", err)))?;
 
-            let array_data = ArrayData::from_pyarrow_bound(&result).unwrap();
-            make_array(array_data)
+            let array_data = ArrayData::from_pyarrow_bound(&result)
+                .map_err(|err| DataFusionError::Internal(format!("{:?}", err)))?;
+
+            let array = make_array(array_data);
+            Ok(array)
         });
 
         Ok(array_ref_to_columnar_value(
-            processed_array,
+            processed_array?,
             &self.output_type,
             is_scalar,
         )?)
