@@ -116,15 +116,6 @@ impl ScalarUDFImpl for PythonUDF {
                 .clone_ref(py)
                 .into_bound(py);
 
-            // let py_args = match array_data_type {
-            //     DataType::Struct(_) => py_args.clone_ref(py).into_bound(py),
-            //     _ => py_args
-            //         .call_method0(py, pyo3::intern!(py, "to_pylist"))
-            //         .unwrap()
-            //         .clone_ref(py)
-            //         .into_bound(py),
-            // };
-
             for i in 0..array_len {
                 let py_arg: Bound<PyAny> = py_args.get_item(i).unwrap();
                 let py_arg: Bound<PyTuple> = PyTuple::new_bound(py, &[py_arg]);
@@ -152,11 +143,6 @@ impl ScalarUDFImpl for PythonUDF {
             make_array(array_data)
             // Arc::new(builder.finish()) as ArrayRef
         });
-
-        // let array = downcast_array_ref::<types::Int32Type>(&processed_array)?;
-        // Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(
-        //     array.value(0),
-        // ))))
 
         Ok(array_ref_to_columnar_value(
             processed_array,
