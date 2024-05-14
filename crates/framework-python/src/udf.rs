@@ -94,8 +94,6 @@ impl ScalarUDFImpl for PythonUDF {
         };
 
         let array_len = array_ref.len().clone();
-        let array_data_type = array_ref.data_type().clone();
-        let mut builder: Box<dyn ArrayBuilder> = make_builder(&self.output_type, array_len);
 
         let processed_array = Python::with_gil(|py| {
             let mut results: Vec<Bound<PyAny>> = vec![];
@@ -125,8 +123,6 @@ impl ScalarUDFImpl for PythonUDF {
                     .unwrap();
 
                 results.push(result);
-
-                // builder_append_pyany(builder.as_any_mut(), result, &self.output_type).unwrap();
             }
 
             let kwargs: Bound<PyDict> = PyDict::new_bound(py);
@@ -141,7 +137,6 @@ impl ScalarUDFImpl for PythonUDF {
 
             let array_data = ArrayData::from_pyarrow_bound(&result).unwrap();
             make_array(array_data)
-            // Arc::new(builder.finish()) as ArrayRef
         });
 
         Ok(array_ref_to_columnar_value(
