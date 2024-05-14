@@ -21,11 +21,13 @@ pytest_args=("$@")
 if [ "${#pytest_args[@]}" -eq 0 ]; then
   # We run Spark Connect tests by default.
   pytest_args+=("python/pyspark/sql/tests/connect/")
+  pytest_args+=("--tb=no")
+  pytest_args+=("-rN")
 fi
 
 # We ignore the pytext exit code so that the command can complete successfully.
 python/run-pytest.sh \
-  --tb=no -rN --disable-warnings \
+  --disable-warnings \
   --report-log="${logs_dir}/test.jsonl" \
   "${pytest_args[@]}" \
   | tee "${logs_dir}/test.log" || true

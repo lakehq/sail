@@ -3,12 +3,13 @@ use std::sync::Arc;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::extension::function::alias::MultiAlias;
 use crate::extension::function::contains::Contains;
+use crate::extension::function::struct_function::StructFunction;
 use crate::schema::{from_spark_built_in_data_type, parse_spark_data_type_string};
 use crate::spark::connect as sc;
 use crate::sql::new_sql_parser;
 use datafusion::arrow::datatypes::{DataType, IntervalMonthDayNanoType};
 use datafusion::catalog::TableReference;
-use datafusion::common::{Column, DFSchema, ScalarValue};
+use datafusion::common::{Column, DFSchema, Result, ScalarValue};
 use datafusion::config::ConfigOptions;
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::{functions, functions_array};
@@ -18,7 +19,7 @@ use datafusion_expr::{
     expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, ExprSchemable, GetFieldAccess,
     GetIndexedField, Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
 };
-use framework_python::py_function_pyspark::PyFunctionWrapper;
+use framework_python::partial_python_udf::PartialPythonUDF;
 use sqlparser::ast;
 
 #[derive(Default)]
@@ -27,11 +28,8 @@ pub(crate) struct EmptyContextProvider {
 }
 
 impl ContextProvider for EmptyContextProvider {
-    fn get_table_source(
-        &self,
-        name: TableReference,
-    ) -> datafusion::common::Result<Arc<dyn TableSource>> {
-        Err(datafusion::error::DataFusionError::NotImplemented(format!(
+    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+        Err(DataFusionError::NotImplemented(format!(
             "get table source: {:?}",
             name
         )))
@@ -93,6 +91,7 @@ pub(crate) fn from_spark_expression(
             if func.is_distinct {
                 return Err(SparkError::unsupported("distinct function"));
             }
+
             let args = func
                 .arguments
                 .iter()
@@ -251,9 +250,9 @@ pub(crate) fn from_spark_expression(
             Err(SparkError::todo("unresolved named lambda variable"))
         }
         ExprType::CommonInlineUserDefinedFunction(udf) => {
-            use framework_python::py_function_pyspark::deserialize_py_function_pyspark;
+            use framework_python::partial_python_udf::deserialize_partial_python_udf;
             use framework_python::udf::PythonUDF;
-            use pyo3::prelude::Python;
+            use pyo3::prelude::*;
             use sc::common_inline_user_defined_function::Function::PythonUdf;
             use sc::PythonUdf as PythonUDFStruct;
 
@@ -302,11 +301,10 @@ pub(crate) fn from_spark_expression(
                 )));
             }
 
-            let python_obj_wrapper: PyFunctionWrapper = deserialize_py_function_pyspark(command)
+            let python_function: PartialPythonUDF = deserialize_partial_python_udf(command)
                 .map_err(|e| {
                     SparkError::invalid(format!("Python UDF deserialization error: {:?}", e))
                 })?;
-            let python_function = python_obj_wrapper.function;
 
             let python_udf: PythonUDF = PythonUDF::new(
                 function_name.to_owned(),
@@ -622,12 +620,34 @@ pub(crate) fn get_scalar_function(
             args.push(expr::Expr::Literal(ScalarValue::Utf8(Some(
                 "g".to_string(),
             ))));
+            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
+                    functions::regex::regexpreplace::RegexpReplaceFunc::new(),
+                ))),
+                args: args,
+            }));
         }
         "timestamp" | "to_timestamp" => {
             return Ok(functions::expr_fn::to_timestamp_micros(args));
         }
         "unix_timestamp" | "to_unixtime" => {
             return Ok(functions::expr_fn::to_unixtime(args));
+        }
+        "struct" => {
+            let field_names: Vec<String> = args.iter().map(|x| {
+                match x {
+                    expr::Expr::Column(column) => Ok(column.name.to_string()),
+                    _ => {
+                        Err(SparkError::invalid("get_scalar_function: struct function should have expr::Expr::Column as arguments"))
+                    }
+                }
+            }).collect::<SparkResult<Vec<String>>>()?;
+            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
+                    StructFunction::new(field_names),
+                ))),
+                args: args,
+            }));
         }
         _ => {}
     }

@@ -19,7 +19,7 @@ if __name__ == "__main__":
 
     @F.udf(IntegerType())
     def add_x_y(structured_data):
-        x, y = structured_data.x, structured_data.y
+        x, y = structured_data['x'], structured_data['y']
         if x is None or y is None:
             return None
         return x + y
@@ -78,9 +78,10 @@ if __name__ == "__main__":
 
     print(df.limit(1).select(add_one(F.col("a"))).toPandas())
     print(df.select(add_one(F.col("a"))).toPandas())
+    print(df.withColumn("x", F.col("a")).withColumn("y", F.col("a")).select(
+        add_x_y(F.struct(F.col("x"), F.col("y")))).toPandas())
 
     # FIXME: not working
-    # print(df.select(add_x_y(F.struct(F.col("a"), F.col("a"))).alias("sum")).toPandas())
     # print(df.selectExpr("b.*").toPandas())
     # spark.readStream.format("rate").load().writeStream.format("console").start()
     # df.write.saveAsTable("meow")

@@ -1,6 +1,7 @@
-use pyo3::{PyResult, Python};
+use pyo3::prelude::*;
 
-pub mod py_function_pyspark;
+pub mod partial_python_udf;
+pub mod pyarrow;
 pub mod udf;
 mod utils;
 
@@ -17,4 +18,29 @@ signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 pub fn init_python() -> PyResult<()> {
     Python::with_gil(|py| py.run_bound(PYTHON_INIT_SCRIPT, None, None))
+}
+
+#[macro_export]
+macro_rules! impl_py_state_serialization {
+    ($ty:ty) => {
+        #[pymethods]
+        impl $ty {
+            pub fn __reduce__(&self, py: Python) -> PyResult<(PyObject, PyObject)> {
+                Ok((
+                    Self::type_object_bound(py)
+                        .getattr("_from_serialized")?
+                        .to_object(py),
+                    (PyBytes::new_bound(py, &bincode::serialize(&self).unwrap()).to_object(py),)
+                        .to_object(py),
+                ))
+            }
+
+            #[staticmethod]
+            pub fn _from_serialized(py: Python, serialized: PyObject) -> PyResult<Self> {
+                serialized
+                    .extract::<&PyBytes>(py)
+                    .map(|py_bytes| bincode::deserialize(Bytes::new(py_bytes.as_bytes())).unwrap())
+            }
+        }
+    };
 }
