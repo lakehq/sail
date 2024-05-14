@@ -117,18 +117,7 @@ impl ScalarUDFImpl for PythonUDF {
                 let result = python_function
                     .call1(py_arg)
                     .map_err(|e| DataFusionError::Execution(format!("{e:?}")))?;
-
                 results.push(result);
-
-                // match result {
-                //     Ok(result) => results.push(result),
-                //     Err(py_err) => {
-                //         return Err(DataFusionError::Execution(format!(
-                //             "Error while calling Python UDF: {:?}",
-                //             py_err
-                //         )))
-                //     }
-                // }
             }
 
             let pyarrow_output_type = self
