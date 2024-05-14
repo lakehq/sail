@@ -1,7 +1,6 @@
 use pyo3::prelude::*;
 
 pub mod partial_python_udf;
-pub mod py_data_type;
 pub mod pyarrow;
 pub mod udf;
 mod utils;
