@@ -17,11 +17,11 @@ fn to_array_struct(args: &[ArrayRef], field_names: &[String]) -> Result<ArrayRef
 
     let vec: Vec<_> = args
         .iter()
-        .enumerate()
-        .map(|(i, arg)| {
+        .zip(field_names.iter())
+        .map(|(arg, field_name)| {
             Ok((
                 Arc::new(Field::new(
-                    field_names[i].as_str(),
+                    field_name.as_str(),
                     arg.data_type().clone(),
                     true,
                 )),
@@ -40,6 +40,7 @@ fn to_struct_expr(args: &[ColumnarValue], field_names: &[String]) -> Result<Colu
         field_names,
     )?))
 }
+
 #[derive(Debug, Clone)]
 pub struct StructFunction {
     signature: Signature,
@@ -71,9 +72,9 @@ impl ScalarUDFImpl for StructFunction {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         let return_fields = arg_types
             .iter()
-            .enumerate()
-            .map(|(pos, dt)| Field::new(self.field_names[pos].clone(), dt.clone(), true))
-            .collect::<Vec<Field>>();
+            .zip(self.field_names.iter())
+            .map(|(dt, field_name)| Ok(Field::new(field_name.clone(), dt.clone(), true)))
+            .collect::<Result<Vec<Field>>>()?;
         Ok(DataType::Struct(Fields::from(return_fields)))
     }
 

@@ -9,7 +9,7 @@ use crate::spark::connect as sc;
 use crate::sql::new_sql_parser;
 use datafusion::arrow::datatypes::{DataType, IntervalMonthDayNanoType};
 use datafusion::catalog::TableReference;
-use datafusion::common::{Column, DFSchema, ScalarValue};
+use datafusion::common::{Column, DFSchema, Result, ScalarValue};
 use datafusion::config::ConfigOptions;
 use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion::{functions, functions_array};
@@ -28,11 +28,8 @@ pub(crate) struct EmptyContextProvider {
 }
 
 impl ContextProvider for EmptyContextProvider {
-    fn get_table_source(
-        &self,
-        name: TableReference,
-    ) -> datafusion::common::Result<Arc<dyn TableSource>> {
-        Err(datafusion::error::DataFusionError::NotImplemented(format!(
+    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+        Err(DataFusionError::NotImplemented(format!(
             "get table source: {:?}",
             name
         )))
@@ -643,8 +640,8 @@ pub(crate) fn get_scalar_function(
                     _ => {
                         Err(SparkError::invalid("get_scalar_function: struct function should have expr::Expr::Column as arguments"))
                     }
-                }.unwrap()
-            }).collect::<Vec<String>>();
+                }
+            }).collect::<SparkResult<Vec<String>>>()?;
             return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                 func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
                     StructFunction::new(field_names),
