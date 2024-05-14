@@ -21,10 +21,10 @@ impl Serialize for PartialPythonUDF {
                 .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "dumps")))
                 .and_then(|dumps| dumps.call1((self.0.clone_ref(py).into_bound(py),)))
                 .and_then(|py_bytes| {
-                    let bytes = Bytes::new(py_bytes.downcast::<PyBytes>().unwrap().as_bytes());
+                    let bytes = Bytes::new(py_bytes.downcast::<PyBytes>()?.as_bytes());
                     Ok(serializer.serialize_bytes(bytes))
                 })
-                .unwrap()
+                .map_err(|e| serde::ser::Error::custom(format!("Pickle Error: {:?}", e)))?
         })
     }
 }
