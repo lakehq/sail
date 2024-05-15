@@ -565,8 +565,55 @@ pub(crate) async fn from_spark_relation(
         RelType::SampleBy(_) => {
             return Err(SparkError::todo("sample by"));
         }
-        RelType::Catalog(_) => {
-            return Err(SparkError::todo("catalog"));
+        RelType::Catalog(catalog) => {
+            use sc::catalog::CatType;
+            let cat_type = catalog.cat_type.as_ref().required("catalog type")?;
+            match cat_type {
+                CatType::CurrentDatabase(_) => {
+                    Err(SparkError::unsupported("CatType::CurrentDatabase"))
+                }
+                CatType::SetCurrentDatabase(_) => {
+                    Err(SparkError::unsupported("CatType::SetCurrentDatabase"))
+                }
+                CatType::ListDatabases(_) => Err(SparkError::unsupported("CatType::ListDatabases")),
+                CatType::ListTables(_) => Err(SparkError::unsupported("CatType::ListTables")),
+                CatType::ListFunctions(_) => Err(SparkError::unsupported("CatType::ListFunctions")),
+                CatType::ListColumns(_) => Err(SparkError::unsupported("CatType::ListColumns")),
+                CatType::GetDatabase(_) => Err(SparkError::unsupported("CatType::GetDatabase")),
+                CatType::GetTable(_) => Err(SparkError::unsupported("CatType::GetTable")),
+                CatType::GetFunction(_) => Err(SparkError::unsupported("CatType::GetFunction")),
+                CatType::DatabaseExists(_) => {
+                    Err(SparkError::unsupported("CatType::DatabaseExists"))
+                }
+                CatType::TableExists(_) => Err(SparkError::unsupported("CatType::TableExists")),
+                CatType::FunctionExists(_) => {
+                    Err(SparkError::unsupported("CatType::FunctionExists"))
+                }
+                CatType::CreateExternalTable(_) => {
+                    Err(SparkError::unsupported("CatType::CreateExternalTable"))
+                }
+                CatType::CreateTable(_) => Err(SparkError::unsupported("CatType::CreateTable")),
+                CatType::DropTempView(_) => Err(SparkError::unsupported("CatType::DropTempView")),
+                CatType::DropGlobalTempView(_) => {
+                    Err(SparkError::unsupported("CatType::DropGlobalTempView"))
+                }
+                CatType::RecoverPartitions(_) => {
+                    Err(SparkError::unsupported("CatType::RecoverPartitions"))
+                }
+                CatType::IsCached(_) => Err(SparkError::unsupported("CatType::IsCached")),
+                CatType::CacheTable(_) => Err(SparkError::unsupported("CatType::CacheTable")),
+                CatType::UncacheTable(_) => Err(SparkError::unsupported("CatType::UncacheTable")),
+                CatType::ClearCache(_) => Err(SparkError::unsupported("CatType::ClearCache")),
+                CatType::RefreshTable(_) => Err(SparkError::unsupported("CatType::RefreshTable")),
+                CatType::RefreshByPath(_) => Err(SparkError::unsupported("CatType::RefreshByPath")),
+                CatType::CurrentCatalog(_) => {
+                    Err(SparkError::unsupported("CatType::CurrentCatalog"))
+                }
+                CatType::SetCurrentCatalog(_) => {
+                    Err(SparkError::unsupported("CatType::SetCurrentCatalog"))
+                }
+                CatType::ListCatalogs(_) => Err(SparkError::unsupported("CatType::ListCatalogs")),
+            }
         }
         RelType::Extension(_) => {
             return Err(SparkError::unsupported("Spark relation extension"));
