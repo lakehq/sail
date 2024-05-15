@@ -15,8 +15,10 @@ pub enum SparkError {
     DataFusionError(#[from] DataFusionError),
     #[error("error in SQL parser: {0}")]
     SqlParserError(#[from] sqlparser::parser::ParserError),
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
     #[error("error in Arrow: {0}")]
-    ArrowError(#[from] datafusion::arrow::error::ArrowError),
+    ArrowError(#[from] arrow::error::ArrowError),
     #[error("error in JSON serde: {0}")]
     JsonError(#[from] serde_json::Error),
     #[error("error in channel: {0}")]
@@ -114,6 +116,7 @@ impl From<SparkError> for tonic::Status {
             e @ SparkError::MissingArgument(_) | e @ SparkError::InvalidArgument(_) => {
                 tonic::Status::invalid_argument(e.to_string())
             }
+            SparkError::IoError(e) => tonic::Status::internal(e.to_string()),
             SparkError::JsonError(e) => tonic::Status::invalid_argument(e.to_string()),
             SparkError::ArrowError(e) => tonic::Status::internal(e.to_string()),
             e @ SparkError::SendError(_) => tonic::Status::cancelled(e.to_string()),

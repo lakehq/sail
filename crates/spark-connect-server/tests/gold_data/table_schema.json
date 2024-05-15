@@ -1,0 +1,162 @@
+{
+  "tests": [
+    {
+      "input": "",
+      "output": {
+        "failure": "error in JSON serde: EOF while parsing a value at line 1 column 0"
+      }
+    },
+    {
+      "input": "A int",
+      "output": {
+        "success": {
+          "fields": [
+            {
+              "name": "a",
+              "data_type": "Int32",
+              "nullable": true,
+              "dict_id": 0,
+              "dict_is_ordered": false,
+              "metadata": {}
+            }
+          ],
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "input": "`!@#$%.^&*()` string",
+      "output": {
+        "success": {
+          "fields": [
+            {
+              "name": "!@#$%.^&*()",
+              "data_type": "Utf8",
+              "nullable": true,
+              "dict_id": 0,
+              "dict_is_ordered": false,
+              "metadata": {}
+            }
+          ],
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "input": "a",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "a INT",
+      "output": {
+        "success": {
+          "fields": [
+            {
+              "name": "a",
+              "data_type": "Int32",
+              "nullable": true,
+              "dict_id": 0,
+              "dict_is_ordered": false,
+              "metadata": {}
+            }
+          ],
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "input": "a INT b long",
+      "output": {
+        "success": {
+          "fields": [
+            {
+              "name": "a",
+              "data_type": "Int32",
+              "nullable": true,
+              "dict_id": 0,
+              "dict_is_ordered": false,
+              "metadata": {}
+            }
+          ],
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "input": "a INT, b long, c int,",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "a INT, b long,,",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "a INT,, b long",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "a STRUCT<intType: int, ts:timestamp>",
+      "output": {
+        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"STRUCT\", quote_style: None }]), [])"
+      }
+    },
+    {
+      "input": "a int comment 'test'",
+      "output": {
+        "success": {
+          "fields": [
+            {
+              "name": "a",
+              "data_type": "Int32",
+              "nullable": true,
+              "dict_id": 0,
+              "dict_is_ordered": false,
+              "metadata": {}
+            }
+          ],
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "input": "a int, b long",
+      "output": {
+        "success": {
+          "fields": [
+            {
+              "name": "a",
+              "data_type": "Int32",
+              "nullable": true,
+              "dict_id": 0,
+              "dict_is_ordered": false,
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "data_type": "Int64",
+              "nullable": true,
+              "dict_id": 0,
+              "dict_is_ordered": false,
+              "metadata": {}
+            }
+          ],
+          "metadata": {}
+        }
+      }
+    },
+    {
+      "input": "complexStructCol struct<struct:struct<deciMal:DECimal, anotherDecimal:decimAL(5,2)>,MAP:Map<timestamp, varchar(10)>,arrAy:Array<double>,anotherArray:Array<char(9)>>      ",
+      "output": {
+        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"struct\", quote_style: None }]), [])"
+      }
+    }
+  ]
+}

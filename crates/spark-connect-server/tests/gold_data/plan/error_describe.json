@@ -1,0 +1,10 @@
+{
+  "tests": [
+    {
+      "input": "DESC SCHEMA EXTENDED test-db",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

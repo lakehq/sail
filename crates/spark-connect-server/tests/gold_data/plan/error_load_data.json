@@ -1,0 +1,10 @@
+{
+  "tests": [
+    {
+      "input": "LOAD DATA INPATH \"path\" INTO TABLE my-tab",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

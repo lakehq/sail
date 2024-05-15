@@ -1,0 +1,94 @@
+{
+  "tests": [
+    {
+      "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING (SELECT * FROM testcat2.ns1.ns2.tbl) AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update') THEN UPDATE SET target.col2 = source.col2\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)\nWHEN NOT MATCHED BY SOURCE AND (target.col3='delete') THEN DELETE\nWHEN NOT MATCHED BY SOURCE AND (target.col3='update')\nTHEN UPDATE SET target.col3 = 'delete'\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING (WITH s as (SELECT * FROM testcat2.ns1.ns2.tbl) SELECT * FROM s) AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update') THEN UPDATE SET target.col2 = source.col2\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)\nWHEN NOT MATCHED BY SOURCE AND (target.col3='delete') THEN DELETE\nWHEN NOT MATCHED BY SOURCE AND (target.col3='update')\nTHEN UPDATE SET target.col3 = 'delete'\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update') THEN UPDATE SET *\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT *\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update') THEN UPDATE SET target.col2 = DEFAULT\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) VALUES (source.col1, DEFAULT)\nWHEN NOT MATCHED BY SOURCE AND (target.col2='delete') THEN DELETE\nWHEN NOT MATCHED BY SOURCE AND (target.col2='update') THEN UPDATE SET target.col2 = DEFAULT\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update') THEN UPDATE SET target.col2 = source.col2\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)\nWHEN NOT MATCHED BY SOURCE AND (target.col3='delete') THEN DELETE\nWHEN NOT MATCHED BY SOURCE AND (target.col3='update')\nTHEN UPDATE SET target.col3 = 'delete'\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update1') THEN UPDATE SET target.col2 = 1\nWHEN MATCHED AND (target.col2='update2') THEN UPDATE SET target.col2 = 2\nWHEN NOT MATCHED AND (target.col2='insert1')\nTHEN INSERT (target.col1, target.col2) values (source.col1, 1)\nWHEN NOT MATCHED AND (target.col2='insert2')\nTHEN INSERT (target.col1, target.col2) values (source.col1, 2)\nWHEN NOT MATCHED BY SOURCE AND (target.col3='delete') THEN DELETE\nWHEN NOT MATCHED BY SOURCE AND (target.col3='update1') THEN UPDATE SET target.col3 = 1\nWHEN NOT MATCHED BY SOURCE AND (target.col3='update2') THEN UPDATE SET target.col3 = 2\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED THEN UPDATE SET target.col2 = source.col2\nWHEN NOT MATCHED\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)\nWHEN NOT MATCHED BY SOURCE THEN DELETE\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN NOT MATCHED BY SOURCE THEN UPDATE *\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN NOT MATCHED BY TARGET AND (target.col3='insert1')\nTHEN INSERT (target.col1, target.col2) VALUES (source.col1, 0)\nWHEN NOT MATCHED AND (target.col3='insert2')\nTHEN INSERT (target.col1, target.col2) VALUES (1, source.col2)\nWHEN NOT MATCHED BY TARGET\nTHEN INSERT *\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "MERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "MERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2 == 'update') THEN UPDATE SET target.col2 = source.col2\nWHEN MATCHED THEN DELETE\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)\nWHEN NOT MATCHED BY SOURCE AND (target.col3='update')\nTHEN UPDATE SET target.col3 = 'delete'\nWHEN NOT MATCHED BY SOURCE THEN UPDATE SET target.col3 = 'update'\nWHEN NOT MATCHED BY SOURCE THEN DELETE",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "MERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2 == 'update') THEN UPDATE SET target.col2 = source.col2\nWHEN MATCHED THEN DELETE\nWHEN NOT MATCHED AND (target.col2='insert1')\nTHEN INSERT (target.col1, target.col2) values (source.col1, 1)\nWHEN NOT MATCHED\nTHEN INSERT (target.col1, target.col2) values (source.col1, 2)\nWHEN NOT MATCHED\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "MERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2 == 'update1') THEN UPDATE SET target.col2 = 1\nWHEN MATCHED THEN UPDATE SET target.col2 = 2\nWHEN MATCHED THEN DELETE\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "MERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source(c1, c2)\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update') THEN UPDATE SET target.col2 = source.col2\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "MERGE INTO testcat1.ns1.ns2.tbl AS target(c1, c2)\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update') THEN UPDATE SET target.col2 = source.col2\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

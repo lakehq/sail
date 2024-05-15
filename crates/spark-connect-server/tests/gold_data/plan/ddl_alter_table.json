@@ -1,0 +1,478 @@
+{
+  "tests": [
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\"",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\"",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN b STRING FIRST COMMENT \"abc\" AFTER y",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN b STRING NOT NULL DEFAULT \"abc\" NOT NULL",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" DEFAULT 'abc' FIRST NOT NULL",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" DEFAULT 'abc' NOT NULL FIRST",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" FIRST DEFAULT 'abc' NOT NULL",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" FIRST NOT NULL DEFAULT 'abc'",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" NOT NULL DEFAULT 'abc' FIRST",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" NOT NULL FIRST DEFAULT 'abc'",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING DEFAULT 'abc' COMMENT \"a\" FIRST NOT NULL",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING DEFAULT 'abc' COMMENT \"a\" NOT NULL FIRST",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING DEFAULT 'abc' FIRST COMMENT \"a\" NOT NULL",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING DEFAULT 'abc' FIRST NOT NULL COMMENT \"a\"",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING DEFAULT 'abc' NOT NULL COMMENT \"a\" FIRST",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING DEFAULT 'abc' NOT NULL FIRST COMMENT \"a\"",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING FIRST COMMENT \"a\" DEFAULT 'abc' NOT NULL",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING FIRST COMMENT \"a\" NOT NULL DEFAULT 'abc'",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING FIRST DEFAULT 'abc' COMMENT \"a\" NOT NULL",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING FIRST DEFAULT 'abc' NOT NULL COMMENT \"a\"",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING FIRST NOT NULL COMMENT \"a\" DEFAULT 'abc'",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING FIRST NOT NULL DEFAULT 'abc' COMMENT \"a\"",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING NOT NULL COMMENT \"a\" DEFAULT 'abc' FIRST",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING NOT NULL COMMENT \"a\" FIRST DEFAULT 'abc'",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING NOT NULL DEFAULT 'abc' COMMENT \"a\" FIRST",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING NOT NULL DEFAULT 'abc' FIRST COMMENT \"a\"",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING NOT NULL FIRST COMMENT \"a\" DEFAULT 'abc'",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE my_tab ADD COLUMN x STRING NOT NULL FIRST DEFAULT 'abc' COMMENT \"a\"",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE t1 ADD COLUMN x int NOT NULL DEFAULT 42",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE t1 ALTER COLUMN a.b.c DROP DEFAULT",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE t1 ALTER COLUMN a.b.c DROP DEFAULT SET DEFAULT 42",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE t1 ALTER COLUMN a.b.c SET DEFAULT ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE t1 ALTER COLUMN a.b.c SET DEFAULT ''",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE t1 ALTER COLUMN a.b.c SET DEFAULT 42",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ADD COLUMN x int",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ADD COLUMN x int AFTER y",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ADD COLUMN x int COMMENT 'doc'",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ADD COLUMN x int FIRST",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ADD COLUMN x int NOT NULL",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ADD COLUMN x.y.z int COMMENT 'doc'",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ADD COLUMN x.y.z int COMMENT 'doc', a.b string FIRST",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ADD COLUMNS (x int COMMENT 'doc')",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ADD COLUMNS (x int)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ADD COLUMNS x int",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ADD COLUMNS x int, y string",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ALTER COLUMN a.b.c DROP NOT NULL",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ALTER COLUMN a.b.c SET NOT NULL",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bad_type",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment'",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment' AFTER d",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT AFTER d",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c COMMENT 'new comment'",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c FIRST",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c TYPE bigint",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c c INT",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c c INT AFTER other_col",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c c INT COMMENT 'new_comment'",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c new_name INT",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name DROP COLUMN IF EXISTS a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name DROP COLUMN IF EXISTS x, y, a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name DROP COLUMN a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name DROP COLUMN x, y, a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name DROP COLUMNS IF EXISTS x, y, a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name DROP COLUMNS x, y, a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name PARTITION (a='1') CHANGE COLUMN a.b.c c INT",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name PARTITION (a='1') REPLACE COLUMNS (x string)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name RENAME COLUMN a.b.c TO d",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name REPLACE COLUMNS (a STRING COMMENT 'x' COMMENT 'y')",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name REPLACE COLUMNS (a.b.c string)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name REPLACE COLUMNS (x string COMMENT 'x1')",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name REPLACE COLUMNS (x string COMMENT 'x1', y int COMMENT 'y1')",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name REPLACE COLUMNS (x string COMMENT 'x1', y int)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name REPLACE COLUMNS (x string FIRST)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name REPLACE COLUMNS (x string NOT NULL)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name REPLACE COLUMNS (x string)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name SET TBLPROPERTIES ('test' = 'test', 'comment' = 'new_comment')",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name UNSET TBLPROPERTIES ('comment', 'test')",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER TABLE table_name UNSET TBLPROPERTIES IF EXISTS ('comment', 'test')",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

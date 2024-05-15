@@ -1,0 +1,26 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT cast('10' as int);",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "CAST(10 AS INT)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    }
+  ]
+}

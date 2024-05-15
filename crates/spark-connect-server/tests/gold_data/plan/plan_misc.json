@@ -1,0 +1,172 @@
+{
+  "tests": [
+    {
+      "input": "\n/*\nSELECT 'trailing' as x1; -- inside block comment\n*/\nSELECT * FROM a\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\n/* This block comment surrounds a query which itself has a block comment...\n//* I am a nested bracketed comment.\n*/\n*/\nSELECT * FROM a\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\n/* This block comment surrounds a query which itself has a block comment...\nSELECT /* embedded single line */ 'embedded' AS x2;\n*/\nSELECT * FROM a\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\n/* This is an example of SQL which should not execute:\n * select 'multi-line';\n */\nSELECT * FROM a\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\n/*/**/*/\nSELECT * FROM a\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\n/*/*abc*/*/\nSELECT * FROM a\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\n/*/*foo*//*bar*/*/\nSELECT * FROM a\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\n/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\n*/\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "(select * from t1) union distinct (select * from t2)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "-- single comment\\\nwith line continuity\nSELECT * FROM a",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\n",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\nselect 4 as d\n",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "TABLE testcat.db.tab",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "from (from a union all from b) c select *",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "from a",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "from a insert into tbl1 select * insert into tbl2 select * where s < 10",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "from a select * from b",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "from a select * select * from x where a.s < 10",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "from a select * select * where s < 10",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "from a select b, c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "from a select distinct b, c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "from db.a select b, c where d < 1",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "from t insert into s select * limit 1 insert into u select * where x > 5",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "from t1\nlateral view explode(x) expl as x\ninsert into t2\nselect *\nlateral view json_tuple(x, y) jtup q, z\ninsert into t3\nselect *\nwhere s < 10\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "table d.t",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "table t",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "values (1, 'a'), (2, 'b') as tbl(a, b)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "values 1, 2, 3, 4",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

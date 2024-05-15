@@ -1,0 +1,40 @@
+{
+  "tests": [
+    {
+      "input": "\nWITH cte1 AS (SELECT * FROM testcat.db.tab)\nSELECT * FROM cte1\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "WITH t(x) AS (SELECT c FROM a) SELECT * FROM t",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "with cte1 (select 1) select * from cte1",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "with cte1 (select 1), cte1 as (select 1 from cte1) select * from cte1",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "with cte1 (select 1), cte2 as (select * from cte1) select * from cte2",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "with cte1 as (select * from a) select * from cte1",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

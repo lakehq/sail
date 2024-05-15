@@ -1,0 +1,22 @@
+{
+  "tests": [
+    {
+      "input": "DELETE FROM testcat.ns1.ns2.tbl",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "DELETE FROM testcat.ns1.ns2.tbl AS t WHERE t.a = 2",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "DELETE FROM testcat.ns1.ns2.tbl AS t(a,b,c,d) WHERE d = 2",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

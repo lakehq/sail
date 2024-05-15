@@ -1,0 +1,337 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT a, b, cume_dist() OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\t0.6666666666666666",
+          "A1\t1\t0.6666666666666666",
+          "A1\t2\t1.0",
+          "A2\t3\t1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "cume_dist() OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT a, b, dense_rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\t1",
+          "A1\t1\t1",
+          "A1\t2\t2",
+          "A2\t3\t1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "DENSE_RANK() OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT a, b, lag(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\tNULL",
+          "A1\t1\t1",
+          "A1\t2\t1",
+          "A2\t3\tNULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "lag(b, 1, NULL) OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT a, b, lead(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\t1",
+          "A1\t1\t2",
+          "A1\t2\tNULL",
+          "A2\t3\tNULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "lead(b, 1, NULL) OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT a, b, nth_value(b, 2) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\t1",
+          "A1\t1\t1",
+          "A1\t2\t1",
+          "A2\t3\tNULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "nth_value(b, 2) OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT a, b, ntile(2) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\t1",
+          "A1\t1\t1",
+          "A1\t2\t2",
+          "A2\t3\t1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "ntile(2) OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT a, b, percent_rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\t0.0",
+          "A1\t1\t0.0",
+          "A1\t2\t1.0",
+          "A2\t3\t0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "PERCENT_RANK() OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT a, b, rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\t1",
+          "A1\t1\t1",
+          "A1\t2\t3",
+          "A2\t3\t1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "RANK() OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\t1",
+          "A1\t1\t2",
+          "A1\t2\t3",
+          "A2\t3\t1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "row_number() OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    }
+  ]
+}

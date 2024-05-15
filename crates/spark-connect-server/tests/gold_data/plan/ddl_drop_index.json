@@ -1,0 +1,16 @@
+{
+  "tests": [
+    {
+      "input": "DROP index IF EXISTS i1 ON a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "DROP index i1 ON a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "tests": [
+    {
+      "input": "\nALTER TABLE t\nCHANGE COLUMN\ntest-col TYPE BIGINT\n        ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nALTER TABLE t\nDROP COLUMN\ntest-col, test\n        ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nALTER TABLE t\nRENAME COLUMN\ntest TO test-col\n        ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nALTER TABLE t\nRENAME COLUMN\ntest-col TO test\n        ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}
