@@ -26,9 +26,7 @@ mod tests {
                 let ctx = session.context();
                 rt.block_on(async {
                     let result = execute_query(&ctx, &example.query).await?;
-                    let result = result.into_iter()
-                        .map(|x| format!("{:?}", x))
-                        .collect();
+                    let result = result.into_iter().map(|x| format!("{:?}", x)).collect();
                     Ok(result)
                 })
             },
