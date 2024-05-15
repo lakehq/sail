@@ -26,9 +26,6 @@ jobs:
           ref: v3.5.1
           fetch-depth: 1
 
-      - name: Patch Spark
-        run: git -C opt/spark apply ../../scripts/spark-tests/gold-data/spark-3.5.1.patch
-
       - uses: actions/setup-java@v4
         with:
           distribution: "corretto"
