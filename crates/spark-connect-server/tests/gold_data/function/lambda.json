@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 24"
+        "failure": "internal error: error"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 24"
+        "failure": "internal error: error"
       }
     },
     {
@@ -67,7 +67,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 'b' at Line: 1, Column 25"
+        "failure": "internal error: error"
       }
     },
     {
@@ -93,7 +93,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 'bc' at Line: 1, Column 25"
+        "failure": "internal error: error"
       }
     },
     {
@@ -119,7 +119,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 5 at Line: 1, Column 25"
+        "failure": "internal error: error"
       }
     },
     {
@@ -141,7 +141,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: array at Line: 1, Column 15"
+        "failure": "internal error: error"
       }
     },
     {
@@ -163,7 +163,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: array at Line: 1, Column 15"
+        "failure": "internal error: error"
       }
     },
     {
@@ -185,7 +185,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: array at Line: 1, Column 15"
+        "failure": "internal error: error"
       }
     },
     {
@@ -207,7 +207,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: array at Line: 1, Column 15"
+        "failure": "internal error: error"
       }
     },
     {
@@ -229,7 +229,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: array at Line: 1, Column 15"
+        "failure": "internal error: error"
       }
     },
     {
@@ -255,7 +255,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 0 at Line: 1, Column 21"
+        "failure": "internal error: error"
       }
     },
     {
@@ -281,7 +281,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 0 at Line: 1, Column 21"
+        "failure": "internal error: error"
       }
     },
     {
@@ -307,7 +307,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 21"
+        "failure": "internal error: error"
       }
     },
     {
@@ -329,7 +329,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 21"
+        "failure": "internal error: error"
       }
     },
     {
@@ -351,7 +351,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 21"
+        "failure": "internal error: error"
       }
     },
     {
@@ -373,7 +373,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 2 at Line: 1, Column 21"
+        "failure": "internal error: error"
       }
     },
     {
@@ -395,7 +395,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 2 at Line: 1, Column 21"
+        "failure": "internal error: error"
       }
     },
     {
@@ -422,7 +422,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'map_filter'.\nDid you mean 'make_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -449,7 +449,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'map_zip_with'.\nDid you mean 'ends_with'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -476,7 +476,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'map_zip_with'.\nDid you mean 'ends_with'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -498,7 +498,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 21"
+        "failure": "internal error: error"
       }
     },
     {
@@ -520,7 +520,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 21"
+        "failure": "internal error: error"
       }
     },
     {
@@ -546,7 +546,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 24"
+        "failure": "internal error: error"
       }
     },
     {
@@ -572,7 +572,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 24"
+        "failure": "internal error: error"
       }
     },
     {
@@ -599,7 +599,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 45"
+        "failure": "internal error: error"
       }
     },
     {
@@ -626,7 +626,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 45"
+        "failure": "internal error: error"
       }
     },
     {
@@ -653,7 +653,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 47"
+        "failure": "internal error: error"
       }
     },
     {
@@ -680,7 +680,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 47"
+        "failure": "internal error: error"
       }
     },
     {
@@ -706,7 +706,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 'a' at Line: 1, Column 23"
+        "failure": "internal error: error"
       }
     },
     {
@@ -732,7 +732,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 23"
+        "failure": "internal error: error"
       }
     },
     {
@@ -774,7 +774,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 23"
+        "failure": "internal error: error"
       }
     }
   ]

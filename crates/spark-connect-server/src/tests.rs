@@ -84,13 +84,14 @@ where
                     e
                 )))
             })?;
-            fs::write(path, content)?;
+            fs::write(path, content + "\n")?;
         } else {
             if expected != actual {
                 Err(SparkError::internal(format!(
-                "The test data from {} is not up-to-date. Please run 'env {}=1 cargo test' to save the updates.",
-                path.display(), UPDATE_GOLD_DATA_ENV_VAR
-            )))?;
+                    "The test data from {} is not up-to-date. Please run 'env {}=1 cargo test' to save the updates.",
+                    path.display(),
+                    UPDATE_GOLD_DATA_ENV_VAR
+                )))?;
             }
         }
     }

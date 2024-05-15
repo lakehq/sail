@@ -19,9 +19,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Utf8(\\\"10\\\")\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  10,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     }
   ]

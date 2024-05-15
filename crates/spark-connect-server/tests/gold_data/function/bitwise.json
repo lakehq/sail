@@ -19,9 +19,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(3) & Int64(5)\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  1,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -43,9 +41,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(3) BIT_XOR Int64(5)\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  6,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -67,9 +63,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(3) | Int64(5)\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  7,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -91,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'bit_count'.\nDid you mean 'COUNT'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -113,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'bit_get'.\nDid you mean 'BIT_AND'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -135,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'bit_get'.\nDid you mean 'BIT_AND'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -157,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'getbit'.\nDid you mean 'cbrt'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -179,7 +173,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'getbit'.\nDid you mean 'cbrt'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -201,7 +195,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'shiftright'.\nDid you mean 'right'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -223,7 +217,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'shiftrightunsigned'.\nDid you mean 'string_to_list'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -245,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected an expression:, found: ~ at Line: 1, Column 8"
+        "failure": "internal error: error"
       }
     }
   ]

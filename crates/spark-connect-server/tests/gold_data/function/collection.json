@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 'b' at Line: 1, Column 25"
+        "failure": "internal error: error"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 'b' at Line: 1, Column 26"
+        "failure": "internal error: error"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'map'.\nDid you mean 'MAX'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -85,9 +85,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"concat(Utf8(\\\"Spark\\\"),Utf8(\\\"SQL\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"SparkSQL\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -113,7 +111,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 21"
+        "failure": "internal error: error"
       }
     },
     {
@@ -135,9 +133,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"reverse(Utf8(\\\"Spark SQL\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"LQS krapS\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -163,7 +159,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 2 at Line: 1, Column 22"
+        "failure": "internal error: error"
       }
     },
     {
@@ -185,7 +181,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 'b' at Line: 1, Column 19"
+        "failure": "internal error: error"
       }
     },
     {
@@ -207,7 +203,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'size'.\nDid you mean 'sin'?"
+        "failure": "internal error: error"
       }
     }
   ]

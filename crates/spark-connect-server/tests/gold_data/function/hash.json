@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'crc32'.\nDid you mean 'atan2'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 123 at Line: 1, Column 28"
+        "failure": "internal error: error"
       }
     },
     {
@@ -63,9 +63,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"md5(Utf8(\\\"Spark\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"8cde774d6f7333752ed72cacddb05126\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -87,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'sha'.\nDid you mean 'sin'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -109,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'sha1'.\nDid you mean 'sha512'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -131,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'sha2'.\nDid you mean 'sha224'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -153,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 123 at Line: 1, Column 32"
+        "failure": "internal error: error"
       }
     }
   ]

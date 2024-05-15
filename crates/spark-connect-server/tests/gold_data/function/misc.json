@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'aes_decrypt'.\nDid you mean 'list_except'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'aes_decrypt'.\nDid you mean 'list_except'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'aes_decrypt'.\nDid you mean 'list_except'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'aes_decrypt'.\nDid you mean 'list_except'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'aes_decrypt'.\nDid you mean 'list_except'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'aes_decrypt'.\nDid you mean 'list_except'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -151,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'assert_true'.\nDid you mean 'date_trunc'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -173,7 +173,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'base64'.\nDid you mean 'asinh'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -195,7 +195,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'base64'.\nDid you mean 'asinh'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -217,7 +217,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'base64'.\nDid you mean 'asinh'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -239,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'base64'.\nDid you mean 'asinh'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -261,7 +261,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'bitmap_bit_position'.\nDid you mean 'list_position'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -283,7 +283,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'bitmap_bit_position'.\nDid you mean 'list_position'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -305,7 +305,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'bitmap_bucket_number'.\nDid you mean 'make_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -327,7 +327,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'bitmap_bucket_number'.\nDid you mean 'make_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -349,7 +349,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: '0' at Line: 1, Column 23"
+        "failure": "internal error: error"
       }
     },
     {
@@ -371,7 +371,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: '1010' at Line: 1, Column 23"
+        "failure": "internal error: error"
       }
     },
     {
@@ -393,7 +393,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: 'FFFF' at Line: 1, Column 23"
+        "failure": "internal error: error"
       }
     },
     {
@@ -415,7 +415,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'current_catalog'.\nDid you mean 'current_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -437,7 +437,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'current_database'.\nDid you mean 'current_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -459,7 +459,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'current_schema'.\nDid you mean 'current_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -481,7 +481,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'current_user'.\nDid you mean 'current_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -503,7 +503,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'equal_null'.\nDid you mean 'ifnull'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -525,7 +525,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'equal_null'.\nDid you mean 'ifnull'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -547,7 +547,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'equal_null'.\nDid you mean 'ifnull'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -569,7 +569,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'equal_null'.\nDid you mean 'ifnull'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -591,7 +591,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'equal_null'.\nDid you mean 'ifnull'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -613,7 +613,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'hex'.\nDid you mean 'exp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -635,7 +635,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'hex'.\nDid you mean 'exp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -657,7 +657,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'hll_sketch_estimate'.\nDid you mean 'list_empty'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -679,7 +679,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'hll_sketch_estimate'.\nDid you mean 'list_empty'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -701,7 +701,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'input_file_block_length'.\nDid you mean 'octet_length'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -723,7 +723,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'input_file_block_start'.\nDid you mean 'list_replace_all'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -743,7 +743,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'input_file_name'.\nDid you mean 'list_length'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -765,7 +765,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'java_method'.\nDid you mean 'atanh'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -787,7 +787,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'java_method'.\nDid you mean 'atanh'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -809,7 +809,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'monotonically_increasing_id'.\nDid you mean 'array_prepend'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -832,7 +832,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'raise_error'.\nDid you mean 'iszero'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -854,7 +854,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'reflect'.\nDid you mean 'replace'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -876,7 +876,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'reflect'.\nDid you mean 'replace'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -898,7 +898,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'spark_partition_id'.\nDid you mean 'array_position'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -920,7 +920,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_aes_decrypt'.\nDid you mean 'array_except'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -942,7 +942,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_aes_decrypt'.\nDid you mean 'array_except'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -964,7 +964,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'typeof'.\nDid you mean 'strpos'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -986,7 +986,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 21"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1008,7 +1008,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'user'.\nDid you mean 'upper'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1030,9 +1030,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"uuid()\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"0ae20907-b9e0-4ca9-8f4e-41f89fac8d11\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1054,7 +1052,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'version'.\nDid you mean 'sin'?"
+        "failure": "internal error: error"
       }
     }
   ]

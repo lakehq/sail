@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'any'.\nDid you mean 'ln'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'any'.\nDid you mean 'ln'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'any'.\nDid you mean 'ln'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'any_value'.\nDid you mean 'LAST_VALUE'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'any_value'.\nDid you mean 'LAST_VALUE'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'any_value'.\nDid you mean 'LAST_VALUE'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -151,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'approx_count_distinct'.\nDid you mean 'APPROX_DISTINCT'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -173,7 +173,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'approx_percentile'.\nDid you mean 'APPROX_PERCENTILE_CONT'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -195,7 +195,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'approx_percentile'.\nDid you mean 'APPROX_PERCENTILE_CONT'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -221,7 +221,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 0.5 at Line: 1, Column 37"
+        "failure": "internal error: error"
       }
     },
     {
@@ -247,7 +247,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 0.5 at Line: 1, Column 37"
+        "failure": "internal error: error"
       }
     },
     {
@@ -273,9 +273,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"ARRAY_AGG(tab.col)\", data_type: List(Field { name: \"item\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [ListArray\n[\n  PrimitiveArray<Int64>\n[\n  1,\n  2,\n  1,\n],\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -297,9 +295,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"AVG(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -321,9 +317,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"AVG(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.5,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -345,9 +339,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"BIT_AND(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  1,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -369,9 +361,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"BIT_OR(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  7,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -393,9 +383,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"BIT_XOR(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  6,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -417,9 +405,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"BOOL_AND(tab.col)\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -441,9 +427,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"BOOL_AND(tab.col)\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -465,9 +449,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"BOOL_AND(tab.col)\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -489,9 +471,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"BOOL_OR(tab.col)\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -513,9 +493,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"BOOL_OR(tab.col)\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -537,9 +515,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"BOOL_OR(tab.col)\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -565,7 +541,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'collect_list'.\nDid you mean 'make_list'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -591,7 +567,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'collect_set'.\nDid you mean 'coalesce'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -613,9 +589,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"CORR(tab.c1,tab.c2)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.8660254037844386,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -637,9 +611,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"COUNT(*)\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  4,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -661,9 +633,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"COUNT(DISTINCT tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  2,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -685,9 +655,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"COUNT(tab.col)\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  3,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -709,7 +677,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'count_if'.\nDid you mean 'COUNT'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -731,7 +699,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'count_if'.\nDid you mean 'COUNT'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -753,9 +721,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"COVAR_POP(tab.c1,tab.c2)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.6666666666666666,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -777,9 +743,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"COVAR(tab.c1,tab.c2)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -801,7 +765,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'every'.\nDid you mean 'reverse'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -823,7 +787,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'every'.\nDid you mean 'reverse'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -845,7 +809,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'every'.\nDid you mean 'reverse'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -867,7 +831,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'first'.\nDid you mean 'cbrt'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -889,7 +853,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'first'.\nDid you mean 'cbrt'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -911,7 +875,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'first'.\nDid you mean 'cbrt'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -933,9 +897,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"FIRST_VALUE(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  10,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -957,9 +919,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"FIRST_VALUE(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  null,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -981,7 +941,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'FIRST_VALUE(Int64, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tFIRST_VALUE(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1003,7 +963,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: d at Line: 1, Column 37"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1045,7 +1005,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'histogram_numeric'.\nDid you mean 'list_remove_n'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1067,7 +1027,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'hll_sketch_estimate'.\nDid you mean 'list_empty'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1089,7 +1049,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: table function 'VALUES' not found"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1111,7 +1071,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'kurtosis'.\nDid you mean 'strpos'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1133,7 +1093,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'kurtosis'.\nDid you mean 'strpos'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1155,7 +1115,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'last'.\nDid you mean 'left'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1177,7 +1137,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'last'.\nDid you mean 'left'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1199,7 +1159,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'last'.\nDid you mean 'left'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1221,9 +1181,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"LAST_VALUE(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  20,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1245,9 +1203,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"LAST_VALUE(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  null,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1269,7 +1225,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'LAST_VALUE(Int64, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tLAST_VALUE(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1291,9 +1247,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"MAX(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  50,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1315,7 +1269,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'max_by'.\nDid you mean 'MAX'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1337,9 +1291,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"AVG(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1361,9 +1313,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"AVG(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.5,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1385,9 +1335,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"MEDIAN(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  5,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1409,7 +1357,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: MedianAccumulator not supported for MEDIAN(tab.col) with Interval(MonthDayNano)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1431,9 +1379,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"MIN(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  -1,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1455,7 +1401,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'min_by'.\nDid you mean 'MIN'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1477,7 +1423,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'mode'.\nDid you mean 'md5'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1499,7 +1445,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'mode'.\nDid you mean 'md5'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1521,7 +1467,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'mode'.\nDid you mean 'md5'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1557,7 +1503,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected end of statement, found: GROUP at Line: 1, Column 94"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1603,7 +1549,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected end of statement, found: GROUP at Line: 1, Column 124"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1625,7 +1571,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'percentile'.\nDid you mean 'ceil'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1647,7 +1593,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'percentile'.\nDid you mean 'ceil'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1673,7 +1619,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 0.2 at Line: 1, Column 30"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1699,7 +1645,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 0.25 at Line: 1, Column 30"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1721,7 +1667,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'percentile_approx'.\nDid you mean 'string_to_array'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1743,7 +1689,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'percentile_approx'.\nDid you mean 'string_to_array'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1769,7 +1715,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 0.5 at Line: 1, Column 37"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1795,7 +1741,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 0.5 at Line: 1, Column 37"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1817,9 +1763,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_AVGX(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2.75,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1841,9 +1785,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_AVGX(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  3.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1865,9 +1807,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_AVGX(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  3.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1889,7 +1829,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_AVGX(Int64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_AVGX(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1911,7 +1851,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_AVGX(Utf8, Int64)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_AVGX(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1933,9 +1873,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_AVGY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.75,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1957,9 +1895,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_AVGY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.6666666666666667,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1981,9 +1917,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_AVGY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.5,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2005,7 +1939,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_AVGY(Int64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_AVGY(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2027,7 +1961,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_AVGY(Utf8, Int64)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_AVGY(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2049,9 +1983,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_COUNT(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  4.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2073,9 +2005,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_COUNT(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  3.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2097,9 +2027,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_COUNT(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2121,7 +2049,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_INTERCEPT(Int64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_INTERCEPT(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2143,9 +2071,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_INTERCEPT(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2167,7 +2093,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_INTERCEPT(Utf8, Int64)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_INTERCEPT(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2189,9 +2115,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_R2(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.2727272727272727,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2213,9 +2137,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_R2(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.75,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2237,9 +2159,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_R2(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2261,7 +2181,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_R2(Int64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_R2(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2283,7 +2203,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_R2(Utf8, Int64)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_R2(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2305,7 +2225,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_SLOPE(Int64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_SLOPE(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2327,9 +2247,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SLOPE(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2351,7 +2269,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_SLOPE(Utf8, Int64)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_SLOPE(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2373,9 +2291,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SXX(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2.7499999999999996,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2397,9 +2313,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SXX(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2421,9 +2335,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SXX(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2445,9 +2357,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SXY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.7499999999999999,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2469,9 +2379,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SXY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.9999999999999999,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2493,9 +2401,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SXY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2517,9 +2423,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SYY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.75,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2541,9 +2445,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SYY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.6666666666666666,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2565,9 +2467,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SYY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.5,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2589,7 +2489,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'skewness'.\nDid you mean 'degrees'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2611,7 +2511,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'skewness'.\nDid you mean 'degrees'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2633,7 +2533,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'some'.\nDid you mean 'SUM'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2655,7 +2555,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'some'.\nDid you mean 'SUM'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2677,7 +2577,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'some'.\nDid you mean 'SUM'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2699,7 +2599,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'std'.\nDid you mean 'gcd'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2721,9 +2621,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"STDDEV(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2745,9 +2643,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"STDDEV_POP(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.816496580927726,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2769,9 +2665,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"STDDEV(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2793,7 +2687,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'hex'.\nDid you mean 'exp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2815,7 +2709,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'hex'.\nDid you mean 'exp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2837,7 +2731,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: '10' at Line: 1, Column 64"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2859,7 +2753,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: '10' at Line: 1, Column 64"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2881,9 +2775,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"SUM(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  30,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2905,9 +2797,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"SUM(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  25,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2929,7 +2819,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'SUM(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tSUM(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2951,7 +2841,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_avg'.\nDid you mean 'AVG'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2973,7 +2863,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_avg'.\nDid you mean 'AVG'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2995,7 +2885,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_avg'.\nDid you mean 'AVG'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3017,7 +2907,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_sum'.\nDid you mean 'trim'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3039,7 +2929,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_sum'.\nDid you mean 'trim'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3061,7 +2951,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_sum'.\nDid you mean 'trim'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3083,7 +2973,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_sum'.\nDid you mean 'trim'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3105,9 +2995,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"VAR_POP(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.6666666666666666,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -3129,9 +3017,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"VAR(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -3153,7 +3039,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'variance'.\nDid you mean 'radians'?"
+        "failure": "internal error: error"
       }
     }
   ]

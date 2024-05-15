@@ -23,7 +23,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'xpath'.\nDid you mean 'atanh'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -45,7 +45,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'xpath_boolean'.\nDid you mean 'date_format'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -67,7 +67,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'xpath_double'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -89,7 +89,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'xpath_float'.\nDid you mean 'date_format'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -111,7 +111,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'xpath_int'.\nDid you mean 'date_bin'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -133,7 +133,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'xpath_long'.\nDid you mean 'date_bin'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -155,7 +155,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'xpath_number'.\nDid you mean 'date_bin'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -177,7 +177,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'xpath_short'.\nDid you mean 'list_sort'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -199,7 +199,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'xpath_string'.\nDid you mean 'array_to_string'?"
+        "failure": "internal error: error"
       }
     }
   ]

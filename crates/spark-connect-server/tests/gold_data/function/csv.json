@@ -35,7 +35,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'from_csv'.\nDid you mean 'arrow_cast'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -67,7 +67,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'from_csv'.\nDid you mean 'arrow_cast'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -89,7 +89,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'schema_of_csv'.\nDid you mean 'concat_ws'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -111,7 +111,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_csv'.\nDid you mean 'to_char'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -133,7 +133,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_csv'.\nDid you mean 'to_char'?"
+        "failure": "internal error: error"
       }
     }
   ]

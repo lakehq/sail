@@ -75,7 +75,7 @@ function write_grouped_tests() {
   # and then use `xargs` to run `jq` again for each group to produce the output file.
   # shellcheck disable=SC2016
   jq -r -f "${script_file}" --arg group "" "${input_file}" \
-    | xargs -n 1 -I {} bash -c 'jq -f "$0" --arg group "$1" "$2" > "$3"' \
+    | xargs -I {} bash -c 'jq -f "$0" --arg group "$1" "$2" > "$3"' \
     "${script_file}" {} "${input_file}" "${output_path}/${kind}/${file_prefix}"{}.json
 }
 

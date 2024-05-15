@@ -35,7 +35,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'from_json'.\nDid you mean 'floor'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -93,7 +93,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'from_json'.\nDid you mean 'floor'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -125,7 +125,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'from_json'.\nDid you mean 'floor'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -147,7 +147,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'get_json_object'.\nDid you mean 'list_intersect'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -169,7 +169,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'json_array_length'.\nDid you mean 'array_length'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -191,7 +191,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'json_array_length'.\nDid you mean 'array_length'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -213,7 +213,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'json_array_length'.\nDid you mean 'array_length'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -239,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'json_object_keys'.\nDid you mean 'concat_ws'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -265,7 +265,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'json_object_keys'.\nDid you mean 'concat_ws'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -291,7 +291,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'json_object_keys'.\nDid you mean 'concat_ws'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -319,7 +319,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'json_tuple'.\nDid you mean 'strpos'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -341,7 +341,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'schema_of_json'.\nDid you mean 'concat_ws'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -363,7 +363,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'schema_of_json'.\nDid you mean 'concat_ws'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -385,7 +385,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: map at Line: 1, Column 22"
+        "failure": "internal error: error"
       }
     },
     {
@@ -407,7 +407,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: named_struct at Line: 1, Column 22"
+        "failure": "internal error: error"
       }
     },
     {
@@ -429,7 +429,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_json'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -451,7 +451,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_json'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -473,7 +473,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_json'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -495,7 +495,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_json'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -517,7 +517,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_json'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     }
   ]

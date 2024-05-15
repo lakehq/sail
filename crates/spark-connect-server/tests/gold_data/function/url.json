@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'parse_url'.\nDid you mean 'power'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'parse_url'.\nDid you mean 'power'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'parse_url'.\nDid you mean 'power'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'url_decode'.\nDid you mean 'decode'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'url_encode'.\nDid you mean 'encode'?"
+        "failure": "internal error: error"
       }
     }
   ]

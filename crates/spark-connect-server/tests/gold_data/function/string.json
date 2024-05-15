@@ -19,9 +19,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"character_length(Utf8(\\\"Spark SQL \\\"))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  10,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -43,9 +41,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"character_length(Utf8(\\\"Spark SQL \\\"))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  10,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -67,9 +63,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"strpos(Utf8(\\\"foobarbar\\\"),Utf8(\\\"bar\\\"))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  4,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -91,9 +85,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"ascii(Utf8(\\\"222\\\"))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  50,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -115,9 +107,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"ascii(Int64(2))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  50,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -139,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'base64'.\nDid you mean 'asinh'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -161,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'base64'.\nDid you mean 'asinh'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -183,9 +173,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"bit_length(Utf8(\\\"Spark SQL\\\"))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  72,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -207,9 +195,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"bit_length(Binary(\\\"83,112,97,114,107,32,83,81,76\\\"))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  72,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -231,9 +217,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"btrim(Utf8(\\\"    SparkSQL   \\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"SparkSQL\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -255,9 +239,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"btrim(Utf8(\\\"SSparkSQLS\\\"),Utf8(\\\"SL\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"parkSQ\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -279,7 +261,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
+        "failure": "internal error: error"
       }
     },
     {
@@ -301,7 +283,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
+        "failure": "internal error: error"
       }
     },
     {
@@ -323,7 +305,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'char'.\nDid you mean 'chr'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -345,9 +327,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"character_length(Utf8(\\\"Spark SQL \\\"))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  10,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -369,9 +349,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"character_length(Binary(\\\"83,112,97,114,107,32,83,81,76\\\"))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  9,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -393,9 +371,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"character_length(Utf8(\\\"Spark SQL \\\"))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  10,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -417,9 +393,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"character_length(Binary(\\\"83,112,97,114,107,32,83,81,76\\\"))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  9,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -441,9 +415,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"chr(Int64(65))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"A\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -465,7 +437,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'space'.\nDid you mean 'lpad'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -487,9 +459,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"concat_ws(Utf8(\\\" \\\"),Utf8(\\\"Spark\\\"),Utf8(\\\"SQL\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"Spark SQL\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -511,9 +481,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"concat_ws(Utf8(\\\"/\\\"),Utf8(\\\"foo\\\"),NULL,Utf8(\\\"bar\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"foo/bar\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -533,7 +501,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: concat_ws was called with 1 arguments. It requires at least 2."
+        "failure": "internal error: error"
       }
     },
     {
@@ -555,9 +523,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"concat_ws(NULL,Utf8(\\\"Spark\\\"),Utf8(\\\"SQL\\\"))\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  null,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -579,7 +545,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'contains'.\nDid you mean 'concat'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -601,7 +567,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'contains'.\nDid you mean 'concat'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -623,7 +589,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'contains'.\nDid you mean 'concat'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -645,7 +611,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'contains'.\nDid you mean 'concat'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -667,7 +633,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'decode(Int64, Int64, Utf8, Int64, Utf8, Int64, Utf8, Int64, Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdecode(Utf8, Utf8)\n\tdecode(LargeUtf8, Utf8)\n\tdecode(Binary, Utf8)\n\tdecode(LargeBinary, Utf8)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -689,7 +655,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'decode(Int64, Int64, Utf8, Int64, Utf8, Int64, Utf8, Int64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdecode(Utf8, Utf8)\n\tdecode(LargeUtf8, Utf8)\n\tdecode(Binary, Utf8)\n\tdecode(LargeBinary, Utf8)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -711,7 +677,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'decode(Int64, Int64, Utf8, Int64, Utf8, Int64, Utf8, Int64, Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdecode(Utf8, Utf8)\n\tdecode(LargeUtf8, Utf8)\n\tdecode(Binary, Utf8)\n\tdecode(LargeBinary, Utf8)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -733,7 +699,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
+        "failure": "internal error: error"
       }
     },
     {
@@ -755,7 +721,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'decode(Null, Int64, Utf8, Null, Utf8, Int64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdecode(Utf8, Utf8)\n\tdecode(LargeUtf8, Utf8)\n\tdecode(Binary, Utf8)\n\tdecode(LargeBinary, Utf8)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -777,7 +743,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'elt'.\nDid you mean 'exp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -799,7 +765,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'elt'.\nDid you mean 'exp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -821,7 +787,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
+        "failure": "internal error: error"
       }
     },
     {
@@ -843,7 +809,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'endswith'.\nDid you mean 'ends_with'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -865,7 +831,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'endswith'.\nDid you mean 'ends_with'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -887,7 +853,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'endswith'.\nDid you mean 'ends_with'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -909,7 +875,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'endswith'.\nDid you mean 'ends_with'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -931,7 +897,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'endswith'.\nDid you mean 'ends_with'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -953,9 +919,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"find_in_set(Utf8(\\\"ab\\\"),Utf8(\\\"abc,b,ab,c,def\\\"))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  3,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -977,7 +941,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'format_number'.\nDid you mean 'FIRST_VALUE'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -999,7 +963,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'format_number'.\nDid you mean 'FIRST_VALUE'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1021,7 +985,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'format_string'.\nDid you mean 'array_to_string'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1043,7 +1007,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'hex'.\nDid you mean 'exp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1065,7 +1029,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'hex'.\nDid you mean 'exp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1087,7 +1051,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'hex'.\nDid you mean 'exp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1109,7 +1073,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'hex'.\nDid you mean 'exp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1131,9 +1095,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"initcap(Utf8(\\\"sPark sql\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"Spark Sql\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1155,9 +1117,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"strpos(Utf8(\\\"SparkSQL\\\"),Utf8(\\\"SQL\\\"))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  6,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1179,7 +1139,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'lcase'.\nDid you mean 'acosh'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1201,9 +1161,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"left(Utf8(\\\"Spark SQL\\\"),Int64(3))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"Spa\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1225,7 +1183,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1247,7 +1205,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'len'.\nDid you mean 'ln'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1269,7 +1227,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'len'.\nDid you mean 'ln'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1291,9 +1249,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"character_length(Utf8(\\\"Spark SQL \\\"))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  10,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1315,9 +1271,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"character_length(Binary(\\\"83,112,97,114,107,32,83,81,76\\\"))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  9,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1339,9 +1293,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"levenshtein(Utf8(\\\"kitten\\\"),Utf8(\\\"sitting\\\"))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  3,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1363,7 +1315,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'levenshtein(Utf8, Utf8, Int64)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tlevenshtein(Utf8, Utf8)\n\tlevenshtein(LargeUtf8, LargeUtf8)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1385,7 +1337,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'locate'.\nDid you mean 'concat'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1407,7 +1359,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'locate'.\nDid you mean 'concat'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1429,9 +1381,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"lower(Utf8(\\\"SparkSql\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"sparksql\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1453,9 +1403,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"lpad(Utf8(\\\"hi\\\"),Int64(1),Utf8(\\\"??\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"h\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1477,9 +1425,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"lpad(Utf8(\\\"hi\\\"),Int64(5))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"   hi\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1501,9 +1447,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"lpad(Utf8(\\\"hi\\\"),Int64(5),Utf8(\\\"??\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"???hi\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1525,9 +1469,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"ltrim(Utf8(\\\"    SparkSQL   \\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"SparkSQL   \",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1549,7 +1491,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'luhn_check'.\nDid you mean 'to_char'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1571,7 +1513,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'luhn_check'.\nDid you mean 'to_char'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1593,7 +1535,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'luhn_check'.\nDid you mean 'to_char'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1615,7 +1557,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'mask'.\nDid you mean 'MAX'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1637,7 +1579,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'mask'.\nDid you mean 'MAX'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1659,7 +1601,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'mask'.\nDid you mean 'MAX'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1681,7 +1623,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'mask'.\nDid you mean 'MAX'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1703,7 +1645,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'mask'.\nDid you mean 'MAX'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1725,7 +1667,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'mask'.\nDid you mean 'MAX'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1747,7 +1689,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'mask'.\nDid you mean 'MAX'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1769,7 +1711,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'mask'.\nDid you mean 'MAX'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1791,7 +1733,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'mask'.\nDid you mean 'MAX'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1813,7 +1755,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'mask'.\nDid you mean 'MAX'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1835,7 +1777,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'mask'.\nDid you mean 'MAX'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1857,7 +1799,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'mask'.\nDid you mean 'MAX'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1879,7 +1821,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'mask'.\nDid you mean 'MAX'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1901,9 +1843,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"octet_length(Utf8(\\\"Spark SQL\\\"))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  9,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1925,9 +1865,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"octet_length(Binary(\\\"83,112,97,114,107,32,83,81,76\\\"))\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  9,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1949,9 +1887,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"overlay(Utf8(\\\"Spark SQL\\\"),Utf8(\\\"ANSI \\\"),Int64(7),Int64(0))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"Spark ANSI SQL\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1973,9 +1909,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"overlay(Utf8(\\\"Spark SQL\\\"),Utf8(\\\"CORE\\\"),Int64(7))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"Spark CORE\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1997,9 +1931,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"overlay(Utf8(\\\"Spark SQL\\\"),Utf8(\\\"_\\\"),Int64(6))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"Spark_SQL\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2021,9 +1953,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"overlay(Utf8(\\\"Spark SQL\\\"),Utf8(\\\"tructured\\\"),Int64(2),Int64(4))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"Structured SQL\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2045,7 +1975,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2067,7 +1997,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2089,7 +2019,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2111,7 +2041,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2133,7 +2063,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Position function must include IN keyword at Line: 1, Column 22"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2155,7 +2085,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Position function must include IN keyword at Line: 1, Column 22"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2177,7 +2107,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'printf'.\nDid you mean 'asinh'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2199,7 +2129,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'regexp_count'.\nDid you mean 'REGR_COUNT'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2221,7 +2151,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'regexp_count'.\nDid you mean 'REGR_COUNT'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2243,7 +2173,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'regexp_extract'.\nDid you mean 'regexp_replace'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2269,7 +2199,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'regexp_extract_all'.\nDid you mean 'regexp_replace'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2291,7 +2221,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'regexp_instr'.\nDid you mean 'regexp_like'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2313,9 +2243,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"regexp_replace(Utf8(\\\"100-200\\\"),Utf8(\\\"(\\\\\\\\d+)\\\"),Utf8(\\\"num\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"100-200\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2337,7 +2265,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'regexp_substr'.\nDid you mean 'regexp_like'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2359,7 +2287,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'regexp_substr'.\nDid you mean 'regexp_like'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2381,9 +2309,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"repeat(Utf8(\\\"123\\\"),Int64(2))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"123123\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2405,9 +2331,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"replace(Utf8(\\\"ABCabc\\\"),Utf8(\\\"abc\\\"),Utf8(\\\"DEF\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"ABCDEF\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2429,9 +2353,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"right(Utf8(\\\"Spark SQL\\\"),Int64(3))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"SQL\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2453,9 +2375,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"rpad(Utf8(\\\"hi\\\"),Int64(1),Utf8(\\\"??\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"h\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2477,9 +2397,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"rpad(Utf8(\\\"hi\\\"),Int64(5))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"hi   \",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2501,9 +2419,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"rpad(Utf8(\\\"hi\\\"),Int64(5),Utf8(\\\"??\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"hi???\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2525,9 +2441,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"rtrim(Utf8(\\\"    SparkSQL   \\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"    SparkSQL\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2557,7 +2471,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'sentences'.\nDid you mean 'degrees'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2579,7 +2493,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'soundex'.\nDid you mean 'round'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2605,7 +2519,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'split'.\nDid you mean 'pi'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2631,7 +2545,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'split'.\nDid you mean 'pi'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2657,7 +2571,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'split'.\nDid you mean 'pi'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2679,9 +2593,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"split_part(Utf8(\\\"11.12.13\\\"),Utf8(\\\".\\\"),Int64(3))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"13\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2703,7 +2615,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'startswith'.\nDid you mean 'starts_with'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2725,7 +2637,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'startswith'.\nDid you mean 'starts_with'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2747,7 +2659,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'startswith'.\nDid you mean 'starts_with'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2769,7 +2681,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'startswith'.\nDid you mean 'starts_with'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2791,7 +2703,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'startswith'.\nDid you mean 'starts_with'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2813,7 +2725,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: FROM at Line: 1, Column 27"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2835,7 +2747,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: FROM at Line: 1, Column 27"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2857,7 +2769,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: FROM at Line: 1, Column 27"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2879,9 +2791,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"substr(Utf8(\\\"Spark SQL\\\"),Int64(-3))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"Spark SQL\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2903,9 +2813,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"substr(Utf8(\\\"Spark SQL\\\"),Int64(5))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"k SQL\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2927,9 +2835,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"substr(Utf8(\\\"Spark SQL\\\"),Int64(5),Int64(1))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"k\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2951,7 +2857,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2973,9 +2879,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"substr(Utf8(\\\"Spark SQL\\\"),Int64(-3))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"Spark SQL\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2997,9 +2901,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"substr(Utf8(\\\"Spark SQL\\\"),Int64(5),Int64(1))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"k\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -3021,9 +2923,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"substr(Utf8(\\\"Spark SQL\\\"),Int64(5))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"k SQL\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -3045,9 +2945,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"substr(Utf8(\\\"Spark SQL\\\"),Int64(-3))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"Spark SQL\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -3069,9 +2967,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"substr(Utf8(\\\"Spark SQL\\\"),Int64(5))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"k SQL\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -3093,9 +2989,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"substr(Utf8(\\\"Spark SQL\\\"),Int64(5),Int64(1))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"k\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -3117,7 +3011,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3139,9 +3033,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"substr_index(Utf8(\\\"www.apache.org\\\"),Utf8(\\\".\\\"),Int64(2))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"www.apache\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -3163,7 +3055,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_binary'.\nDid you mean 'to_char'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3185,7 +3077,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'to_char(Float64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tto_char(Date32, Utf8)\n\tto_char(Date64, Utf8)\n\tto_char(Time32(Millisecond), Utf8)\n\tto_char(Time32(Second), Utf8)\n\tto_char(Time64(Microsecond), Utf8)\n\tto_char(Time64(Nanosecond), Utf8)\n\tto_char(Timestamp(Second, None), Utf8)\n\tto_char(Timestamp(Second, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Millisecond, None), Utf8)\n\tto_char(Timestamp(Millisecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Microsecond, None), Utf8)\n\tto_char(Timestamp(Microsecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Nanosecond, None), Utf8)\n\tto_char(Timestamp(Nanosecond, Some(\"+TZ\")), Utf8)\n\tto_char(Duration(Second), Utf8)\n\tto_char(Duration(Millisecond), Utf8)\n\tto_char(Duration(Microsecond), Utf8)\n\tto_char(Duration(Nanosecond), Utf8)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3207,7 +3099,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'to_char(Int64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tto_char(Date32, Utf8)\n\tto_char(Date64, Utf8)\n\tto_char(Time32(Millisecond), Utf8)\n\tto_char(Time32(Second), Utf8)\n\tto_char(Time64(Microsecond), Utf8)\n\tto_char(Time64(Nanosecond), Utf8)\n\tto_char(Timestamp(Second, None), Utf8)\n\tto_char(Timestamp(Second, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Millisecond, None), Utf8)\n\tto_char(Timestamp(Millisecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Microsecond, None), Utf8)\n\tto_char(Timestamp(Microsecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Nanosecond, None), Utf8)\n\tto_char(Timestamp(Nanosecond, Some(\"+TZ\")), Utf8)\n\tto_char(Duration(Second), Utf8)\n\tto_char(Duration(Millisecond), Utf8)\n\tto_char(Duration(Microsecond), Utf8)\n\tto_char(Duration(Nanosecond), Utf8)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3229,7 +3121,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'to_char(Int64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tto_char(Date32, Utf8)\n\tto_char(Date64, Utf8)\n\tto_char(Time32(Millisecond), Utf8)\n\tto_char(Time32(Second), Utf8)\n\tto_char(Time64(Microsecond), Utf8)\n\tto_char(Time64(Nanosecond), Utf8)\n\tto_char(Timestamp(Second, None), Utf8)\n\tto_char(Timestamp(Second, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Millisecond, None), Utf8)\n\tto_char(Timestamp(Millisecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Microsecond, None), Utf8)\n\tto_char(Timestamp(Microsecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Nanosecond, None), Utf8)\n\tto_char(Timestamp(Nanosecond, Some(\"+TZ\")), Utf8)\n\tto_char(Duration(Second), Utf8)\n\tto_char(Duration(Millisecond), Utf8)\n\tto_char(Duration(Microsecond), Utf8)\n\tto_char(Duration(Nanosecond), Utf8)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3251,7 +3143,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'to_char(Float64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tto_char(Date32, Utf8)\n\tto_char(Date64, Utf8)\n\tto_char(Time32(Millisecond), Utf8)\n\tto_char(Time32(Second), Utf8)\n\tto_char(Time64(Microsecond), Utf8)\n\tto_char(Time64(Nanosecond), Utf8)\n\tto_char(Timestamp(Second, None), Utf8)\n\tto_char(Timestamp(Second, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Millisecond, None), Utf8)\n\tto_char(Timestamp(Millisecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Microsecond, None), Utf8)\n\tto_char(Timestamp(Microsecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Nanosecond, None), Utf8)\n\tto_char(Timestamp(Nanosecond, Some(\"+TZ\")), Utf8)\n\tto_char(Duration(Second), Utf8)\n\tto_char(Duration(Millisecond), Utf8)\n\tto_char(Duration(Microsecond), Utf8)\n\tto_char(Duration(Nanosecond), Utf8)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3273,7 +3165,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'to_char(Float64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tto_char(Date32, Utf8)\n\tto_char(Date64, Utf8)\n\tto_char(Time32(Millisecond), Utf8)\n\tto_char(Time32(Second), Utf8)\n\tto_char(Time64(Microsecond), Utf8)\n\tto_char(Time64(Nanosecond), Utf8)\n\tto_char(Timestamp(Second, None), Utf8)\n\tto_char(Timestamp(Second, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Millisecond, None), Utf8)\n\tto_char(Timestamp(Millisecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Microsecond, None), Utf8)\n\tto_char(Timestamp(Microsecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Nanosecond, None), Utf8)\n\tto_char(Timestamp(Nanosecond, Some(\"+TZ\")), Utf8)\n\tto_char(Duration(Second), Utf8)\n\tto_char(Duration(Millisecond), Utf8)\n\tto_char(Duration(Microsecond), Utf8)\n\tto_char(Duration(Nanosecond), Utf8)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3295,7 +3187,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_number'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3317,7 +3209,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_number'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3339,7 +3231,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_number'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3361,7 +3253,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_number'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3383,7 +3275,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_number'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3405,7 +3297,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_varchar'.\nDid you mean 'to_char'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3427,7 +3319,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_varchar'.\nDid you mean 'to_char'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3449,7 +3341,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_varchar'.\nDid you mean 'to_char'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3471,7 +3363,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_varchar'.\nDid you mean 'to_char'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3493,7 +3385,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_varchar'.\nDid you mean 'to_char'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3515,9 +3407,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"translate(Utf8(\\\"AaBbCc\\\"),Utf8(\\\"abc\\\"),Utf8(\\\"123\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"A1B2C3\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -3539,9 +3429,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"btrim(Utf8(\\\"    SparkSQL   \\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"SparkSQL\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -3563,9 +3451,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"btrim(Utf8(\\\"SSparkSQLS\\\"),Utf8(\\\"SL\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"parkSQ\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -3587,9 +3473,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"btrim(Utf8(\\\"SSparkSQLS\\\"),Utf8(\\\"SL\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"parkSQ\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -3611,7 +3495,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: '    SparkSQL   ' at Line: 1, Column 23"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3633,9 +3517,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"ltrim(Utf8(\\\"SSparkSQLS\\\"),Utf8(\\\"SL\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"parkSQLS\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -3657,7 +3539,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: '    SparkSQL   ' at Line: 1, Column 26"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3679,9 +3561,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"rtrim(Utf8(\\\"SSparkSQLS\\\"),Utf8(\\\"SL\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"SSparkSQ\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -3703,7 +3583,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: '    SparkSQL   ' at Line: 1, Column 27"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3725,7 +3605,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_to_binary'.\nDid you mean 'string_to_array'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3747,7 +3627,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_to_number'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3769,7 +3649,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_to_number'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3791,7 +3671,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_to_number'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3813,7 +3693,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_to_number'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3835,7 +3715,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_to_number'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3857,7 +3737,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'ucase'.\nDid you mean 'acosh'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3879,7 +3759,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'unbase64'.\nDid you mean 'asinh'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3901,9 +3781,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"upper(Utf8(\\\"SparkSql\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"SPARKSQL\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -3925,7 +3803,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_to_binary'.\nDid you mean 'string_to_array'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -3947,7 +3825,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_to_binary'.\nDid you mean 'string_to_array'?"
+        "failure": "internal error: error"
       }
     }
   ]

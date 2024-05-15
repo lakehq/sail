@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected an expression:, found: ! at Line: 1, Column 8"
+        "failure": "internal error: error"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected an expression:, found: ! at Line: 1, Column 8"
+        "failure": "internal error: error"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected an expression:, found: ! at Line: 1, Column 8"
+        "failure": "internal error: error"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: LIKE does not support escape_char"
+        "failure": "internal error: error"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: LIKE does not support escape_char"
+        "failure": "internal error: error"
       }
     },
     {
@@ -129,9 +129,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Utf8(\\\"%SystemDrive%\\\\Users\\\\John\\\") ILIKE Utf8(\\\"\\\\%SystemDrive\\\\%\\\\\\\\users%\\\") \", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -153,9 +151,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Utf8(\\\"%SystemDrive%\\\\Users\\\\John\\\") LIKE Utf8(\\\"\\\\%SystemDrive\\\\%\\\\\\\\Users%\\\") \", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -177,9 +173,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Utf8(\\\"%SystemDrive%\\\\\\\\USERS\\\\\\\\John\\\") ILIKE Utf8(\\\"\\\\%SystemDrive\\\\%\\\\\\\\\\\\\\\\Users%\\\") \", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -201,9 +195,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Utf8(\\\"%SystemDrive%\\\\\\\\Users\\\\\\\\John\\\") LIKE Utf8(\\\"\\\\%SystemDrive\\\\%\\\\\\\\\\\\\\\\Users%\\\") \", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -225,9 +217,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(1) < Int64(2)\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -249,9 +239,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(1) < NULL\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  null,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -273,9 +261,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(1) <= NULL\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  null,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -297,7 +283,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL binary operator Spaceship"
+        "failure": "internal error: error"
       }
     },
     {
@@ -319,9 +305,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(1) = Utf8(\\\"1\\\")\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -343,9 +327,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(1) = Utf8(\\\"1\\\")\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -367,9 +349,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(1) > NULL\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  null,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -391,9 +371,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(1) >= NULL\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  null,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -415,9 +393,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(1) IN (Map { iter: Iter([Literal(Int64(1)), Literal(Int64(2)), Literal(Int64(3))]) })\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -439,9 +415,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(1) IN (Map { iter: Iter([Literal(Int64(2)), Literal(Int64(3)), Literal(Int64(4))]) })\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -463,9 +437,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Float64(1) <= Utf8(\\\"1\\\")\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -487,9 +459,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Float64(1.1) < Utf8(\\\"1\\\")\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -511,9 +481,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(2) <= Int64(2)\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -535,7 +503,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL binary operator Spaceship"
+        "failure": "internal error: error"
       }
     },
     {
@@ -557,9 +525,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(2) = Int64(2)\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -581,9 +547,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(2) = Int64(2)\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -605,9 +569,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(2) > Float64(1.1)\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -629,9 +591,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(2) > Int64(1)\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -653,9 +613,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(2) >= Int64(1)\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -677,9 +635,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Float64(2) >= Utf8(\\\"2.1\\\")\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -701,7 +657,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL binary operator Spaceship"
+        "failure": "internal error: error"
       }
     },
     {
@@ -723,9 +679,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"NULL = NULL\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  null,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -747,9 +701,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"NULL = NULL\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  null,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -771,9 +723,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Boolean(false) AND NULL\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -795,9 +745,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Boolean(false) OR NULL\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  null,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -819,9 +767,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Boolean(false) OR Boolean(false)\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -843,7 +789,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'ilike'.\nDid you mean 'asinh'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -865,9 +811,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"isnan(Utf8(\\\"NaN\\\"))\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -889,7 +833,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'isnotnull'.\nDid you mean 'ifnull'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -911,7 +855,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'isnull'.\nDid you mean 'ifnull'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -933,7 +877,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'like'.\nDid you mean 'lcm'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -955,7 +899,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'named_struct'.\nDid you mean 'struct'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -977,7 +921,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'named_struct'.\nDid you mean 'struct'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -999,9 +943,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"NOT NULL\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  null,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1023,9 +965,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"NOT Boolean(false)\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1047,9 +987,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"NOT Boolean(true)\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1071,7 +1009,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'regexp'.\nDid you mean 'exp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1093,7 +1031,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'regexp'.\nDid you mean 'exp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1115,9 +1053,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"regexp_like(Utf8(\\\"%SystemDrive%\\\\Users\\\\John\\\"),Utf8(\\\"%SystemDrive%\\\\\\\\Users.*\\\"))\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1139,9 +1075,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"regexp_like(Utf8(\\\"%SystemDrive%\\\\\\\\Users\\\\\\\\John\\\"),Utf8(\\\"%SystemDrive%\\\\\\\\\\\\\\\\Users.*\\\"))\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1163,7 +1097,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'rlike'.\nDid you mean 'range'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1185,7 +1119,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'rlike'.\nDid you mean 'range'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1207,9 +1141,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"to_date(Utf8(\\\"2009-07-30 04:17:52\\\")) < to_date(Utf8(\\\"2009-07-30 04:17:52\\\"))\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1231,9 +1163,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"to_date(Utf8(\\\"2009-07-30 04:17:52\\\")) < to_date(Utf8(\\\"2009-08-01 04:17:52\\\"))\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1255,9 +1185,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"to_date(Utf8(\\\"2009-07-30 04:17:52\\\")) <= to_date(Utf8(\\\"2009-07-30 04:17:52\\\"))\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1279,9 +1207,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"to_date(Utf8(\\\"2009-07-30 04:17:52\\\")) <= to_date(Utf8(\\\"2009-08-01 04:17:52\\\"))\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1303,9 +1229,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"to_date(Utf8(\\\"2009-07-30 04:17:52\\\")) > to_date(Utf8(\\\"2009-07-30 04:17:52\\\"))\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1327,9 +1251,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"to_date(Utf8(\\\"2009-07-30 04:17:52\\\")) > to_date(Utf8(\\\"2009-08-01 04:17:52\\\"))\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1351,9 +1273,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"to_date(Utf8(\\\"2009-07-30 04:17:52\\\")) >= to_date(Utf8(\\\"2009-07-30 04:17:52\\\"))\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1375,9 +1295,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"to_date(Utf8(\\\"2009-07-30 04:17:52\\\")) >= to_date(Utf8(\\\"2009-08-01 04:17:52\\\"))\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1399,7 +1317,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL binary operator Spaceship"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1421,9 +1339,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Boolean(true) = NULL\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  null,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1445,9 +1361,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Boolean(true) = NULL\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  null,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1469,9 +1383,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Boolean(true) AND NULL\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  null,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1493,9 +1405,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Boolean(true) AND Boolean(false)\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1517,9 +1427,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Boolean(true) AND Boolean(true)\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1541,9 +1449,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Boolean(true) OR NULL\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1565,9 +1471,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"Boolean(true) OR Boolean(false)\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1595,7 +1499,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported logical plan: Statement(SetVariable)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1623,7 +1527,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported logical plan: Statement(SetVariable)"
+        "failure": "internal error: error"
       }
     }
   ]

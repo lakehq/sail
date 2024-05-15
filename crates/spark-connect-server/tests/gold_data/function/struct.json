@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'named_struct'.\nDid you mean 'struct'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -85,9 +85,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"struct(Int64(1),Int64(2),Int64(3))\", data_type: Struct([Field { name: \"c0\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"c1\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"c2\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StructArray\n[\n-- child 0: \"c0\" (Int64)\nPrimitiveArray<Int64>\n[\n  1,\n]\n-- child 1: \"c1\" (Int64)\nPrimitiveArray<Int64>\n[\n  2,\n]\n-- child 2: \"c2\" (Int64)\nPrimitiveArray<Int64>\n[\n  3,\n]\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     }
   ]

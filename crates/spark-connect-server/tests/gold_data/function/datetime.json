@@ -39,7 +39,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected end of statement, found: GROUP at Line: 1, Column 217"
+        "failure": "internal error: error"
       }
     },
     {
@@ -82,7 +82,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected end of statement, found: GROUP at Line: 1, Column 248"
+        "failure": "internal error: error"
       }
     },
     {
@@ -130,7 +130,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected joined table, found: , at Line: 1, Column 92"
+        "failure": "internal error: error"
       }
     },
     {
@@ -174,7 +174,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected end of statement, found: GROUP at Line: 1, Column 201"
+        "failure": "internal error: error"
       }
     },
     {
@@ -216,7 +216,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected end of statement, found: GROUP at Line: 1, Column 201"
+        "failure": "internal error: error"
       }
     },
     {
@@ -238,7 +238,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'add_months'.\nDid you mean 'acosh'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -260,7 +260,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: '2021-12-06 00:00:00' at Line: 1, Column 80"
+        "failure": "internal error: error"
       }
     },
     {
@@ -282,7 +282,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: '2021-12-05 15:00:00' at Line: 1, Column 57"
+        "failure": "internal error: error"
       }
     },
     {
@@ -304,7 +304,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'curdate'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -326,9 +326,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"current_date()\", data_type: Date32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Date32>\n[\n  2024-05-15,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -350,9 +348,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"current_date()\", data_type: Date32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Date32>\n[\n  2024-05-15,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -374,7 +370,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'current_timestamp'.\nDid you mean 'current_time'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -396,7 +392,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'current_timestamp'.\nDid you mean 'current_time'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -418,7 +414,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'current_timezone'.\nDid you mean 'current_time'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -440,7 +436,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'date_add'.\nDid you mean 'datepart'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -462,7 +458,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'date_diff'.\nDid you mean 'date_bin'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -484,7 +480,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'date_diff'.\nDid you mean 'date_bin'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -506,9 +502,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"to_char(Utf8(\\\"2016-04-08\\\"),Utf8(\\\"y\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"y\",\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -530,7 +524,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'date_from_unix_date'.\nDid you mean 'from_unixtime'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -552,7 +546,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported Interval Expression with last_field Some(Second)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -574,7 +568,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported Interval Expression with last_field Some(Month)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -596,7 +590,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Date part 'SECONDS' not supported"
+        "failure": "internal error: error"
       }
     },
     {
@@ -618,9 +612,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"date_part(Utf8(\\\"YEAR\\\"),Utf8(\\\"2019-08-12 01:00:00.123456\\\"))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2019.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -642,7 +634,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: days at Line: 1, Column 37"
+        "failure": "internal error: error"
       }
     },
     {
@@ -664,9 +656,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"date_part(Utf8(\\\"doy\\\"),Utf8(\\\"2019-08-12\\\"))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  224.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -688,7 +678,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: hours at Line: 1, Column 40"
+        "failure": "internal error: error"
       }
     },
     {
@@ -710,9 +700,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"date_part(Utf8(\\\"week\\\"),Utf8(\\\"2019-08-12 01:00:00.123456\\\"))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  33.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -734,7 +722,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'date_sub'.\nDid you mean 'date_bin'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -756,7 +744,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Unsupported date_trunc granularity: dd"
+        "failure": "internal error: error"
       }
     },
     {
@@ -778,9 +766,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"date_trunc(Utf8(\\\"HOUR\\\"),Utf8(\\\"2015-03-05T09:32:05.359\\\"))\", data_type: Timestamp(Nanosecond, None), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Timestamp(Nanosecond, None)>\n[\n  2015-03-05T09:00:00,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -802,9 +788,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"date_trunc(Utf8(\\\"MILLISECOND\\\"),Utf8(\\\"2015-03-05T09:32:05.123456\\\"))\", data_type: Timestamp(Nanosecond, None), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Timestamp(Nanosecond, None)>\n[\n  2015-03-05T09:32:05.123,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -826,7 +810,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Unsupported date_trunc granularity: mm"
+        "failure": "internal error: error"
       }
     },
     {
@@ -848,9 +832,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"date_trunc(Utf8(\\\"YEAR\\\"),Utf8(\\\"2015-03-05T09:32:05.359\\\"))\", data_type: Timestamp(Nanosecond, None), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Timestamp(Nanosecond, None)>\n[\n  2015-01-01T00:00:00,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -872,7 +854,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'dateadd'.\nDid you mean 'datepart'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -894,7 +876,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'datediff'.\nDid you mean 'datepart'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -916,7 +898,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'datediff'.\nDid you mean 'datepart'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -938,7 +920,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported Interval Expression with last_field Some(Second)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -960,7 +942,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported Interval Expression with last_field Some(Month)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -982,7 +964,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Date part 'SECONDS' not supported"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1004,9 +986,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"date_part(Utf8(\\\"YEAR\\\"),Utf8(\\\"2019-08-12 01:00:00.123456\\\"))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2019.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1028,7 +1008,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: days at Line: 1, Column 36"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1050,9 +1030,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"date_part(Utf8(\\\"doy\\\"),Utf8(\\\"2019-08-12\\\"))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  224.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1074,7 +1052,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected ), found: hours at Line: 1, Column 39"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1096,9 +1074,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"date_part(Utf8(\\\"week\\\"),Utf8(\\\"2019-08-12 01:00:00.123456\\\"))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  33.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1120,7 +1096,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'day'.\nDid you mean 'today'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1142,7 +1118,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'dayofmonth'.\nDid you mean 'acosh'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1164,7 +1140,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'dayofweek'.\nDid you mean 'degrees'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1186,7 +1162,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'dayofyear'.\nDid you mean 'power'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1208,7 +1184,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported Interval Expression with last_field Some(Second)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1230,7 +1206,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported Interval Expression with last_field Some(Month)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1252,7 +1228,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected date/time field, found: SECONDS at Line: 1, Column 16"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1274,9 +1250,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"date_part(Utf8(\\\"YEAR\\\"),Utf8(\\\"2019-08-12 01:00:00.123456\\\"))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2019.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1298,7 +1272,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected date/time field, found: days at Line: 1, Column 16"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1320,9 +1294,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"date_part(Utf8(\\\"DOY\\\"),Utf8(\\\"2019-08-12\\\"))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  224.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1344,7 +1316,7 @@
         }
       },
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected date/time field, found: seconds at Line: 1, Column 16"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1366,9 +1338,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"date_part(Utf8(\\\"WEEK\\\"),Utf8(\\\"2019-08-12 01:00:00.123456\\\"))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  33.0,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1390,9 +1360,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"from_unixtime(Int64(0))\", data_type: Timestamp(Second, None), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Timestamp(Second, None)>\n[\n  1970-01-01T00:00:00,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1414,7 +1382,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'from_unixtime(Int64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tfrom_unixtime(Int64)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1436,7 +1404,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'from_utc_timestamp'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1458,7 +1426,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'hour'.\nDid you mean 'CORR'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1480,7 +1448,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'last_day'.\nDid you mean 'list_cat'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1502,7 +1470,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'localtimestamp'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1524,9 +1492,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"make_date(Int64(2013),Int64(7),Int64(15))\", data_type: Date32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Date32>\n[\n  2013-07-15,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1548,7 +1514,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Unable to parse date from null/empty value"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1570,7 +1536,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_dt_interval'.\nDid you mean 'make_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1592,7 +1558,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_dt_interval'.\nDid you mean 'make_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1614,7 +1580,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_dt_interval'.\nDid you mean 'make_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1636,7 +1602,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_interval'.\nDid you mean 'make_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1658,7 +1624,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_interval'.\nDid you mean 'make_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1680,7 +1646,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_interval'.\nDid you mean 'make_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1702,7 +1668,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_timestamp'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1724,7 +1690,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_timestamp'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1746,7 +1712,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_timestamp'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1768,7 +1734,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_timestamp'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1790,7 +1756,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_timestamp'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1812,7 +1778,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_timestamp_ltz'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1834,7 +1800,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_timestamp_ltz'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1856,7 +1822,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_timestamp_ltz'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1878,7 +1844,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_timestamp_ltz'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1900,7 +1866,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_timestamp_ntz'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1922,7 +1888,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_timestamp_ntz'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1944,7 +1910,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_timestamp_ntz'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1966,7 +1932,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_ym_interval'.\nDid you mean 'array_intersect'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -1988,7 +1954,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_ym_interval'.\nDid you mean 'array_intersect'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2010,7 +1976,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_ym_interval'.\nDid you mean 'array_intersect'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2032,7 +1998,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'make_ym_interval'.\nDid you mean 'array_intersect'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2054,7 +2020,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'minute'.\nDid you mean 'MIN'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2076,7 +2042,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'month'.\nDid you mean 'cosh'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2098,7 +2064,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'months_between'.\nDid you mean 'NTH_VALUE'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2120,7 +2086,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'months_between'.\nDid you mean 'NTH_VALUE'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2142,7 +2108,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'next_day'.\nDid you mean 'today'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2164,9 +2130,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"now()\", data_type: Timestamp(Nanosecond, Some(\"+00:00\")), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Timestamp(Nanosecond, Some(\"+00:00\"))>\n[\n  2024-05-15T02:31:01.186809+00:00,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2188,7 +2152,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'quarter'.\nDid you mean 'substr'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2210,7 +2174,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'second'.\nDid you mean 'decode'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2232,7 +2196,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'timestamp_micros'.\nDid you mean 'to_timestamp_micros'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2254,7 +2218,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'timestamp_millis'.\nDid you mean 'to_timestamp_millis'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2276,7 +2240,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'timestamp_seconds'.\nDid you mean 'to_timestamp_seconds'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2298,7 +2262,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'timestamp_seconds'.\nDid you mean 'to_timestamp_seconds'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2320,9 +2284,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"to_date(Utf8(\\\"2009-07-30 04:17:52\\\"))\", data_type: Date32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Date32>\n[\n  2009-07-30,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2344,7 +2306,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Error parsing timestamp from '2016-12-31' using format 'yyyy-MM-dd': input contains invalid characters"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2366,9 +2328,7 @@
         }
       },
       "output": {
-        "success": [
-          "RecordBatch { schema: Schema { fields: [Field { name: \"to_timestamp(Utf8(\\\"2016-12-31 00:12:00\\\"))\", data_type: Timestamp(Nanosecond, None), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Timestamp(Nanosecond, None)>\n[\n  2016-12-31T00:12:00,\n]], row_count: 1 }"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2390,7 +2350,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Error parsing timestamp from '2016-12-31' using format 'yyyy-MM-dd': input contains invalid characters"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2412,7 +2372,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_timestamp_ltz'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2434,7 +2394,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_timestamp_ltz'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2456,7 +2416,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_timestamp_ntz'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2478,7 +2438,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_timestamp_ntz'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2500,7 +2460,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_unix_timestamp'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2522,7 +2482,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'to_utc_timestamp'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2544,7 +2504,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'trunc(Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\ttrunc(Float32, Int64)\n\ttrunc(Float64, Int64)\n\ttrunc(Float64)\n\ttrunc(Float32)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2566,7 +2526,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'trunc(Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\ttrunc(Float32, Int64)\n\ttrunc(Float64, Int64)\n\ttrunc(Float64)\n\ttrunc(Float32)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2588,7 +2548,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'trunc(Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\ttrunc(Float32, Int64)\n\ttrunc(Float64, Int64)\n\ttrunc(Float64)\n\ttrunc(Float32)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2610,7 +2570,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'trunc(Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\ttrunc(Float32, Int64)\n\ttrunc(Float64, Int64)\n\ttrunc(Float64)\n\ttrunc(Float32)"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2632,7 +2592,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_to_timestamp'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2654,7 +2614,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_to_timestamp'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2676,7 +2636,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'try_to_timestamp'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2698,7 +2658,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'unix_date'.\nDid you mean 'to_date'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2720,7 +2680,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'unix_micros'.\nDid you mean 'cos'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2742,7 +2702,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'unix_millis'.\nDid you mean 'nullif'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2764,7 +2724,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'unix_seconds'.\nDid you mean 'decode'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2786,7 +2746,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'unix_timestamp'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2808,7 +2768,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'unix_timestamp'.\nDid you mean 'to_timestamp'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2830,7 +2790,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'weekday'.\nDid you mean 'overlay'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2852,7 +2812,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'weekofyear'.\nDid you mean 'power'?"
+        "failure": "internal error: error"
       }
     },
     {
@@ -2874,7 +2834,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Invalid function 'year'.\nDid you mean 'VAR'?"
+        "failure": "internal error: error"
       }
     }
   ]
