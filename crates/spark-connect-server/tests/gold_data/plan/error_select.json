@@ -1,0 +1,64 @@
+{
+  "tests": [
+    {
+      "input": "\nSELECT * FROM tab\nWINDOW window_ref AS window-ref\n        ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT (a - test_func(b-c)) FROM test-table",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM table-with-hyphen",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT a-b AS a-b FROM t",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT a-b FROM table-hyphen WHERE a-b = 0",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT a-b FROM table-with-hyphen",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT cast('a' as CHAR)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT cast('a' as Character)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT cast('a' as Varchar)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT cast(1 as badtype)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

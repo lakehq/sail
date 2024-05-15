@@ -13,7 +13,7 @@ use crate::spark::connect::data_type as dt;
 ///   org.apache.spark.sql.types.DataType#parseDataType
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum JsonDataType {
+pub(crate) enum JsonDataType {
     #[serde(alias = "void")]
     Null,
     String,
@@ -30,6 +30,8 @@ enum JsonDataType {
     #[serde(alias = "timestamp_ltz")]
     Timestamp,
     TimestampNtz,
+    #[serde(rename = "interval")]
+    CalendarInterval,
     #[serde(untagged, with = "serde_char")]
     Char {
         length: i32,
@@ -83,15 +85,15 @@ enum JsonDataType {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-struct JsonStructField {
-    name: String,
-    nullable: bool,
-    r#type: JsonDataType,
-    metadata: Option<HashMap<String, String>>,
+pub(crate) struct JsonStructField {
+    pub(crate) name: String,
+    pub(crate) nullable: bool,
+    pub(crate) r#type: JsonDataType,
+    pub(crate) metadata: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum DayTimeIntervalField {
+pub(crate) enum DayTimeIntervalField {
     Day = 0,
     Hour = 1,
     Minute = 2,
@@ -127,7 +129,7 @@ impl Display for DayTimeIntervalField {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum YearMonthIntervalField {
+pub(crate) enum YearMonthIntervalField {
     Year = 0,
     Month = 1,
 }
@@ -430,6 +432,9 @@ fn from_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataType> {
         JsonDataType::TimestampNtz => sc::DataType {
             kind: Some(dt::Kind::TimestampNtz(dt::TimestampNtz::default())),
         },
+        JsonDataType::CalendarInterval => sc::DataType {
+            kind: Some(dt::Kind::CalendarInterval(dt::CalendarInterval::default())),
+        },
         JsonDataType::DayTimeInterval { start, end } => sc::DataType {
             kind: Some(dt::Kind::DayTimeInterval(dt::DayTimeInterval {
                 start_field: start.map(|f| f as i32),
@@ -637,6 +642,12 @@ mod tests {
                 r#""timestamp_ntz""#,
                 sc::DataType {
                     kind: Some(dt::Kind::TimestampNtz(dt::TimestampNtz::default())),
+                },
+            ),
+            (
+                r#""interval""#,
+                sc::DataType {
+                    kind: Some(dt::Kind::CalendarInterval(dt::CalendarInterval::default())),
                 },
             ),
             (

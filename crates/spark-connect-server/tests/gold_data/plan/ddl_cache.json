@@ -1,0 +1,34 @@
+{
+  "tests": [
+    {
+      "input": "CACHE LAZY TABLE a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "CACHE LAZY TABLE a.b.c OPTIONS('storageLevel' 'DISK_ONLY')",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "CACHE TABLE a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "CACHE TABLE a.b.c AS SELECT * FROM testData",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "CACHE TABLE t AS SELECT * FROM testData",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

@@ -1,0 +1,392 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT element_at(array(1, 2, 3), 2);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "element_at(array(1, 2, 3), 2)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 25"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT element_at(map(1, 'a', 2, 'b'), 2);",
+        "result": [
+          "b"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "element_at(map(1, a, 2, b), 2)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'element_at'.\nDid you mean 'current_date'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT map(1.0, '2', 3.0, '4');",
+        "result": [
+          "{1.0:\"2\",3.0:\"4\"}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "map(1.0, 2, 3.0, 4)",
+              "nullable": false,
+              "type": {
+                "type": "map",
+                "keyType": "decimal(2, 1)",
+                "valueType": "string",
+                "valueContainsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'map'.\nDid you mean 'MAX'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT map_concat(map(1, 'a', 2, 'b'), map(3, 'c'));",
+        "result": [
+          "{1:\"a\",2:\"b\",3:\"c\"}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "map_concat(map(1, a, 2, b), map(3, c))",
+              "nullable": false,
+              "type": {
+                "type": "map",
+                "keyType": "integer",
+                "valueType": "string",
+                "valueContainsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'map_concat'.\nDid you mean 'concat'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT map_contains_key(map(1, 'a', 2, 'b'), 1);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "map_contains_key(map(1, a, 2, b), 1)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'map_contains_key'.\nDid you mean 'array_contains'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT map_contains_key(map(1, 'a', 2, 'b'), 3);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "map_contains_key(map(1, a, 2, b), 3)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'map_contains_key'.\nDid you mean 'array_contains'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT map_entries(map(1, 'a', 2, 'b'));",
+        "result": [
+          "[{\"key\":1,\"value\":\"a\"},{\"key\":2,\"value\":\"b\"}]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "map_entries(map(1, a, 2, b))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": {
+                  "type": "struct",
+                  "fields": [
+                    {
+                      "name": "key",
+                      "nullable": false,
+                      "type": "integer",
+                      "metadata": {}
+                    },
+                    {
+                      "name": "value",
+                      "nullable": false,
+                      "type": "string",
+                      "metadata": {}
+                    }
+                  ]
+                },
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'map_entries'.\nDid you mean 'degrees'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT map_from_arrays(array(1.0, 3.0), array('2', '4'));",
+        "result": [
+          "{1.0:\"2\",3.0:\"4\"}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "map_from_arrays(array(1.0, 3.0), array(2, 4))",
+              "nullable": false,
+              "type": {
+                "type": "map",
+                "keyType": "decimal(2, 1)",
+                "valueType": "string",
+                "valueContainsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1.0 at Line: 1, Column 30"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT map_from_entries(array(struct(1, 'a'), struct(2, 'b')));",
+        "result": [
+          "{1:\"a\",2:\"b\"}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "map_from_entries(array(struct(1, a), struct(2, b)))",
+              "nullable": false,
+              "type": {
+                "type": "map",
+                "keyType": "integer",
+                "valueType": "string",
+                "valueContainsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: struct at Line: 1, Column 31"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT map_keys(map(1, 'a', 2, 'b'));",
+        "result": [
+          "[1,2]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "map_keys(map(1, a, 2, b))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'map_keys'.\nDid you mean 'degrees'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT map_values(map(1, 'a', 2, 'b'));",
+        "result": [
+          "[\"a\",\"b\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "map_values(map(1, a, 2, b))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'map_values'.\nDid you mean 'LAST_VALUE'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT str_to_map('a');",
+        "result": [
+          "{\"a\":null}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "str_to_map(a, ,, :)",
+              "nullable": false,
+              "type": {
+                "type": "map",
+                "keyType": "string",
+                "valueType": "string",
+                "valueContainsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'str_to_map'.\nDid you mean 'strpos'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT str_to_map('a:1,b:2,c:3', ',', ':');",
+        "result": [
+          "{\"a\":\"1\",\"b\":\"2\",\"c\":\"3\"}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "str_to_map(a:1,b:2,c:3, ,, :)",
+              "nullable": false,
+              "type": {
+                "type": "map",
+                "keyType": "string",
+                "valueType": "string",
+                "valueContainsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'str_to_map'.\nDid you mean 'strpos'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_element_at(array(1, 2, 3), 2);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_element_at(array(1, 2, 3), 2)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 29"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_element_at(map(1, 'a', 2, 'b'), 2);",
+        "result": [
+          "b"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_element_at(map(1, a, 2, b), 2)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_element_at'.\nDid you mean 'array_element'?"
+      }
+    }
+  ]
+}

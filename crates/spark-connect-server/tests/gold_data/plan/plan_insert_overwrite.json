@@ -1,0 +1,16 @@
+{
+  "tests": [
+    {
+      "input": "insert overwrite table s partition (e = 1) if not exists select * from t",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "insert overwrite table s select * from t",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

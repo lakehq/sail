@@ -1,0 +1,10 @@
+{
+  "tests": [
+    {
+      "input": "SELECT 1",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

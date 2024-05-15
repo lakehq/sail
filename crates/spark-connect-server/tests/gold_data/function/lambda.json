@@ -1,0 +1,781 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT aggregate(array(1, 2, 3), 0, (acc, x) -> acc + x);",
+        "result": [
+          "6"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "aggregate(array(1, 2, 3), 0, lambdafunction((namedlambdavariable() + namedlambdavariable()), namedlambdavariable(), namedlambdavariable()), lambdafunction(namedlambdavariable(), namedlambdavariable()))",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 24"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT aggregate(array(1, 2, 3), 0, (acc, x) -> acc + x, acc -> acc * 10);",
+        "result": [
+          "60"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "aggregate(array(1, 2, 3), 0, lambdafunction((namedlambdavariable() + namedlambdavariable()), namedlambdavariable(), namedlambdavariable()), lambdafunction((namedlambdavariable() * 10), namedlambdavariable()))",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 24"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_sort(array('b', 'd', null, 'c', 'a'));",
+        "result": [
+          "[\"a\",\"b\",\"c\",\"d\",null]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_sort(array(b, d, NULL, c, a), lambdafunction((IF(((namedlambdavariable() IS NULL) AND (namedlambdavariable() IS NULL)), 0, (IF((namedlambdavariable() IS NULL), 1, (IF((namedlambdavariable() IS NULL), -1, (IF((namedlambdavariable() < namedlambdavariable()), -1, (IF((namedlambdavariable() > namedlambdavariable()), 1, 0)))))))))), namedlambdavariable(), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 'b' at Line: 1, Column 25"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_sort(array('bc', 'ab', 'dc'), (left, right) -> case when left is null and right is null then 0 when left is null then -1 when right is null then 1 when left < right then 1 when left > right then -1 else 0 end);",
+        "result": [
+          "[\"dc\",\"bc\",\"ab\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_sort(array(bc, ab, dc), lambdafunction(CASE WHEN ((namedlambdavariable() IS NULL) AND (namedlambdavariable() IS NULL)) THEN 0 WHEN (namedlambdavariable() IS NULL) THEN -1 WHEN (namedlambdavariable() IS NULL) THEN 1 WHEN (namedlambdavariable() < namedlambdavariable()) THEN 1 WHEN (namedlambdavariable() > namedlambdavariable()) THEN -1 ELSE 0 END, namedlambdavariable(), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 'bc' at Line: 1, Column 25"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_sort(array(5, 6, 1), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end);",
+        "result": [
+          "[1,5,6]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_sort(array(5, 6, 1), lambdafunction(CASE WHEN (namedlambdavariable() < namedlambdavariable()) THEN -1 WHEN (namedlambdavariable() > namedlambdavariable()) THEN 1 ELSE 0 END, namedlambdavariable(), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 5 at Line: 1, Column 25"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT exists(array(0, null, 2, 3, null), x -> x IS NULL);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "exists(array(0, NULL, 2, 3, NULL), lambdafunction((namedlambdavariable() IS NULL), namedlambdavariable()))",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: array at Line: 1, Column 15"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT exists(array(1, 2, 3), x -> x % 2 == 0);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "exists(array(1, 2, 3), lambdafunction(((namedlambdavariable() % 2) = 0), namedlambdavariable()))",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: array at Line: 1, Column 15"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT exists(array(1, 2, 3), x -> x % 2 == 10);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "exists(array(1, 2, 3), lambdafunction(((namedlambdavariable() % 2) = 10), namedlambdavariable()))",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: array at Line: 1, Column 15"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT exists(array(1, 2, 3), x -> x IS NULL);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "exists(array(1, 2, 3), lambdafunction((namedlambdavariable() IS NULL), namedlambdavariable()))",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: array at Line: 1, Column 15"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT exists(array(1, null, 3), x -> x % 2 == 0);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "exists(array(1, NULL, 3), lambdafunction(((namedlambdavariable() % 2) = 0), namedlambdavariable()))",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: array at Line: 1, Column 15"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT filter(array(0, 2, 3), (x, i) -> x > i);",
+        "result": [
+          "[2,3]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "filter(array(0, 2, 3), lambdafunction((namedlambdavariable() > namedlambdavariable()), namedlambdavariable(), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 0 at Line: 1, Column 21"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT filter(array(0, null, 2, 3, null), x -> x IS NOT NULL);",
+        "result": [
+          "[0,2,3]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "filter(array(0, NULL, 2, 3, NULL), lambdafunction((namedlambdavariable() IS NOT NULL), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 0 at Line: 1, Column 21"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT filter(array(1, 2, 3), x -> x % 2 == 1);",
+        "result": [
+          "[1,3]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "filter(array(1, 2, 3), lambdafunction(((namedlambdavariable() % 2) = 1), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 21"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT forall(array(1, 2, 3), x -> x % 2 == 0);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "forall(array(1, 2, 3), lambdafunction(((namedlambdavariable() % 2) = 0), namedlambdavariable()))",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 21"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT forall(array(1, null, 3), x -> x % 2 == 0);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "forall(array(1, NULL, 3), lambdafunction(((namedlambdavariable() % 2) = 0), namedlambdavariable()))",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 21"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT forall(array(2, 4, 8), x -> x % 2 == 0);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "forall(array(2, 4, 8), lambdafunction(((namedlambdavariable() % 2) = 0), namedlambdavariable()))",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 2 at Line: 1, Column 21"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT forall(array(2, null, 8), x -> x % 2 == 0);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "forall(array(2, NULL, 8), lambdafunction(((namedlambdavariable() % 2) = 0), namedlambdavariable()))",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 2 at Line: 1, Column 21"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT map_filter(map(1, 0, 2, 2, 3, -1), (k, v) -> k > v);",
+        "result": [
+          "{1:0,3:-1}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "map_filter(map(1, 0, 2, 2, 3, -1), lambdafunction((namedlambdavariable() > namedlambdavariable()), namedlambdavariable(), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "map",
+                "keyType": "integer",
+                "valueType": "integer",
+                "valueContainsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'map_filter'.\nDid you mean 'make_date'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT map_zip_with(map('a', 1, 'b', 2), map('b', 3, 'c', 4), (k, v1, v2) -> coalesce(v1, 0) + coalesce(v2, 0));",
+        "result": [
+          "{\"a\":1,\"b\":5,\"c\":4}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "map_zip_with(map(a, 1, b, 2), map(b, 3, c, 4), lambdafunction((coalesce(namedlambdavariable(), 0) + coalesce(namedlambdavariable(), 0)), namedlambdavariable(), namedlambdavariable(), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "map",
+                "keyType": "string",
+                "valueType": "integer",
+                "valueContainsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'map_zip_with'.\nDid you mean 'ends_with'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT map_zip_with(map(1, 'a', 2, 'b'), map(1, 'x', 2, 'y'), (k, v1, v2) -> concat(v1, v2));",
+        "result": [
+          "{1:\"ax\",2:\"by\"}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "map_zip_with(map(1, a, 2, b), map(1, x, 2, y), lambdafunction(concat(namedlambdavariable(), namedlambdavariable()), namedlambdavariable(), namedlambdavariable(), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "map",
+                "keyType": "integer",
+                "valueType": "string",
+                "valueContainsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'map_zip_with'.\nDid you mean 'ends_with'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT reduce(array(1, 2, 3), 0, (acc, x) -> acc + x);",
+        "result": [
+          "6"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "reduce(array(1, 2, 3), 0, lambdafunction((namedlambdavariable() + namedlambdavariable()), namedlambdavariable(), namedlambdavariable()), lambdafunction(namedlambdavariable(), namedlambdavariable()))",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 21"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT reduce(array(1, 2, 3), 0, (acc, x) -> acc + x, acc -> acc * 10);",
+        "result": [
+          "60"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "reduce(array(1, 2, 3), 0, lambdafunction((namedlambdavariable() + namedlambdavariable()), namedlambdavariable(), namedlambdavariable()), lambdafunction((namedlambdavariable() * 10), namedlambdavariable()))",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 21"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT transform(array(1, 2, 3), (x, i) -> x + i);",
+        "result": [
+          "[1,3,5]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "transform(array(1, 2, 3), lambdafunction((namedlambdavariable() + namedlambdavariable()), namedlambdavariable(), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 24"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT transform(array(1, 2, 3), x -> x + 1);",
+        "result": [
+          "[2,3,4]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "transform(array(1, 2, 3), lambdafunction((namedlambdavariable() + 1), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 24"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT transform_keys(map_from_arrays(array(1, 2, 3), array(1, 2, 3)), (k, v) -> k + 1);",
+        "result": [
+          "{2:1,3:2,4:3}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "transform_keys(map_from_arrays(array(1, 2, 3), array(1, 2, 3)), lambdafunction((namedlambdavariable() + 1), namedlambdavariable(), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "map",
+                "keyType": "integer",
+                "valueType": "integer",
+                "valueContainsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 45"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT transform_keys(map_from_arrays(array(1, 2, 3), array(1, 2, 3)), (k, v) -> k + v);",
+        "result": [
+          "{2:1,4:2,6:3}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "transform_keys(map_from_arrays(array(1, 2, 3), array(1, 2, 3)), lambdafunction((namedlambdavariable() + namedlambdavariable()), namedlambdavariable(), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "map",
+                "keyType": "integer",
+                "valueType": "integer",
+                "valueContainsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 45"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT transform_values(map_from_arrays(array(1, 2, 3), array(1, 2, 3)), (k, v) -> k + v);",
+        "result": [
+          "{1:2,2:4,3:6}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "transform_values(map_from_arrays(array(1, 2, 3), array(1, 2, 3)), lambdafunction((namedlambdavariable() + namedlambdavariable()), namedlambdavariable(), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "map",
+                "keyType": "integer",
+                "valueType": "integer",
+                "valueContainsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 47"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT transform_values(map_from_arrays(array(1, 2, 3), array(1, 2, 3)), (k, v) -> v + 1);",
+        "result": [
+          "{1:2,2:3,3:4}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "transform_values(map_from_arrays(array(1, 2, 3), array(1, 2, 3)), lambdafunction((namedlambdavariable() + 1), namedlambdavariable(), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "map",
+                "keyType": "integer",
+                "valueType": "integer",
+                "valueContainsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 47"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT zip_with(array('a', 'b', 'c'), array('d', 'e', 'f'), (x, y) -> concat(x, y));",
+        "result": [
+          "[\"ad\",\"be\",\"cf\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "zip_with(array(a, b, c), array(d, e, f), lambdafunction(concat(namedlambdavariable(), namedlambdavariable()), namedlambdavariable(), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 'a' at Line: 1, Column 23"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT zip_with(array(1, 2), array(3, 4), (x, y) -> x + y);",
+        "result": [
+          "[4,6]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "zip_with(array(1, 2), array(3, 4), lambdafunction((namedlambdavariable() + namedlambdavariable()), namedlambdavariable(), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 23"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT zip_with(array(1, 2, 3), array('a', 'b', 'c'), (x, y) -> (y, x));",
+        "result": [
+          "[{\"y\":\"a\",\"x\":1},{\"y\":\"b\",\"x\":2},{\"y\":\"c\",\"x\":3}]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "zip_with(array(1, 2, 3), array(a, b, c), lambdafunction(named_struct(y, namedlambdavariable(), x, namedlambdavariable()), namedlambdavariable(), namedlambdavariable()))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": {
+                  "type": "struct",
+                  "fields": [
+                    {
+                      "name": "y",
+                      "nullable": true,
+                      "type": "string",
+                      "metadata": {}
+                    },
+                    {
+                      "name": "x",
+                      "nullable": true,
+                      "type": "integer",
+                      "metadata": {}
+                    }
+                  ]
+                },
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 23"
+      }
+    }
+  ]
+}

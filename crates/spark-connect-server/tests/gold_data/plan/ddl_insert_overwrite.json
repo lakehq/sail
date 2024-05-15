@@ -1,0 +1,70 @@
+{
+  "tests": [
+    {
+      "input": "\n INSERT OVERWRITE LOCAL DIRECTORY\n USING parquet\n OPTIONS (\n  path 'xxx'\n )\n SELECT i from t1",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3) IF NOT EXISTS\nSELECT * FROM source\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2)\nSELECT * FROM source\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2) (a, b)\nSELECT * FROM source\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "INSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2) IF NOT EXISTS\nSELECT * FROM source",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "INSERT OVERWRITE TABLE testcat.ns1.ns2.tbl (a, b) SELECT * FROM source",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "INSERT OVERWRITE TABLE testcat.ns1.ns2.tbl BY NAME SELECT * FROM source",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "INSERT OVERWRITE TABLE testcat.ns1.ns2.tbl SELECT * FROM source",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "INSERT OVERWRITE testcat.ns1.ns2.tbl (a, b) SELECT * FROM source",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "INSERT OVERWRITE testcat.ns1.ns2.tbl BY NAME SELECT * FROM source",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "INSERT OVERWRITE testcat.ns1.ns2.tbl SELECT * FROM source",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

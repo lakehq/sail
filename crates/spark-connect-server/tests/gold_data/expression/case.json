@@ -1,0 +1,34 @@
+{
+  "tests": [
+    {
+      "input": "case 'a'='a' when true then 1 end",
+      "output": {
+        "failure": "not supported: SQL to expression"
+      }
+    },
+    {
+      "input": "case (a or b) when true then c when false then d else e end",
+      "output": {
+        "failure": "not supported: SQL to expression"
+      }
+    },
+    {
+      "input": "case a when 1 then b when 2 then c else d end",
+      "output": {
+        "failure": "not supported: SQL to expression"
+      }
+    },
+    {
+      "input": "case when (1) + case when a > b then c else d end then f else g end",
+      "output": {
+        "failure": "not supported: SQL to expression"
+      }
+    },
+    {
+      "input": "case when a = 1 then b when a = 2 then c else d end",
+      "output": {
+        "failure": "not supported: SQL to expression"
+      }
+    }
+  ]
+}

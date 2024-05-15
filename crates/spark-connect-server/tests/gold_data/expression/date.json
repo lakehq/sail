@@ -1,0 +1,34 @@
+{
+  "tests": [
+    {
+      "input": "DATE '2019'",
+      "output": {
+        "failure": "not supported: SQL to expression"
+      }
+    },
+    {
+      "input": "DATE '2019-01'",
+      "output": {
+        "failure": "not supported: SQL to expression"
+      }
+    },
+    {
+      "input": "DATE '2019-01-14'",
+      "output": {
+        "failure": "not supported: SQL to expression"
+      }
+    },
+    {
+      "input": "DAtE 'mar 11 2016'",
+      "output": {
+        "failure": "not supported: SQL to expression"
+      }
+    },
+    {
+      "input": "dAte '2016-03-11'",
+      "output": {
+        "failure": "not supported: SQL to expression"
+      }
+    }
+  ]
+}

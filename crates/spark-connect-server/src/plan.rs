@@ -29,7 +29,7 @@ use crate::schema::{cast_record_batch, parse_spark_schema_string};
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::Relation;
-use crate::sql::new_sql_parser;
+use crate::sql::parser::new_sql_parser;
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
     let cursor = Cursor::new(data);

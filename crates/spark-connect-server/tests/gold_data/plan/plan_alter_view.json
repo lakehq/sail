@@ -1,0 +1,16 @@
+{
+  "tests": [
+    {
+      "input": "ALTER VIEW testView AS FROM jt\nINSERT INTO tbl1 SELECT * WHERE jt.id < 5\nINSERT INTO tbl2 SELECT * WHERE jt.id > 4",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ALTER VIEW testView AS INSERT INTO jt VALUES(1, 1)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

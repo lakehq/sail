@@ -1,0 +1,22 @@
+{
+  "tests": [
+    {
+      "input": "\nCREATE TABLE IF NOT EXISTS mydb.page-view\nUSING parquet\nCOMMENT 'This is the staging page view table'\nLOCATION '/user/external/page_view'\nTBLPROPERTIES ('p1'='v1', 'p2'='v2')\nAS SELECT * FROM src",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nCREATE TABLE IF NOT EXISTS tab\nUSING test-provider\nAS SELECT * FROM src",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "CREATE TABLE test (attri-bute INT)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

@@ -1,0 +1,3160 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT any(col) FROM VALUES (NULL), (true), (false) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "any(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'any'.\nDid you mean 'ln'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT any(col) FROM VALUES (false), (false), (NULL) AS tab(col);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "any(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'any'.\nDid you mean 'ln'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT any(col) FROM VALUES (true), (false), (false) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "any(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'any'.\nDid you mean 'ln'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT any_value(col) FROM VALUES (10), (5), (20) AS tab(col);",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "any_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'any_value'.\nDid you mean 'LAST_VALUE'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT any_value(col) FROM VALUES (NULL), (5), (20) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "any_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'any_value'.\nDid you mean 'LAST_VALUE'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT any_value(col, true) FROM VALUES (NULL), (5), (20) AS tab(col);",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "any_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'any_value'.\nDid you mean 'LAST_VALUE'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT approx_count_distinct(col1) FROM VALUES (1), (1), (2), (2), (3) tab(col1);",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "approx_count_distinct(col1)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'approx_count_distinct'.\nDid you mean 'APPROX_DISTINCT'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT approx_percentile(col, 0.5, 100) FROM VALUES (0), (6), (7), (9), (10) AS tab(col);",
+        "result": [
+          "7"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "approx_percentile(col, 0.5, 100)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'approx_percentile'.\nDid you mean 'APPROX_PERCENTILE_CONT'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT approx_percentile(col, 0.5, 100) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '1' MONTH), (INTERVAL '2' MONTH), (INTERVAL '10' MONTH) AS tab(col);",
+        "result": [
+          "0-1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "approx_percentile(col, 0.5, 100)",
+              "nullable": true,
+              "type": "interval month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'approx_percentile'.\nDid you mean 'APPROX_PERCENTILE_CONT'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT approx_percentile(col, array(0.5, 0.4, 0.1), 100) FROM VALUES (0), (1), (2), (10) AS tab(col);",
+        "result": [
+          "[1,1,0]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "approx_percentile(col, array(0.5, 0.4, 0.1), 100)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 0.5 at Line: 1, Column 37"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT approx_percentile(col, array(0.5, 0.7), 100) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '1' SECOND), (INTERVAL '2' SECOND), (INTERVAL '10' SECOND) AS tab(col);",
+        "result": [
+          "[0 00:00:01.000000000,0 00:00:02.000000000]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "approx_percentile(col, array(0.5, 0.7), 100)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "interval second",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 0.5 at Line: 1, Column 37"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_agg(col) FROM VALUES (1), (2), (1) AS tab(col);",
+        "result": [
+          "[1,2,1]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "collect_list(col)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"ARRAY_AGG(tab.col)\", data_type: List(Field { name: \"item\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [ListArray\n[\n  PrimitiveArray<Int64>\n[\n  1,\n  2,\n  1,\n],\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT avg(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "2.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "avg(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"AVG(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT avg(col) FROM VALUES (1), (2), (NULL) AS tab(col);",
+        "result": [
+          "1.5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "avg(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"AVG(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.5,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bit_and(col) FROM VALUES (3), (5) AS tab(col);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bit_and(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"BIT_AND(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  1,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bit_or(col) FROM VALUES (3), (5) AS tab(col);",
+        "result": [
+          "7"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bit_or(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"BIT_OR(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  7,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bit_xor(col) FROM VALUES (3), (5) AS tab(col);",
+        "result": [
+          "6"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bit_xor(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"BIT_XOR(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  6,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bool_and(col) FROM VALUES (NULL), (true), (true) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bool_and(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"BOOL_AND(tab.col)\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bool_and(col) FROM VALUES (true), (false), (true) AS tab(col);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bool_and(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"BOOL_AND(tab.col)\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bool_and(col) FROM VALUES (true), (true), (true) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bool_and(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"BOOL_AND(tab.col)\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bool_or(col) FROM VALUES (NULL), (true), (false) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bool_or(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"BOOL_OR(tab.col)\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bool_or(col) FROM VALUES (false), (false), (NULL) AS tab(col);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bool_or(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"BOOL_OR(tab.col)\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  false,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bool_or(col) FROM VALUES (true), (false), (false) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bool_or(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"BOOL_OR(tab.col)\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [BooleanArray\n[\n  true,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT collect_list(col) FROM VALUES (1), (2), (1) AS tab(col);",
+        "result": [
+          "[1,2,1]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "collect_list(col)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'collect_list'.\nDid you mean 'make_list'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT collect_set(col) FROM VALUES (1), (2), (1) AS tab(col);",
+        "result": [
+          "[1,2]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "collect_set(col)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'collect_set'.\nDid you mean 'coalesce'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT corr(c1, c2) FROM VALUES (3, 2), (3, 3), (6, 4) as tab(c1, c2);",
+        "result": [
+          "0.8660254037844387"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "corr(c1, c2)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"CORR(tab.c1,tab.c2)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.8660254037844386,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT count(*) FROM VALUES (NULL), (5), (5), (20) AS tab(col);",
+        "result": [
+          "4"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "count(1)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"COUNT(*)\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  4,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT count(DISTINCT col) FROM VALUES (NULL), (5), (5), (10) AS tab(col);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "count(DISTINCT col)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"COUNT(DISTINCT tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  2,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT count(col) FROM VALUES (NULL), (5), (5), (20) AS tab(col);",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "count(col)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"COUNT(tab.col)\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  3,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT count_if(col % 2 = 0) FROM VALUES (NULL), (0), (1), (2), (3) AS tab(col);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "count_if(((col % 2) = 0))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'count_if'.\nDid you mean 'COUNT'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT count_if(col IS NULL) FROM VALUES (NULL), (0), (1), (2), (3) AS tab(col);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "count_if((col IS NULL))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'count_if'.\nDid you mean 'COUNT'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT covar_pop(c1, c2) FROM VALUES (1,1), (2,2), (3,3) AS tab(c1, c2);",
+        "result": [
+          "0.6666666666666666"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "covar_pop(c1, c2)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"COVAR_POP(tab.c1,tab.c2)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.6666666666666666,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT covar_samp(c1, c2) FROM VALUES (1,1), (2,2), (3,3) AS tab(c1, c2);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "covar_samp(c1, c2)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"COVAR(tab.c1,tab.c2)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT every(col) FROM VALUES (NULL), (true), (true) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "every(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'every'.\nDid you mean 'reverse'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT every(col) FROM VALUES (true), (false), (true) AS tab(col);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "every(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'every'.\nDid you mean 'reverse'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT every(col) FROM VALUES (true), (true), (true) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "every(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'every'.\nDid you mean 'reverse'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT first(col) FROM VALUES (10), (5), (20) AS tab(col);",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "first(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'first'.\nDid you mean 'cbrt'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT first(col) FROM VALUES (NULL), (5), (20) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "first(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'first'.\nDid you mean 'cbrt'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT first(col, true) FROM VALUES (NULL), (5), (20) AS tab(col);",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "first(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'first'.\nDid you mean 'cbrt'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT first_value(col) FROM VALUES (10), (5), (20) AS tab(col);",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "first_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"FIRST_VALUE(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  10,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT first_value(col) FROM VALUES (NULL), (5), (20) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "first_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"FIRST_VALUE(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  null,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT first_value(col, true) FROM VALUES (NULL), (5), (20) AS tab(col);",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "first_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'FIRST_VALUE(Int64, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tFIRST_VALUE(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hex(count_min_sketch(col, 0.5d, 0.5d, 1)) FROM VALUES (1), (2), (1) AS tab(col);",
+        "result": [
+          "0000000100000000000000030000000100000004000000005D8D6AB90000000000000000000000000000000200000000000000010000000000000000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hex(count_min_sketch(col, 0.5, 0.5, 1))",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected ), found: d at Line: 1, Column 37"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT histogram_numeric(col, 5) FROM VALUES (0), (1), (2), (10) AS tab(col);",
+        "result": [
+          "[{\"x\":0,\"y\":1.0},{\"x\":1,\"y\":1.0},{\"x\":2,\"y\":1.0},{\"x\":10,\"y\":1.0}]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "histogram_numeric(col, 5)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": {
+                  "type": "struct",
+                  "fields": [
+                    {
+                      "name": "x",
+                      "nullable": true,
+                      "type": "integer",
+                      "metadata": {}
+                    },
+                    {
+                      "name": "y",
+                      "nullable": true,
+                      "type": "double",
+                      "metadata": {}
+                    }
+                  ]
+                },
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'histogram_numeric'.\nDid you mean 'list_remove_n'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hll_sketch_estimate(hll_sketch_agg(col, 12)) FROM VALUES (1), (1), (2), (2), (3) tab(col);",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hll_sketch_estimate(hll_sketch_agg(col, 12))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'hll_sketch_estimate'.\nDid you mean 'list_empty'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hll_sketch_estimate(hll_union_agg(sketch, true)) FROM (SELECT hll_sketch_agg(col) as sketch FROM VALUES (1) tab(col) UNION ALL SELECT hll_sketch_agg(col, 20) as sketch FROM VALUES (1) tab(col));",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hll_sketch_estimate(hll_union_agg(sketch, true))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: table function 'VALUES' not found"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT kurtosis(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col);",
+        "result": [
+          "-0.7014368047529627"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "kurtosis(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'kurtosis'.\nDid you mean 'strpos'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT kurtosis(col) FROM VALUES (1), (10), (100), (10), (1) as tab(col);",
+        "result": [
+          "0.19432323191699075"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "kurtosis(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'kurtosis'.\nDid you mean 'strpos'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT last(col) FROM VALUES (10), (5), (20) AS tab(col);",
+        "result": [
+          "20"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "last(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'last'.\nDid you mean 'left'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT last(col) FROM VALUES (10), (5), (NULL) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "last(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'last'.\nDid you mean 'left'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT last(col, true) FROM VALUES (10), (5), (NULL) AS tab(col);",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "last(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'last'.\nDid you mean 'left'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT last_value(col) FROM VALUES (10), (5), (20) AS tab(col);",
+        "result": [
+          "20"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "last_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"LAST_VALUE(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  20,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT last_value(col) FROM VALUES (10), (5), (NULL) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "last_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"LAST_VALUE(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  null,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT last_value(col, true) FROM VALUES (10), (5), (NULL) AS tab(col);",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "last_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'LAST_VALUE(Int64, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tLAST_VALUE(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT max(col) FROM VALUES (10), (50), (20) AS tab(col);",
+        "result": [
+          "50"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "max(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"MAX(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  50,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT max_by(x, y) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);",
+        "result": [
+          "b"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "max_by(x, y)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'max_by'.\nDid you mean 'MAX'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mean(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "2.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mean(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"AVG(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mean(col) FROM VALUES (1), (2), (NULL) AS tab(col);",
+        "result": [
+          "1.5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mean(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"AVG(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.5,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT median(col) FROM VALUES (0), (10) AS tab(col);",
+        "result": [
+          "5.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "median(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"MEDIAN(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  5,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT median(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);",
+        "result": [
+          "0-5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "median(col)",
+              "nullable": true,
+              "type": "interval year to month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: This feature is not implemented: MedianAccumulator not supported for MEDIAN(tab.col) with Interval(MonthDayNano)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT min(col) FROM VALUES (10), (-1), (20) AS tab(col);",
+        "result": [
+          "-1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "min(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"MIN(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  -1,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT min_by(x, y) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);",
+        "result": [
+          "a"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "min_by(x, y)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'min_by'.\nDid you mean 'MIN'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mode(col) FROM VALUES (0), (10), (10) AS tab(col);",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mode(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'mode'.\nDid you mean 'md5'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mode(col) FROM VALUES (0), (10), (10), (null), (null), (null) AS tab(col);",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mode(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'mode'.\nDid you mean 'md5'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mode(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH), (INTERVAL '10' MONTH) AS tab(col);",
+        "result": [
+          "0-10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mode(col)",
+              "nullable": true,
+              "type": "interval month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'mode'.\nDid you mean 'md5'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT name, grouping(name), sum(age) FROM VALUES (2, 'Alice'), (5, 'Bob') people(age, name) GROUP BY cube(name);",
+        "result": [
+          "Alice\t0\t2",
+          "Bob\t0\t5",
+          "NULL\t1\t7"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "name",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "grouping(name)",
+              "nullable": false,
+              "type": "byte",
+              "metadata": {}
+            },
+            {
+              "name": "sum(age)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected end of statement, found: GROUP at Line: 1, Column 94"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT name, grouping_id(), sum(age), avg(height) FROM VALUES (2, 'Alice', 165), (5, 'Bob', 180) people(age, name, height) GROUP BY cube(name, height);",
+        "result": [
+          "Alice\t0\t2\t165.0",
+          "Alice\t1\t2\t165.0",
+          "NULL\t3\t7\t172.5",
+          "Bob\t0\t5\t180.0",
+          "Bob\t1\t5\t180.0",
+          "NULL\t2\t2\t165.0",
+          "NULL\t2\t5\t180.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "name",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "grouping_id()",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            },
+            {
+              "name": "sum(age)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            },
+            {
+              "name": "avg(height)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected end of statement, found: GROUP at Line: 1, Column 124"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile(col, 0.3) FROM VALUES (0), (10) AS tab(col);",
+        "result": [
+          "3.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile(col, 0.3, 1)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'percentile'.\nDid you mean 'ceil'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile(col, 0.5) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);",
+        "result": [
+          "0-5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile(col, 0.5, 1)",
+              "nullable": true,
+              "type": "interval year to month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'percentile'.\nDid you mean 'ceil'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile(col, array(0.2, 0.5)) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '10' SECOND) AS tab(col);",
+        "result": [
+          "[0 00:00:02.000000000,0 00:00:05.000000000]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile(col, array(0.2, 0.5), 1)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "interval day to second",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 0.2 at Line: 1, Column 30"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile(col, array(0.25, 0.75)) FROM VALUES (0), (10) AS tab(col);",
+        "result": [
+          "[2.5,7.5]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile(col, array(0.25, 0.75), 1)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "double",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 0.25 at Line: 1, Column 30"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile_approx(col, 0.5, 100) FROM VALUES (0), (6), (7), (9), (10) AS tab(col);",
+        "result": [
+          "7"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile_approx(col, 0.5, 100)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'percentile_approx'.\nDid you mean 'string_to_array'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile_approx(col, 0.5, 100) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '1' MONTH), (INTERVAL '2' MONTH), (INTERVAL '10' MONTH) AS tab(col);",
+        "result": [
+          "0-1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile_approx(col, 0.5, 100)",
+              "nullable": true,
+              "type": "interval month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'percentile_approx'.\nDid you mean 'string_to_array'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile_approx(col, array(0.5, 0.4, 0.1), 100) FROM VALUES (0), (1), (2), (10) AS tab(col);",
+        "result": [
+          "[1,1,0]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile_approx(col, array(0.5, 0.4, 0.1), 100)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 0.5 at Line: 1, Column 37"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile_approx(col, array(0.5, 0.7), 100) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '1' SECOND), (INTERVAL '2' SECOND), (INTERVAL '10' SECOND) AS tab(col);",
+        "result": [
+          "[0 00:00:01.000000000,0 00:00:02.000000000]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile_approx(col, array(0.5, 0.7), 100)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "interval second",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 0.5 at Line: 1, Column 37"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgx(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "2.75"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_AVGX(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2.75,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgx(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "3.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_AVGX(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  3.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgx(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "3.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_AVGX(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  3.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgx(y, x) FROM VALUES (1, null) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_AVGX(Int64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_AVGX(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgx(y, x) FROM VALUES (null, 1) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_AVGX(Utf8, Int64)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_AVGX(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "1.75"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_AVGY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.75,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "1.6666666666666667"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_AVGY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.6666666666666667,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "1.5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_AVGY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.5,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgy(y, x) FROM VALUES (1, null) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_AVGY(Int64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_AVGY(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgy(y, x) FROM VALUES (null, 1) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_AVGY(Utf8, Int64)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_AVGY(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_count(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "4"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_count(y, x)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_COUNT(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  4.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_count(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_count(y, x)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_COUNT(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  3.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_count(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_count(y, x)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_COUNT(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_intercept(y, x) FROM VALUES (1, null) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_intercept(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_INTERCEPT(Int64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_INTERCEPT(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_intercept(y, x) FROM VALUES (1,1), (2,2), (3,3) AS tab(y, x);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_intercept(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_INTERCEPT(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_intercept(y, x) FROM VALUES (null, 1) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_intercept(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_INTERCEPT(Utf8, Int64)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_INTERCEPT(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "0.2727272727272727"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_r2(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_R2(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.2727272727272727,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "0.7500000000000001"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_r2(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_R2(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.75,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_r2(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_R2(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_r2(y, x) FROM VALUES (1, null) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_r2(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_R2(Int64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_R2(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_r2(y, x) FROM VALUES (null, 1) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_r2(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_R2(Utf8, Int64)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_R2(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_slope(y, x) FROM VALUES (1, null) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_slope(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_SLOPE(Int64, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_SLOPE(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_slope(y, x) FROM VALUES (1,1), (2,2), (3,3) AS tab(y, x);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_slope(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SLOPE(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_slope(y, x) FROM VALUES (null, 1) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_slope(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'REGR_SLOPE(Utf8, Int64)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tREGR_SLOPE(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "2.75"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_sxx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SXX(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2.7499999999999996,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "2.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_sxx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SXX(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "2.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_sxx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SXX(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_sxy(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "0.75"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_sxy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SXY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.7499999999999999,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_sxy(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_sxy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SXY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.9999999999999999,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_sxy(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_sxy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SXY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_syy(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "0.75"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_syy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SYY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.75,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_syy(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "0.6666666666666666"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_syy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SYY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.6666666666666666,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_syy(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "0.5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_syy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"REGR_SYY(tab.y,tab.x)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.5,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT skewness(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col);",
+        "result": [
+          "1.1135657469022011"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "skewness(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'skewness'.\nDid you mean 'degrees'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT skewness(col) FROM VALUES (-1000), (-100), (10), (20) AS tab(col);",
+        "result": [
+          "-1.1135657469022011"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "skewness(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'skewness'.\nDid you mean 'degrees'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT some(col) FROM VALUES (NULL), (true), (false) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "some(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'some'.\nDid you mean 'SUM'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT some(col) FROM VALUES (false), (false), (NULL) AS tab(col);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "some(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'some'.\nDid you mean 'SUM'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT some(col) FROM VALUES (true), (false), (false) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "some(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'some'.\nDid you mean 'SUM'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT std(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "std(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'std'.\nDid you mean 'gcd'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT stddev(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "stddev(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"STDDEV(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT stddev_pop(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "0.816496580927726"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "stddev_pop(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"STDDEV_POP(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.816496580927726,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT stddev_samp(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "stddev_samp(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"STDDEV(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6) FROM VALUES (1), (1), (1) AS tab(col);",
+        "result": [
+          "010000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'hex'.\nDid you mean 'exp'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "070000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'hex'.\nDid you mean 'exp'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substring(hex(bitmap_or_agg(col)), 0, 6) FROM VALUES (X '10'), (X '10'), (X '10') AS tab(col);",
+        "result": [
+          "100000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(hex(bitmap_or_agg(col)), 0, 6)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected ), found: '10' at Line: 1, Column 64"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substring(hex(bitmap_or_agg(col)), 0, 6) FROM VALUES (X '10'), (X '20'), (X '40') AS tab(col);",
+        "result": [
+          "700000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(hex(bitmap_or_agg(col)), 0, 6)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected ), found: '10' at Line: 1, Column 64"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sum(col) FROM VALUES (5), (10), (15) AS tab(col);",
+        "result": [
+          "30"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sum(col)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"SUM(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  30,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sum(col) FROM VALUES (NULL), (10), (15) AS tab(col);",
+        "result": [
+          "25"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sum(col)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"SUM(tab.col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  25,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sum(col) FROM VALUES (NULL), (NULL) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sum(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'SUM(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tSUM(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_avg(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "2.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_avg(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_avg'.\nDid you mean 'AVG'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_avg(col) FROM VALUES (1), (2), (NULL) AS tab(col);",
+        "result": [
+          "1.5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_avg(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_avg'.\nDid you mean 'AVG'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_avg(col) FROM VALUES (interval '2147483647 months'), (interval '1 months') AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_avg(col)",
+              "nullable": true,
+              "type": "interval year to month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_avg'.\nDid you mean 'AVG'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_sum(col) FROM VALUES (5), (10), (15) AS tab(col);",
+        "result": [
+          "30"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_sum(col)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_sum'.\nDid you mean 'trim'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_sum(col) FROM VALUES (9223372036854775807L), (1L) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_sum(col)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_sum'.\nDid you mean 'trim'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_sum(col) FROM VALUES (NULL), (10), (15) AS tab(col);",
+        "result": [
+          "25"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_sum(col)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_sum'.\nDid you mean 'trim'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_sum(col) FROM VALUES (NULL), (NULL) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_sum(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_sum'.\nDid you mean 'trim'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT var_pop(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "0.6666666666666666"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "var_pop(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"VAR_POP(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.6666666666666666,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT var_samp(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "var_samp(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"VAR(tab.col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT variance(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "variance(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'variance'.\nDid you mean 'radians'?"
+      }
+    }
+  ]
+}

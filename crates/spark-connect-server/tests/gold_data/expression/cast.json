@@ -1,0 +1,28 @@
+{
+  "tests": [
+    {
+      "input": "cast(a as array<int>)",
+      "output": {
+        "failure": "not supported: SQL to expression"
+      }
+    },
+    {
+      "input": "cast(a as int)",
+      "output": {
+        "failure": "not supported: SQL to expression"
+      }
+    },
+    {
+      "input": "cast(a as timestamp)",
+      "output": {
+        "failure": "not supported: SQL to expression"
+      }
+    },
+    {
+      "input": "cast(cast(a as int) as long)",
+      "output": {
+        "failure": "not supported: SQL to expression"
+      }
+    }
+  ]
+}

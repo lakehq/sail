@@ -1,0 +1,16 @@
+{
+  "tests": [
+    {
+      "input": "current_date",
+      "output": {
+        "failure": "not supported: SQL to expression"
+      }
+    },
+    {
+      "input": "current_timestamp",
+      "output": {
+        "failure": "not supported: SQL to expression"
+      }
+    }
+  ]
+}

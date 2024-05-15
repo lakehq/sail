@@ -1,0 +1,46 @@
+{
+  "tests": [
+    {
+      "input": "SHOW VIEWS",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SHOW VIEWS '*test*'",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SHOW VIEWS FROM testcat.ns1.ns2.tbl",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SHOW VIEWS IN ns1 '*test*'",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SHOW VIEWS IN ns1 LIKE '*test*'",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SHOW VIEWS IN testcat.ns1.ns2.tbl",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SHOW VIEWS LIKE '*test*'",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

@@ -25,6 +25,9 @@ tonic-reflection = "0.11"
 tonic-health = "0.11"
 prost = "0.12"
 prost-types = "0.12"
+pbjson = "0.6"
+pbjson-types = "0.6"
+pbjson-build = "0.6"
 tower = { version = "0.4", features = ["full"] }
 tower-http = { version = "0.4", features = ["full"] }
 uuid = { version = "1.8.0", features = ["v4"] }
@@ -40,6 +43,7 @@ serde_json = "1.0"
 serde_bytes = "0.11"
 monostate = "0.1"
 regex = "1.10"
+glob = "0.3"
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 # 0.21 breaks when datafusion has pyarrow enabled
 pyo3 = { version = "0.21.2", features = ["auto-initialize", "serde"] }

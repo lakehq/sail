@@ -1,0 +1,136 @@
+{
+  "tests": [
+    {
+      "input": "\nANALYZE TABLE a.b.c PARTITION(ds='2017-06-10')\nCOMPUTE STATISTICS FOR ALL COLUMNS\n         ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nANALYZE TABLE a.b.c PARTITION(ds='2017-06-10')\nCOMPUTE STATISTICS FOR COLUMNS key, value\n         ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ANALYZE TABLE a.b.c COMPUTE STATISTICS FOR ALL",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ANALYZE TABLE a.b.c COMPUTE STATISTICS FOR ALL COLUMNS key, value",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ANALYZE TABLE a.b.c COMPUTE STATISTICS FOR COLUMNS",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ANALYZE TABLE a.b.c COMPUTE STATISTICS FOR COLUMNS key, value",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ANALYZE TABLE a.b.c PARTITION(ds, hr) COMPUTE STATISTICS",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ANALYZE TABLE a.b.c PARTITION(ds, hr) COMPUTE STATISTICS noscan",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ANALYZE TABLE a.b.c PARTITION(ds, hr=11) COMPUTE STATISTICS noscan",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ANALYZE TABLE a.b.c PARTITION(ds='2008-04-09') COMPUTE STATISTICS noscan",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ANALYZE TABLE a.b.c PARTITION(ds='2008-04-09', hr) COMPUTE STATISTICS",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ANALYZE TABLE a.b.c PARTITION(ds='2008-04-09', hr) COMPUTE STATISTICS noscan",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ANALYZE TABLE a.b.c PARTITION(ds='2008-04-09', hr=11) COMPUTE STATISTICS",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ANALYZE TABLE a.b.c PARTITION(ds='2008-04-09', hr=11) COMPUTE STATISTICS noscan",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ANALYZE TABLES FROM a COMPUTE STATISTICS NOSCAN",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ANALYZE TABLES IN a.b.c COMPUTE STATISTICS",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "ANALYZE TABLES IN a.b.c COMPUTE STATISTICS xxxx",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "analyze table a.b.c compute statistics",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "analyze table a.b.c compute statistics noscan",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "analyze table a.b.c compute statistics xxxx",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "analyze table a.b.c partition (a) compute statistics nOscAn",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "analyze table a.b.c partition (a) compute statistics xxxx",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

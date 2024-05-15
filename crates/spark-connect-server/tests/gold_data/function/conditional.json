@@ -1,0 +1,246 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT CASE WHEN 1 < 0 THEN 1 WHEN 2 < 0 THEN 2.0 END;",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "CASE WHEN (1 < 0) THEN 1 WHEN (2 < 0) THEN 2.0 END",
+              "nullable": true,
+              "type": "decimal(11, 1)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"CASE WHEN Int64(1) < Int64(0) THEN Int64(1) WHEN Int64(2) < Int64(0) THEN Float64(2) END\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  null,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT CASE WHEN 1 < 0 THEN 1 WHEN 2 > 0 THEN 2.0 ELSE 1.2 END;",
+        "result": [
+          "2.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "CASE WHEN (1 < 0) THEN 1 WHEN (2 > 0) THEN 2.0 ELSE 1.2 END",
+              "nullable": false,
+              "type": "decimal(11, 1)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"CASE WHEN Int64(1) < Int64(0) THEN Int64(1) WHEN Int64(2) > Int64(0) THEN Float64(2) ELSE Float64(1.2) END\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT CASE WHEN 1 > 0 THEN 1 WHEN 2 > 0 THEN 2.0 ELSE 1.2 END;",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "CASE WHEN (1 > 0) THEN 1 WHEN (2 > 0) THEN 2.0 ELSE 1.2 END",
+              "nullable": false,
+              "type": "decimal(11, 1)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"CASE WHEN Int64(1) > Int64(0) THEN Int64(1) WHEN Int64(2) > Int64(0) THEN Float64(2) ELSE Float64(1.2) END\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT coalesce(NULL, 1, NULL);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "coalesce(NULL, 1, NULL)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"coalesce(NULL,Int64(1),NULL)\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  1,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT if(1 < 2, 'a', 'b');",
+        "result": [
+          "a"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(IF((1 < 2), a, b))",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'if'.\nDid you mean 'ln'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ifnull(NULL, array('2'));",
+        "result": [
+          "[\"2\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ifnull(NULL, array(2))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: '2' at Line: 1, Column 27"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT nanvl(cast('NaN' as double), 123);",
+        "result": [
+          "123.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "nanvl(CAST(NaN AS DOUBLE), 123)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"nanvl(Utf8(\\\"NaN\\\"),Int64(123))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  123.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT nullif(2, 2);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "nullif(2, 2)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"nullif(Int64(2),Int64(2))\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  null,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT nvl(NULL, array('2'));",
+        "result": [
+          "[\"2\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "nvl(NULL, array(2))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: '2' at Line: 1, Column 24"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT nvl2(NULL, 2, 1);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "nvl2(NULL, 2, 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"nvl2(NULL,Int64(2),Int64(1))\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  1,\n]], row_count: 1 }"
+        ]
+      }
+    }
+  ]
+}

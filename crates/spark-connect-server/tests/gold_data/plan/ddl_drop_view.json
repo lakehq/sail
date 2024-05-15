@@ -1,0 +1,34 @@
+{
+  "tests": [
+    {
+      "input": "DROP VIEW IF EXISTS db.view",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "DROP VIEW IF EXISTS view",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "DROP VIEW db.view",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "DROP VIEW testcat.db.view",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "DROP VIEW view",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

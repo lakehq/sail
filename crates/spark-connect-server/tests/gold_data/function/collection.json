@@ -1,0 +1,214 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT array_size(array('b', 'd', 'c', 'a'));",
+        "result": [
+          "4"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_size(array(b, d, c, a))",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 'b' at Line: 1, Column 25"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT cardinality(array('b', 'd', 'c', 'a'));",
+        "result": [
+          "4"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "cardinality(array(b, d, c, a))",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 'b' at Line: 1, Column 26"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT cardinality(map('a', 1, 'b', 2));",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "cardinality(map(a, 1, b, 2))",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'map'.\nDid you mean 'MAX'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT concat('Spark', 'SQL');",
+        "result": [
+          "SparkSQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "concat(Spark, SQL)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"concat(Utf8(\\\"Spark\\\"),Utf8(\\\"SQL\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"SparkSQL\",\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT concat(array(1, 2, 3), array(4, 5), array(6));",
+        "result": [
+          "[1,2,3,4,5,6]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "concat(array(1, 2, 3), array(4, 5), array(6))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 21"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT reverse('Spark SQL');",
+        "result": [
+          "LQS krapS"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "reverse(Spark SQL)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"reverse(Utf8(\\\"Spark SQL\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"LQS krapS\",\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT reverse(array(2, 1, 4, 3));",
+        "result": [
+          "[3,4,1,2]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "reverse(array(2, 1, 4, 3))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 2 at Line: 1, Column 22"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT size(array('b', 'd', 'c', 'a'));",
+        "result": [
+          "4"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "size(array(b, d, c, a))",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 'b' at Line: 1, Column 19"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT size(map('a', 1, 'b', 2));",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "size(map(a, 1, b, 2))",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'size'.\nDid you mean 'sin'?"
+      }
+    }
+  ]
+}

@@ -1,0 +1,252 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT 3 & 5;",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(3 & 5)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(3) & Int64(5)\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  1,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 3 ^ 5;",
+        "result": [
+          "6"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(3 ^ 5)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(3) BIT_XOR Int64(5)\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  6,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 3 | 5;",
+        "result": [
+          "7"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(3 | 5)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(3) | Int64(5)\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  7,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bit_count(0);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bit_count(0)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'bit_count'.\nDid you mean 'COUNT'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bit_get(11, 0);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bit_get(11, 0)",
+              "nullable": false,
+              "type": "byte",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'bit_get'.\nDid you mean 'BIT_AND'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bit_get(11, 2);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bit_get(11, 2)",
+              "nullable": false,
+              "type": "byte",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'bit_get'.\nDid you mean 'BIT_AND'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT getbit(11, 0);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "getbit(11, 0)",
+              "nullable": false,
+              "type": "byte",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'getbit'.\nDid you mean 'cbrt'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT getbit(11, 2);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "getbit(11, 2)",
+              "nullable": false,
+              "type": "byte",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'getbit'.\nDid you mean 'cbrt'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT shiftright(4, 1);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "shiftright(4, 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'shiftright'.\nDid you mean 'right'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT shiftrightunsigned(4, 1);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "shiftrightunsigned(4, 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'shiftrightunsigned'.\nDid you mean 'string_to_list'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ~ 0;",
+        "result": [
+          "-1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "~0",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected an expression:, found: ~ at Line: 1, Column 8"
+      }
+    }
+  ]
+}

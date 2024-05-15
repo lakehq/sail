@@ -1,0 +1,56 @@
+name: Validate gold data
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "scripts/spark-tests/gold-data/**"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "scripts/spark-tests/gold-data/**"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        name: Checkout Spark
+        with:
+          repository: apache/spark
+          path: opt/spark
+          ref: v3.5.1
+          fetch-depth: 1
+
+      - name: Patch Spark
+        run: git -C opt/spark apply ../../scripts/spark-tests/gold-data/spark-3.5.1.patch
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "corretto"
+          java-version: "17"
+
+      - uses: ./.github/actions/setup-rust
+        name: Set up Rust
+
+      - name: Bootstrap gold data
+        run: |
+          scripts/spark-tests/gold-data/bootstrap.sh
+
+      - name: Update gold data
+        run: |
+          env SPARK_UPDATE_GOLD_DATA=1 cargo test -p spark-connect-server --lib
+
+      - name: Detect uncommitted changes
+        run: |
+          status="$(git status --porcelain)"
+          if [ -n "$status" ]; then
+            echo "Uncommitted changes detected:"
+            echo "$status"
+            echo "Please commit all the gold data changes."
+            exit 1
+          fi

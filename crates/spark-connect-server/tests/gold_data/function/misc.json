@@ -1,0 +1,1061 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT aes_decrypt(unbase64('2NYmDCjgXTbbxGA3/SnJEfFC/JQ7olk2VQWReIAAFKo='), '1234567890abcdef', 'CBC');",
+        "result": [
+          "Apache Spark"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "aes_decrypt(unbase64(2NYmDCjgXTbbxGA3/SnJEfFC/JQ7olk2VQWReIAAFKo=), 1234567890abcdef, CBC, DEFAULT, )",
+              "nullable": true,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'aes_decrypt'.\nDid you mean 'list_except'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT aes_decrypt(unbase64('3lmwu+Mw0H3fi5NDvcu9lg=='), '1234567890abcdef', 'ECB', 'PKCS');",
+        "result": [
+          "Spark SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "aes_decrypt(unbase64(3lmwu+Mw0H3fi5NDvcu9lg==), 1234567890abcdef, ECB, PKCS, )",
+              "nullable": true,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'aes_decrypt'.\nDid you mean 'list_except'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT aes_decrypt(unbase64('AAAAAAAAAAAAAAAAAAAAAPSd4mWyMZ5mhvjiAPQJnfg='), 'abcdefghijklmnop12345678ABCDEFGH', 'CBC', 'DEFAULT');",
+        "result": [
+          "Spark"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "aes_decrypt(unbase64(AAAAAAAAAAAAAAAAAAAAAPSd4mWyMZ5mhvjiAPQJnfg=), abcdefghijklmnop12345678ABCDEFGH, CBC, DEFAULT, )",
+              "nullable": true,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'aes_decrypt'.\nDid you mean 'list_except'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT aes_decrypt(unbase64('AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4'), 'abcdefghijklmnop12345678ABCDEFGH', 'GCM', 'DEFAULT', 'This is an AAD mixed into the input');",
+        "result": [
+          "Spark"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "aes_decrypt(unbase64(AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4), abcdefghijklmnop12345678ABCDEFGH, GCM, DEFAULT, This is an AAD mixed into the input)",
+              "nullable": true,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'aes_decrypt'.\nDid you mean 'list_except'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), '0000111122223333', 'GCM');",
+        "result": [
+          "Spark SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "aes_decrypt(unhex(6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210), 0000111122223333, GCM, DEFAULT, )",
+              "nullable": true,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'aes_decrypt'.\nDid you mean 'list_except'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT aes_decrypt(unhex('83F16B2AA704794132802D248E6BFD4E380078182D1544813898AC97E709B28A94'), '0000111122223333');",
+        "result": [
+          "Spark"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "aes_decrypt(unhex(83F16B2AA704794132802D248E6BFD4E380078182D1544813898AC97E709B28A94), 0000111122223333, GCM, DEFAULT, )",
+              "nullable": true,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'aes_decrypt'.\nDid you mean 'list_except'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT assert_true(0 < 1);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "assert_true((0 < 1), '(0 < 1)' is not true!)",
+              "nullable": true,
+              "type": "null",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'assert_true'.\nDid you mean 'date_trunc'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT base64(aes_encrypt('Apache Spark', '1234567890abcdef', 'CBC', 'DEFAULT'));",
+        "result": [
+          "2NYmDCjgXTbbxGA3/SnJEfFC/JQ7olk2VQWReIAAFKo="
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "base64(aes_encrypt(Apache Spark, 1234567890abcdef, CBC, DEFAULT, , ))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'base64'.\nDid you mean 'asinh'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT base64(aes_encrypt('Spark SQL', '1234567890abcdef', 'ECB', 'PKCS'));",
+        "result": [
+          "3lmwu+Mw0H3fi5NDvcu9lg=="
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "base64(aes_encrypt(Spark SQL, 1234567890abcdef, ECB, PKCS, , ))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'base64'.\nDid you mean 'asinh'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT base64(aes_encrypt('Spark', 'abcdefghijklmnop12345678ABCDEFGH', 'CBC', 'DEFAULT', unhex('00000000000000000000000000000000')));",
+        "result": [
+          "AAAAAAAAAAAAAAAAAAAAAPSd4mWyMZ5mhvjiAPQJnfg="
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "base64(aes_encrypt(Spark, abcdefghijklmnop12345678ABCDEFGH, CBC, DEFAULT, unhex(00000000000000000000000000000000), ))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'base64'.\nDid you mean 'asinh'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT base64(aes_encrypt('Spark', 'abcdefghijklmnop12345678ABCDEFGH', 'GCM', 'DEFAULT', unhex('000000000000000000000000'), 'This is an AAD mixed into the input'));",
+        "result": [
+          "AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "base64(aes_encrypt(Spark, abcdefghijklmnop12345678ABCDEFGH, GCM, DEFAULT, unhex(000000000000000000000000), This is an AAD mixed into the input))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'base64'.\nDid you mean 'asinh'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bitmap_bit_position(1);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bitmap_bit_position(1)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'bitmap_bit_position'.\nDid you mean 'list_position'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bitmap_bit_position(123);",
+        "result": [
+          "122"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bitmap_bit_position(123)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'bitmap_bit_position'.\nDid you mean 'list_position'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bitmap_bucket_number(0);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bitmap_bucket_number(0)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'bitmap_bucket_number'.\nDid you mean 'make_date'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bitmap_bucket_number(123);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bitmap_bucket_number(123)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'bitmap_bucket_number'.\nDid you mean 'make_date'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bitmap_count(X '0');",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bitmap_count(X'00')",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected ), found: '0' at Line: 1, Column 23"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bitmap_count(X '1010');",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bitmap_count(X'1010')",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected ), found: '1010' at Line: 1, Column 23"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bitmap_count(X 'FFFF');",
+        "result": [
+          "16"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bitmap_count(X'FFFF')",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected ), found: 'FFFF' at Line: 1, Column 23"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT current_catalog();",
+        "result": [
+          "spark_catalog"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_catalog()",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'current_catalog'.\nDid you mean 'current_date'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT current_database();",
+        "result": [
+          "default"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_database()",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'current_database'.\nDid you mean 'current_date'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT current_schema();",
+        "result": [
+          "default"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_database()",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'current_schema'.\nDid you mean 'current_date'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT current_user();",
+        "result": [
+          "mockingjay"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_user()",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'current_user'.\nDid you mean 'current_date'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT equal_null(1, '11');",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "equal_null(1, 11)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'equal_null'.\nDid you mean 'ifnull'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT equal_null(3, 3);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "equal_null(3, 3)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'equal_null'.\nDid you mean 'ifnull'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT equal_null(NULL, 'abc');",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "equal_null(NULL, abc)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'equal_null'.\nDid you mean 'ifnull'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT equal_null(NULL, NULL);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "equal_null(NULL, NULL)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'equal_null'.\nDid you mean 'ifnull'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT equal_null(true, NULL);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "equal_null(true, NULL)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'equal_null'.\nDid you mean 'ifnull'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hex(aes_encrypt('Spark SQL', '0000111122223333', 'GCM'));",
+        "result": [
+          "6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hex(aes_encrypt(Spark SQL, 0000111122223333, GCM, DEFAULT, , ))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'hex'.\nDid you mean 'exp'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hex(aes_encrypt('Spark', '0000111122223333'));",
+        "result": [
+          "83F16B2AA704794132802D248E6BFD4E380078182D1544813898AC97E709B28A94"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hex(aes_encrypt(Spark, 0000111122223333, GCM, DEFAULT, , ))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'hex'.\nDid you mean 'exp'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hll_sketch_estimate(hll_sketch_agg(col)) FROM VALUES (1), (1), (2), (2), (3) tab(col);",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hll_sketch_estimate(hll_sketch_agg(col, 12))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'hll_sketch_estimate'.\nDid you mean 'list_empty'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hll_sketch_estimate(hll_union(hll_sketch_agg(col1), hll_sketch_agg(col2))) FROM VALUES (1, 4), (1, 4), (2, 5), (2, 5), (3, 6) tab(col1, col2);",
+        "result": [
+          "6"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hll_sketch_estimate(hll_union(hll_sketch_agg(col1, 12), hll_sketch_agg(col2, 12), false))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'hll_sketch_estimate'.\nDid you mean 'list_empty'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT input_file_block_length();",
+        "result": [
+          "-1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "input_file_block_length()",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'input_file_block_length'.\nDid you mean 'octet_length'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT input_file_block_start();",
+        "result": [
+          "-1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "input_file_block_start()",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'input_file_block_start'.\nDid you mean 'list_replace_all'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT input_file_name();",
+        "result": [],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "input_file_name()",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'input_file_name'.\nDid you mean 'list_length'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT java_method('java.util.UUID', 'fromString', 'a5cf6c42-0c85-418f-af6c-3e4e5b1328f2');",
+        "result": [
+          "a5cf6c42-0c85-418f-af6c-3e4e5b1328f2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "java_method(java.util.UUID, fromString, a5cf6c42-0c85-418f-af6c-3e4e5b1328f2)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'java_method'.\nDid you mean 'atanh'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT java_method('java.util.UUID', 'randomUUID');",
+        "result": [
+          "c33fb387-8500-4bfa-81d2-6e0e3e930df2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "java_method(java.util.UUID, randomUUID)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'java_method'.\nDid you mean 'atanh'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT monotonically_increasing_id();",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "monotonically_increasing_id()",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'monotonically_increasing_id'.\nDid you mean 'array_prepend'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT raise_error('custom error message');",
+        "result": [
+          "java.lang.RuntimeException",
+          "custom error message"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "raise_error(custom error message)",
+              "nullable": true,
+              "type": "null",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'raise_error'.\nDid you mean 'iszero'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT reflect('java.util.UUID', 'fromString', 'a5cf6c42-0c85-418f-af6c-3e4e5b1328f2');",
+        "result": [
+          "a5cf6c42-0c85-418f-af6c-3e4e5b1328f2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "reflect(java.util.UUID, fromString, a5cf6c42-0c85-418f-af6c-3e4e5b1328f2)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'reflect'.\nDid you mean 'replace'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT reflect('java.util.UUID', 'randomUUID');",
+        "result": [
+          "c33fb387-8500-4bfa-81d2-6e0e3e930df2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "reflect(java.util.UUID, randomUUID)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'reflect'.\nDid you mean 'replace'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT spark_partition_id();",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "SPARK_PARTITION_ID()",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'spark_partition_id'.\nDid you mean 'array_position'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_aes_decrypt(unhex('----------468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), '0000111122223333', 'GCM');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_aes_decrypt(unhex(----------468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210), 0000111122223333, GCM, DEFAULT, )",
+              "nullable": true,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_aes_decrypt'.\nDid you mean 'array_except'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), '0000111122223333', 'GCM');",
+        "result": [
+          "Spark SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_aes_decrypt(unhex(6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210), 0000111122223333, GCM, DEFAULT, )",
+              "nullable": true,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_aes_decrypt'.\nDid you mean 'array_except'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT typeof(1);",
+        "result": [
+          "int"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "typeof(1)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'typeof'.\nDid you mean 'strpos'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT typeof(array(1));",
+        "result": [
+          "array<int>"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "typeof(array(1))",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 1 at Line: 1, Column 21"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT user();",
+        "result": [
+          "mockingjay"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_user()",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'user'.\nDid you mean 'upper'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT uuid();",
+        "result": [
+          "46707d92-02f4-4817-8116-a4c3b23e6266"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "uuid()",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"uuid()\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"0ae20907-b9e0-4ca9-8f4e-41f89fac8d11\",\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT version();",
+        "result": [
+          "3.1.0 a6d6ea3efedbad14d99c24143834cd4e2e52fb40"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "version()",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'version'.\nDid you mean 'sin'?"
+      }
+    }
+  ]
+}

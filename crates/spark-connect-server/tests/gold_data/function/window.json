@@ -1,0 +1,399 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT a, b, cume_dist() OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\t0.6666666666666666",
+          "A1\t1\t0.6666666666666666",
+          "A1\t2\t1.0",
+          "A2\t3\t1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "cume_dist() OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"CUME_DIST() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"A1\",\n  \"A1\",\n  \"A1\",\n], PrimitiveArray<Int64>\n[\n  1,\n  1,\n  2,\n], PrimitiveArray<Float64>\n[\n  0.6666666666666666,\n  0.6666666666666666,\n  1.0,\n]], row_count: 3 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"CUME_DIST() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"A2\",\n], PrimitiveArray<Int64>\n[\n  3,\n], PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"CUME_DIST() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Float64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"CUME_DIST() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Float64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"CUME_DIST() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Float64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"CUME_DIST() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Float64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"CUME_DIST() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Float64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"CUME_DIST() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Float64>\n[\n]], row_count: 0 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT a, b, dense_rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\t1",
+          "A1\t1\t1",
+          "A1\t2\t2",
+          "A2\t3\t1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "DENSE_RANK() OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'DENSE_RANK(Int64)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tDENSE_RANK()"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT a, b, lag(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\tNULL",
+          "A1\t1\t1",
+          "A1\t2\t1",
+          "A2\t3\tNULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "lag(b, 1, NULL) OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LAG(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"A1\",\n  \"A1\",\n  \"A1\",\n], PrimitiveArray<Int64>\n[\n  1,\n  1,\n  2,\n], PrimitiveArray<Int64>\n[\n  null,\n  1,\n  1,\n]], row_count: 3 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LAG(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LAG(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"A2\",\n], PrimitiveArray<Int64>\n[\n  3,\n], PrimitiveArray<Int64>\n[\n  null,\n]], row_count: 1 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LAG(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LAG(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LAG(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LAG(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LAG(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LAG(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LAG(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT a, b, lead(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\t1",
+          "A1\t1\t2",
+          "A1\t2\tNULL",
+          "A2\t3\tNULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "lead(b, 1, NULL) OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LEAD(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LEAD(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"A1\",\n  \"A1\",\n  \"A1\",\n], PrimitiveArray<Int64>\n[\n  1,\n  1,\n  2,\n], PrimitiveArray<Int64>\n[\n  1,\n  2,\n  null,\n]], row_count: 3 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LEAD(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LEAD(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"A2\",\n], PrimitiveArray<Int64>\n[\n  3,\n], PrimitiveArray<Int64>\n[\n  null,\n]], row_count: 1 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LEAD(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LEAD(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LEAD(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LEAD(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LEAD(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"LEAD(tab.b) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT a, b, nth_value(b, 2) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\t1",
+          "A1\t1\t1",
+          "A1\t2\t1",
+          "A2\t3\tNULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "nth_value(b, 2) OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTH_VALUE(tab.b,Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"A1\",\n  \"A1\",\n], PrimitiveArray<Int64>\n[\n  1,\n  1,\n], PrimitiveArray<Int64>\n[\n  1,\n  1,\n]], row_count: 2 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTH_VALUE(tab.b,Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"A1\",\n], PrimitiveArray<Int64>\n[\n  2,\n], PrimitiveArray<Int64>\n[\n  1,\n]], row_count: 1 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTH_VALUE(tab.b,Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTH_VALUE(tab.b,Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"A2\",\n], PrimitiveArray<Int64>\n[\n  3,\n], PrimitiveArray<Int64>\n[\n  null,\n]], row_count: 1 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTH_VALUE(tab.b,Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTH_VALUE(tab.b,Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTH_VALUE(tab.b,Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTH_VALUE(tab.b,Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTH_VALUE(tab.b,Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTH_VALUE(tab.b,Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<Int64>\n[\n]], row_count: 0 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT a, b, ntile(2) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\t1",
+          "A1\t1\t1",
+          "A1\t2\t2",
+          "A2\t3\t1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "ntile(2) OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTILE(Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"A1\",\n  \"A1\",\n  \"A1\",\n], PrimitiveArray<Int64>\n[\n  1,\n  1,\n  2,\n], PrimitiveArray<UInt64>\n[\n  1,\n  1,\n  2,\n]], row_count: 3 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTILE(Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"A2\",\n], PrimitiveArray<Int64>\n[\n  3,\n], PrimitiveArray<UInt64>\n[\n  1,\n]], row_count: 1 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTILE(Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<UInt64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTILE(Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<UInt64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTILE(Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<UInt64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTILE(Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<UInt64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTILE(Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<UInt64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"NTILE(Int64(2)) PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<UInt64>\n[\n]], row_count: 0 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT a, b, percent_rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\t0.0",
+          "A1\t1\t0.0",
+          "A1\t2\t1.0",
+          "A2\t3\t0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "PERCENT_RANK() OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'PERCENT_RANK(Int64)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tPERCENT_RANK()"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT a, b, rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\t1",
+          "A1\t1\t1",
+          "A1\t2\t3",
+          "A2\t3\t1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "RANK() OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'RANK(Int64)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tRANK()"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);",
+        "result": [
+          "A1\t1\t1",
+          "A1\t1\t2",
+          "A1\t2\t3",
+          "A2\t3\t1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "a",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "b",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "row_number() OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"ROW_NUMBER() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"A1\",\n  \"A1\",\n  \"A1\",\n], PrimitiveArray<Int64>\n[\n  1,\n  1,\n  2,\n], PrimitiveArray<UInt64>\n[\n  1,\n  2,\n  3,\n]], row_count: 3 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"ROW_NUMBER() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<UInt64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"ROW_NUMBER() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"A2\",\n], PrimitiveArray<Int64>\n[\n  3,\n], PrimitiveArray<UInt64>\n[\n  1,\n]], row_count: 1 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"ROW_NUMBER() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<UInt64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"ROW_NUMBER() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<UInt64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"ROW_NUMBER() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<UInt64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"ROW_NUMBER() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<UInt64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"ROW_NUMBER() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<UInt64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"ROW_NUMBER() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<UInt64>\n[\n]], row_count: 0 }",
+          "RecordBatch { schema: Schema { fields: [Field { name: \"a\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"ROW_NUMBER() PARTITION BY [tab.a] ORDER BY [tab.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n], PrimitiveArray<Int64>\n[\n], PrimitiveArray<UInt64>\n[\n]], row_count: 0 }"
+        ]
+      }
+    }
+  ]
+}

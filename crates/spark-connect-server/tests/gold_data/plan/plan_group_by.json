@@ -1,0 +1,70 @@
+{
+  "tests": [
+    {
+      "input": "SELECT a, b, count(distinct a, distinct b) as c FROM d GROUP BY a, b",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by a, b",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by a, b grouping sets((a, b), (a), ())",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by a, b with cube",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by a, b with rollup",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by cube (a, b)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by cube(a, b)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by grouping sets((a, b), (a), ())",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by rollup (a, b)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by rollup(a, b)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select g from t group by g having a > (select b from s)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

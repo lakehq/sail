@@ -1,0 +1,345 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT * FROM explode(collection => array(10, 20));",
+        "result": [
+          "10",
+          "20"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "col",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 10 at Line: 1, Column 43"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT * FROM explode_outer(collection => array(10, 20));",
+        "result": [
+          "10",
+          "20"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "col",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 10 at Line: 1, Column 49"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT * FROM posexplode(array(10,20));",
+        "result": [
+          "0\t10",
+          "1\t20"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "pos",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "col",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 10 at Line: 1, Column 32"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT * FROM posexplode_outer(array(10,20));",
+        "result": [
+          "0\t10",
+          "1\t20"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "pos",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "col",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 10 at Line: 1, Column 38"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT explode(array(10, 20));",
+        "result": [
+          "10",
+          "20"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "col",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 10 at Line: 1, Column 22"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT explode(collection => array(10, 20));",
+        "result": [
+          "10",
+          "20"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "col",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 10 at Line: 1, Column 36"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT explode_outer(array(10, 20));",
+        "result": [
+          "10",
+          "20"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "col",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 10 at Line: 1, Column 28"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT explode_outer(collection => array(10, 20));",
+        "result": [
+          "10",
+          "20"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "col",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 10 at Line: 1, Column 42"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT inline(array(struct(1, 'a'), struct(2, 'b')));",
+        "result": [
+          "1\ta",
+          "2\tb"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "col1",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "col2",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: struct at Line: 1, Column 21"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT inline_outer(array(struct(1, 'a'), struct(2, 'b')));",
+        "result": [
+          "1\ta",
+          "2\tb"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "col1",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "col2",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: struct at Line: 1, Column 27"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT posexplode(array(10,20));",
+        "result": [
+          "0\t10",
+          "1\t20"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "pos",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "col",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 10 at Line: 1, Column 25"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT posexplode_outer(array(10,20));",
+        "result": [
+          "0\t10",
+          "1\t20"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "pos",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "col",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 10 at Line: 1, Column 31"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT stack(2, 1, 2, 3);",
+        "result": [
+          "1\t2",
+          "3\tNULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "col0",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "col1",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'stack'.\nDid you mean 'atan'?"
+      }
+    }
+  ]
+}

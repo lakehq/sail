@@ -1,0 +1,160 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT crc32('Spark');",
+        "result": [
+          "1557323817"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "crc32(Spark)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'crc32'.\nDid you mean 'atan2'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hash('Spark', array(123), 2);",
+        "result": [
+          "-1321691492"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hash(Spark, array(123), 2)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 123 at Line: 1, Column 28"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT md5('Spark');",
+        "result": [
+          "8cde774d6f7333752ed72cacddb05126"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "md5(Spark)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"md5(Utf8(\\\"Spark\\\"))\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [StringArray\n[\n  \"8cde774d6f7333752ed72cacddb05126\",\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sha('Spark');",
+        "result": [
+          "85f5955f4b27a9a4c2aab6ffe5d7189fc298b92c"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sha(Spark)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'sha'.\nDid you mean 'sin'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sha1('Spark');",
+        "result": [
+          "85f5955f4b27a9a4c2aab6ffe5d7189fc298b92c"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sha1(Spark)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'sha1'.\nDid you mean 'sha512'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sha2('Spark', 256);",
+        "result": [
+          "529bc3b07127ecb7e53a4dcf1991d9152c24537d919178022b2c42657f79a26b"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sha2(Spark, 256)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'sha2'.\nDid you mean 'sha224'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT xxhash64('Spark', array(123), 2);",
+        "result": [
+          "5602566077635097486"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "xxhash64(Spark, array(123), 2)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: 123 at Line: 1, Column 32"
+      }
+    }
+  ]
+}

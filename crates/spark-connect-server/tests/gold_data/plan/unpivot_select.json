@@ -1,0 +1,124 @@
+{
+  "tests": [
+    {
+      "input": "SELECT * FROM t UNPIVOT (() FOR col in ((a, b), (c, d)))",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in (()))",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a A, b), (c, d)))",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a AS A, b), (c, d)))",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a, b) AS first, (c, d)))",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a, b) first, (c, d)))",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a, b), (c, d)))",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ())",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM t UNPIVOT (val FOR col in ())",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM t UNPIVOT (val FOR col in (a A, b))",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM t UNPIVOT (val FOR col in (a AS A, b))",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM t UNPIVOT (val FOR col in (a, b))",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM t UNPIVOT EXCLUDE NULLS (val FOR col in (a, b))",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM t UNPIVOT INCLUDE NULLS (val FOR col in (a, b))",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM t1 UNPIVOT (val FOR col in (a, b)) UNPIVOT (val FOR col in (a, b))",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM t1 UNPIVOT (val FOR col in (a, b)), t2",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM t1, (t2 UNPIVOT (val FOR col in (a, b)))",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT * FROM t1, t2 UNPIVOT (val FOR col in (a, b))",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT up.* FROM t UNPIVOT (val FOR col in (a, b)) AS up",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SELECT up.* FROM t UNPIVOT (val FOR col in (a, b)) up",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

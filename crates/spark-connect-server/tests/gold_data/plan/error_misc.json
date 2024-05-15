@@ -1,0 +1,70 @@
+{
+  "tests": [
+    {
+      "input": "\nALTER DATABASE my-database\nSET DBPROPERTIES ('p1'='v1')",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nFROM test-table\nSELECT a\nSELECT b\n        ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "CREATE DATABASE IF NOT EXISTS my-database",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "CREATE FUNCTION test-func as org.test.func",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "DROP DATABASE my-database",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "DROP FUNCTION test-func as org.test.func",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SHOW COLUMNS IN t FROM test-db",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SHOW FUNCTIONS LIKE test-func",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SHOW TABLE EXTENDED IN hyphen-db LIKE \"str\"",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SHOW TABLES IN hyphen-database",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "USE test-test",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

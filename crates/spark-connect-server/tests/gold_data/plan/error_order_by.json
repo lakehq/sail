@@ -1,0 +1,28 @@
+{
+  "tests": [
+    {
+      "input": "\nSELECT * FROM tab\nWINDOW hyphen-window AS\n  (PARTITION BY a, b ORDER BY c rows BETWEEN 1 PRECEDING AND 1 FOLLOWING)\n        ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nSELECT a, b\nFROM grammar-breaker\nWHERE a-b > 10\nGROUP BY fake-breaker\nORDER BY c\n        ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nSELECT a, b\nFROM t\nWHERE a-b > 10\nGROUP BY fake-breaker\nORDER BY c\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nSELECT product, category, dense_rank()\nOVER (PARTITION BY category ORDER BY revenue DESC) as hyphen-rank\nFROM productRevenue\n        ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

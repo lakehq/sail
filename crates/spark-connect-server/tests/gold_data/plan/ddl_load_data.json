@@ -1,0 +1,28 @@
+{
+  "tests": [
+    {
+      "input": "\nLOAD DATA LOCAL INPATH 'filepath' OVERWRITE INTO TABLE a.b.c\nPARTITION(ds='2017-06-10')\n         ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "LOAD DATA INPATH 'filepath' INTO TABLE a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "LOAD DATA LOCAL INPATH 'filepath' INTO TABLE a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "LOAD DATA LOCAL INPATH 'filepath' OVERWRITE INTO TABLE a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

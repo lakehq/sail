@@ -1,0 +1,2734 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT 1 + 2;",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(1 + 2)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(1) + Int64(2)\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  3,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 2 % 1.8;",
+        "result": [
+          "0.2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(2 % 1.8)",
+              "nullable": true,
+              "type": "decimal(2, 1)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(2) % Float64(1.8)\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.19999999999999996,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 2 * 3;",
+        "result": [
+          "6"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(2 * 3)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(2) * Int64(3)\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  6,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 2 - 1;",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(2 - 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(2) - Int64(1)\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  1,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 2L / 2L;",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(2 / 2)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(2) / Int64(2)\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  1,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 3 / 2;",
+        "result": [
+          "1.5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(3 / 2)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"Int64(3) / Int64(2)\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  1,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 3 div 2;",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(3 div 2)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: No infix parser for token Word(Word { value: \"div\", quote_style: None, keyword: DIV }) at Line: 1, Column 10"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT INTERVAL '1-1' YEAR TO MONTH div INTERVAL '-1' MONTH;",
+        "result": [
+          "-13"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(INTERVAL '1-1' YEAR TO MONTH div INTERVAL '-1' MONTH)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: No infix parser for token Word(Word { value: \"div\", quote_style: None, keyword: DIV }) at Line: 1, Column 37"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT MOD(2, 1.8);",
+        "result": [
+          "0.2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mod(2, 1.8)",
+              "nullable": true,
+              "type": "decimal(2, 1)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'mod'.\nDid you mean 'cos'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT abs(-1);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "abs(-1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"abs(Int64(-1))\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  1,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT abs(INTERVAL -'1-1' YEAR TO MONTH);",
+        "result": [
+          "1-1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "abs(INTERVAL '-1-1' YEAR TO MONTH)",
+              "nullable": false,
+              "type": "interval year to month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: This feature is not implemented: Unsupported Interval Expression with last_field Some(Month)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT acos(1);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ACOS(1)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"acos(Int64(1))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT acos(2);",
+        "result": [
+          "NaN"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ACOS(2)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"acos(Int64(2))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  NaN,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT acosh(0);",
+        "result": [
+          "NaN"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ACOSH(0)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"acosh(Int64(0))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  NaN,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT acosh(1);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ACOSH(1)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"acosh(Int64(1))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT asin(0);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ASIN(0)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"asin(Int64(0))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT asin(2);",
+        "result": [
+          "NaN"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ASIN(2)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"asin(Int64(2))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  NaN,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT asinh(0);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ASINH(0)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"asinh(Int64(0))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT atan(0);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ATAN(0)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"atan(Int64(0))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT atan2(0, 0);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ATAN2(0, 0)",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"atan2(Int64(0),Int64(0))\", data_type: Float32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float32>\n[\n  0.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT atanh(0);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ATANH(0)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"atanh(Int64(0))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT atanh(2);",
+        "result": [
+          "NaN"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ATANH(2)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"atanh(Int64(2))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  NaN,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bin(-13);",
+        "result": [
+          "1111111111111111111111111111111111111111111111111111111111110011"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bin(-13)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'bin'.\nDid you mean 'sin'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bin(13);",
+        "result": [
+          "1101"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bin(13)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'bin'.\nDid you mean 'sin'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bin(13.3);",
+        "result": [
+          "1101"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bin(13.3)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'bin'.\nDid you mean 'sin'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bround(2.5, 0);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bround(2.5, 0)",
+              "nullable": true,
+              "type": "decimal(2, 0)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'bround'.\nDid you mean 'round'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bround(25, -1);",
+        "result": [
+          "20"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bround(25, -1)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'bround'.\nDid you mean 'round'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT cbrt(27.0);",
+        "result": [
+          "3.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "CBRT(27.0)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"cbrt(Float64(27))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  3.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ceil(-0.1);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "CEIL(-0.1)",
+              "nullable": true,
+              "type": "decimal(1, 0)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"ceil(Float64(-0.1))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  -0.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ceil(3.1411, -3);",
+        "result": [
+          "1000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ceil(3.1411, -3)",
+              "nullable": true,
+              "type": "decimal(4, 0)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected ), found: , at Line: 1, Column 19"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ceil(3.1411, 3);",
+        "result": [
+          "3.142"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ceil(3.1411, 3)",
+              "nullable": true,
+              "type": "decimal(5, 3)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected ), found: , at Line: 1, Column 19"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ceil(5);",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "CEIL(5)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"ceil(Int64(5))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  5.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ceiling(-0.1);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ceiling(-0.1)",
+              "nullable": true,
+              "type": "decimal(1, 0)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'ceiling'.\nDid you mean 'ceil'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ceiling(3.1411, -3);",
+        "result": [
+          "1000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ceiling(3.1411, -3)",
+              "nullable": true,
+              "type": "decimal(4, 0)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'ceiling'.\nDid you mean 'ceil'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ceiling(3.1411, 3);",
+        "result": [
+          "3.142"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ceiling(3.1411, 3)",
+              "nullable": true,
+              "type": "decimal(5, 3)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'ceiling'.\nDid you mean 'ceil'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ceiling(5);",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ceiling(5)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'ceiling'.\nDid you mean 'ceil'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT conv('100', 2, 10);",
+        "result": [
+          "4"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "conv(100, 2, 10)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'conv'.\nDid you mean 'cos'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT conv(-10, 16, -10);",
+        "result": [
+          "-16"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "conv(-10, 16, -10)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'conv'.\nDid you mean 'cos'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT cos(0);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "COS(0)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"cos(Int64(0))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT cosh(0);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "COSH(0)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"cosh(Int64(0))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT cot(1);",
+        "result": [
+          "0.6420926159343306"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "COT(1)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"cot(Int64(1))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.6420926159343308,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT csc(1);",
+        "result": [
+          "1.1883951057781212"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "CSC(1)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'csc'.\nDid you mean 'cos'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT decode(unhex('537061726B2053514C'), 'UTF-8');",
+        "result": [
+          "Spark SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "decode(unhex(537061726B2053514C), UTF-8)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'unhex'.\nDid you mean 'upper'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT degrees(3.141592653589793);",
+        "result": [
+          "180.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "DEGREES(3.141592653589793)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"degrees(Float64(3.141592653589793))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  180.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT e();",
+        "result": [
+          "2.718281828459045"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "E()",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'e'.\nDid you mean 'exp'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT exp(0);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "EXP(0)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"exp(Int64(0))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT expm1(0);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "EXPM1(0)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'expm1'.\nDid you mean 'exp'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT factorial(5);",
+        "result": [
+          "120"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "factorial(5)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"factorial(Int64(5))\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  120,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT floor(-0.1);",
+        "result": [
+          "-1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "FLOOR(-0.1)",
+              "nullable": true,
+              "type": "decimal(1, 0)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"floor(Float64(-0.1))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  -1.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT floor(3.1411, -3);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "floor(3.1411, -3)",
+              "nullable": true,
+              "type": "decimal(4, 0)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected ), found: , at Line: 1, Column 20"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT floor(3.1411, 3);",
+        "result": [
+          "3.141"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "floor(3.1411, 3)",
+              "nullable": true,
+              "type": "decimal(5, 3)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in SQL parser: sql parser error: Expected ), found: , at Line: 1, Column 20"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT floor(5);",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "FLOOR(5)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"floor(Int64(5))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  5.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT greatest(10, 9, 2, 4, 3);",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "greatest(10, 9, 2, 4, 3)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'greatest'.\nDid you mean 'repeat'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hex('Spark SQL');",
+        "result": [
+          "537061726B2053514C"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hex(Spark SQL)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'hex'.\nDid you mean 'exp'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hex(17);",
+        "result": [
+          "11"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hex(17)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'hex'.\nDid you mean 'exp'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hypot(3, 4);",
+        "result": [
+          "5.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "HYPOT(3, 4)",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'hypot'.\nDid you mean 'cot'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT least(10, 9, 2, 4, 3);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "least(10, 9, 2, 4, 3)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'least'.\nDid you mean 'left'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ln(1);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ln(1)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"ln(Int64(1))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT log(10, 100);",
+        "result": [
+          "2.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "LOG(10, 100)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"log(Int64(10),Int64(100))\", data_type: Float32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float32>\n[\n  2.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT log10(10);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "LOG10(10)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"log10(Int64(10))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT log1p(0);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "LOG1P(0)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'log1p'.\nDid you mean 'log10'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT log2(2);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "LOG2(2)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"log2(Int64(2))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT negative(1);",
+        "result": [
+          "-1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "negative(1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'negative'.\nDid you mean 'nanvl'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT pi();",
+        "result": [
+          "3.141592653589793"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "PI()",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"pi()\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  3.141592653589793,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT pmod(-10, 3);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "pmod(-10, 3)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'pmod'.\nDid you mean 'cos'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT pmod(10, 3);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "pmod(10, 3)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'pmod'.\nDid you mean 'cos'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT positive(1);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(+ 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'positive'.\nDid you mean 'asinh'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT pow(2, 3);",
+        "result": [
+          "8.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "pow(2, 3)",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"power(Int64(2),Int64(3))\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  8,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT power(2, 3);",
+        "result": [
+          "8.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "POWER(2, 3)",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"power(Int64(2),Int64(3))\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int64>\n[\n  8,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT radians(180);",
+        "result": [
+          "3.141592653589793"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "RADIANS(180)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"radians(Int64(180))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  3.141592653589793,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT rand();",
+        "result": [
+          "0.9629742951434543"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "rand()",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'rand'.\nDid you mean 'round'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT rand(0);",
+        "result": [
+          "0.7604953758285915"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "rand(0)",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'rand'.\nDid you mean 'round'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT rand(null);",
+        "result": [
+          "0.7604953758285915"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "rand(NULL)",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'rand'.\nDid you mean 'round'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT randn();",
+        "result": [
+          "-0.3254147983080288"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "randn()",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'randn'.\nDid you mean 'random'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT randn(0);",
+        "result": [
+          "1.6034991609278433"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "randn(0)",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'randn'.\nDid you mean 'random'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT randn(null);",
+        "result": [
+          "1.6034991609278433"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "randn(NULL)",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'randn'.\nDid you mean 'random'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT random();",
+        "result": [
+          "0.9629742951434543"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "rand()",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"random()\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.7644834008177488,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT random(0);",
+        "result": [
+          "0.7604953758285915"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "rand(0)",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'random(Int64)'. You might need to add explicit type casts.\n\tCandidate functions:\n\trandom()"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT random(null);",
+        "result": [
+          "0.7604953758285915"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "rand(NULL)",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'random(Null)'. You might need to add explicit type casts.\n\tCandidate functions:\n\trandom()"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT rint(12.3456);",
+        "result": [
+          "12.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "rint(12.3456)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'rint'.\nDid you mean 'sin'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT round(2.5, 0);",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "round(2.5, 0)",
+              "nullable": true,
+              "type": "decimal(2, 0)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"round(Float64(2.5),Int64(0))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  3.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sec(0);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "SEC(0)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'sec'.\nDid you mean 'sin'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT shiftleft(2, 1);",
+        "result": [
+          "4"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "shiftleft(2, 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'shiftleft'.\nDid you mean 'left'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sign(40);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sign(40)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'sign'.\nDid you mean 'sin'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sign(INTERVAL -'100' YEAR);",
+        "result": [
+          "-1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sign(INTERVAL '-100' YEAR)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'sign'.\nDid you mean 'sin'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT signum(40);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "SIGNUM(40)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"signum(Int64(40))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  1.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT signum(INTERVAL -'100' YEAR);",
+        "result": [
+          "-1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "SIGNUM(INTERVAL '-100' YEAR)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: This feature is not implemented: Unsupported interval argument. Expected string literal, got: UnaryOp { op: Minus, expr: Value(SingleQuotedString(\"100\")) }"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sin(0);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "SIN(0)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"sin(Int64(0))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sinh(0);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "SINH(0)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"sinh(Int64(0))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sqrt(4);",
+        "result": [
+          "2.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "SQRT(4)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"sqrt(Int64(4))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  2.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT tan(0);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "TAN(0)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"tan(Int64(0))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT tanh(0);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "TANH(0)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"tanh(Int64(0))\", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Float64>\n[\n  0.0,\n]], row_count: 1 }"
+        ]
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_add(1, 2);",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_add(1, 2)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_add'.\nDid you mean 'rpad'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_add(2147483647, 1);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_add(2147483647, 1)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_add'.\nDid you mean 'rpad'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_add(date'2021-01-01', 1);",
+        "result": [
+          "2021-01-02"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_add(DATE '2021-01-01', 1)",
+              "nullable": true,
+              "type": "date",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_add'.\nDid you mean 'rpad'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_add(date'2021-01-01', interval 1 year);",
+        "result": [
+          "2022-01-01"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_add(DATE '2021-01-01', INTERVAL '1' YEAR)",
+              "nullable": true,
+              "type": "date",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_add'.\nDid you mean 'rpad'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_add(interval 1 year, interval 2 year);",
+        "result": [
+          "3-0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_add(INTERVAL '1' YEAR, INTERVAL '2' YEAR)",
+              "nullable": true,
+              "type": "interval year",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_add'.\nDid you mean 'rpad'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_add(timestamp'2021-01-01 00:00:00', interval 1 day);",
+        "result": [
+          "2021-01-02 00:00:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_add(TIMESTAMP '2021-01-01 00:00:00', INTERVAL '1' DAY)",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_add'.\nDid you mean 'rpad'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_divide(1, 0);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_divide(1, 0)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_divide'.\nDid you mean 'to_date'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_divide(2L, 2L);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_divide(2, 2)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_divide'.\nDid you mean 'to_date'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_divide(3, 2);",
+        "result": [
+          "1.5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_divide(3, 2)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_divide'.\nDid you mean 'to_date'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_divide(interval 2 month, 0);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_divide(INTERVAL '2' MONTH, 0)",
+              "nullable": true,
+              "type": "interval year to month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_divide'.\nDid you mean 'to_date'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_divide(interval 2 month, 2);",
+        "result": [
+          "0-1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_divide(INTERVAL '2' MONTH, 2)",
+              "nullable": true,
+              "type": "interval year to month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_divide'.\nDid you mean 'to_date'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_multiply(-2147483648, 10);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_multiply(-2147483648, 10)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_multiply'.\nDid you mean 'trunc'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_multiply(2, 3);",
+        "result": [
+          "6"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_multiply(2, 3)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_multiply'.\nDid you mean 'trunc'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_multiply(interval 2 year, 3);",
+        "result": [
+          "6-0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_multiply(INTERVAL '2' YEAR, 3)",
+              "nullable": true,
+              "type": "interval year to month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_multiply'.\nDid you mean 'trunc'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_subtract(-2147483648, 1);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_subtract(-2147483648, 1)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_subtract'.\nDid you mean 'array_extract'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_subtract(2, 1);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_subtract(2, 1)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_subtract'.\nDid you mean 'array_extract'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_subtract(date'2021-01-01', interval 1 year);",
+        "result": [
+          "2020-01-01"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_subtract(DATE '2021-01-01', INTERVAL '1' YEAR)",
+              "nullable": true,
+              "type": "date",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_subtract'.\nDid you mean 'array_extract'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_subtract(date'2021-01-02', 1);",
+        "result": [
+          "2021-01-01"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_subtract(DATE '2021-01-02', 1)",
+              "nullable": true,
+              "type": "date",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_subtract'.\nDid you mean 'array_extract'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_subtract(interval 2 year, interval 1 year);",
+        "result": [
+          "1-0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_subtract(INTERVAL '2' YEAR, INTERVAL '1' YEAR)",
+              "nullable": true,
+              "type": "interval year",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_subtract'.\nDid you mean 'array_extract'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_subtract(timestamp'2021-01-02 00:00:00', interval 1 day);",
+        "result": [
+          "2021-01-01 00:00:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_subtract(TIMESTAMP '2021-01-02 00:00:00', INTERVAL '1' DAY)",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'try_subtract'.\nDid you mean 'array_extract'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT width_bucket(-0.9, 5.2, 0.5, 2);",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "width_bucket(-0.9, 5.2, 0.5, 2)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'width_bucket'.\nDid you mean 'list_except'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT width_bucket(-2.1, 1.3, 3.4, 3);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "width_bucket(-2.1, 1.3, 3.4, 3)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'width_bucket'.\nDid you mean 'list_except'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT width_bucket(5.3, 0.2, 10.6, 5);",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "width_bucket(5.3, 0.2, 10.6, 5)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'width_bucket'.\nDid you mean 'list_except'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT width_bucket(8.1, 0.0, 5.7, 4);",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "width_bucket(8.1, 0.0, 5.7, 4)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'width_bucket'.\nDid you mean 'list_except'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'width_bucket'.\nDid you mean 'list_except'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'width_bucket'.\nDid you mean 'list_except'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT width_bucket(INTERVAL '1' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "width_bucket(INTERVAL '1' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'width_bucket'.\nDid you mean 'list_except'?"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT width_bucket(INTERVAL '1' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "width_bucket(INTERVAL '1' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Invalid function 'width_bucket'.\nDid you mean 'list_except'?"
+      }
+    }
+  ]
+}

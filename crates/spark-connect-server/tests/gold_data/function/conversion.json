@@ -1,0 +1,28 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT cast('10' as int);",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "CAST(10 AS INT)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": [
+          "RecordBatch { schema: Schema { fields: [Field { name: \"Utf8(\\\"10\\\")\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, columns: [PrimitiveArray<Int32>\n[\n  10,\n]], row_count: 1 }"
+        ]
+      }
+    }
+  ]
+}
