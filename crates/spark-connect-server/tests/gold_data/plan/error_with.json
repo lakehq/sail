@@ -1,0 +1,10 @@
+{
+  "tests": [
+    {
+      "input": "WITH a-b AS (SELECT 1 FROM s) SELECT * FROM s;",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

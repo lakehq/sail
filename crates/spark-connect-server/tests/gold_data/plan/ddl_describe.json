@@ -1,0 +1,28 @@
+{
+  "tests": [
+    {
+      "input": "DESC FUNCTION a",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "DESCRIBE FUNCTION EXTENDED a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "DESCRIBE FUNCTION a",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "DESCRIBE FUNCTION a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

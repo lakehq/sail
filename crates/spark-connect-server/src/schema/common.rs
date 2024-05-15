@@ -14,7 +14,7 @@ use crate::expression::EmptyContextProvider;
 use crate::schema::json::parse_spark_json_data_type;
 use crate::spark::connect as sc;
 use crate::spark::connect::data_type as sdt;
-use crate::sql::new_sql_parser;
+use crate::sql::parser::new_sql_parser;
 
 static DEFAULT_FIELD_NAME: &str = "value";
 
@@ -406,4 +406,26 @@ pub(crate) fn cast_record_batch(
         })
         .collect::<SparkResult<Vec<_>>>()?;
     Ok(RecordBatch::try_new(schema.clone(), columns)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_spark_data_type_string, parse_spark_schema_string};
+    use crate::tests::test_gold_set;
+
+    #[test]
+    fn test_parse_spark_data_type_string() -> Result<(), Box<dyn std::error::Error>> {
+        Ok(test_gold_set(
+            "tests/gold_data/data_type.json",
+            |s: String| Ok(parse_spark_data_type_string(&s)?),
+        )?)
+    }
+
+    #[test]
+    fn test_parse_spark_schema_string() -> Result<(), Box<dyn std::error::Error>> {
+        Ok(test_gold_set(
+            "tests/gold_data/table_schema.json",
+            |s: String| Ok(parse_spark_schema_string(&s)?),
+        )?)
+    }
 }

@@ -1,0 +1,106 @@
+{
+  "tests": [
+    {
+      "input": "\nSELECT * FROM a\nUNION\nSELECT * FROM b\nEXCEPT\nSELECT * FROM c\nINTERSECT\nSELECT * FROM d\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "\nSELECT * FROM a\nUNION\nSELECT * FROM b\nEXCEPT ALL\nSELECT * FROM c\nINTERSECT ALL\nSELECT * FROM d\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select  id\nfrom (((select id from t0)\n       union all\n       (select  id from t0))\n      union all\n      (select id from t0)) as u_1\n      ",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select * from ((select * from t1) union (select * from t2)) t",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select * from a except all select * from b",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select * from a except distinct select * from b",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select * from a except select * from b",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select * from a intersect all select * from b",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select * from a intersect distinct select * from b",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select * from a intersect select * from b",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select * from a minus all select * from b",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select * from a minus distinct select * from b",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select * from a minus select * from b",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select * from a union all select * from b",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select * from a union distinct select * from b",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select * from a union select * from b",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "select 1 union select 1",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

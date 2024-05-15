@@ -1,0 +1,16 @@
+{
+  "tests": [
+    {
+      "input": "EXPLAIN formatted SELECT 1",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "EXPLAIN logical SELECT 1",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

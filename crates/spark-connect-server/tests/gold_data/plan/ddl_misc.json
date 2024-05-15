@@ -1,0 +1,82 @@
+{
+  "tests": [
+    {
+      "input": "COMMENT ON DATABASE a.b.c IS 'NULL'",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "COMMENT ON DATABASE a.b.c IS NULL",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "COMMENT ON NAMESPACE a.b.c IS ''",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "COMMENT ON TABLE a.b.c IS 'xYz'",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "REFRESH FUNCTION a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "REFRESH FUNCTION b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "REFRESH FUNCTION c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "REFRESH TABLE a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SHOW COLUMNS FROM db1.t1 IN db1",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SHOW COLUMNS FROM t1",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SHOW COLUMNS FROM t1 IN db1",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "SHOW COLUMNS IN db1.t1",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "VALUES (1, 2, DEFAULT) AS val",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

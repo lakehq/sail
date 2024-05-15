@@ -1,0 +1,206 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>','a/b/text()');",
+        "result": [
+          "[\"b1\",\"b2\",\"b3\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "xpath(<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>, a/b/text())",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT xpath_boolean('<a><b>1</b></a>','a/b');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "xpath_boolean(<a><b>1</b></a>, a/b)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT xpath_double('<a><b>1</b><b>2</b></a>', 'sum(a/b)');",
+        "result": [
+          "3.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "xpath_double(<a><b>1</b><b>2</b></a>, sum(a/b))",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT xpath_float('<a><b>1</b><b>2</b></a>', 'sum(a/b)');",
+        "result": [
+          "3.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "xpath_float(<a><b>1</b><b>2</b></a>, sum(a/b))",
+              "nullable": true,
+              "type": "float",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT xpath_int('<a><b>1</b><b>2</b></a>', 'sum(a/b)');",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "xpath_int(<a><b>1</b><b>2</b></a>, sum(a/b))",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT xpath_long('<a><b>1</b><b>2</b></a>', 'sum(a/b)');",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "xpath_long(<a><b>1</b><b>2</b></a>, sum(a/b))",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT xpath_number('<a><b>1</b><b>2</b></a>', 'sum(a/b)');",
+        "result": [
+          "3.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "xpath_number(<a><b>1</b><b>2</b></a>, sum(a/b))",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT xpath_short('<a><b>1</b><b>2</b></a>', 'sum(a/b)');",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "xpath_short(<a><b>1</b><b>2</b></a>, sum(a/b))",
+              "nullable": true,
+              "type": "short",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT xpath_string('<a><b>b</b><c>cc</c></a>','a/c');",
+        "result": [
+          "cc"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "xpath_string(<a><b>b</b><c>cc</c></a>, a/c)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "tests": [
+    {
+      "input": "UNCACHE TABLE IF EXISTS a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    },
+    {
+      "input": "UNCACHE TABLE a.b.c",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

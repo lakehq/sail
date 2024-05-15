@@ -6,7 +6,7 @@ use crate::extension::function::contains::Contains;
 use crate::extension::function::struct_function::StructFunction;
 use crate::schema::{from_spark_built_in_data_type, parse_spark_data_type_string};
 use crate::spark::connect as sc;
-use crate::sql::new_sql_parser;
+use crate::sql::parser::new_sql_parser;
 use datafusion::arrow::datatypes::{DataType, IntervalMonthDayNanoType};
 use datafusion::catalog::TableReference;
 use datafusion::common::{Column, DFSchema, Result, ScalarValue};
@@ -382,7 +382,7 @@ pub(crate) fn from_spark_literal_to_scalar(
                 &element_type,
             )))
         }
-        LiteralType::Map(map) => Err(SparkError::todo("CHECK HERE UNIT TEST LiteralType::Map")),
+        LiteralType::Map(_map) => Err(SparkError::todo("LiteralType::Map")),
         LiteralType::Struct(r#struct) => {
             // TODO: Validate that this works
             let struct_type: &sc::DataType =

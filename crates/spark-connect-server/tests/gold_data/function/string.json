@@ -1,0 +1,3832 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT CHARACTER_LENGTH('Spark SQL ');",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "character_length(Spark SQL )",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT CHAR_LENGTH('Spark SQL ');",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "char_length(Spark SQL )",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT POSITION('bar' IN 'foobarbar');",
+        "result": [
+          "4"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "locate(bar, foobarbar, 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ascii('222');",
+        "result": [
+          "50"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ascii(222)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ascii(2);",
+        "result": [
+          "50"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ascii(2)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT base64('Spark SQL');",
+        "result": [
+          "U3BhcmsgU1FM"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "base64(Spark SQL)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT base64(x'537061726b2053514c');",
+        "result": [
+          "U3BhcmsgU1FM"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "base64(X'537061726B2053514C')",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bit_length('Spark SQL');",
+        "result": [
+          "72"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bit_length(Spark SQL)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bit_length(x'537061726b2053514c');",
+        "result": [
+          "72"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bit_length(X'537061726B2053514C')",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT btrim('    SparkSQL   ');",
+        "result": [
+          "SparkSQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "btrim(    SparkSQL   )",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT btrim('SSparkSQLS', 'SL');",
+        "result": [
+          "parkSQ"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "btrim(SSparkSQLS, SL)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT btrim(encode('    SparkSQL   ', 'utf-8'));",
+        "result": [
+          "SparkSQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "btrim(encode(    SparkSQL   , utf-8))",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT btrim(encode('SSparkSQLS', 'utf-8'), encode('SL', 'utf-8'));",
+        "result": [
+          "parkSQ"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "btrim(encode(SSparkSQLS, utf-8), encode(SL, utf-8))",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT char(65);",
+        "result": [
+          "A"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "char(65)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT char_length('Spark SQL ');",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "char_length(Spark SQL )",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT char_length(x'537061726b2053514c');",
+        "result": [
+          "9"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "char_length(X'537061726B2053514C')",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT character_length('Spark SQL ');",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "character_length(Spark SQL )",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT character_length(x'537061726b2053514c');",
+        "result": [
+          "9"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "character_length(X'537061726B2053514C')",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT chr(65);",
+        "result": [
+          "A"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "chr(65)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT concat(space(2), '1');",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "concat(space(2), 1)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT concat_ws(' ', 'Spark', 'SQL');",
+        "result": [
+          "Spark SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "concat_ws( , Spark, SQL)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT concat_ws('/', 'foo', null, 'bar');",
+        "result": [
+          "foo/bar"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "concat_ws(/, foo, NULL, bar)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT concat_ws('s');",
+        "result": [],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "concat_ws(s)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT concat_ws(null, 'Spark', 'SQL');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "concat_ws(NULL, Spark, SQL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT contains('Spark SQL', 'SPARK');",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "contains(Spark SQL, SPARK)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT contains('Spark SQL', 'Spark');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "contains(Spark SQL, Spark)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT contains('Spark SQL', null);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "contains(Spark SQL, NULL)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT contains(x'537061726b2053514c', x'537061726b');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "contains(X'537061726B2053514C', X'537061726B')",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic');",
+        "result": [
+          "San Francisco"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "decode(2, 1, Southlake, 2, San Francisco, 3, New Jersey, 4, Seattle, Non domestic)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "decode(6, 1, Southlake, 2, San Francisco, 3, New Jersey, 4, Seattle)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic');",
+        "result": [
+          "Non domestic"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "decode(6, 1, Southlake, 2, San Francisco, 3, New Jersey, 4, Seattle, Non domestic)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT decode(encode('abc', 'utf-8'), 'utf-8');",
+        "result": [
+          "abc"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "decode(encode(abc, utf-8), utf-8)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, 'rocks');",
+        "result": [
+          "SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "decode(NULL, 6, Spark, NULL, SQL, 4, rocks)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT elt(1, 'scala', 'java');",
+        "result": [
+          "scala"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "elt(1, scala, java)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT elt(2, 'a', 1);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "elt(2, a, 1)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT encode('abc', 'utf-8');",
+        "result": [
+          "abc"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "encode(abc, utf-8)",
+              "nullable": false,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT endswith('Spark SQL', 'SQL');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "endswith(Spark SQL, SQL)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT endswith('Spark SQL', 'Spark');",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "endswith(Spark SQL, Spark)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT endswith('Spark SQL', null);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "endswith(Spark SQL, NULL)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT endswith(x'537061726b2053514c', x'53514c');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "endswith(X'537061726B2053514C', X'53514C')",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT endswith(x'537061726b2053514c', x'537061726b');",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "endswith(X'537061726B2053514C', X'537061726B')",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT find_in_set('ab','abc,b,ab,c,def');",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "find_in_set(ab, abc,b,ab,c,def)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT format_number(12332.123456, '##################.###');",
+        "result": [
+          "12332.123"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "format_number(12332.123456, ##################.###)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT format_number(12332.123456, 4);",
+        "result": [
+          "12,332.1235"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "format_number(12332.123456, 4)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT format_string(\"Hello World %d %s\", 100, \"days\");",
+        "result": [
+          "Hello World 100 days"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "format_string(Hello World %d %s, 100, days)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hex(lpad(unhex('aabb'), 5));",
+        "result": [
+          "000000AABB"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hex(lpad(unhex(aabb), 5, X'00'))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hex(lpad(unhex('aabb'), 5, unhex('1122')));",
+        "result": [
+          "112211AABB"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hex(lpad(unhex(aabb), 5, unhex(1122)))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hex(rpad(unhex('aabb'), 5));",
+        "result": [
+          "AABB000000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hex(rpad(unhex(aabb), 5, X'00'))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hex(rpad(unhex('aabb'), 5, unhex('1122')));",
+        "result": [
+          "AABB112211"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hex(rpad(unhex(aabb), 5, unhex(1122)))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT initcap('sPark sql');",
+        "result": [
+          "Spark Sql"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "initcap(sPark sql)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT instr('SparkSQL', 'SQL');",
+        "result": [
+          "6"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "instr(SparkSQL, SQL)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT lcase('SparkSql');",
+        "result": [
+          "sparksql"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "lcase(SparkSql)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT left('Spark SQL', 3);",
+        "result": [
+          "Spa"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "left(Spark SQL, 3)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT left(encode('Spark SQL', 'utf-8'), 3);",
+        "result": [
+          "Spa"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "left(encode(Spark SQL, utf-8), 3)",
+              "nullable": false,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT len('Spark SQL ');",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "len(Spark SQL )",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT len(x'537061726b2053514c');",
+        "result": [
+          "9"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "len(X'537061726B2053514C')",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT length('Spark SQL ');",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "length(Spark SQL )",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT length(x'537061726b2053514c');",
+        "result": [
+          "9"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "length(X'537061726B2053514C')",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT levenshtein('kitten', 'sitting');",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "levenshtein(kitten, sitting)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT levenshtein('kitten', 'sitting', 2);",
+        "result": [
+          "-1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "levenshtein(kitten, sitting, 2)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT locate('bar', 'foobarbar');",
+        "result": [
+          "4"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "locate(bar, foobarbar, 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT locate('bar', 'foobarbar', 5);",
+        "result": [
+          "7"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "locate(bar, foobarbar, 5)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT lower('SparkSql');",
+        "result": [
+          "sparksql"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "lower(SparkSql)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT lpad('hi', 1, '??');",
+        "result": [
+          "h"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "lpad(hi, 1, ??)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT lpad('hi', 5);",
+        "result": [
+          "hi"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "lpad(hi, 5,  )",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT lpad('hi', 5, '??');",
+        "result": [
+          "???hi"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "lpad(hi, 5, ??)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ltrim('    SparkSQL   ');",
+        "result": [
+          "SparkSQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ltrim(    SparkSQL   )",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT luhn_check('79927398713');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "luhn_check(79927398713)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT luhn_check('79927398714');",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "luhn_check(79927398714)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT luhn_check('8112189876');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "luhn_check(8112189876)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mask('AbCD123-@$#');",
+        "result": [
+          "XxXXnnn-@$#"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mask(AbCD123-@$#, X, x, n, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mask('AbCD123-@$#', 'Q');",
+        "result": [
+          "QxQQnnn-@$#"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mask(AbCD123-@$#, Q, x, n, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mask('AbCD123-@$#', 'Q', 'q');",
+        "result": [
+          "QqQQnnn-@$#"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mask(AbCD123-@$#, Q, q, n, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mask('AbCD123-@$#', 'Q', 'q', 'd');",
+        "result": [
+          "QqQQddd-@$#"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mask(AbCD123-@$#, Q, q, d, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', 'o');",
+        "result": [
+          "QqQQdddoooo"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mask(AbCD123-@$#, Q, q, d, o)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mask('AbCD123-@$#', NULL, 'q', 'd', 'o');",
+        "result": [
+          "AqCDdddoooo"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mask(AbCD123-@$#, NULL, q, d, o)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mask('AbCD123-@$#', NULL, NULL, 'd', 'o');",
+        "result": [
+          "AbCDdddoooo"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mask(AbCD123-@$#, NULL, NULL, d, o)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mask('AbCD123-@$#', NULL, NULL, NULL, 'o');",
+        "result": [
+          "AbCD123oooo"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mask(AbCD123-@$#, NULL, NULL, NULL, o)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mask('AbCD123-@$#', NULL, NULL, NULL, NULL);",
+        "result": [
+          "AbCD123-@$#"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mask(AbCD123-@$#, NULL, NULL, NULL, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mask('abcd-EFGH-8765-4321');",
+        "result": [
+          "xxxx-XXXX-nnnn-nnnn"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mask(abcd-EFGH-8765-4321, X, x, n, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mask('abcd-EFGH-8765-4321', 'Q');",
+        "result": [
+          "xxxx-QQQQ-nnnn-nnnn"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mask(abcd-EFGH-8765-4321, Q, x, n, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mask(NULL);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mask(NULL, X, x, n, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mask(NULL, NULL, NULL, NULL, 'o');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mask(NULL, NULL, NULL, NULL, o)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT octet_length('Spark SQL');",
+        "result": [
+          "9"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "octet_length(Spark SQL)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT octet_length(x'537061726b2053514c');",
+        "result": [
+          "9"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "octet_length(X'537061726B2053514C')",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT overlay('Spark SQL' PLACING 'ANSI ' FROM 7 FOR 0);",
+        "result": [
+          "Spark ANSI SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "overlay(Spark SQL, ANSI , 7, 0)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT overlay('Spark SQL' PLACING 'CORE' FROM 7);",
+        "result": [
+          "Spark CORE"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "overlay(Spark SQL, CORE, 7, -1)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT overlay('Spark SQL' PLACING '_' FROM 6);",
+        "result": [
+          "Spark_SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "overlay(Spark SQL, _, 6, -1)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT overlay('Spark SQL' PLACING 'tructured' FROM 2 FOR 4);",
+        "result": [
+          "Structured SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "overlay(Spark SQL, tructured, 2, 4)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT overlay(encode('Spark SQL', 'utf-8') PLACING encode('ANSI ', 'utf-8') FROM 7 FOR 0);",
+        "result": [
+          "Spark ANSI SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "overlay(encode(Spark SQL, utf-8), encode(ANSI , utf-8), 7, 0)",
+              "nullable": false,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT overlay(encode('Spark SQL', 'utf-8') PLACING encode('CORE', 'utf-8') FROM 7);",
+        "result": [
+          "Spark CORE"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "overlay(encode(Spark SQL, utf-8), encode(CORE, utf-8), 7, -1)",
+              "nullable": false,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT overlay(encode('Spark SQL', 'utf-8') PLACING encode('_', 'utf-8') FROM 6);",
+        "result": [
+          "Spark_SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "overlay(encode(Spark SQL, utf-8), encode(_, utf-8), 6, -1)",
+              "nullable": false,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT overlay(encode('Spark SQL', 'utf-8') PLACING encode('tructured', 'utf-8') FROM 2 FOR 4);",
+        "result": [
+          "Structured SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "overlay(encode(Spark SQL, utf-8), encode(tructured, utf-8), 2, 4)",
+              "nullable": false,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT position('bar', 'foobarbar');",
+        "result": [
+          "4"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "position(bar, foobarbar, 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT position('bar', 'foobarbar', 5);",
+        "result": [
+          "7"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "position(bar, foobarbar, 5)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT printf(\"Hello World %d %s\", 100, \"days\");",
+        "result": [
+          "Hello World 100 days"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "printf(Hello World %d %s, 100, days)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', 'Ste(v|ph)en');",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regexp_count(Steven Jones and Stephen Smith are the best players, Ste(v|ph)en)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regexp_count('abcdefghijklmnopqrstuvwxyz', '[a-z]{3}');",
+        "result": [
+          "8"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regexp_count(abcdefghijklmnopqrstuvwxyz, [a-z]{3})",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', 1);",
+        "result": [
+          "100"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regexp_extract(100-200, (\\d+)-(\\d+), 1)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regexp_extract_all('100-200, 300-400', '(\\\\d+)-(\\\\d+)', 1);",
+        "result": [
+          "[\"100\",\"300\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regexp_extract_all(100-200, 300-400, (\\d+)-(\\d+), 1)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regexp_instr('user@spark.apache.org', '@[^.]*');",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regexp_instr(user@spark.apache.org, @[^.]*, 0)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regexp_replace('100-200', '(\\\\d+)', 'num');",
+        "result": [
+          "num-num"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regexp_replace(100-200, (\\d+), num, 1)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', 'Jeck');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regexp_substr(Steven Jones and Stephen Smith are the best players, Jeck)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', 'Ste(v|ph)en');",
+        "result": [
+          "Steven"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regexp_substr(Steven Jones and Stephen Smith are the best players, Ste(v|ph)en)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT repeat('123', 2);",
+        "result": [
+          "123123"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "repeat(123, 2)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT replace('ABCabc', 'abc', 'DEF');",
+        "result": [
+          "ABCDEF"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "replace(ABCabc, abc, DEF)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT right('Spark SQL', 3);",
+        "result": [
+          "SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "right(Spark SQL, 3)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT rpad('hi', 1, '??');",
+        "result": [
+          "h"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "rpad(hi, 1, ??)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT rpad('hi', 5);",
+        "result": [
+          "hi"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "rpad(hi, 5,  )",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT rpad('hi', 5, '??');",
+        "result": [
+          "hi???"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "rpad(hi, 5, ??)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT rtrim('    SparkSQL   ');",
+        "result": [
+          "SparkSQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "rtrim(    SparkSQL   )",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sentences('Hi there! Good morning.');",
+        "result": [
+          "[[\"Hi\",\"there\"],[\"Good\",\"morning\"]]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sentences(Hi there! Good morning., , )",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": {
+                  "type": "array",
+                  "elementType": "string",
+                  "containsNull": false
+                },
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT soundex('Miller');",
+        "result": [
+          "M460"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "soundex(Miller)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT split('oneAtwoBthreeC', '[ABC]');",
+        "result": [
+          "[\"one\",\"two\",\"three\",\"\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "split(oneAtwoBthreeC, [ABC], -1)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT split('oneAtwoBthreeC', '[ABC]', -1);",
+        "result": [
+          "[\"one\",\"two\",\"three\",\"\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "split(oneAtwoBthreeC, [ABC], -1)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT split('oneAtwoBthreeC', '[ABC]', 2);",
+        "result": [
+          "[\"one\",\"twoBthreeC\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "split(oneAtwoBthreeC, [ABC], 2)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT split_part('11.12.13', '.', 3);",
+        "result": [
+          "13"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "split_part(11.12.13, ., 3)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT startswith('Spark SQL', 'SQL');",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "startswith(Spark SQL, SQL)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT startswith('Spark SQL', 'Spark');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "startswith(Spark SQL, Spark)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT startswith('Spark SQL', null);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "startswith(Spark SQL, NULL)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT startswith(x'537061726b2053514c', x'53514c');",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "startswith(X'537061726B2053514C', X'53514C')",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT startswith(x'537061726b2053514c', x'537061726b');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "startswith(X'537061726B2053514C', X'537061726B')",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substr('Spark SQL' FROM -3);",
+        "result": [
+          "SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(Spark SQL, -3, 2147483647)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substr('Spark SQL' FROM 5 FOR 1);",
+        "result": [
+          "k"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(Spark SQL, 5, 1)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substr('Spark SQL' FROM 5);",
+        "result": [
+          "k SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(Spark SQL, 5, 2147483647)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substr('Spark SQL', -3);",
+        "result": [
+          "SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substr(Spark SQL, -3, 2147483647)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substr('Spark SQL', 5);",
+        "result": [
+          "k SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substr(Spark SQL, 5, 2147483647)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substr('Spark SQL', 5, 1);",
+        "result": [
+          "k"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substr(Spark SQL, 5, 1)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substr(encode('Spark SQL', 'utf-8'), 5);",
+        "result": [
+          "k SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substr(encode(Spark SQL, utf-8), 5, 2147483647)",
+              "nullable": false,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substring('Spark SQL' FROM -3);",
+        "result": [
+          "SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(Spark SQL, -3, 2147483647)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substring('Spark SQL' FROM 5 FOR 1);",
+        "result": [
+          "k"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(Spark SQL, 5, 1)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substring('Spark SQL' FROM 5);",
+        "result": [
+          "k SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(Spark SQL, 5, 2147483647)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substring('Spark SQL', -3);",
+        "result": [
+          "SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(Spark SQL, -3, 2147483647)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substring('Spark SQL', 5);",
+        "result": [
+          "k SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(Spark SQL, 5, 2147483647)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substring('Spark SQL', 5, 1);",
+        "result": [
+          "k"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(Spark SQL, 5, 1)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substring(encode('Spark SQL', 'utf-8'), 5);",
+        "result": [
+          "k SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(encode(Spark SQL, utf-8), 5, 2147483647)",
+              "nullable": false,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substring_index('www.apache.org', '.', 2);",
+        "result": [
+          "www.apache"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring_index(www.apache.org, ., 2)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_binary('abc', 'utf-8');",
+        "result": [
+          "abc"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_binary(abc, utf-8)",
+              "nullable": false,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_char(-12454.8, '99G999D9S');",
+        "result": [
+          "12,454.8-"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_char(-12454.8, 99G999D9S)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_char(12454, '99G999');",
+        "result": [
+          "12,454"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_char(12454, 99G999)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_char(454, '999');",
+        "result": [
+          "454"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_char(454, 999)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_char(454.00, '000D00');",
+        "result": [
+          "454.00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_char(454.00, 000D00)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_char(78.12, '$99.99');",
+        "result": [
+          "$78.12"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_char(78.12, $99.99)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_number('$78.12', '$99.99');",
+        "result": [
+          "78.12"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_number($78.12, $99.99)",
+              "nullable": false,
+              "type": "decimal(4, 2)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_number('12,454', '99,999');",
+        "result": [
+          "12454"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_number(12,454, 99,999)",
+              "nullable": false,
+              "type": "decimal(5, 0)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_number('12,454.8-', '99,999.9S');",
+        "result": [
+          "-12454.8"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_number(12,454.8-, 99,999.9S)",
+              "nullable": false,
+              "type": "decimal(6, 1)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_number('454', '999');",
+        "result": [
+          "454"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_number(454, 999)",
+              "nullable": false,
+              "type": "decimal(3, 0)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_number('454.00', '000.00');",
+        "result": [
+          "454.00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_number(454.00, 000.00)",
+              "nullable": false,
+              "type": "decimal(5, 2)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_varchar(-12454.8, '99G999D9S');",
+        "result": [
+          "12,454.8-"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_char(-12454.8, 99G999D9S)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_varchar(12454, '99G999');",
+        "result": [
+          "12,454"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_char(12454, 99G999)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_varchar(454, '999');",
+        "result": [
+          "454"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_char(454, 999)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_varchar(454.00, '000D00');",
+        "result": [
+          "454.00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_char(454.00, 000D00)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_varchar(78.12, '$99.99');",
+        "result": [
+          "$78.12"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_char(78.12, $99.99)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT translate('AaBbCc', 'abc', '123');",
+        "result": [
+          "A1B2C3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "translate(AaBbCc, abc, 123)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT trim('    SparkSQL   ');",
+        "result": [
+          "SparkSQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "trim(    SparkSQL   )",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT trim('SL' FROM 'SSparkSQLS');",
+        "result": [
+          "parkSQ"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "TRIM(BOTH SL FROM SSparkSQLS)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT trim(BOTH 'SL' FROM 'SSparkSQLS');",
+        "result": [
+          "parkSQ"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "TRIM(BOTH SL FROM SSparkSQLS)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT trim(BOTH FROM '    SparkSQL   ');",
+        "result": [
+          "SparkSQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "trim(    SparkSQL   )",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT trim(LEADING 'SL' FROM 'SSparkSQLS');",
+        "result": [
+          "parkSQLS"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "TRIM(LEADING SL FROM SSparkSQLS)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT trim(LEADING FROM '    SparkSQL   ');",
+        "result": [
+          "SparkSQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ltrim(    SparkSQL   )",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT trim(TRAILING 'SL' FROM 'SSparkSQLS');",
+        "result": [
+          "SSparkSQ"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "TRIM(TRAILING SL FROM SSparkSQLS)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT trim(TRAILING FROM '    SparkSQL   ');",
+        "result": [
+          "SparkSQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "rtrim(    SparkSQL   )",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_to_binary('abc', 'utf-8');",
+        "result": [
+          "abc"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_to_binary(abc, utf-8)",
+              "nullable": true,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_to_number('$78.12', '$99.99');",
+        "result": [
+          "78.12"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_to_number($78.12, $99.99)",
+              "nullable": true,
+              "type": "decimal(4, 2)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_to_number('12,454', '99,999');",
+        "result": [
+          "12454"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_to_number(12,454, 99,999)",
+              "nullable": true,
+              "type": "decimal(5, 0)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_to_number('12,454.8-', '99,999.9S');",
+        "result": [
+          "-12454.8"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_to_number(12,454.8-, 99,999.9S)",
+              "nullable": true,
+              "type": "decimal(6, 1)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_to_number('454', '999');",
+        "result": [
+          "454"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_to_number(454, 999)",
+              "nullable": true,
+              "type": "decimal(3, 0)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_to_number('454.00', '000.00');",
+        "result": [
+          "454.00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_to_number(454.00, 000.00)",
+              "nullable": true,
+              "type": "decimal(5, 2)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ucase('SparkSql');",
+        "result": [
+          "SPARKSQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ucase(SparkSql)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT unbase64('U3BhcmsgU1FM');",
+        "result": [
+          "Spark SQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "unbase64(U3BhcmsgU1FM)",
+              "nullable": false,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT upper('SparkSql');",
+        "result": [
+          "SPARKSQL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "upper(SparkSql)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "select try_to_binary('a!', 'base64');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_to_binary(a!, base64)",
+              "nullable": true,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "select try_to_binary('abc', 'invalidFormat');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_to_binary(abc, invalidFormat)",
+              "nullable": true,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    }
+  ]
+}

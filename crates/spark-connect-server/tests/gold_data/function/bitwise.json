@@ -1,0 +1,246 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT 3 & 5;",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(3 & 5)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 3 ^ 5;",
+        "result": [
+          "6"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(3 ^ 5)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 3 | 5;",
+        "result": [
+          "7"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(3 | 5)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bit_count(0);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bit_count(0)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bit_get(11, 0);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bit_get(11, 0)",
+              "nullable": false,
+              "type": "byte",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bit_get(11, 2);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bit_get(11, 2)",
+              "nullable": false,
+              "type": "byte",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT getbit(11, 0);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "getbit(11, 0)",
+              "nullable": false,
+              "type": "byte",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT getbit(11, 2);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "getbit(11, 2)",
+              "nullable": false,
+              "type": "byte",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT shiftright(4, 1);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "shiftright(4, 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT shiftrightunsigned(4, 1);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "shiftrightunsigned(4, 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ~ 0;",
+        "result": [
+          "-1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "~0",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    }
+  ]
+}

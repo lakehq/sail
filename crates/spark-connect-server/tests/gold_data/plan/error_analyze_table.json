@@ -1,0 +1,10 @@
+{
+  "tests": [
+    {
+      "input": "ANALYZE TABLE test-table PARTITION (part1)",
+      "output": {
+        "failure": "not supported: SQL to plan"
+      }
+    }
+  ]
+}

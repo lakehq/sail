@@ -1,0 +1,1086 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT array(1, 2, 3);",
+        "result": [
+          "[1,2,3]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array(1, 2, 3)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_append(CAST(null as Array<Int>), 2);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_append(NULL, 2)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_append(array('b', 'd', 'c', 'a'), 'd');",
+        "result": [
+          "[\"b\",\"d\",\"c\",\"a\",\"d\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_append(array(b, d, c, a), d)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_append(array(1, 2, 3, null), null);",
+        "result": [
+          "[1,2,3,null,null]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_append(array(1, 2, 3, NULL), NULL)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_compact(array(\"a\", \"b\", \"c\"));",
+        "result": [
+          "[\"a\",\"b\",\"c\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_compact(array(a, b, c))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_compact(array(1, 2, 3, null));",
+        "result": [
+          "[1,2,3]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_compact(array(1, 2, 3, NULL))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_contains(array(1, 2, 3), 2);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_contains(array(1, 2, 3), 2)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_distinct(array(1, 2, 3, null, 3));",
+        "result": [
+          "[1,2,3,null]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_distinct(array(1, 2, 3, NULL, 3))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_except(array(1, 2, 3), array(1, 3, 5));",
+        "result": [
+          "[2]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_except(array(1, 2, 3), array(1, 3, 5))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_insert(array(1, 2, 3, 4), 5, 5);",
+        "result": [
+          "[1,2,3,4,5]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_insert(array(1, 2, 3, 4), 5, 5)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_insert(array(5, 3, 2, 1), -4, 4);",
+        "result": [
+          "[5,4,3,2,1]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_insert(array(5, 3, 2, 1), -4, 4)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_insert(array(5, 4, 3, 2), -1, 1);",
+        "result": [
+          "[5,4,3,2,1]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_insert(array(5, 4, 3, 2), -1, 1)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_intersect(array(1, 2, 3), array(1, 3, 5));",
+        "result": [
+          "[1,3]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_intersect(array(1, 2, 3), array(1, 3, 5))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_join(array('hello', 'world'), ' ');",
+        "result": [
+          "hello world"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_join(array(hello, world),  )",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_join(array('hello', null ,'world'), ' ');",
+        "result": [
+          "hello world"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_join(array(hello, NULL, world),  )",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_join(array('hello', null ,'world'), ' ', ',');",
+        "result": [
+          "hello , world"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_join(array(hello, NULL, world),  , ,)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_max(array(1, 20, null, 3));",
+        "result": [
+          "20"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_max(array(1, 20, NULL, 3))",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_min(array(1, 20, null, 3));",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_min(array(1, 20, NULL, 3))",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_position(array(312, 773, 708, 708), 414);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_position(array(312, 773, 708, 708), 414)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_position(array(312, 773, 708, 708), 708);",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_position(array(312, 773, 708, 708), 708)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_prepend(CAST(null as Array<Int>), 2);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_prepend(NULL, 2)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_prepend(array('b', 'd', 'c', 'a'), 'd');",
+        "result": [
+          "[\"d\",\"b\",\"d\",\"c\",\"a\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_prepend(array(b, d, c, a), d)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_prepend(array(1, 2, 3, null), null);",
+        "result": [
+          "[null,1,2,3,null]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_prepend(array(1, 2, 3, NULL), NULL)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_remove(array(1, 2, 3, null, 3), 3);",
+        "result": [
+          "[1,2,null]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_remove(array(1, 2, 3, NULL, 3), 3)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_repeat('123', 2);",
+        "result": [
+          "[\"123\",\"123\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_repeat(123, 2)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_union(array(1, 2, 3), array(1, 3, 5));",
+        "result": [
+          "[1,2,3,5]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_union(array(1, 2, 3), array(1, 3, 5))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT arrays_overlap(array(1, 2, 3), array(3, 4, 5));",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "arrays_overlap(array(1, 2, 3), array(3, 4, 5))",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT arrays_zip(array(1, 2), array(2, 3), array(3, 4));",
+        "result": [
+          "[{\"0\":1,\"1\":2,\"2\":3},{\"0\":2,\"1\":3,\"2\":4}]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "arrays_zip(array(1, 2), array(2, 3), array(3, 4))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": {
+                  "type": "struct",
+                  "fields": [
+                    {
+                      "name": "0",
+                      "nullable": true,
+                      "type": "integer",
+                      "metadata": {}
+                    },
+                    {
+                      "name": "1",
+                      "nullable": true,
+                      "type": "integer",
+                      "metadata": {}
+                    },
+                    {
+                      "name": "2",
+                      "nullable": true,
+                      "type": "integer",
+                      "metadata": {}
+                    }
+                  ]
+                },
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT arrays_zip(array(1, 2, 3), array(2, 3, 4));",
+        "result": [
+          "[{\"0\":1,\"1\":2},{\"0\":2,\"1\":3},{\"0\":3,\"1\":4}]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "arrays_zip(array(1, 2, 3), array(2, 3, 4))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": {
+                  "type": "struct",
+                  "fields": [
+                    {
+                      "name": "0",
+                      "nullable": true,
+                      "type": "integer",
+                      "metadata": {}
+                    },
+                    {
+                      "name": "1",
+                      "nullable": true,
+                      "type": "integer",
+                      "metadata": {}
+                    }
+                  ]
+                },
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT flatten(array(array(1, 2), array(3, 4)));",
+        "result": [
+          "[1,2,3,4]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "flatten(array(array(1, 2), array(3, 4)))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT get(array(1, 2, 3), -1);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "get(array(1, 2, 3), -1)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT get(array(1, 2, 3), 0);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "get(array(1, 2, 3), 0)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT get(array(1, 2, 3), 3);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "get(array(1, 2, 3), 3)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sequence(1, 5);",
+        "result": [
+          "[1,2,3,4,5]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sequence(1, 5)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sequence(5, 1);",
+        "result": [
+          "[5,4,3,2,1]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sequence(5, 1)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), interval '0-1' year to month);",
+        "result": [
+          "[2018-01-01,2018-02-01,2018-03-01]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sequence(to_date(2018-01-01), to_date(2018-03-01), INTERVAL '0-1' YEAR TO MONTH)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "date",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), interval 1 month);",
+        "result": [
+          "[2018-01-01,2018-02-01,2018-03-01]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sequence(to_date(2018-01-01), to_date(2018-03-01), INTERVAL '1' MONTH)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "date",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT shuffle(array(1, 20, 3, 5));",
+        "result": [
+          "[3,1,5,20]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "shuffle(array(1, 20, 3, 5))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT shuffle(array(1, 20, null, 3));",
+        "result": [
+          "[20,null,3,1]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "shuffle(array(1, 20, NULL, 3))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT slice(array(1, 2, 3, 4), -2, 2);",
+        "result": [
+          "[3,4]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "slice(array(1, 2, 3, 4), -2, 2)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT slice(array(1, 2, 3, 4), 2, 2);",
+        "result": [
+          "[2,3]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "slice(array(1, 2, 3, 4), 2, 2)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sort_array(array('b', 'd', null, 'c', 'a'), true);",
+        "result": [
+          "[null,\"a\",\"b\",\"c\",\"d\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sort_array(array(b, d, NULL, c, a), true)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "internal error: error"
+      }
+    }
+  ]
+}
