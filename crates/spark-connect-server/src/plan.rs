@@ -566,7 +566,7 @@ pub(crate) async fn from_spark_relation(
             return Err(SparkError::todo("sample by"));
         }
         RelType::Catalog(catalog) => {
-            // Spark Catalog = Datafusion Database
+            // Spark Catalog = Datafusion Catalog
             // Spark Database = Datafusion Schema
             // Spark Table = Datafusion Table
             use sc::catalog::CatType;
