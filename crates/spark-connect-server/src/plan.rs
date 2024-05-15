@@ -566,10 +566,13 @@ pub(crate) async fn from_spark_relation(
             return Err(SparkError::todo("sample by"));
         }
         RelType::Catalog(catalog) => {
+            // Spark Catalog = Datafusion Database
+            // Spark Database = Datafusion Schema
+            // Spark Table = Datafusion Table
             use sc::catalog::CatType;
             let cat_type = catalog.cat_type.as_ref().required("catalog type")?;
             match cat_type {
-                CatType::CurrentDatabase(_) => {
+                CatType::CurrentDatabase(current_database) => {
                     Err(SparkError::unsupported("CatType::CurrentDatabase"))
                 }
                 CatType::SetCurrentDatabase(_) => {
