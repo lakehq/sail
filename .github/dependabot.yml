@@ -1,0 +1,24 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    target-branch: main
+    groups:
+      all:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "datafusion"
+      - dependency-name: "datafusion-*"
+      - dependency-name: "arrow"
+      - dependency-name: "arrow-*"
+      - dependency-name: "polars"
+      - dependency-name: "polars-*"
+      - dependency-name: "sqlparser"
+      - dependency-name: "pyo3"
