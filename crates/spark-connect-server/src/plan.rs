@@ -575,7 +575,8 @@ pub(crate) async fn from_spark_relation(
                 CatType::CurrentDatabase(current_database) => {
                     Err(SparkError::unsupported("CatType::CurrentDatabase"))
                 }
-                CatType::SetCurrentDatabase(_) => {
+                CatType::SetCurrentDatabase(set_current_database) => {
+                    let db_name = set_current_database.db_name.to_string();
                     Err(SparkError::unsupported("CatType::SetCurrentDatabase"))
                 }
                 CatType::ListDatabases(_) => Err(SparkError::unsupported("CatType::ListDatabases")),
