@@ -19,6 +19,7 @@ use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
 use datafusion::sql::parser::Statement;
+use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::expression::{from_spark_expression, from_spark_literal_to_scalar};
@@ -212,20 +213,10 @@ pub(crate) async fn from_spark_relation(
         }) => {
             let query = &query.replace(" database ", " SCHEMA ");
             let query = &query.replace(" DATABASE ", " SCHEMA ");
-            let df = ctx.sql(query).await?;
-            return Ok(df.into_optimized_plan()?);
-            println!("CHECK HERE: {:?}", query);
             let statement = new_sql_parser(query)?.parse_one_statement()?;
-            println!("CHECK HERE: {:?}", statement);
             let plan = state
                 .statement_to_plan(Statement::Statement(Box::new(statement)))
                 .await?;
-            println!("CHECK HERE: {:?}", plan);
-            println!(
-                "CHECK HERE pos_args: {:?} args: {:?}",
-                pos_args.len(),
-                args.len()
-            );
             if pos_args.len() == 0 && args.len() == 0 {
                 Ok(plan)
             } else if pos_args.len() > 0 && args.len() == 0 {
@@ -585,11 +576,23 @@ pub(crate) async fn from_spark_relation(
             let cat_type = catalog.cat_type.as_ref().required("catalog type")?;
             match cat_type {
                 CatType::CurrentDatabase(current_database) => {
-                    Err(SparkError::unsupported("CatType::CurrentDatabase"))
+                    let default_schema = &state.config().options().catalog.default_schema;
+                    let results = ctx
+                        .sql("SELECT CAST($default_schema AS STRING)")
+                        .await?
+                        .with_param_values(vec![(
+                            "default_schema",
+                            ScalarValue::Utf8(Some(default_schema.to_owned())),
+                        )])?;
+                    Ok(results.into_optimized_plan()?)
                 }
                 CatType::SetCurrentDatabase(set_current_database) => {
                     let db_name = set_current_database.db_name.to_string();
-                    Err(SparkError::unsupported("CatType::SetCurrentDatabase"))
+                    // ctx.state().config().options_mut().catalog.default_schema = db_name;
+                    Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
+                        produce_one_row: false,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    }))
                 }
                 CatType::ListDatabases(_) => Err(SparkError::unsupported("CatType::ListDatabases")),
                 CatType::ListTables(_) => Err(SparkError::unsupported("CatType::ListTables")),
