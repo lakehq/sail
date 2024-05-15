@@ -210,10 +210,22 @@ pub(crate) async fn from_spark_relation(
             args,
             pos_args,
         }) => {
+            let query = &query.replace(" database ", " SCHEMA ");
+            let query = &query.replace(" DATABASE ", " SCHEMA ");
+            let df = ctx.sql(query).await?;
+            return Ok(df.into_optimized_plan()?);
+            println!("CHECK HERE: {:?}", query);
             let statement = new_sql_parser(query)?.parse_one_statement()?;
+            println!("CHECK HERE: {:?}", statement);
             let plan = state
                 .statement_to_plan(Statement::Statement(Box::new(statement)))
                 .await?;
+            println!("CHECK HERE: {:?}", plan);
+            println!(
+                "CHECK HERE pos_args: {:?} args: {:?}",
+                pos_args.len(),
+                args.len()
+            );
             if pos_args.len() == 0 && args.len() == 0 {
                 Ok(plan)
             } else if pos_args.len() > 0 && args.len() == 0 {
@@ -616,7 +628,34 @@ pub(crate) async fn from_spark_relation(
                 CatType::SetCurrentCatalog(_) => {
                     Err(SparkError::unsupported("CatType::SetCurrentCatalog"))
                 }
-                CatType::ListCatalogs(_) => Err(SparkError::unsupported("CatType::ListCatalogs")),
+                CatType::ListCatalogs(list_catalogs) => {
+                    let pattern = list_catalogs.pattern.as_ref();
+                    // match pattern {
+                    //     Some(pattern) => {
+                    //         let catalog_names = &ctx
+                    //             .catalog_names()
+                    //             .iter()
+                    //             .filter(|name| name.contains(pattern))
+                    //             .map(|name| name.to_string())
+                    //             .collect::<Vec<String>>();
+                    //         Err(SparkError::unsupported("CatType::SetCurrentCatalog"))
+                    //
+                    //     }
+                    //     None => {
+                    //         // List all catalogs
+                    //         let catalog_names = &ctx.catalog_names();
+                    //         Err(SparkError::unsupported("CatType::SetCurrentCatalog"))
+                    //
+                    //     }
+                    // }
+                    // let table_reference = TableReference::from(unparsed_identifier);
+                    // let df: DataFrame = ctx.table(table_reference.clone()).await?;
+                    // Ok(df.into_optimized_plan()?)
+
+                    let test = state.catalog_list();
+
+                    Err(SparkError::unsupported("CatType::SetCurrentCatalog"))
+                }
             }
         }
         RelType::Extension(_) => {
