@@ -2,7 +2,6 @@ use std::sync::PoisonError;
 
 use datafusion::common::DataFusionError;
 use prost::DecodeError;
-use sqlparser;
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
 use tokio::task::JoinError;
@@ -14,7 +13,7 @@ pub enum SparkError {
     #[error("error in DataFusion: {0}")]
     DataFusionError(#[from] DataFusionError),
     #[error("error in SQL parser: {0}")]
-    SqlParserError(#[from] sqlparser::parser::ParserError),
+    SqlParserError(#[from] datafusion::sql::sqlparser::parser::ParserError),
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
     #[error("error in Arrow: {0}")]
@@ -58,6 +57,13 @@ impl SparkError {
 
     pub fn internal(message: impl Into<String>) -> Self {
         SparkError::InternalError(message.into())
+    }
+}
+
+// TODO: remove this after we consolidate the sqlparser library version
+impl From<sqlparser::parser::ParserError> for SparkError {
+    fn from(error: sqlparser::parser::ParserError) -> Self {
+        SparkError::invalid(error.to_string())
     }
 }
 

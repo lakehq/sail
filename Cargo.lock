@@ -1289,7 +1289,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
- "sqlparser 0.44.0",
+ "sqlparser 0.46.0",
 ]
 
 [[package]]
@@ -3551,7 +3551,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "sqlparser 0.44.0",
+ "sqlparser 0.46.0",
  "thiserror",
  "tokio",
  "tonic",
@@ -3588,8 +3588,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aaf9c7ff146298ffda83a200f8d5084f08dcee1edfc135fcc1d646a45d50ffd6"
 dependencies = [
  "log",
+ "sqlparser_derive 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "sqlparser"
+version = "0.46.0"
+source = "git+https://github.com/lakehq/sqlparser-rs.git?branch=data-type#89f34c56d8a2703b1b93050f7b3d2e42512f25ef"
+dependencies = [
+ "log",
  "serde",
- "sqlparser_derive",
+ "sqlparser_derive 0.2.2 (git+https://github.com/lakehq/sqlparser-rs.git?branch=data-type)",
 ]
 
 [[package]]
@@ -3597,6 +3606,16 @@ name = "sqlparser_derive"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01b2e185515564f15375f593fb966b5718bc624ba77fe49fa4616ad619690554"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.63",
+]
+
+[[package]]
+name = "sqlparser_derive"
+version = "0.2.2"
+source = "git+https://github.com/lakehq/sqlparser-rs.git?branch=data-type#89f34c56d8a2703b1b93050f7b3d2e42512f25ef"
 dependencies = [
  "proc-macro2",
  "quote",

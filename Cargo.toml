@@ -55,6 +55,14 @@ pyo3 = { version = "0.21.2", features = ["auto-initialize", "serde"] }
 arrow = { version = "51.0.0", features = ["ffi"] }
 arrow-cast = { version = "51.0.0" }
 # 0.44.0 is the version that DataFusion 37.1.0 uses (DataFusion does not have serde enabled)
-sqlparser = { version = "0.44.0", features = ["serde", "visitor"] }
+# It will co-exist with our patched newer version of sqlparser,
+# until we stop relying on `SqlToRel` in DataFusion.
+sqlparser = { version = "0.46.0", features = ["serde", "visitor"] }
 polars = { version = "0.39.2", features = ["serde", "polars-io", "dtype-struct"] }
 polars-arrow = { version = "0.39.2", features = ["serde", "arrow_rs"] }
+
+[patch.crates-io]
+# Override dependencies to use our forked versions.
+# You can use `path = "..."` to temporarily point to your local copy of the crates
+# to speed up local development.
+sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", branch = "data-type" }
