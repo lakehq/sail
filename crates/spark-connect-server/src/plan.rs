@@ -21,7 +21,7 @@ use datafusion::logical_expr::{
 };
 use datafusion::sql::parser::Statement;
 use datafusion_common::{Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference};
-use datafusion_expr::build_join_schema;
+use datafusion_expr::{build_join_schema, DdlStatement};
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::expression::{from_spark_expression, from_spark_literal_to_scalar};
@@ -746,9 +746,21 @@ pub(crate) async fn from_spark_relation(
                     Err(SparkError::unsupported("CatType::CreateExternalTable"))
                 }
                 CatType::CreateTable(_) => Err(SparkError::unsupported("CatType::CreateTable")),
-                CatType::DropTempView(_) => Err(SparkError::unsupported("CatType::DropTempView")),
-                CatType::DropGlobalTempView(_) => {
-                    Err(SparkError::unsupported("CatType::DropGlobalTempView"))
+                CatType::DropTempView(drop_temp_view) => {
+                    let view_name = &drop_temp_view.view_name;
+                    Ok(LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
+                        name: TableReference::from(view_name),
+                        if_exists: true,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    })))
+                }
+                CatType::DropGlobalTempView(drop_global_temp_view) => {
+                    let view_name = &drop_global_temp_view.view_name;
+                    Ok(LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
+                        name: TableReference::from(view_name),
+                        if_exists: true,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    })))
                 }
                 CatType::RecoverPartitions(_) => {
                     Err(SparkError::unsupported("CatType::RecoverPartitions"))
