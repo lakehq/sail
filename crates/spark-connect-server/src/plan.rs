@@ -8,7 +8,6 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::catalog::CatalogProviderList;
-use datafusion::common::{ParamValues, TableReference};
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::json::JsonFormat;
@@ -21,13 +20,15 @@ use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
 use datafusion::sql::parser::Statement;
-use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference};
+use datafusion_expr::build_join_schema;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::expression::{from_spark_expression, from_spark_literal_to_scalar};
 use crate::extension::analyzer::alias::rewrite_multi_alias;
 use crate::extension::analyzer::explode::rewrite_explode;
 use crate::extension::analyzer::wildcard::rewrite_wildcard;
+use crate::extension::analyzer::window::rewrite_window;
 use crate::schema::{cast_record_batch, parse_spark_schema_string};
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
@@ -128,6 +129,7 @@ pub(crate) async fn from_spark_relation(
             let expr = rewrite_multi_alias(expr)?;
             let (input, expr) = rewrite_wildcard(input, expr)?;
             let (input, expr) = rewrite_explode(input, expr)?;
+            let (input, expr) = rewrite_window(input, expr)?;
             Ok(LogicalPlan::Projection(plan::Projection::try_new(
                 expr,
                 Arc::new(input),
@@ -142,8 +144,76 @@ pub(crate) async fn from_spark_relation(
             let filter = plan::Filter::try_new(predicate, Arc::new(input))?;
             Ok(LogicalPlan::Filter(filter))
         }
-        RelType::Join(_) => {
-            return Err(SparkError::todo("join"));
+        RelType::Join(join) => {
+            use sc::join::JoinType;
+
+            let left = join.left.as_ref().required("join left")?;
+            let right = join.right.as_ref().required("join right")?;
+            let left = from_spark_relation(ctx, left).await?;
+            let right = from_spark_relation(ctx, right).await?;
+            let join_type = match JoinType::try_from(join.join_type)? {
+                JoinType::Inner => plan::JoinType::Inner,
+                JoinType::LeftOuter => plan::JoinType::Left,
+                JoinType::RightOuter => plan::JoinType::Right,
+                JoinType::FullOuter => plan::JoinType::Full,
+                JoinType::LeftSemi => plan::JoinType::LeftSemi,
+                JoinType::LeftAnti => plan::JoinType::LeftAnti,
+                // use inner join type to build the schema for cross join
+                JoinType::Cross => plan::JoinType::Inner,
+                JoinType::Unspecified => return Err(SparkError::invalid("join type")),
+            };
+            let schema = build_join_schema(&left.schema(), &right.schema(), &join_type)?;
+            if join.join_type == JoinType::Cross as i32 {
+                if join.join_condition.is_some() {
+                    return Err(SparkError::invalid("cross join with join condition"));
+                }
+                if join.using_columns.len() > 0 {
+                    return Err(SparkError::invalid("cross join with using columns"));
+                }
+                if join.join_data_type.is_some() {
+                    return Err(SparkError::invalid("cross join with join data type"));
+                }
+                return Ok(LogicalPlan::CrossJoin(plan::CrossJoin {
+                    left: Arc::new(left),
+                    right: Arc::new(right),
+                    schema: Arc::new(schema),
+                }));
+            }
+            // TODO: add more validation logic here and in the plan optimizer
+            // See `LogicalPlanBuilder` for details about such logic.
+            let (on, filter, join_constraint) =
+                if join.join_condition.is_some() && join.using_columns.is_empty() {
+                    let condition = join
+                        .join_condition
+                        .as_ref()
+                        .map(|c| from_spark_expression(c, &schema))
+                        .transpose()?;
+                    (vec![], condition, plan::JoinConstraint::On)
+                } else if join.join_condition.is_none() && !join.using_columns.is_empty() {
+                    let on = join
+                        .using_columns
+                        .iter()
+                        .map(|name| {
+                            let column = Expr::Column(Column::new_unqualified(name));
+                            (column.clone(), column)
+                        })
+                        .collect();
+                    (on, None, plan::JoinConstraint::Using)
+                } else {
+                    return Err(SparkError::invalid(
+                        "expecting either join condition or using columns",
+                    ));
+                };
+            Ok(LogicalPlan::Join(plan::Join {
+                left: Arc::new(left),
+                right: Arc::new(right),
+                on,
+                filter,
+                join_type,
+                join_constraint,
+                schema: Arc::new(schema),
+                null_equals_null: false,
+            }))
         }
         RelType::SetOp(_) => {
             return Err(SparkError::todo("set operation"));
@@ -471,6 +541,8 @@ pub(crate) async fn from_spark_relation(
                     expr.push(e.clone().alias(name));
                 }
             }
+            let (input, expr) = rewrite_explode(input, expr)?;
+            let (input, expr) = rewrite_window(input, expr)?;
             Ok(LogicalPlan::Projection(plan::Projection::try_new(
                 expr,
                 Arc::new(input),

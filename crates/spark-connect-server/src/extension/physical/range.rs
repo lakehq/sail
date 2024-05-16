@@ -120,8 +120,8 @@ impl ExtensionPlanner for RangePlanner {
         Ok(Some(Arc::new(RangeExec {
             range: node.range().clone(),
             num_partitions: node.num_partitions(),
-            schema: schema,
-            cache: cache,
+            schema,
+            cache,
         })))
     }
 }

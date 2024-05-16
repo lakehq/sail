@@ -16,8 +16,9 @@ use datafusion::{functions, functions_array};
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
-    expr, AggregateFunction, AggregateUDF, BuiltinScalarFunction, ExprSchemable, GetFieldAccess,
-    GetIndexedField, Operator, ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
+    expr, window_frame, AggregateFunction, AggregateUDF, BuiltInWindowFunction,
+    BuiltinScalarFunction, ExprSchemable, GetFieldAccess, GetIndexedField, Operator,
+    ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
 };
 use framework_python::partial_python_udf::PartialPythonUDF;
 use sqlparser::ast;
@@ -68,6 +69,113 @@ impl ContextProvider for EmptyContextProvider {
     }
 }
 
+pub(crate) fn from_spark_sort_order(
+    sort: &sc::expression::SortOrder,
+    schema: &DFSchema,
+) -> SparkResult<expr::Expr> {
+    use sc::expression::sort_order::{NullOrdering, SortDirection};
+
+    let expr = sort.child.as_ref().required("expression for sort order")?;
+    let asc = match SortDirection::try_from(sort.direction) {
+        Ok(SortDirection::Ascending) => true,
+        Ok(SortDirection::Descending) => false,
+        Ok(SortDirection::Unspecified) => true,
+        Err(_) => {
+            return Err(SparkError::invalid("invalid sort direction"));
+        }
+    };
+    let nulls_first = match NullOrdering::try_from(sort.null_ordering) {
+        Ok(NullOrdering::SortNullsFirst) => true,
+        Ok(NullOrdering::SortNullsLast) => false,
+        Ok(NullOrdering::SortNullsUnspecified) => asc,
+        Err(_) => {
+            return Err(SparkError::invalid("invalid null ordering"));
+        }
+    };
+    Ok(expr::Expr::Sort(expr::Sort {
+        expr: Box::new(from_spark_expression(expr, schema)?),
+        asc,
+        nulls_first,
+    }))
+}
+
+pub(crate) fn from_spark_window_frame(
+    frame: &sc::expression::window::WindowFrame,
+) -> SparkResult<window_frame::WindowFrame> {
+    use sc::expression::window::window_frame::frame_boundary::Boundary;
+    use sc::expression::window::window_frame::FrameType;
+
+    let frame_type = FrameType::try_from(frame.frame_type)?;
+    let lower = frame
+        .lower
+        .as_ref()
+        .required("lower boundary")?
+        .boundary
+        .as_ref()
+        .required("lower boundary")?;
+    let upper = frame
+        .upper
+        .as_ref()
+        .required("upper boundary")?
+        .boundary
+        .as_ref()
+        .required("upper boundary")?;
+
+    let units = match frame_type {
+        FrameType::Undefined => return Err(SparkError::invalid("undefined frame type")),
+        FrameType::Row => window_frame::WindowFrameUnits::Rows,
+        FrameType::Range => window_frame::WindowFrameUnits::Range,
+    };
+
+    fn from_boundary_value(value: &sc::Expression) -> SparkResult<ScalarValue> {
+        let value = from_spark_expression(value, &DFSchema::empty())?;
+        match value {
+            expr::Expr::Literal(
+                v @ (ScalarValue::UInt32(_)
+                | ScalarValue::Int32(_)
+                | ScalarValue::UInt64(_)
+                | ScalarValue::Int64(_)),
+            ) => Ok(v),
+            _ => Err(SparkError::invalid(format!(
+                "invalid boundary value: {:?}",
+                value
+            ))),
+        }
+    }
+
+    let start = match lower {
+        Boundary::CurrentRow(true) => window_frame::WindowFrameBound::CurrentRow,
+        Boundary::Unbounded(true) => {
+            window_frame::WindowFrameBound::Preceding(ScalarValue::UInt64(None))
+        }
+        Boundary::Value(value) => {
+            window_frame::WindowFrameBound::Preceding(from_boundary_value(value)?)
+        }
+        _ => {
+            return Err(SparkError::invalid(format!(
+                "invalid lower boundary: {:?}",
+                lower
+            )));
+        }
+    };
+    let end = match upper {
+        Boundary::CurrentRow(true) => window_frame::WindowFrameBound::CurrentRow,
+        Boundary::Unbounded(true) => {
+            window_frame::WindowFrameBound::Following(ScalarValue::UInt64(None))
+        }
+        Boundary::Value(value) => {
+            window_frame::WindowFrameBound::Following(from_boundary_value(value)?)
+        }
+        _ => {
+            return Err(SparkError::invalid(format!(
+                "invalid upper boundary: {:?}",
+                upper
+            )));
+        }
+    };
+    Ok(window_frame::WindowFrame::new_bounds(units, start, end))
+}
+
 pub(crate) fn from_spark_expression(
     expr: &sc::Expression,
     schema: &DFSchema,
@@ -82,6 +190,7 @@ pub(crate) fn from_spark_expression(
         }
         ExprType::UnresolvedAttribute(attr) => {
             let col = Column::new_unqualified(&attr.unparsed_identifier);
+            let _plan_id = attr.plan_id;
             Ok(expr::Expr::Column(col))
         }
         ExprType::UnresolvedFunction(func) => {
@@ -177,34 +286,71 @@ pub(crate) fn from_spark_expression(
             }))
         }
         ExprType::UnresolvedRegex(_) => Err(SparkError::todo("unresolved regex")),
-        ExprType::SortOrder(sort) => {
-            use sc::expression::sort_order::{NullOrdering, SortDirection};
-
-            let expr = sort.child.as_ref().required("expression for sort order")?;
-            let asc = match SortDirection::try_from(sort.direction) {
-                Ok(SortDirection::Ascending) => true,
-                Ok(SortDirection::Descending) => false,
-                Ok(SortDirection::Unspecified) => true,
-                Err(_) => {
-                    return Err(SparkError::invalid("invalid sort direction"));
+        ExprType::SortOrder(sort) => from_spark_sort_order(sort.as_ref(), schema),
+        ExprType::LambdaFunction(_) => Err(SparkError::todo("lambda function")),
+        ExprType::Window(window) => {
+            let func = window
+                .window_function
+                .as_ref()
+                .required("window function")?
+                .expr_type
+                .as_ref()
+                .required("window function expression")?;
+            let (func_name, args) = match func {
+                ExprType::UnresolvedFunction(sc::expression::UnresolvedFunction {
+                    function_name,
+                    arguments,
+                    is_user_defined_function,
+                    is_distinct,
+                }) => {
+                    if *is_user_defined_function {
+                        return Err(SparkError::unsupported("user defined window function"));
+                    }
+                    if *is_distinct {
+                        return Err(SparkError::unsupported("distinct window function"));
+                    }
+                    let args = arguments
+                        .iter()
+                        .map(|x| from_spark_expression(x, schema))
+                        .collect::<SparkResult<Vec<_>>>()?;
+                    (function_name, args)
+                }
+                ExprType::CommonInlineUserDefinedFunction(_) => {
+                    return Err(SparkError::unsupported(
+                        "inline user defined window function",
+                    ));
+                }
+                _ => {
+                    return Err(SparkError::invalid(format!(
+                        "invalid window function expression: {:?}",
+                        func
+                    )));
                 }
             };
-            let nulls_first = match NullOrdering::try_from(sort.null_ordering) {
-                Ok(NullOrdering::SortNullsFirst) => true,
-                Ok(NullOrdering::SortNullsLast) => false,
-                Ok(NullOrdering::SortNullsUnspecified) => asc,
-                Err(_) => {
-                    return Err(SparkError::invalid("invalid null ordering"));
-                }
+            let partition_by = window
+                .partition_spec
+                .iter()
+                .map(|x| from_spark_expression(x, schema))
+                .collect::<SparkResult<Vec<_>>>()?;
+            let order_by = window
+                .order_spec
+                .iter()
+                .map(|x| from_spark_sort_order(x, schema))
+                .collect::<SparkResult<Vec<_>>>()?;
+            let window_frame = if let Some(frame) = window.frame_spec.as_ref() {
+                from_spark_window_frame(frame)?
+            } else {
+                window_frame::WindowFrame::new(None)
             };
-            Ok(expr::Expr::Sort(expr::Sort {
-                expr: Box::new(from_spark_expression(expr, schema)?),
-                asc,
-                nulls_first,
+            Ok(expr::Expr::WindowFunction(expr::WindowFunction {
+                fun: get_window_function(func_name.as_str())?,
+                args,
+                partition_by,
+                order_by,
+                window_frame,
+                null_treatment: None,
             }))
         }
-        ExprType::LambdaFunction(_) => Err(SparkError::todo("lambda function")),
-        ExprType::Window(_) => Err(SparkError::todo("window")),
         ExprType::UnresolvedExtractValue(extract) => {
             use sc::expression::literal::LiteralType;
 
@@ -656,4 +802,61 @@ pub(crate) fn get_scalar_function(
         func_def: ScalarFunctionDefinition::BuiltIn(name.parse()?),
         args,
     }))
+}
+
+pub(crate) fn get_window_function(name: &str) -> SparkResult<expr::WindowFunctionDefinition> {
+    match name {
+        "avg" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
+            AggregateFunction::Avg,
+        )),
+        "min" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
+            AggregateFunction::Min,
+        )),
+        "max" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
+            AggregateFunction::Max,
+        )),
+        "sum" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
+            AggregateFunction::Sum,
+        )),
+        "count" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
+            AggregateFunction::Count,
+        )),
+        "row_number" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
+            BuiltInWindowFunction::RowNumber,
+        )),
+        "rank" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
+            BuiltInWindowFunction::Rank,
+        )),
+        "dense_rank" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
+            BuiltInWindowFunction::DenseRank,
+        )),
+        "percent_rank" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
+            BuiltInWindowFunction::PercentRank,
+        )),
+        "ntile" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
+            BuiltInWindowFunction::Ntile,
+        )),
+        "first_value" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
+            BuiltInWindowFunction::FirstValue,
+        )),
+        "last_value" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
+            BuiltInWindowFunction::LastValue,
+        )),
+        "nth_value" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
+            BuiltInWindowFunction::NthValue,
+        )),
+        "lead" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
+            BuiltInWindowFunction::Lead,
+        )),
+        "lag" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
+            BuiltInWindowFunction::Lag,
+        )),
+        "cume_dist" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
+            BuiltInWindowFunction::CumeDist,
+        )),
+        s => Err(SparkError::invalid(format!(
+            "unknown window function: {}",
+            s
+        ))),
+    }
 }
