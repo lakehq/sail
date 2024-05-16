@@ -648,8 +648,7 @@ pub(crate) async fn from_spark_relation(
             // Spark Database = Datafusion Schema
             // Spark Table = Datafusion Table
             use sc::catalog::CatType;
-            let cat_type = catalog.cat_type.as_ref().required("catalog type")?;
-            match cat_type {
+            match catalog.cat_type.as_ref().required("catalog type")? {
                 CatType::CurrentDatabase(_current_database) => {
                     let default_schema = &state.config().options().catalog.default_schema;
                     let results = ctx
@@ -747,7 +746,7 @@ pub(crate) async fn from_spark_relation(
                 }
                 CatType::CreateTable(_) => Err(SparkError::unsupported("CatType::CreateTable")),
                 CatType::DropTempView(drop_temp_view) => {
-                    let view_name = &drop_temp_view.view_name;
+                    let view_name = drop_temp_view.view_name.to_string();
                     Ok(LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
                         name: TableReference::from(view_name),
                         if_exists: true,
@@ -755,7 +754,7 @@ pub(crate) async fn from_spark_relation(
                     })))
                 }
                 CatType::DropGlobalTempView(drop_global_temp_view) => {
-                    let view_name = &drop_global_temp_view.view_name;
+                    let view_name = drop_global_temp_view.view_name.to_string();
                     Ok(LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
                         name: TableReference::from(view_name),
                         if_exists: true,
