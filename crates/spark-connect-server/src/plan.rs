@@ -663,6 +663,7 @@ pub(crate) async fn from_spark_relation(
                 }
                 CatType::SetCurrentDatabase(set_current_database) => {
                     let _db_name = set_current_database.db_name.to_string();
+                    // TODO: Uncomment when we upgrade to DataFusion 38.0.0
                     // ctx.state().config().options_mut().catalog.default_schema = db_name;
                     Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
                         produce_one_row: false,
@@ -671,13 +672,12 @@ pub(crate) async fn from_spark_relation(
                 }
                 CatType::ListDatabases(list_databases) => {
                     let pattern: Option<&String> = list_databases.pattern.as_ref();
-
                     let mut schema_names: Vec<String> = Vec::new();
                     let mut catalog_names: Vec<Option<String>> = Vec::new();
+                    // TODO: schema_descriptions
                     let mut schema_descriptions: Vec<Option<String>> = Vec::new();
                     // TODO: locationUri should technically not be nullable
                     let mut schema_location_uris: Vec<Option<String>> = Vec::new();
-
                     let catalog_list: &Arc<dyn CatalogProviderList> = &state.catalog_list();
 
                     for catalog_name in catalog_list.catalog_names() {
@@ -710,14 +710,13 @@ pub(crate) async fn from_spark_relation(
                         // TODO: locationUri should technically not be nullable
                         Field::new("locationUri", DataType::Utf8, true),
                     ]));
-
                     let record_batch = RecordBatch::try_new(
                         schema_ref.clone(),
                         vec![
-                            Arc::new(StringArray::from(schema_names.clone())),
-                            Arc::new(StringArray::from(schema_names.clone())),
-                            Arc::new(StringArray::from(schema_names.clone())),
-                            Arc::new(StringArray::from(schema_names.clone())),
+                            Arc::new(StringArray::from(schema_names)),
+                            Arc::new(StringArray::from(catalog_names)),
+                            Arc::new(StringArray::from(schema_descriptions)),
+                            Arc::new(StringArray::from(schema_location_uris)),
                         ],
                     )?;
 
@@ -761,38 +760,70 @@ pub(crate) async fn from_spark_relation(
                 CatType::RefreshTable(_) => Err(SparkError::unsupported("CatType::RefreshTable")),
                 CatType::RefreshByPath(_) => Err(SparkError::unsupported("CatType::RefreshByPath")),
                 CatType::CurrentCatalog(_) => {
-                    Err(SparkError::unsupported("CatType::CurrentCatalog"))
+                    let default_catalog = &state.config().options().catalog.default_catalog;
+                    let results = ctx
+                        .sql("SELECT CAST($default_catalog AS STRING)")
+                        .await?
+                        .with_param_values(vec![(
+                            "default_catalog",
+                            ScalarValue::Utf8(Some(default_catalog.to_owned())),
+                        )])?;
+                    Ok(results.into_optimized_plan()?)
                 }
-                CatType::SetCurrentCatalog(_) => {
-                    Err(SparkError::unsupported("CatType::SetCurrentCatalog"))
+                CatType::SetCurrentCatalog(set_current_catalog) => {
+                    let _catalog_name = set_current_catalog.catalog_name.to_string();
+                    // TODO: Uncomment when we upgrade to DataFusion 38.0.0
+                    // ctx.state().config().options_mut().catalog.default_catalog = catalog_name;
+                    Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
+                        produce_one_row: false,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    }))
                 }
                 CatType::ListCatalogs(list_catalogs) => {
-                    let pattern = list_catalogs.pattern.as_ref();
-                    // match pattern {
-                    //     Some(pattern) => {
-                    //         let catalog_names = &ctx
-                    //             .catalog_names()
-                    //             .iter()
-                    //             .filter(|name| name.contains(pattern))
-                    //             .map(|name| name.to_string())
-                    //             .collect::<Vec<String>>();
-                    //         Err(SparkError::unsupported("CatType::SetCurrentCatalog"))
-                    //
-                    //     }
-                    //     None => {
-                    //         // List all catalogs
-                    //         let catalog_names = &ctx.catalog_names();
-                    //         Err(SparkError::unsupported("CatType::SetCurrentCatalog"))
-                    //
-                    //     }
-                    // }
-                    // let table_reference = TableReference::from(unparsed_identifier);
-                    // let df: DataFrame = ctx.table(table_reference.clone()).await?;
-                    // Ok(df.into_optimized_plan()?)
+                    let pattern: Option<&String> = list_catalogs.pattern.as_ref();
+                    let mut catalog_names: Vec<String> = Vec::new();
+                    // TODO: catalog_descriptions
+                    let mut catalog_descriptions: Vec<Option<String>> = Vec::new();
+                    let catalog_list: &Arc<dyn CatalogProviderList> = &state.catalog_list();
 
-                    let test = state.catalog_list();
+                    for catalog_name in catalog_list.catalog_names() {
+                        let catalog = catalog_list.catalog(&catalog_name);
+                        match catalog {
+                            Some(_catalog) => {
+                                let catalog_name = filter_pattern(&vec![catalog_name], pattern);
+                                if catalog_name.is_empty() {
+                                    continue;
+                                }
+                                catalog_names.push(catalog_name[0].to_owned());
+                                // TODO: catalog_descriptions
+                                catalog_descriptions.push(None);
+                            }
+                            None => {
+                                continue;
+                            }
+                        }
+                    }
 
-                    Err(SparkError::unsupported("CatType::SetCurrentCatalog"))
+                    let schema_ref = SchemaRef::new(Schema::new(vec![
+                        Field::new("name", DataType::Utf8, false),
+                        Field::new("description", DataType::Utf8, true),
+                    ]));
+                    let record_batch = RecordBatch::try_new(
+                        schema_ref.clone(),
+                        vec![
+                            Arc::new(StringArray::from(catalog_names)),
+                            Arc::new(StringArray::from(catalog_descriptions)),
+                        ],
+                    )?;
+
+                    let provider = MemTable::try_new(schema_ref, vec![vec![record_batch]])?;
+                    Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                        UNNAMED_TABLE,
+                        provider_as_source(Arc::new(provider)),
+                        None,
+                        vec![],
+                        None,
+                    )?))
                 }
             }
         }
