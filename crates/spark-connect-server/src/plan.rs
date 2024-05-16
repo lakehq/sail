@@ -34,6 +34,7 @@ use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::Relation;
 use crate::sql::parser::new_sql_parser;
+use crate::utils::filter_pattern;
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
     let cursor = Cursor::new(data);
@@ -670,10 +671,6 @@ pub(crate) async fn from_spark_relation(
                 }
                 CatType::ListDatabases(list_databases) => {
                     let pattern: Option<&String> = list_databases.pattern.as_ref();
-                    let pattern = match pattern {
-                        Some(pattern) => pattern.replace("*", ""),
-                        None => "".to_string(),
-                    };
 
                     let mut schema_names: Vec<String> = Vec::new();
                     let mut catalog_names: Vec<Option<String>> = Vec::new();
@@ -688,10 +685,11 @@ pub(crate) async fn from_spark_relation(
                         match catalog {
                             Some(catalog) => {
                                 for schema_name in catalog.schema_names() {
-                                    if &pattern != "" && !schema_name.contains(&pattern) {
+                                    let schema_name = filter_pattern(&vec![schema_name], pattern);
+                                    if schema_name.is_empty() {
                                         continue;
                                     }
-                                    schema_names.push(schema_name);
+                                    schema_names.push(schema_name[0].to_owned());
                                     catalog_names.push(Some(catalog_name.to_owned()));
                                     // TODO: schema_descriptions
                                     schema_descriptions.push(None);
