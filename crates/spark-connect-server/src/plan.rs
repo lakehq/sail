@@ -3,9 +3,11 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::array::{RecordBatch, StringArray};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
+use datafusion::catalog::CatalogProviderList;
 use datafusion::common::{ParamValues, TableReference};
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::file_format::csv::CsvFormat;
@@ -13,7 +15,7 @@ use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion::datasource::provider_as_source;
+use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::execution::context::{DataFilePaths, SessionContext};
 use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
@@ -255,7 +257,7 @@ pub(crate) async fn from_spark_relation(
             } else {
                 return Err(SparkError::invalid("missing schema for local relation"));
             };
-            let provider = datafusion::datasource::MemTable::try_new(schema, vec![batches])?;
+            let provider = MemTable::try_new(schema, vec![batches])?;
             Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
                 UNNAMED_TABLE,
                 provider_as_source(Arc::new(provider)),
@@ -575,7 +577,7 @@ pub(crate) async fn from_spark_relation(
             use sc::catalog::CatType;
             let cat_type = catalog.cat_type.as_ref().required("catalog type")?;
             match cat_type {
-                CatType::CurrentDatabase(current_database) => {
+                CatType::CurrentDatabase(_current_database) => {
                     let default_schema = &state.config().options().catalog.default_schema;
                     let results = ctx
                         .sql("SELECT CAST($default_schema AS STRING)")
@@ -587,14 +589,77 @@ pub(crate) async fn from_spark_relation(
                     Ok(results.into_optimized_plan()?)
                 }
                 CatType::SetCurrentDatabase(set_current_database) => {
-                    let db_name = set_current_database.db_name.to_string();
+                    let _db_name = set_current_database.db_name.to_string();
                     // ctx.state().config().options_mut().catalog.default_schema = db_name;
                     Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
                         produce_one_row: false,
                         schema: DFSchemaRef::new(DFSchema::empty()),
                     }))
                 }
-                CatType::ListDatabases(_) => Err(SparkError::unsupported("CatType::ListDatabases")),
+                CatType::ListDatabases(list_databases) => {
+                    let pattern: Option<&String> = list_databases.pattern.as_ref();
+                    let pattern = match pattern {
+                        Some(pattern) => pattern.replace("*", ""),
+                        None => "".to_string(),
+                    };
+
+                    let mut schema_names: Vec<String> = Vec::new();
+                    let mut catalog_names: Vec<Option<String>> = Vec::new();
+                    let mut schema_descriptions: Vec<Option<String>> = Vec::new();
+                    // TODO: locationUri should technically not be nullable
+                    let mut schema_location_uris: Vec<Option<String>> = Vec::new();
+
+                    let catalog_list: &Arc<dyn CatalogProviderList> = &state.catalog_list();
+
+                    for catalog_name in catalog_list.catalog_names() {
+                        let catalog = catalog_list.catalog(&catalog_name);
+                        match catalog {
+                            Some(catalog) => {
+                                for schema_name in catalog.schema_names() {
+                                    if &pattern != "" && !schema_name.contains(&pattern) {
+                                        continue;
+                                    }
+                                    schema_names.push(schema_name);
+                                    catalog_names.push(Some(catalog_name.to_owned()));
+                                    // TODO: schema_descriptions
+                                    schema_descriptions.push(None);
+                                    // TODO: schema_location_uris
+                                    schema_location_uris.push(None);
+                                }
+                            }
+                            None => {
+                                continue;
+                            }
+                        }
+                    }
+
+                    let schema_ref = SchemaRef::new(Schema::new(vec![
+                        Field::new("name", DataType::Utf8, false),
+                        Field::new("catalog", DataType::Utf8, true),
+                        Field::new("description", DataType::Utf8, true),
+                        // TODO: locationUri should technically not be nullable
+                        Field::new("locationUri", DataType::Utf8, true),
+                    ]));
+
+                    let record_batch = RecordBatch::try_new(
+                        schema_ref.clone(),
+                        vec![
+                            Arc::new(StringArray::from(schema_names.clone())),
+                            Arc::new(StringArray::from(schema_names.clone())),
+                            Arc::new(StringArray::from(schema_names.clone())),
+                            Arc::new(StringArray::from(schema_names.clone())),
+                        ],
+                    )?;
+
+                    let provider = MemTable::try_new(schema_ref, vec![vec![record_batch]])?;
+                    Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                        UNNAMED_TABLE,
+                        provider_as_source(Arc::new(provider)),
+                        None,
+                        vec![],
+                        None,
+                    )?))
+                }
                 CatType::ListTables(_) => Err(SparkError::unsupported("CatType::ListTables")),
                 CatType::ListFunctions(_) => Err(SparkError::unsupported("CatType::ListFunctions")),
                 CatType::ListColumns(_) => Err(SparkError::unsupported("CatType::ListColumns")),
