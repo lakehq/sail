@@ -925,7 +925,7 @@ pub(crate) async fn from_spark_relation(
                             catalog_list
                                 .catalog(&catalog_name)
                                 .map_or(false, |catalog| {
-                                    db_name.map_or(false, |db_name| {
+                                    db_name.clone().map_or(false, |db_name| {
                                         catalog
                                             .schema(&db_name)
                                             .map_or(false, |schema| schema.table_exist(table_name))
