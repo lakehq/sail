@@ -31,7 +31,7 @@ use crate::extension::analyzer::alias::rewrite_multi_alias;
 use crate::extension::analyzer::explode::rewrite_explode;
 use crate::extension::analyzer::wildcard::rewrite_wildcard;
 use crate::extension::analyzer::window::rewrite_window;
-use crate::schema::cast_record_batch;
+use crate::schema::{cast_record_batch, from_spark_built_in_data_type};
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::Relation;
@@ -85,6 +85,7 @@ pub(crate) async fn from_spark_relation(
                     let unparsed_identifier: &String = &named_table.unparsed_identifier;
                     let options: &HashMap<String, String> = &named_table.options;
                     if !options.is_empty() {
+                        // TODO: Handle options
                         return Err(SparkError::unsupported("table options"));
                     }
                     let table_reference = TableReference::from(unparsed_identifier);
@@ -800,11 +801,48 @@ pub(crate) async fn from_spark_relation(
                         .with_param_values(vec![("1", ScalarValue::Boolean(Some(db_exists)))])?;
                     Ok(results.into_optimized_plan()?)
                 }
-                CatType::TableExists(_) => Err(SparkError::unsupported("CatType::TableExists")),
+                CatType::TableExists(table_exists) => {
+                    let table_name = table_exists.table_name.to_string();
+                    let db_name: Option<&String> = table_exists.db_name.as_ref();
+                    Err(SparkError::unsupported("CatType::FunctionExists"))
+                }
                 CatType::FunctionExists(_) => {
                     Err(SparkError::unsupported("CatType::FunctionExists"))
                 }
-                CatType::CreateExternalTable(_) => {
+                CatType::CreateExternalTable(create_external_table) => {
+                    let table_name = create_external_table.table_name.to_string();
+                    let path: Option<&String> = create_external_table.path.as_ref();
+                    let source: Option<&String> = create_external_table.source.as_ref();
+                    let schema: Option<&sc::DataType> = create_external_table.schema.as_ref();
+                    let schema: Option<DataType> = match schema {
+                        Some(schema) => Some(from_spark_built_in_data_type(schema)?),
+                        None => None,
+                    };
+                    let options: &HashMap<String, String> = &create_external_table.options;
+                    if !options.is_empty() {
+                        // TODO: Handle options
+                        return Err(SparkError::unsupported("table options"));
+                    }
+
+                    // Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
+                    //     plan::CreateExternalTable {
+                    //         schema: Arc<DFSchema>,
+                    //         name: TableReference::from(table_name),
+                    //         location: String,
+                    //         file_type: String,
+                    //         has_header: bool,
+                    //         delimiter: char,
+                    //         table_partition_cols: Vec<String>,
+                    //         if_not_exists: bool,
+                    //         definition: Option<String>,
+                    //         order_exprs: Vec<Vec<Expr>>,
+                    //         file_compression_type: CompressionTypeVariant,
+                    //         unbounded: bool,
+                    //         options: HashMap<String, String>,
+                    //         constraints: Constraints,
+                    //         column_defaults: HashMap<String, Expr>,
+                    //     },
+                    // )))
                     Err(SparkError::unsupported("CatType::CreateExternalTable"))
                 }
                 CatType::CreateTable(_) => Err(SparkError::unsupported("CatType::CreateTable")),
