@@ -1157,10 +1157,7 @@ pub(crate) async fn from_spark_relation(
                         .map_or(catalog_name, |catalog| Some(catalog.to_string()));
 
                     let catalog_list: &Arc<dyn CatalogProviderList> = &state.catalog_list();
-                    println!(
-                        "CHECK HERE: table_name: {:?}, db_name: {:?}, catalog_name: {:?}",
-                        table_name, db_name, catalog_name
-                    );
+                    let default_schema = &state.config().options().catalog.default_schema;
 
                     let table_exists: bool = catalog_name.map_or_else(
                         || {
@@ -1168,17 +1165,8 @@ pub(crate) async fn from_spark_relation(
                                 catalog_list.catalog(catalog_name).map_or(false, |catalog| {
                                     db_name.clone().map_or_else(
                                         || {
-                                            catalog.schema_names().iter().any(|schema_name| {
-                                                catalog.schema(schema_name).map_or(
-                                                    false,
-                                                    |schema| {
-                                                        println!(
-                                                            "CHECK HERE1: schema table_names: {:?}, table_name: {:?}, exists: {:?}",
-                                                            schema.table_names(), table_name, schema.table_exist(table_name)
-                                                        );
-                                                        schema.table_exist(table_name)
-                                                    },
-                                                )
+                                            catalog.schema(default_schema).map_or(false, |schema| {
+                                                schema.table_exist(table_name)
                                             })
                                         },
                                         |db_name| {
@@ -1197,12 +1185,11 @@ pub(crate) async fn from_spark_relation(
                                     db_name.clone().map_or_else(
                                         || {
                                             catalog.schema_names().iter().any(|schema_name| {
-                                                catalog.schema(schema_name).map_or(
-                                                    false,
-                                                    |schema| {
+                                                catalog
+                                                    .schema(schema_name)
+                                                    .map_or(false, |schema| {
                                                         schema.table_exist(table_name)
-                                                    },
-                                                )
+                                                    })
                                             })
                                         },
                                         |db_name| {
