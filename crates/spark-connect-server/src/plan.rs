@@ -758,7 +758,7 @@ pub(crate) async fn from_spark_relation(
                                                 tables.push(CatalogTable {
                                                     name: table_name.clone(),
                                                     catalog: Some(catalog_name.clone()),
-                                                    namespace: Some(db_name.clone()),
+                                                    namespace: Some(vec![db_name.clone()]),
                                                     // TODO: Add actual description if available
                                                     description: None,
                                                     table_type: table_type,
@@ -980,12 +980,41 @@ pub(crate) async fn from_spark_relation(
                                             tables.push(CatalogTable {
                                                 name: table_name.to_string(),
                                                 catalog: Some(catalog_name.clone()),
-                                                namespace: Some(db_name.clone()),
+                                                namespace: Some(vec![db_name.clone()]),
                                                 // TODO: Add actual description if available
                                                 description: None,
                                                 table_type: table_type,
                                                 is_temporary: is_temporary,
                                             });
+                                        }
+                                    }
+                                } else {
+                                    for schema_name in catalog.schema_names() {
+                                        if let Some(schema) = catalog.schema(&schema_name) {
+                                            if let Ok(Some(table)) = schema.table(&table_name).await
+                                            {
+                                                // Spark Table Types: EXTERNAL, MANAGED, VIEW
+                                                let (table_type, is_temporary) = match table
+                                                    .table_type()
+                                                {
+                                                    TableType::View => ("VIEW".to_string(), false),
+                                                    TableType::Base => {
+                                                        ("MANAGED".to_string(), false)
+                                                    }
+                                                    TableType::Temporary => {
+                                                        ("MANAGED".to_string(), true)
+                                                    }
+                                                };
+                                                tables.push(CatalogTable {
+                                                    name: table_name.to_string(),
+                                                    catalog: Some(catalog_name.clone()),
+                                                    namespace: Some(vec![schema_name.clone()]),
+                                                    // TODO: Add actual description if available
+                                                    description: None,
+                                                    table_type: table_type,
+                                                    is_temporary: is_temporary,
+                                                });
+                                            }
                                         }
                                     }
                                 }
@@ -1013,12 +1042,43 @@ pub(crate) async fn from_spark_relation(
                                                 tables.push(CatalogTable {
                                                     name: table_name.to_string(),
                                                     catalog: Some(catalog_name.clone()),
-                                                    namespace: Some(db_name.clone()),
+                                                    namespace: Some(vec![db_name.clone()]),
                                                     // TODO: Add actual description if available
                                                     description: None,
                                                     table_type: table_type,
                                                     is_temporary: is_temporary,
                                                 });
+                                            }
+                                        }
+                                    } else {
+                                        for schema_name in catalog.schema_names() {
+                                            if let Some(schema) = catalog.schema(&schema_name) {
+                                                if let Ok(Some(table)) =
+                                                    schema.table(&table_name).await
+                                                {
+                                                    // Spark Table Types: EXTERNAL, MANAGED, VIEW
+                                                    let (table_type, is_temporary) =
+                                                        match table.table_type() {
+                                                            TableType::View => {
+                                                                ("VIEW".to_string(), false)
+                                                            }
+                                                            TableType::Base => {
+                                                                ("MANAGED".to_string(), false)
+                                                            }
+                                                            TableType::Temporary => {
+                                                                ("MANAGED".to_string(), true)
+                                                            }
+                                                        };
+                                                    tables.push(CatalogTable {
+                                                        name: table_name.to_string(),
+                                                        catalog: Some(catalog_name.clone()),
+                                                        namespace: Some(vec![schema_name.clone()]),
+                                                        // TODO: Add actual description if available
+                                                        description: None,
+                                                        table_type: table_type,
+                                                        is_temporary: is_temporary,
+                                                    });
+                                                }
                                             }
                                         }
                                     }
@@ -1097,15 +1157,36 @@ pub(crate) async fn from_spark_relation(
                         .map_or(catalog_name, |catalog| Some(catalog.to_string()));
 
                     let catalog_list: &Arc<dyn CatalogProviderList> = &state.catalog_list();
+                    println!(
+                        "CHECK HERE: table_name: {:?}, db_name: {:?}, catalog_name: {:?}",
+                        table_name, db_name, catalog_name
+                    );
+
                     let table_exists: bool = catalog_name.map_or_else(
                         || {
                             catalog_list.catalog_names().iter().any(|catalog_name| {
                                 catalog_list.catalog(catalog_name).map_or(false, |catalog| {
-                                    db_name.clone().map_or(false, |db_name| {
-                                        catalog
-                                            .schema(&db_name)
-                                            .map_or(false, |schema| schema.table_exist(table_name))
-                                    })
+                                    db_name.clone().map_or_else(
+                                        || {
+                                            catalog.schema_names().iter().any(|schema_name| {
+                                                catalog.schema(schema_name).map_or(
+                                                    false,
+                                                    |schema| {
+                                                        println!(
+                                                            "CHECK HERE1: schema table_names: {:?}, table_name: {:?}, exists: {:?}",
+                                                            schema.table_names(), table_name, schema.table_exist(table_name)
+                                                        );
+                                                        schema.table_exist(table_name)
+                                                    },
+                                                )
+                                            })
+                                        },
+                                        |db_name| {
+                                            catalog.schema(&db_name).map_or(false, |schema| {
+                                                schema.table_exist(table_name)
+                                            })
+                                        },
+                                    )
                                 })
                             })
                         },
@@ -1113,11 +1194,23 @@ pub(crate) async fn from_spark_relation(
                             catalog_list
                                 .catalog(&catalog_name)
                                 .map_or(false, |catalog| {
-                                    db_name.clone().map_or(false, |db_name| {
-                                        catalog
-                                            .schema(&db_name)
-                                            .map_or(false, |schema| schema.table_exist(table_name))
-                                    })
+                                    db_name.clone().map_or_else(
+                                        || {
+                                            catalog.schema_names().iter().any(|schema_name| {
+                                                catalog.schema(schema_name).map_or(
+                                                    false,
+                                                    |schema| {
+                                                        schema.table_exist(table_name)
+                                                    },
+                                                )
+                                            })
+                                        },
+                                        |db_name| {
+                                            catalog.schema(&db_name).map_or(false, |schema| {
+                                                schema.table_exist(table_name)
+                                            })
+                                        },
+                                    )
                                 })
                         },
                     );
