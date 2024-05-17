@@ -3,118 +3,338 @@
     {
       "input": "\nstruct<\n  struct:struct<deciMal:DECimal, anotherDecimal:decimAL(5,2)>,\n  MAP:Map<timestamp, varchar(10)>,\n  arrAy:Array<double>,\n  anotherArray:Array<char(9)>>\n    ",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"struct\", quote_style: None }]), [])"
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "struct",
+                "dataType": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "name": "deciMal",
+                        "dataType": {
+                          "decimal": {
+                            "scale": 0,
+                            "precision": 10
+                          }
+                        },
+                        "nullable": true
+                      },
+                      {
+                        "name": "anotherDecimal",
+                        "dataType": {
+                          "decimal": {
+                            "scale": 2,
+                            "precision": 5
+                          }
+                        },
+                        "nullable": true
+                      }
+                    ]
+                  }
+                },
+                "nullable": true
+              },
+              {
+                "name": "MAP",
+                "dataType": {
+                  "map": {
+                    "keyType": {
+                      "timestamp": {}
+                    },
+                    "valueType": {
+                      "varChar": {
+                        "length": 10
+                      }
+                    },
+                    "valueContainsNull": true
+                  }
+                },
+                "nullable": true
+              },
+              {
+                "name": "arrAy",
+                "dataType": {
+                  "array": {
+                    "elementType": {
+                      "double": {}
+                    },
+                    "containsNull": true
+                  }
+                },
+                "nullable": true
+              },
+              {
+                "name": "anotherArray",
+                "dataType": {
+                  "array": {
+                    "elementType": {
+                      "char": {
+                        "length": 9
+                      }
+                    },
+                    "containsNull": true
+                  }
+                },
+                "nullable": true
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "Array<map<int, tinYint>>",
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected >, found: < at Line: 1, Column 10"
+        "success": {
+          "array": {
+            "elementType": {
+              "map": {
+                "keyType": {
+                  "integer": {}
+                },
+                "valueType": {
+                  "byte": {}
+                },
+                "valueContainsNull": true
+              }
+            },
+            "containsNull": true
+          }
+        }
       }
     },
     {
       "input": "BINARY",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Binary(None)"
+        "success": {
+          "binary": {}
+        }
       }
     },
     {
       "input": "BooLean",
       "output": {
-        "success": "Boolean"
+        "success": {
+          "boolean": {}
+        }
       }
     },
     {
       "input": "ChaR(5)",
       "output": {
-        "success": "Utf8"
+        "success": {
+          "char": {
+            "length": 5
+          }
+        }
       }
     },
     {
       "input": "ChaRacter(5)",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Character(Some(IntegerLength { length: 5, unit: None }))"
+        "success": {
+          "char": {
+            "length": 5
+          }
+        }
       }
     },
     {
       "input": "DATE",
       "output": {
-        "success": "Date32"
+        "success": {
+          "date": {}
+        }
       }
     },
     {
       "input": "Dec(10, 5)",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Dec(PrecisionAndScale(10, 5))"
+        "success": {
+          "decimal": {
+            "scale": 5,
+            "precision": 10
+          }
+        }
       }
     },
     {
       "input": "INT",
       "output": {
-        "success": "Int32"
+        "success": {
+          "integer": {}
+        }
       }
     },
     {
       "input": "INTEGER",
       "output": {
-        "success": "Int32"
+        "success": {
+          "integer": {}
+        }
       }
     },
     {
       "input": "INTERVAL YEAR TO MONTH",
       "output": {
         "success": {
-          "Interval": "MonthDayNano"
+          "yearMonthInterval": {
+            "startField": 0,
+            "endField": 1
+          }
         }
       }
     },
     {
       "input": "MAP<int, STRING>",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"MAP\", quote_style: None }]), [])"
+        "success": {
+          "map": {
+            "keyType": {
+              "integer": {}
+            },
+            "valueType": {
+              "string": {}
+            },
+            "valueContainsNull": true
+          }
+        }
       }
     },
     {
       "input": "MAP<int, struct<varchar:string>>",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"MAP\", quote_style: None }]), [])"
+        "success": {
+          "map": {
+            "keyType": {
+              "integer": {}
+            },
+            "valueType": {
+              "struct": {
+                "fields": [
+                  {
+                    "name": "varchar",
+                    "dataType": {
+                      "string": {}
+                    },
+                    "nullable": true
+                  }
+                ]
+              }
+            },
+            "valueContainsNull": true
+          }
+        }
       }
     },
     {
       "input": "MAp<int, ARRAY<double>>",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"MAp\", quote_style: None }]), [])"
+        "success": {
+          "map": {
+            "keyType": {
+              "integer": {}
+            },
+            "valueType": {
+              "array": {
+                "elementType": {
+                  "double": {}
+                },
+                "containsNull": true
+              }
+            },
+            "valueContainsNull": true
+          }
+        }
       }
     },
     {
       "input": "Struct<TABLE: string, DATE:boolean>",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"Struct\", quote_style: None }]), [])"
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "TABLE",
+                "dataType": {
+                  "string": {}
+                },
+                "nullable": true
+              },
+              {
+                "name": "DATE",
+                "dataType": {
+                  "boolean": {}
+                },
+                "nullable": true
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "Struct<int: int, timestamp:timestamp>",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"Struct\", quote_style: None }]), [])"
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "int",
+                "dataType": {
+                  "integer": {}
+                },
+                "nullable": true
+              },
+              {
+                "name": "timestamp",
+                "dataType": {
+                  "timestamp": {}
+                },
+                "nullable": true
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "Struct<x: INT, y: STRING COMMENT 'test'>",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"Struct\", quote_style: None }]), [])"
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "x",
+                "dataType": {
+                  "integer": {}
+                },
+                "nullable": true
+              },
+              {
+                "name": "y",
+                "dataType": {
+                  "string": {}
+                },
+                "nullable": true,
+                "metadata": "{\"comment\":\"test\"}"
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "array<doublE>",
       "output": {
         "success": {
-          "List": {
-            "name": "item",
-            "data_type": "Float64",
-            "nullable": true,
-            "dict_id": 0,
-            "dict_is_ordered": false,
-            "metadata": {}
+          "array": {
+            "elementType": {
+              "double": {}
+            },
+            "containsNull": true
           }
         }
       }
@@ -122,41 +342,71 @@
     {
       "input": "array<struct<tinYint:tinyint>>",
       "output": {
-        "failure": "error in SQL parser: sql parser error: Expected >, found: < at Line: 1, Column 13"
+        "success": {
+          "array": {
+            "elementType": {
+              "struct": {
+                "fields": [
+                  {
+                    "name": "tinYint",
+                    "dataType": {
+                      "byte": {}
+                    },
+                    "nullable": true
+                  }
+                ]
+              }
+            },
+            "containsNull": true
+          }
+        }
       }
     },
     {
       "input": "bigint",
       "output": {
-        "success": "Int64"
+        "success": {
+          "long": {}
+        }
       }
     },
     {
       "input": "cHaR(27)",
       "output": {
-        "success": "Utf8"
+        "success": {
+          "char": {
+            "length": 27
+          }
+        }
       }
     },
     {
       "input": "dOUBle",
       "output": {
-        "success": "Float64"
+        "success": {
+          "double": {}
+        }
       }
     },
     {
       "input": "deC",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Dec(None)"
+        "success": {
+          "decimal": {
+            "scale": 0,
+            "precision": 10
+          }
+        }
       }
     },
     {
       "input": "decimal",
       "output": {
         "success": {
-          "Decimal128": [
-            38,
-            10
-          ]
+          "decimal": {
+            "scale": 0,
+            "precision": 10
+          }
         }
       }
     },
@@ -164,30 +414,34 @@
       "input": "decimal(10, 5)",
       "output": {
         "success": {
-          "Decimal128": [
-            10,
-            5
-          ]
+          "decimal": {
+            "scale": 5,
+            "precision": 10
+          }
         }
       }
     },
     {
       "input": "float",
       "output": {
-        "success": "Float32"
+        "success": {
+          "float": {}
+        }
       }
     },
     {
       "input": "integer",
       "output": {
-        "success": "Int32"
+        "success": {
+          "integer": {}
+        }
       }
     },
     {
       "input": "interval",
       "output": {
         "success": {
-          "Interval": "MonthDayNano"
+          "calendarInterval": {}
         }
       }
     },
@@ -195,121 +449,231 @@
       "input": "interval day to second",
       "output": {
         "success": {
-          "Interval": "MonthDayNano"
+          "dayTimeInterval": {
+            "startField": 0,
+            "endField": 3
+          }
         }
       }
     },
     {
       "input": "it is not a data type",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"it\", quote_style: None }]), [])"
+        "failure": "invalid argument: extra tokens after data type: is"
       }
     },
     {
       "input": "smallINT",
       "output": {
-        "success": "Int16"
+        "success": {
+          "short": {}
+        }
       }
     },
     {
       "input": "strUCt<>",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"strUCt\", quote_style: None }]), [])"
+        "success": {
+          "struct": {}
+        }
       }
     },
     {
       "input": "string",
       "output": {
-        "success": "Utf8"
+        "success": {
+          "string": {}
+        }
       }
     },
     {
       "input": "struct<`x+y`:int, `!@#$%^&*()`:string, `1_2.345<>:\"`:varchar(20)>",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"struct\", quote_style: None }]), [])"
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "x+y",
+                "dataType": {
+                  "integer": {}
+                },
+                "nullable": true
+              },
+              {
+                "name": "!@#$%^&*()",
+                "dataType": {
+                  "string": {}
+                },
+                "nullable": true
+              },
+              {
+                "name": "1_2.345<>:\"",
+                "dataType": {
+                  "varChar": {
+                    "length": 20
+                  }
+                },
+                "nullable": true
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "struct<end: long, select: int, from: string>",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"struct\", quote_style: None }]), [])"
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "end",
+                "dataType": {
+                  "long": {}
+                },
+                "nullable": true
+              },
+              {
+                "name": "select",
+                "dataType": {
+                  "integer": {}
+                },
+                "nullable": true
+              },
+              {
+                "name": "from",
+                "dataType": {
+                  "string": {}
+                },
+                "nullable": true
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "struct<intType: int, ts:timestamp>",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"struct\", quote_style: None }]), [])"
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "intType",
+                "dataType": {
+                  "integer": {}
+                },
+                "nullable": true
+              },
+              {
+                "name": "ts",
+                "dataType": {
+                  "timestamp": {}
+                },
+                "nullable": true
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "struct<x int, y string>",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"struct\", quote_style: None }]), [])"
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "x",
+                "dataType": {
+                  "integer": {}
+                },
+                "nullable": true
+              },
+              {
+                "name": "y",
+                "dataType": {
+                  "string": {}
+                },
+                "nullable": true
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "struct<x+y: int, 1.1:timestamp>",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"struct\", quote_style: None }]), [])"
+        "failure": "invalid argument: sql parser error: Expected >, found: + at Line: 1, Column 9"
       }
     },
     {
       "input": "struct<x: int",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"struct\", quote_style: None }]), [])"
+        "failure": "invalid argument: sql parser error: Expected >, found: EOF"
       }
     },
     {
       "input": "timestamp",
       "output": {
         "success": {
-          "Timestamp": [
-            "Nanosecond",
-            null
-          ]
+          "timestamp": {}
         }
       }
     },
     {
       "input": "timestamp_ltz",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"timestamp_ltz\", quote_style: None }]), [])"
+        "success": {
+          "timestamp": {}
+        }
       }
     },
     {
       "input": "timestamp_ntz",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"timestamp_ntz\", quote_style: None }]), [])"
+        "success": {
+          "timestampNtz": {}
+        }
       }
     },
     {
       "input": "tinYint",
       "output": {
-        "success": "Int8"
+        "success": {
+          "byte": {}
+        }
       }
     },
     {
       "input": "unknown",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"unknown\", quote_style: None }]), [])"
+        "failure": "not supported: SQL type Custom(ObjectName([Ident { value: \"unknown\", quote_style: None }]), [])"
       }
     },
     {
       "input": "unknown(1,2,3)",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"unknown\", quote_style: None }]), [\"1\", \"2\", \"3\"])"
+        "failure": "not supported: SQL type Custom(ObjectName([Ident { value: \"unknown\", quote_style: None }]), [\"1\", \"2\", \"3\"])"
       }
     },
     {
       "input": "varchAr(20)",
       "output": {
-        "success": "Utf8"
+        "success": {
+          "varChar": {
+            "length": 20
+          }
+        }
       }
     },
     {
       "input": "void",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"void\", quote_style: None }]), [])"
+        "success": {
+          "null": {}
+        }
       }
     }
   ]

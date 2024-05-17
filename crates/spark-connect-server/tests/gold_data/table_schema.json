@@ -3,7 +3,10 @@
     {
       "input": "",
       "output": {
-        "failure": "error in JSON serde: EOF while parsing a value at line 1 column 0"
+        "success": {
+          "fields": [],
+          "metadata": {}
+        }
       }
     },
     {
@@ -12,7 +15,7 @@
         "success": {
           "fields": [
             {
-              "name": "a",
+              "name": "A",
               "data_type": "Int32",
               "nullable": true,
               "dict_id": 0,
@@ -69,19 +72,7 @@
     {
       "input": "a INT b long",
       "output": {
-        "success": {
-          "fields": [
-            {
-              "name": "a",
-              "data_type": "Int32",
-              "nullable": true,
-              "dict_id": 0,
-              "dict_is_ordered": false,
-              "metadata": {}
-            }
-          ],
-          "metadata": {}
-        }
+        "failure": "error in JSON serde: expected value at line 1 column 1"
       }
     },
     {
@@ -105,7 +96,43 @@
     {
       "input": "a STRUCT<intType: int, ts:timestamp>",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"STRUCT\", quote_style: None }]), [])"
+        "success": {
+          "fields": [
+            {
+              "name": "a",
+              "data_type": {
+                "Struct": [
+                  {
+                    "name": "intType",
+                    "data_type": "Int32",
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "ts",
+                    "data_type": {
+                      "Timestamp": [
+                        "Microsecond",
+                        "UTC"
+                      ]
+                    },
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "nullable": true,
+              "dict_id": 0,
+              "dict_is_ordered": false,
+              "metadata": {}
+            }
+          ],
+          "metadata": {}
+        }
       }
     },
     {
@@ -119,7 +146,9 @@
               "nullable": true,
               "dict_id": 0,
               "dict_is_ordered": false,
-              "metadata": {}
+              "metadata": {
+                "metadata.comment": "test"
+              }
             }
           ],
           "metadata": {}
@@ -155,7 +184,137 @@
     {
       "input": "complexStructCol struct<struct:struct<deciMal:DECimal, anotherDecimal:decimAL(5,2)>,MAP:Map<timestamp, varchar(10)>,arrAy:Array<double>,anotherArray:Array<char(9)>>      ",
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported SQL type Custom(ObjectName([Ident { value: \"struct\", quote_style: None }]), [])"
+        "success": {
+          "fields": [
+            {
+              "name": "complexStructCol",
+              "data_type": {
+                "Struct": [
+                  {
+                    "name": "struct",
+                    "data_type": {
+                      "Struct": [
+                        {
+                          "name": "deciMal",
+                          "data_type": {
+                            "Decimal128": [
+                              10,
+                              0
+                            ]
+                          },
+                          "nullable": true,
+                          "dict_id": 0,
+                          "dict_is_ordered": false,
+                          "metadata": {}
+                        },
+                        {
+                          "name": "anotherDecimal",
+                          "data_type": {
+                            "Decimal128": [
+                              5,
+                              2
+                            ]
+                          },
+                          "nullable": true,
+                          "dict_id": 0,
+                          "dict_is_ordered": false,
+                          "metadata": {}
+                        }
+                      ]
+                    },
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "MAP",
+                    "data_type": {
+                      "Map": [
+                        {
+                          "name": "entries",
+                          "data_type": {
+                            "Struct": [
+                              {
+                                "name": "key",
+                                "data_type": {
+                                  "Timestamp": [
+                                    "Microsecond",
+                                    "UTC"
+                                  ]
+                                },
+                                "nullable": false,
+                                "dict_id": 0,
+                                "dict_is_ordered": false,
+                                "metadata": {}
+                              },
+                              {
+                                "name": "value",
+                                "data_type": "Utf8",
+                                "nullable": true,
+                                "dict_id": 0,
+                                "dict_is_ordered": false,
+                                "metadata": {}
+                              }
+                            ]
+                          },
+                          "nullable": false,
+                          "dict_id": 0,
+                          "dict_is_ordered": false,
+                          "metadata": {}
+                        },
+                        false
+                      ]
+                    },
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "arrAy",
+                    "data_type": {
+                      "List": {
+                        "name": "element",
+                        "data_type": "Float64",
+                        "nullable": true,
+                        "dict_id": 0,
+                        "dict_is_ordered": false,
+                        "metadata": {}
+                      }
+                    },
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "anotherArray",
+                    "data_type": {
+                      "List": {
+                        "name": "element",
+                        "data_type": "Utf8",
+                        "nullable": true,
+                        "dict_id": 0,
+                        "dict_is_ordered": false,
+                        "metadata": {}
+                      }
+                    },
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "nullable": true,
+              "dict_id": 0,
+              "dict_is_ordered": false,
+              "metadata": {}
+            }
+          ],
+          "metadata": {}
+        }
       }
     }
   ]

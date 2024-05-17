@@ -366,10 +366,10 @@ mod serde_year_month_interval {
 
 pub(crate) fn parse_spark_json_data_type(schema: &str) -> SparkResult<sc::DataType> {
     let schema: JsonDataType = serde_json::from_str(schema)?;
-    from_json_data_type(schema)
+    from_spark_json_data_type(schema)
 }
 
-fn from_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataType> {
+fn from_spark_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataType> {
     let out = match data_type {
         JsonDataType::Null => sc::DataType {
             kind: Some(dt::Kind::Null(dt::Null::default())),
@@ -455,7 +455,7 @@ fn from_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataType> {
             contains_null,
         } => sc::DataType {
             kind: Some(dt::Kind::Array(Box::new(dt::Array {
-                element_type: Some(Box::new(from_json_data_type(*element_type)?)),
+                element_type: Some(Box::new(from_spark_json_data_type(*element_type)?)),
                 contains_null,
                 type_variation_reference: 0,
             }))),
@@ -467,8 +467,8 @@ fn from_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataType> {
             value_contains_null,
         } => sc::DataType {
             kind: Some(dt::Kind::Map(Box::new(dt::Map {
-                key_type: Some(Box::new(from_json_data_type(*key_type)?)),
-                value_type: Some(Box::new(from_json_data_type(*value_type)?)),
+                key_type: Some(Box::new(from_spark_json_data_type(*key_type)?)),
+                value_type: Some(Box::new(from_spark_json_data_type(*value_type)?)),
                 value_contains_null,
                 type_variation_reference: 0,
             }))),
@@ -480,7 +480,7 @@ fn from_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataType> {
                     .map(|field| {
                         Ok(dt::StructField {
                             name: field.name,
-                            data_type: Some(from_json_data_type(field.r#type)?),
+                            data_type: Some(from_spark_json_data_type(field.r#type)?),
                             nullable: field.nullable,
                             metadata: field
                                 .metadata
@@ -505,7 +505,7 @@ fn from_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataType> {
                 python_class: py_class,
                 serialized_python_class: serialized_class,
                 sql_type: sql_type
-                    .map(|t| Ok(Box::new(from_json_data_type(*t)?)) as SparkResult<_>)
+                    .map(|t| Ok(Box::new(from_spark_json_data_type(*t)?)) as SparkResult<_>)
                     .transpose()?,
             }))),
         },
@@ -518,7 +518,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_json_data_types() {
+    fn test_parse_spark_json_data_type() {
         let data = vec![
             (
                 r#""null""#,

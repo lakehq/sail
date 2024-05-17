@@ -4,7 +4,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::plan::from_spark_relation;
-use crate::schema::{parse_spark_schema_string, to_spark_schema};
+use crate::schema::to_spark_schema;
 use crate::session::Session;
 use crate::spark::connect as sc;
 use crate::spark::connect::analyze_plan_request::{
@@ -25,6 +25,7 @@ use crate::spark::connect::analyze_plan_response::{
 };
 use crate::spark::connect::plan;
 use crate::spark::connect::StorageLevel;
+use crate::sql::data_type::parse_spark_schema;
 use crate::SPARK_VERSION;
 
 pub(crate) async fn handle_analyze_schema(
@@ -95,7 +96,7 @@ pub(crate) async fn handle_analyze_ddl_parse(
     _session: Arc<Session>,
     request: DdlParseRequest,
 ) -> SparkResult<DdlParseResponse> {
-    let schema = parse_spark_schema_string(request.ddl_string.as_str())?;
+    let schema = parse_spark_schema(request.ddl_string.as_str())?;
     Ok(DdlParseResponse {
         parsed: Some(to_spark_schema(schema)?),
     })
