@@ -37,11 +37,11 @@ use crate::schema::{cast_record_batch, from_spark_built_in_data_type};
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::Relation;
-use crate::sql::catalog::{
+use crate::sql::data_type::parse_spark_schema;
+use crate::sql::session_catalog::catalog::{
     create_catalog_database_memtable, create_catalog_metadata_memtable,
     create_catalog_table_memtable, CatalogDatabase, CatalogMetadata, CatalogTable,
 };
-use crate::sql::data_type::parse_spark_schema;
 use crate::utils::filter_pattern;
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
