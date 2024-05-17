@@ -845,7 +845,34 @@ pub(crate) async fn from_spark_relation(
                     // )))
                     Err(SparkError::unsupported("CatType::CreateExternalTable"))
                 }
-                CatType::CreateTable(_) => Err(SparkError::unsupported("CatType::CreateTable")),
+                CatType::CreateTable(create_table) => {
+                    let table_name = create_table.table_name.to_string();
+                    let path: Option<&String> = create_table.path.as_ref();
+                    let source: Option<&String> = create_table.source.as_ref();
+                    let description: Option<&String> = create_table.description.as_ref();
+                    let schema: Option<&sc::DataType> = create_table.schema.as_ref();
+                    let schema: Option<DataType> = match schema {
+                        Some(schema) => Some(from_spark_built_in_data_type(schema)?),
+                        None => None,
+                    };
+                    let options: &HashMap<String, String> = &create_table.options;
+                    if !options.is_empty() {
+                        // TODO: Handle options
+                        return Err(SparkError::unsupported("table options"));
+                    }
+
+                    // Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
+                    //     plan::CreateMemoryTable {
+                    //         name: TableReference::from(table_name),
+                    //         constraints: Constraints,
+                    //         input: Arc<LogicalPlan>,
+                    //         if_not_exists: bool,
+                    //         or_replace: bool,
+                    //         column_defaults: Vec<(String, Expr)>,
+                    //     },
+                    // )))
+                    Err(SparkError::unsupported("CatType::CreateTable"))
+                }
                 CatType::DropTempView(drop_temp_view) => {
                     let view_name = drop_temp_view.view_name.to_string();
                     Ok(LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
