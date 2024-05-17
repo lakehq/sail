@@ -35,6 +35,10 @@ use crate::schema::cast_record_batch;
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::Relation;
+use crate::sql::catalog::{
+    create_catalog_database_memtable, create_catalog_metadata_memtable, CatalogDatabase,
+    CatalogMetadata,
+};
 use crate::sql::data_type::parse_spark_schema;
 use crate::utils::filter_pattern;
 
@@ -58,31 +62,6 @@ pub(crate) async fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatc
         writer.finish()?;
     }
     Ok(output)
-}
-
-pub(crate) fn create_catalog_database_memtable(
-    schema_names: Vec<String>,
-    catalog_names: Vec<Option<String>>,
-    schema_descriptions: Vec<Option<String>>,
-    schema_location_uris: Vec<Option<String>>,
-) -> SparkResult<MemTable> {
-    let schema_ref = SchemaRef::new(Schema::new(vec![
-        Field::new("name", DataType::Utf8, false),
-        Field::new("catalog", DataType::Utf8, true),
-        Field::new("description", DataType::Utf8, true),
-        // TODO: locationUri should technically not be nullable
-        Field::new("locationUri", DataType::Utf8, true),
-    ]));
-    let record_batch = RecordBatch::try_new(
-        schema_ref.clone(),
-        vec![
-            Arc::new(StringArray::from(schema_names)),
-            Arc::new(StringArray::from(catalog_names)),
-            Arc::new(StringArray::from(schema_descriptions)),
-            Arc::new(StringArray::from(schema_location_uris)),
-        ],
-    )?;
-    Ok(MemTable::try_new(schema_ref, vec![vec![record_batch]])?)
 }
 
 #[async_recursion]
@@ -701,12 +680,7 @@ pub(crate) async fn from_spark_relation(
                 CatType::ListDatabases(list_databases) => {
                     let pattern: Option<&String> = list_databases.pattern.as_ref();
 
-                    let mut schema_names: Vec<String> = Vec::new();
-                    let mut catalog_names: Vec<Option<String>> = Vec::new();
-                    // TODO: schema_descriptions
-                    let mut schema_descriptions: Vec<Option<String>> = Vec::new();
-                    // TODO: locationUri should technically not be nullable
-                    let mut schema_location_uris: Vec<Option<String>> = Vec::new();
+                    let mut databases: Vec<CatalogDatabase> = Vec::new();
                     let catalog_list: &Arc<dyn CatalogProviderList> = &state.catalog_list();
 
                     for catalog_name in catalog_list.catalog_names() {
@@ -717,22 +691,17 @@ pub(crate) async fn from_spark_relation(
                                 if filtered_schema_names.is_empty() {
                                     continue;
                                 }
-                                schema_names.push(filtered_schema_names[0].clone());
-                                catalog_names.push(Some(catalog_name.clone()));
-                                // TODO: schema_descriptions
-                                schema_descriptions.push(None);
-                                // TODO: schema_location_uris
-                                schema_location_uris.push(None);
+                                databases.push(CatalogDatabase {
+                                    name: filtered_schema_names[0].clone(),
+                                    catalog: Some(catalog_name.clone()),
+                                    description: None, // TODO: Add actual description if available
+                                    location_uri: None, // TODO: Add actual location URI if available
+                                });
                             }
                         }
                     }
 
-                    let provider = create_catalog_database_memtable(
-                        schema_names,
-                        catalog_names,
-                        schema_descriptions,
-                        schema_location_uris,
-                    )?;
+                    let provider = create_catalog_database_memtable(databases)?;
                     Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
                         UNNAMED_TABLE,
                         provider_as_source(Arc::new(provider)),
@@ -747,14 +716,6 @@ pub(crate) async fn from_spark_relation(
                 CatType::GetDatabase(get_database) => {
                     let db_name = get_database.db_name.to_string();
 
-                    let mut schema_names: Vec<String> = Vec::new();
-                    let mut catalog_names: Vec<Option<String>> = Vec::new();
-                    // TODO: schema_descriptions
-                    let mut schema_descriptions: Vec<Option<String>> = Vec::new();
-                    // TODO: locationUri should technically not be nullable
-                    let mut schema_location_uris: Vec<Option<String>> = Vec::new();
-
-                    let catalog_list: &Arc<dyn CatalogProviderList> = &state.catalog_list();
                     let parts: Vec<&str> = db_name.trim().split('.').collect();
                     let (catalog_name, db_name) = if parts.len() == 2 {
                         (Some(parts[0].to_string()), parts[1].to_string())
@@ -762,16 +723,19 @@ pub(crate) async fn from_spark_relation(
                         (None, db_name)
                     };
 
+                    let mut databases: Vec<CatalogDatabase> = Vec::new();
+                    let catalog_list: &Arc<dyn CatalogProviderList> = &state.catalog_list();
+
                     match catalog_name {
                         Some(cat_name) => {
                             if let Some(catalog) = catalog_list.catalog(&cat_name) {
                                 if let Some(_schema) = catalog.schema(&db_name) {
-                                    schema_names.push(db_name.clone());
-                                    catalog_names.push(Some(cat_name.clone()));
-                                    // TODO: schema_descriptions
-                                    schema_descriptions.push(None);
-                                    // TODO: schema_location_uris
-                                    schema_location_uris.push(None);
+                                    databases.push(CatalogDatabase {
+                                        name: db_name.clone(),
+                                        catalog: Some(cat_name.clone()),
+                                        description: None, // TODO: Add actual description if available
+                                        location_uri: None, // TODO: Add actual location URI if available
+                                    });
                                 }
                             }
                         }
@@ -779,24 +743,19 @@ pub(crate) async fn from_spark_relation(
                             for catalog_name in catalog_list.catalog_names() {
                                 if let Some(catalog) = catalog_list.catalog(&catalog_name) {
                                     if let Some(_schema) = catalog.schema(&db_name) {
-                                        schema_names.push(db_name.clone());
-                                        catalog_names.push(Some(catalog_name.clone()));
-                                        // TODO: schema_descriptions
-                                        schema_descriptions.push(None);
-                                        // TODO: schema_location_uris
-                                        schema_location_uris.push(None);
+                                        databases.push(CatalogDatabase {
+                                            name: db_name.clone(),
+                                            catalog: Some(catalog_name.clone()),
+                                            description: None, // TODO: Add actual description if available
+                                            location_uri: None, // TODO: Add actual location URI if available
+                                        });
                                     }
                                 }
                             }
                         }
                     }
 
-                    let provider = create_catalog_database_memtable(
-                        schema_names,
-                        catalog_names,
-                        schema_descriptions,
-                        schema_location_uris,
-                    )?;
+                    let provider = create_catalog_database_memtable(databases)?;
                     Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
                         UNNAMED_TABLE,
                         provider_as_source(Arc::new(provider)),
@@ -896,9 +855,8 @@ pub(crate) async fn from_spark_relation(
                 }
                 CatType::ListCatalogs(list_catalogs) => {
                     let pattern: Option<&String> = list_catalogs.pattern.as_ref();
-                    let mut catalog_names: Vec<String> = Vec::new();
-                    // TODO: catalog_descriptions
-                    let mut catalog_descriptions: Vec<Option<String>> = Vec::new();
+
+                    let mut catalogs: Vec<CatalogMetadata> = Vec::new();
                     let catalog_list: &Arc<dyn CatalogProviderList> = &state.catalog_list();
 
                     for catalog_name in catalog_list.catalog_names() {
@@ -909,9 +867,10 @@ pub(crate) async fn from_spark_relation(
                                 if catalog_name.is_empty() {
                                     continue;
                                 }
-                                catalog_names.push(catalog_name[0].clone());
-                                // TODO: catalog_descriptions
-                                catalog_descriptions.push(None);
+                                catalogs.push(CatalogMetadata {
+                                    name: catalog_name[0].clone(),
+                                    description: None, // TODO: Add actual description if available
+                                });
                             }
                             None => {
                                 continue;
@@ -919,19 +878,7 @@ pub(crate) async fn from_spark_relation(
                         }
                     }
 
-                    let schema_ref = SchemaRef::new(Schema::new(vec![
-                        Field::new("name", DataType::Utf8, false),
-                        Field::new("description", DataType::Utf8, true),
-                    ]));
-                    let record_batch = RecordBatch::try_new(
-                        schema_ref.clone(),
-                        vec![
-                            Arc::new(StringArray::from(catalog_names)),
-                            Arc::new(StringArray::from(catalog_descriptions)),
-                        ],
-                    )?;
-
-                    let provider = MemTable::try_new(schema_ref, vec![vec![record_batch]])?;
+                    let provider = create_catalog_metadata_memtable(catalogs)?;
                     Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
                         UNNAMED_TABLE,
                         provider_as_source(Arc::new(provider)),
