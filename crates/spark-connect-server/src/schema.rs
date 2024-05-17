@@ -5,18 +5,10 @@ use std::sync::Arc;
 
 use arrow_cast::cast;
 use datafusion::arrow::datatypes as adt;
-use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::sql::planner::SqlToRel;
-use sqlparser::ast::{ColumnDef, Ident};
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::expression::EmptyContextProvider;
-use crate::schema::json::parse_spark_json_data_type;
 use crate::spark::connect as sc;
 use crate::spark::connect::data_type as sdt;
-use crate::sql::parser::new_sql_parser;
-
-static DEFAULT_FIELD_NAME: &str = "value";
 
 pub(crate) enum SparkDataType {
     BuiltIn(adt::DataType),
@@ -26,47 +18,6 @@ pub(crate) enum SparkDataType {
         python_class: Option<String>,
         serialized_python_class: Option<String>,
     },
-}
-
-pub(crate) fn parse_spark_schema_string(schema: &str) -> SparkResult<SchemaRef> {
-    let mut parser = new_sql_parser(schema)?;
-    if let Ok(dt) = parser.parse_spark_schema() {
-        let provider = EmptyContextProvider::default();
-        let planner = SqlToRel::new(&provider);
-        Ok(Arc::new(planner.build_schema(dt)?))
-    } else {
-        let data_type = parse_spark_json_data_type(schema)?;
-        let sc::DataType { ref kind } = data_type;
-        let kind = kind.as_ref().required("data type kind")?;
-        let fields = match kind {
-            sdt::Kind::Struct(r#struct) => from_spark_fields(&r#struct.fields)?,
-            _ => Fields::from(vec![from_spark_field(
-                DEFAULT_FIELD_NAME,
-                &data_type,
-                true,
-                None,
-            )?]),
-        };
-        Ok(Arc::new(adt::Schema::new(fields)))
-    }
-}
-
-pub(crate) fn parse_spark_data_type_string(dt: &str) -> SparkResult<adt::DataType> {
-    let mut parser = new_sql_parser(dt)?;
-    let dt = parser.parse_spark_data_type()?;
-    let col = ColumnDef {
-        name: Ident {
-            value: "a".to_string(),
-            quote_style: None,
-        },
-        data_type: dt,
-        collation: None,
-        options: vec![],
-    };
-    let provider = EmptyContextProvider::default();
-    let planner = SqlToRel::new(&provider);
-    let schema = planner.build_schema(vec![col])?;
-    Ok(schema.field_with_name("a")?.data_type().clone())
 }
 
 pub(crate) fn from_spark_field(
@@ -406,26 +357,4 @@ pub(crate) fn cast_record_batch(
         })
         .collect::<SparkResult<Vec<_>>>()?;
     Ok(RecordBatch::try_new(schema.clone(), columns)?)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{parse_spark_data_type_string, parse_spark_schema_string};
-    use crate::tests::test_gold_set;
-
-    #[test]
-    fn test_parse_spark_data_type_string() -> Result<(), Box<dyn std::error::Error>> {
-        Ok(test_gold_set(
-            "tests/gold_data/data_type.json",
-            |s: String| Ok(parse_spark_data_type_string(&s)?),
-        )?)
-    }
-
-    #[test]
-    fn test_parse_spark_schema_string() -> Result<(), Box<dyn std::error::Error>> {
-        Ok(test_gold_set(
-            "tests/gold_data/table_schema.json",
-            |s: String| Ok(parse_spark_schema_string(&s)?),
-        )?)
-    }
 }

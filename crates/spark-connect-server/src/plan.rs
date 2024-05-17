@@ -20,6 +20,8 @@ use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
 use datafusion::sql::parser::Statement;
+use datafusion::sql::sqlparser::dialect::GenericDialect;
+use datafusion::sql::sqlparser::parser::Parser;
 use datafusion_common::{Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference};
 use datafusion_expr::{build_join_schema, DdlStatement};
 
@@ -29,11 +31,11 @@ use crate::extension::analyzer::alias::rewrite_multi_alias;
 use crate::extension::analyzer::explode::rewrite_explode;
 use crate::extension::analyzer::wildcard::rewrite_wildcard;
 use crate::extension::analyzer::window::rewrite_window;
-use crate::schema::{cast_record_batch, parse_spark_schema_string};
+use crate::schema::cast_record_batch;
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::Relation;
-use crate::sql::parser::new_sql_parser;
+use crate::sql::data_type::parse_spark_schema;
 use crate::utils::filter_pattern;
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
@@ -311,7 +313,9 @@ pub(crate) async fn from_spark_relation(
         }) => {
             let query = &query.replace(" database ", " SCHEMA ");
             let query = &query.replace(" DATABASE ", " SCHEMA ");
-            let statement = new_sql_parser(query)?.parse_one_statement()?;
+            let statement = Parser::new(&GenericDialect {})
+                .try_with_sql(query)?
+                .parse_statement()?;
             let plan = state
                 .statement_to_plan(Statement::Statement(Box::new(statement)))
                 .await?;
@@ -342,7 +346,7 @@ pub(crate) async fn from_spark_relation(
                 vec![]
             };
             let (schema, batches) = if let Some(schema) = local.schema.as_ref() {
-                let schema = parse_spark_schema_string(schema)?;
+                let schema = parse_spark_schema(schema)?;
                 let batches = batches
                     .into_iter()
                     .map(|b| cast_record_batch(b, schema.clone()))

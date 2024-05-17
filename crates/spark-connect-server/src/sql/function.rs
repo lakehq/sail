@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::error::{SparkError, SparkResult};
-    use crate::schema::JsonDataType;
     use crate::session::Session;
+    use crate::sql::data_type::json::JsonDataType;
     use crate::tests::{execute_query, test_gold_set};
     use serde::{Deserialize, Serialize};
 
