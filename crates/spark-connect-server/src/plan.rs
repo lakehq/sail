@@ -757,7 +757,7 @@ pub(crate) async fn from_spark_relation(
                                                 tables.push(CatalogTable {
                                                     name: table_name.clone(),
                                                     catalog: Some(catalog_name.clone()),
-                                                    namespace: Some(vec![db_name.clone()]),
+                                                    namespace: Some(db_name.clone()),
                                                     // TODO: Add actual description if available
                                                     description: None,
                                                     table_type: table_type,
