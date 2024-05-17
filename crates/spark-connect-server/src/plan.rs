@@ -38,9 +38,10 @@ use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::Relation;
 use crate::sql::data_type::parse_spark_schema;
-use crate::sql::session_catalog::catalog::{
-    create_catalog_database_memtable, create_catalog_metadata_memtable,
-    create_catalog_table_memtable, CatalogDatabase, CatalogMetadata, CatalogTable,
+use crate::sql::session_catalog::{
+    catalog::{create_catalog_metadata_memtable, CatalogMetadata},
+    database::{create_catalog_database_memtable, CatalogDatabase},
+    table::{create_catalog_table_memtable, CatalogTable},
 };
 use crate::utils::filter_pattern;
 
