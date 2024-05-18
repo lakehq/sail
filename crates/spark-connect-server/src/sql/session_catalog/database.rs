@@ -2,13 +2,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::SparkResult;
-use crate::sql::session_catalog::catalog::{list_catalogs, CatalogMetadata};
-use crate::sql::session_catalog::utils::filter_pattern;
+use crate::sql::session_catalog::catalog::list_catalogs;
+use crate::sql::utils::{build_schema_reference, filter_pattern};
 use datafusion::arrow::array::{RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
+use datafusion_common::SchemaReference;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CatalogDatabase {
@@ -62,10 +63,11 @@ pub(crate) fn create_catalog_database_memtable(
 }
 
 pub(crate) fn list_catalog_databases(
-    pattern: Option<&String>,
+    catalog_pattern: Option<&String>,
+    database_pattern: Option<&String>,
     ctx: &SessionContext,
 ) -> SparkResult<Vec<CatalogDatabase>> {
-    let catalogs: HashMap<String, Arc<dyn CatalogProvider>> = list_catalogs(None, &ctx)?;
+    let catalogs: HashMap<String, Arc<dyn CatalogProvider>> = list_catalogs(catalog_pattern, &ctx)?;
     let databases: Vec<CatalogDatabase> = catalogs
         .iter()
         .flat_map(|(catalog_name, catalog)| {
@@ -74,7 +76,7 @@ pub(crate) fn list_catalog_databases(
                 .iter()
                 .filter_map(|schema_name| {
                     let filtered_names: Vec<String> =
-                        filter_pattern(&vec![schema_name.clone()], pattern);
+                        filter_pattern(&vec![schema_name.clone()], database_pattern);
                     if filtered_names.is_empty() {
                         None
                     } else {
@@ -90,4 +92,24 @@ pub(crate) fn list_catalog_databases(
         })
         .collect();
     Ok(databases)
+}
+
+pub(crate) fn get_catalog_database(
+    db_name: &String,
+    ctx: &SessionContext,
+) -> SparkResult<Vec<CatalogDatabase>> {
+    let schema_reference: SchemaReference = build_schema_reference(&db_name)?;
+    let (catalog_name, db_name) = match schema_reference {
+        SchemaReference::Bare { schema } => (
+            ctx.state()
+                .config()
+                .options()
+                .catalog
+                .default_catalog
+                .to_string(),
+            schema.to_string(),
+        ),
+        SchemaReference::Full { catalog, schema } => (catalog.to_string(), schema.to_string()),
+    };
+    list_catalog_databases(Some(&catalog_name), Some(&db_name), &ctx)
 }

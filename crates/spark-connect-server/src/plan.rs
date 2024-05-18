@@ -37,8 +37,7 @@ use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::Relation;
 use crate::sql::data_type::parse_spark_schema;
 use crate::sql::session_catalog::catalog::list_catalogs_metadata;
-use crate::sql::session_catalog::database::list_catalog_databases;
-use crate::sql::session_catalog::utils::filter_pattern;
+use crate::sql::session_catalog::database::{get_catalog_database, list_catalog_databases};
 use crate::sql::session_catalog::{
     catalog::{create_catalog_metadata_memtable, CatalogMetadata},
     column::{create_catalog_column_memtable, CatalogColumn},
@@ -46,6 +45,7 @@ use crate::sql::session_catalog::{
     function::{create_catalog_function_memtable, CatalogFunction},
     table::{create_catalog_table_memtable, CatalogTable},
 };
+use crate::sql::utils::filter_pattern;
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
     let cursor = Cursor::new(data);
@@ -686,7 +686,7 @@ pub(crate) async fn from_spark_relation(
                 CatType::ListDatabases(list_databases) => {
                     let pattern: Option<&String> = list_databases.pattern.as_ref();
                     let catalog_databases: Vec<CatalogDatabase> =
-                        list_catalog_databases(pattern, &ctx)?;
+                        list_catalog_databases(None, pattern, &ctx)?;
                     let provider = create_catalog_database_memtable(catalog_databases)?;
                     Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
                         UNNAMED_TABLE,
@@ -870,47 +870,8 @@ pub(crate) async fn from_spark_relation(
                 }
                 CatType::GetDatabase(get_database) => {
                     let db_name = get_database.db_name.to_string();
-
-                    let parts: Vec<&str> = db_name.trim().split('.').collect();
-                    let (catalog_name, db_name) = if parts.len() == 2 {
-                        (Some(parts[0].to_string()), parts[1].to_string())
-                    } else {
-                        (None, db_name)
-                    };
-
-                    let mut databases: Vec<CatalogDatabase> = Vec::new();
-                    let catalog_list: &Arc<dyn CatalogProviderList> = &state.catalog_list();
-
-                    match catalog_name {
-                        Some(cat_name) => {
-                            if let Some(catalog) = catalog_list.catalog(&cat_name) {
-                                if let Some(_schema) = catalog.schema(&db_name) {
-                                    databases.push(CatalogDatabase {
-                                        name: db_name.clone(),
-                                        catalog: Some(cat_name.clone()),
-                                        description: None, // TODO: Add actual description if available
-                                        location_uri: None, // TODO: Add actual location URI if available
-                                    });
-                                }
-                            }
-                        }
-                        None => {
-                            for catalog_name in catalog_list.catalog_names() {
-                                if let Some(catalog) = catalog_list.catalog(&catalog_name) {
-                                    if let Some(_schema) = catalog.schema(&db_name) {
-                                        databases.push(CatalogDatabase {
-                                            name: db_name.clone(),
-                                            catalog: Some(catalog_name.clone()),
-                                            description: None, // TODO: Add actual description if available
-                                            location_uri: None, // TODO: Add actual location URI if available
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    let provider = create_catalog_database_memtable(databases)?;
+                    let catalog_databases = get_catalog_database(&db_name, &ctx)?;
+                    let provider = create_catalog_database_memtable(catalog_databases)?;
                     Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
                         UNNAMED_TABLE,
                         provider_as_source(Arc::new(provider)),

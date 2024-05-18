@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::SparkResult;
-use crate::sql::session_catalog::utils::filter_pattern;
+use crate::sql::utils::filter_pattern;
 use datafusion::arrow::array::{RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
