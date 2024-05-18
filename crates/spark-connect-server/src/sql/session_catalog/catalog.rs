@@ -1,9 +1,12 @@
 use std::sync::Arc;
 
 use crate::error::SparkResult;
+use crate::sql::session_catalog::utils::filter_pattern;
 use datafusion::arrow::array::{RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use datafusion::datasource::MemTable;
+use datafusion::prelude::SessionContext;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CatalogMetadata {
@@ -42,4 +45,41 @@ pub(crate) fn create_catalog_metadata_memtable(
     )?;
 
     Ok(MemTable::try_new(schema_ref, vec![vec![record_batch]])?)
+}
+
+pub(crate) fn list_catalogs(
+    pattern: Option<&String>,
+    ctx: &SessionContext,
+) -> SparkResult<Vec<(String, Arc<dyn CatalogProvider>)>> {
+    let catalog_list: &Arc<dyn CatalogProviderList> = &ctx.state().catalog_list();
+    let catalogs: Vec<(String, Arc<dyn CatalogProvider>)> = catalog_list
+        .catalog_names()
+        .iter()
+        .filter_map(|catalog_name| {
+            catalog_list.catalog(catalog_name).and_then(|catalog| {
+                let filtered_names = filter_pattern(&vec![catalog_name.clone()], pattern);
+                if filtered_names.is_empty() {
+                    None
+                } else {
+                    Some((catalog_name.clone(), catalog))
+                }
+            })
+        })
+        .collect();
+    Ok(catalogs)
+}
+
+pub(crate) fn list_catalogs_metadata(
+    pattern: Option<&String>,
+    ctx: &SessionContext,
+) -> SparkResult<Vec<CatalogMetadata>> {
+    let catalogs: Vec<(String, Arc<dyn CatalogProvider>)> = list_catalogs(pattern, &ctx)?;
+    let catalogs_metadata: Vec<CatalogMetadata> = catalogs
+        .iter()
+        .map(|(catalog_name, catalog)| CatalogMetadata {
+            name: catalog_name.clone(),
+            description: None, // TODO: Add actual description if available
+        })
+        .collect();
+    Ok(catalogs_metadata)
 }

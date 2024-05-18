@@ -36,6 +36,8 @@ use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::Relation;
 use crate::sql::data_type::parse_spark_schema;
+use crate::sql::session_catalog::catalog::list_catalogs_metadata;
+use crate::sql::session_catalog::utils::filter_pattern;
 use crate::sql::session_catalog::{
     catalog::{create_catalog_metadata_memtable, CatalogMetadata},
     column::{create_catalog_column_memtable, CatalogColumn},
@@ -43,7 +45,6 @@ use crate::sql::session_catalog::{
     function::{create_catalog_function_memtable, CatalogFunction},
     table::{create_catalog_table_memtable, CatalogTable},
 };
-use crate::utils::filter_pattern;
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
     let cursor = Cursor::new(data);
@@ -1322,30 +1323,9 @@ pub(crate) async fn from_spark_relation(
                 }
                 CatType::ListCatalogs(list_catalogs) => {
                     let pattern: Option<&String> = list_catalogs.pattern.as_ref();
-
-                    let mut catalogs: Vec<CatalogMetadata> = Vec::new();
-                    let catalog_list: &Arc<dyn CatalogProviderList> = &state.catalog_list();
-
-                    for catalog_name in catalog_list.catalog_names() {
-                        let catalog = catalog_list.catalog(&catalog_name);
-                        match catalog {
-                            Some(_catalog) => {
-                                let catalog_name = filter_pattern(&vec![catalog_name], pattern);
-                                if catalog_name.is_empty() {
-                                    continue;
-                                }
-                                catalogs.push(CatalogMetadata {
-                                    name: catalog_name[0].clone(),
-                                    description: None, // TODO: Add actual description if available
-                                });
-                            }
-                            None => {
-                                continue;
-                            }
-                        }
-                    }
-
-                    let provider = create_catalog_metadata_memtable(catalogs)?;
+                    let catalogs_metadata: Vec<CatalogMetadata> =
+                        list_catalogs_metadata(pattern, &ctx)?;
+                    let provider = create_catalog_metadata_memtable(catalogs_metadata)?;
                     Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
                         UNNAMED_TABLE,
                         provider_as_source(Arc::new(provider)),
