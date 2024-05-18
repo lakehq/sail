@@ -4,7 +4,6 @@ use std::task::{Context, Poll};
 
 use datafusion::common::{FileType, TableReference};
 use datafusion::dataframe::DataFrame;
-use datafusion::datasource::cte_worktable::CteWorkTable;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_common::config::{FormatOptions, TableOptions};
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -239,8 +238,7 @@ pub(crate) async fn handle_execute_create_dataframe_view(
     if view.replace {
         ctx.deregister_table(table_ref.clone())?;
     }
-    let cte_work_table = CteWorkTable::new(table_ref.table().into(), df.into_view().schema());
-    ctx.register_table(table_ref, Arc::new(cte_work_table))?;
+    ctx.register_table(table_ref, df.into_view())?;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     tx.send(ExecutorOutput::new(ExecutorBatch::Complete))
         .await?;

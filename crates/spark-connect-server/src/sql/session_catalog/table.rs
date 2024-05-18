@@ -151,6 +151,16 @@ pub(crate) async fn list_catalog_tables(
                             )
                             .await?,
                         );
+                        catalog_tables.extend(
+                            list_catalog_tables_in_schema(
+                                &schema,
+                                &catalog_name,
+                                &db.name,
+                                table_pattern,
+                                Some(TableType::View),
+                            )
+                            .await?,
+                        );
                     }
                 }
             }
@@ -174,9 +184,12 @@ pub(crate) async fn list_catalog_tables_in_schema(
             if let Ok(Some(table)) = schema.table(&filtered_table_names[0]).await {
                 // Spark Table Types: EXTERNAL, MANAGED, VIEW
                 let (table_type, is_temporary) = match table.table_type() {
-                    TableType::View => ("VIEW".to_string(), false),
                     TableType::Base => ("MANAGED".to_string(), false),
-                    TableType::Temporary => ("TEMPORARY".to_string(), true),
+                    // TODO: handle_execute_create_dataframe_view
+                    //  is currently creating a View table from DataFrame.
+                    //  Unsure if this would be considered a Temporary View Table or not.
+                    //  Spark's expectation is that a Temporary View Table is created.
+                    TableType::Temporary | TableType::View => ("TEMPORARY".to_string(), true),
                 };
                 match table_type_filter {
                     Some(filter) => {
@@ -189,12 +202,16 @@ pub(crate) async fn list_catalog_tables_in_schema(
                 catalog_tables.push(CatalogTable {
                     name: filtered_table_names[0].clone(),
                     // DataFrame Temp Views in Spark Session do not have a Catalog or Namespace
-                    catalog: if table.table_type() == TableType::Temporary {
+                    catalog: if table.table_type() == TableType::Temporary
+                        || table.table_type() == TableType::View
+                    {
                         None
                     } else {
                         Some(catalog_name.to_string())
                     },
-                    namespace: if table.table_type() == TableType::Temporary {
+                    namespace: if table.table_type() == TableType::Temporary
+                        || table.table_type() == TableType::View
+                    {
                         None
                     } else {
                         Some(vec![db_name.to_string()])
