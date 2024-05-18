@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::SparkResult;
@@ -50,18 +51,18 @@ pub(crate) fn create_catalog_metadata_memtable(
 pub(crate) fn list_catalogs(
     pattern: Option<&String>,
     ctx: &SessionContext,
-) -> SparkResult<Vec<(String, Arc<dyn CatalogProvider>)>> {
+) -> SparkResult<HashMap<String, Arc<dyn CatalogProvider>>> {
     let catalog_list: &Arc<dyn CatalogProviderList> = &ctx.state().catalog_list();
-    let catalogs: Vec<(String, Arc<dyn CatalogProvider>)> = catalog_list
+    let catalogs: HashMap<String, Arc<dyn CatalogProvider>> = catalog_list
         .catalog_names()
         .iter()
         .filter_map(|catalog_name| {
             catalog_list.catalog(catalog_name).and_then(|catalog| {
-                let filtered_names = filter_pattern(&vec![catalog_name.clone()], pattern);
+                let filtered_names = filter_pattern(&vec![catalog_name.to_string()], pattern);
                 if filtered_names.is_empty() {
                     None
                 } else {
-                    Some((catalog_name.clone(), catalog))
+                    Some((catalog_name.to_string(), catalog))
                 }
             })
         })
@@ -73,10 +74,10 @@ pub(crate) fn list_catalogs_metadata(
     pattern: Option<&String>,
     ctx: &SessionContext,
 ) -> SparkResult<Vec<CatalogMetadata>> {
-    let catalogs: Vec<(String, Arc<dyn CatalogProvider>)> = list_catalogs(pattern, &ctx)?;
+    let catalogs: HashMap<String, Arc<dyn CatalogProvider>> = list_catalogs(pattern, &ctx)?;
     let catalogs_metadata: Vec<CatalogMetadata> = catalogs
         .iter()
-        .map(|(catalog_name, catalog)| CatalogMetadata {
+        .map(|(catalog_name, _catalog)| CatalogMetadata {
             name: catalog_name.clone(),
             description: None, // TODO: Add actual description if available
         })

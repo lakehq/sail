@@ -1,9 +1,14 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::SparkResult;
+use crate::sql::session_catalog::catalog::{list_catalogs, CatalogMetadata};
+use crate::sql::session_catalog::utils::filter_pattern;
 use datafusion::arrow::array::{RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use datafusion::datasource::MemTable;
+use datafusion::prelude::SessionContext;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CatalogDatabase {
@@ -54,4 +59,35 @@ pub(crate) fn create_catalog_database_memtable(
     )?;
 
     Ok(MemTable::try_new(schema_ref, vec![vec![record_batch]])?)
+}
+
+pub(crate) fn list_catalog_databases(
+    pattern: Option<&String>,
+    ctx: &SessionContext,
+) -> SparkResult<Vec<CatalogDatabase>> {
+    let catalogs: HashMap<String, Arc<dyn CatalogProvider>> = list_catalogs(None, &ctx)?;
+    let databases: Vec<CatalogDatabase> = catalogs
+        .iter()
+        .flat_map(|(catalog_name, catalog)| {
+            catalog
+                .schema_names()
+                .iter()
+                .filter_map(|schema_name| {
+                    let filtered_names: Vec<String> =
+                        filter_pattern(&vec![schema_name.clone()], pattern);
+                    if filtered_names.is_empty() {
+                        None
+                    } else {
+                        Some(CatalogDatabase {
+                            name: filtered_names[0].clone(),
+                            catalog: Some(catalog_name.clone()),
+                            description: None, // TODO: Add actual description if available
+                            location_uri: None, // TODO: Add actual location URI if available
+                        })
+                    }
+                })
+                .collect::<Vec<CatalogDatabase>>()
+        })
+        .collect();
+    Ok(databases)
 }
