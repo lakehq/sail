@@ -98,18 +98,32 @@ pub(crate) fn get_catalog_database(
     db_name: &String,
     ctx: &SessionContext,
 ) -> SparkResult<Vec<CatalogDatabase>> {
-    let schema_reference: SchemaReference = build_schema_reference(&db_name)?;
-    let (catalog_name, db_name) = match schema_reference {
-        SchemaReference::Bare { schema } => (
-            ctx.state()
-                .config()
-                .options()
-                .catalog
-                .default_catalog
-                .to_string(),
-            schema.to_string(),
-        ),
-        SchemaReference::Full { catalog, schema } => (catalog.to_string(), schema.to_string()),
-    };
+    let (catalog_name, db_name) = parse_optional_db_name_with_defaults(
+        Some(&db_name),
+        &ctx.state().config().options().catalog.default_catalog,
+        &db_name,
+    )?;
     list_catalog_databases(Some(&catalog_name), Some(&db_name), &ctx)
+}
+
+pub(crate) fn parse_optional_db_name_with_defaults(
+    db_name: Option<&String>,
+    default_catalog: &str,
+    default_database: &str,
+) -> SparkResult<(String, String)> {
+    let (catalog_name, database_name) = match db_name {
+        Some(db_name) => {
+            let schema_reference: SchemaReference = build_schema_reference(&db_name)?;
+            match schema_reference {
+                SchemaReference::Bare { schema } => {
+                    (default_catalog.to_string(), schema.to_string())
+                }
+                SchemaReference::Full { catalog, schema } => {
+                    (catalog.to_string(), schema.to_string())
+                }
+            }
+        }
+        None => (default_catalog.to_string(), default_database.to_string()),
+    };
+    Ok((catalog_name, database_name))
 }

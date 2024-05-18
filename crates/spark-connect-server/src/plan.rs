@@ -39,7 +39,9 @@ use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::Relation;
 use crate::sql::data_type::parse_spark_schema;
 use crate::sql::session_catalog::catalog::list_catalogs_metadata;
-use crate::sql::session_catalog::database::{get_catalog_database, list_catalog_databases};
+use crate::sql::session_catalog::database::{
+    get_catalog_database, list_catalog_databases, parse_optional_db_name_with_defaults,
+};
 use crate::sql::session_catalog::table::list_catalog_tables;
 use crate::sql::session_catalog::{
     catalog::{create_catalog_metadata_memtable, CatalogMetadata},
@@ -700,25 +702,12 @@ pub(crate) async fn from_spark_relation(
                     )?))
                 }
                 CatType::ListTables(list_tables) => {
-                    let (catalog_pattern, database_pattern) = match list_tables.db_name.as_ref() {
-                        Some(db_name) => {
-                            let schema_reference: SchemaReference =
-                                build_schema_reference(&db_name)?;
-                            match schema_reference {
-                                SchemaReference::Bare { schema } => (
-                                    state.config().options().catalog.default_catalog.to_string(),
-                                    schema.to_string(),
-                                ),
-                                SchemaReference::Full { catalog, schema } => {
-                                    (catalog.to_string(), schema.to_string())
-                                }
-                            }
-                        }
-                        None => (
-                            state.config().options().catalog.default_catalog.to_string(),
-                            state.config().options().catalog.default_schema.to_string(),
-                        ),
-                    };
+                    let db_name = list_tables.db_name.as_ref();
+                    let (catalog_pattern, database_pattern) = parse_optional_db_name_with_defaults(
+                        db_name,
+                        &state.config().options().catalog.default_catalog,
+                        &state.config().options().catalog.default_schema,
+                    )?;
                     let table_pattern: Option<&String> = list_tables.pattern.as_ref();
                     let catalog_tables: Vec<CatalogTable> = list_catalog_tables(
                         Some(&catalog_pattern),
@@ -839,157 +828,28 @@ pub(crate) async fn from_spark_relation(
                     )?))
                 }
                 CatType::GetTable(get_table) => {
-                    let (catalog_name, db_name) =
-                        get_table.db_name.as_ref().map_or((None, None), |db_name| {
-                            let parts: Vec<&str> = db_name.trim().split('.').collect();
-                            if parts.len() == 2 {
-                                (Some(parts[0].to_string()), Some(parts[1].to_string()))
-                            } else {
-                                (None, Some(db_name.to_string()))
-                            }
-                        });
-
                     let table_name = get_table.table_name.to_string();
+                    let (catalog_pattern, database_pattern) = parse_optional_db_name_with_defaults(
+                        get_table.db_name.as_ref(),
+                        &state.config().options().catalog.default_catalog,
+                        &state.config().options().catalog.default_schema,
+                    )?;
                     let table_ref = TableReference::from(table_name);
-                    let table_name = table_ref.table();
-                    let db_name = table_ref
+                    let table_name = table_ref.table().to_string();
+                    let database_pattern = table_ref
                         .schema()
-                        .map_or(db_name, |schema| Some(schema.to_string()));
-                    let catalog_name = table_ref
+                        .map_or(database_pattern, |schema| schema.to_string());
+                    let catalog_pattern = table_ref
                         .catalog()
-                        .map_or(catalog_name, |catalog| Some(catalog.to_string()));
-
-                    let mut tables: Vec<CatalogTable> = Vec::new();
-                    let catalog_list: &Arc<dyn CatalogProviderList> = &state.catalog_list();
-
-                    match catalog_name {
-                        Some(catalog_name) => {
-                            if let Some(catalog) = catalog_list.catalog(&catalog_name) {
-                                if let Some(db_name) = db_name {
-                                    if let Some(schema) = catalog.schema(&db_name) {
-                                        if let Ok(Some(table)) = schema.table(&table_name).await {
-                                            // Spark Table Types: EXTERNAL, MANAGED, VIEW
-                                            let (table_type, is_temporary) = match table
-                                                .table_type()
-                                            {
-                                                TableType::View => ("VIEW".to_string(), false),
-                                                TableType::Base => ("MANAGED".to_string(), false),
-                                                TableType::Temporary => {
-                                                    ("MANAGED".to_string(), true)
-                                                }
-                                            };
-                                            tables.push(CatalogTable {
-                                                name: table_name.to_string(),
-                                                catalog: Some(catalog_name.clone()),
-                                                namespace: Some(vec![db_name.clone()]),
-                                                // TODO: Add actual description if available
-                                                description: None,
-                                                table_type: table_type,
-                                                is_temporary: is_temporary,
-                                            });
-                                        }
-                                    }
-                                } else {
-                                    for schema_name in catalog.schema_names() {
-                                        if let Some(schema) = catalog.schema(&schema_name) {
-                                            if let Ok(Some(table)) = schema.table(&table_name).await
-                                            {
-                                                // Spark Table Types: EXTERNAL, MANAGED, VIEW
-                                                let (table_type, is_temporary) = match table
-                                                    .table_type()
-                                                {
-                                                    TableType::View => ("VIEW".to_string(), false),
-                                                    TableType::Base => {
-                                                        ("MANAGED".to_string(), false)
-                                                    }
-                                                    TableType::Temporary => {
-                                                        ("MANAGED".to_string(), true)
-                                                    }
-                                                };
-                                                tables.push(CatalogTable {
-                                                    name: table_name.to_string(),
-                                                    catalog: Some(catalog_name.clone()),
-                                                    namespace: Some(vec![schema_name.clone()]),
-                                                    // TODO: Add actual description if available
-                                                    description: None,
-                                                    table_type: table_type,
-                                                    is_temporary: is_temporary,
-                                                });
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        None => {
-                            for catalog_name in catalog_list.catalog_names() {
-                                if let Some(catalog) = catalog_list.catalog(&catalog_name) {
-                                    if let Some(db_name) = db_name.clone() {
-                                        if let Some(schema) = catalog.schema(&db_name) {
-                                            if let Ok(Some(table)) = schema.table(&table_name).await
-                                            {
-                                                // Spark Table Types: EXTERNAL, MANAGED, VIEW
-                                                let (table_type, is_temporary) = match table
-                                                    .table_type()
-                                                {
-                                                    TableType::View => ("VIEW".to_string(), false),
-                                                    TableType::Base => {
-                                                        ("MANAGED".to_string(), false)
-                                                    }
-                                                    TableType::Temporary => {
-                                                        ("MANAGED".to_string(), true)
-                                                    }
-                                                };
-                                                tables.push(CatalogTable {
-                                                    name: table_name.to_string(),
-                                                    catalog: Some(catalog_name.clone()),
-                                                    namespace: Some(vec![db_name.clone()]),
-                                                    // TODO: Add actual description if available
-                                                    description: None,
-                                                    table_type: table_type,
-                                                    is_temporary: is_temporary,
-                                                });
-                                            }
-                                        }
-                                    } else {
-                                        for schema_name in catalog.schema_names() {
-                                            if let Some(schema) = catalog.schema(&schema_name) {
-                                                if let Ok(Some(table)) =
-                                                    schema.table(&table_name).await
-                                                {
-                                                    // Spark Table Types: EXTERNAL, MANAGED, VIEW
-                                                    let (table_type, is_temporary) =
-                                                        match table.table_type() {
-                                                            TableType::View => {
-                                                                ("VIEW".to_string(), false)
-                                                            }
-                                                            TableType::Base => {
-                                                                ("MANAGED".to_string(), false)
-                                                            }
-                                                            TableType::Temporary => {
-                                                                ("MANAGED".to_string(), true)
-                                                            }
-                                                        };
-                                                    tables.push(CatalogTable {
-                                                        name: table_name.to_string(),
-                                                        catalog: Some(catalog_name.clone()),
-                                                        namespace: Some(vec![schema_name.clone()]),
-                                                        // TODO: Add actual description if available
-                                                        description: None,
-                                                        table_type: table_type,
-                                                        is_temporary: is_temporary,
-                                                    });
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    let provider = create_catalog_table_memtable(tables)?;
-
+                        .map_or(catalog_pattern, |catalog| catalog.to_string());
+                    let catalog_tables: Vec<CatalogTable> = list_catalog_tables(
+                        Some(&catalog_pattern),
+                        Some(&database_pattern),
+                        Some(&table_name),
+                        &ctx,
+                    )
+                    .await?;
+                    let provider = create_catalog_table_memtable(catalog_tables)?;
                     Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
                         UNNAMED_TABLE,
                         provider_as_source(Arc::new(provider)),
