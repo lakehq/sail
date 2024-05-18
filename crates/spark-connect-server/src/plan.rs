@@ -702,6 +702,7 @@ pub(crate) async fn from_spark_relation(
                     )?))
                 }
                 CatType::ListTables(list_tables) => {
+                    // TODO: self.assertRaisesRegex(AnalysisException, "does_not_exist", lambda: spark.catalog.listTables("does_not_exist"),)
                     let db_name = list_tables.db_name.as_ref();
                     let (catalog_pattern, database_pattern) = parse_optional_db_name_with_defaults(
                         db_name,

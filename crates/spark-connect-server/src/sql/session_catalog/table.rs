@@ -84,48 +84,6 @@ pub(crate) fn create_catalog_table_memtable(tables: Vec<CatalogTable>) -> SparkR
     Ok(MemTable::try_new(schema_ref, vec![vec![record_batch]])?)
 }
 
-pub(crate) async fn list_catalog_tablesz(
-    catalog_pattern: Option<&String>,
-    database_pattern: Option<&String>,
-    table_pattern: Option<&String>,
-    ctx: &SessionContext,
-) -> SparkResult<Vec<CatalogTable>> {
-    let catalog_databases: Vec<CatalogDatabase> =
-        list_catalog_databases(catalog_pattern, database_pattern, ctx)?;
-    let mut catalog_tables: Vec<CatalogTable> = Vec::new();
-    for db in catalog_databases {
-        if let Some(catalog_name) = &db.catalog {
-            if let Some(catalog) = ctx.catalog(catalog_name) {
-                if let Some(schema) = catalog.schema(&db.name) {
-                    for table_name in schema.table_names() {
-                        let filtered_table_names: Vec<String> =
-                            filter_pattern(&vec![table_name.clone()], table_pattern);
-                        if !filtered_table_names.is_empty() {
-                            if let Ok(Some(table)) = schema.table(&filtered_table_names[0]).await {
-                                // Spark Table Types: EXTERNAL, MANAGED, VIEW
-                                let (table_type, is_temporary) = match table.table_type() {
-                                    TableType::View => ("VIEW".to_string(), false),
-                                    TableType::Base => ("MANAGED".to_string(), false),
-                                    TableType::Temporary => ("MANAGED".to_string(), true),
-                                };
-                                catalog_tables.push(CatalogTable {
-                                    name: filtered_table_names[0].clone(),
-                                    catalog: Some(catalog_name.clone()),
-                                    namespace: Some(vec![db.name.clone()]),
-                                    description: None, // TODO: Add actual description if available
-                                    table_type: table_type,
-                                    is_temporary: is_temporary,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(catalog_tables)
-}
-
 pub(crate) async fn list_catalog_tables(
     catalog_pattern: Option<&String>,
     database_pattern: Option<&String>,
@@ -134,20 +92,65 @@ pub(crate) async fn list_catalog_tables(
 ) -> SparkResult<Vec<CatalogTable>> {
     let catalog_databases: Vec<CatalogDatabase> =
         list_catalog_databases(catalog_pattern, database_pattern, ctx)?;
+    let default_catalog_name = &ctx
+        .state()
+        .config()
+        .options()
+        .catalog
+        .default_catalog
+        .to_string();
+    let default_database_name = &ctx
+        .state()
+        .config()
+        .options()
+        .catalog
+        .default_schema
+        .to_string();
+    let mut includes_default_database = false;
     let mut catalog_tables: Vec<CatalogTable> = Vec::new();
     for db in catalog_databases {
         if let Some(catalog_name) = &db.catalog {
             if let Some(catalog) = ctx.catalog(catalog_name) {
                 if let Some(schema) = catalog.schema(&db.name) {
+                    if catalog_name == default_catalog_name && &db.name == default_database_name {
+                        includes_default_database = true;
+                    }
                     catalog_tables.extend(
                         list_catalog_tables_in_schema(
                             &schema,
                             &catalog_name,
                             &db.name,
                             table_pattern,
+                            None,
                         )
                         .await?,
                     );
+                }
+            }
+        }
+    }
+    // Spark Temp View Tables are not associated with a catalog or database
+    if !includes_default_database {
+        let catalog_databases: Vec<CatalogDatabase> = list_catalog_databases(
+            Some(&default_catalog_name),
+            Some(default_database_name),
+            ctx,
+        )?;
+        for db in catalog_databases {
+            if let Some(catalog_name) = &db.catalog {
+                if let Some(catalog) = ctx.catalog(catalog_name) {
+                    if let Some(schema) = catalog.schema(&db.name) {
+                        catalog_tables.extend(
+                            list_catalog_tables_in_schema(
+                                &schema,
+                                &catalog_name,
+                                &db.name,
+                                table_pattern,
+                                Some(TableType::Temporary),
+                            )
+                            .await?,
+                        );
+                    }
                 }
             }
         }
@@ -160,6 +163,7 @@ pub(crate) async fn list_catalog_tables_in_schema(
     catalog_name: &str,
     db_name: &str,
     table_pattern: Option<&String>,
+    table_type_filter: Option<TableType>,
 ) -> SparkResult<Vec<CatalogTable>> {
     let mut catalog_tables: Vec<CatalogTable> = Vec::new();
     for table_name in schema.table_names() {
@@ -171,12 +175,29 @@ pub(crate) async fn list_catalog_tables_in_schema(
                 let (table_type, is_temporary) = match table.table_type() {
                     TableType::View => ("VIEW".to_string(), false),
                     TableType::Base => ("MANAGED".to_string(), false),
-                    TableType::Temporary => ("MANAGED".to_string(), true),
+                    TableType::Temporary => ("TEMPORARY".to_string(), true),
                 };
+                match table_type_filter {
+                    Some(filter) => {
+                        if filter != table.table_type() {
+                            continue;
+                        }
+                    }
+                    None => {}
+                }
                 catalog_tables.push(CatalogTable {
                     name: filtered_table_names[0].clone(),
-                    catalog: Some(catalog_name.to_string()),
-                    namespace: Some(vec![db_name.to_string()]),
+                    // DataFrame Temp Views in Spark Session do not have a Catalog or Namespace
+                    catalog: if table.table_type() == TableType::Temporary {
+                        None
+                    } else {
+                        Some(catalog_name.to_string())
+                    },
+                    namespace: if table.table_type() == TableType::Temporary {
+                        None
+                    } else {
+                        Some(vec![db_name.to_string()])
+                    },
                     description: None, // TODO: Add actual description if available
                     table_type: table_type,
                     is_temporary: is_temporary,
