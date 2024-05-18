@@ -42,7 +42,7 @@ use crate::sql::session_catalog::catalog::list_catalogs_metadata;
 use crate::sql::session_catalog::database::{
     get_catalog_database, list_catalog_databases, parse_optional_db_name_with_defaults,
 };
-use crate::sql::session_catalog::table::list_catalog_tables;
+use crate::sql::session_catalog::table::{get_catalog_table, list_catalog_tables};
 use crate::sql::session_catalog::{
     catalog::{create_catalog_metadata_memtable, CatalogMetadata},
     column::{create_catalog_column_memtable, CatalogColumn},
@@ -835,21 +835,9 @@ pub(crate) async fn from_spark_relation(
                         &state.config().options().catalog.default_catalog,
                         &state.config().options().catalog.default_schema,
                     )?;
-                    let table_ref = TableReference::from(table_name);
-                    let table_name = table_ref.table().to_string();
-                    let database_pattern = table_ref
-                        .schema()
-                        .map_or(database_pattern, |schema| schema.to_string());
-                    let catalog_pattern = table_ref
-                        .catalog()
-                        .map_or(catalog_pattern, |catalog| catalog.to_string());
-                    let catalog_tables: Vec<CatalogTable> = list_catalog_tables(
-                        Some(&catalog_pattern),
-                        Some(&database_pattern),
-                        Some(&table_name),
-                        &ctx,
-                    )
-                    .await?;
+                    let catalog_tables: Vec<CatalogTable> =
+                        get_catalog_table(&table_name, &catalog_pattern, &database_pattern, &ctx)
+                            .await?;
                     let provider = create_catalog_table_memtable(catalog_tables)?;
                     Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
                         UNNAMED_TABLE,
@@ -871,75 +859,16 @@ pub(crate) async fn from_spark_relation(
                     Ok(results.into_optimized_plan()?)
                 }
                 CatType::TableExists(table_exists) => {
-                    let (catalog_name, db_name) =
-                        table_exists
-                            .db_name
-                            .as_ref()
-                            .map_or((None, None), |db_name| {
-                                let parts: Vec<&str> = db_name.trim().split('.').collect();
-                                if parts.len() == 2 {
-                                    (Some(parts[0].to_string()), Some(parts[1].to_string()))
-                                } else {
-                                    (None, Some(db_name.to_string()))
-                                }
-                            });
-
                     let table_name = table_exists.table_name.to_string();
-                    let table_ref = TableReference::from(table_name);
-                    let table_name = table_ref.table();
-                    let db_name = table_ref
-                        .schema()
-                        .map_or(db_name, |schema| Some(schema.to_string()));
-                    let catalog_name = table_ref
-                        .catalog()
-                        .map_or(catalog_name, |catalog| Some(catalog.to_string()));
-
-                    let catalog_list: &Arc<dyn CatalogProviderList> = &state.catalog_list();
-                    let default_schema = &state.config().options().catalog.default_schema;
-
-                    let table_exists: bool = catalog_name.map_or_else(
-                        || {
-                            catalog_list.catalog_names().iter().any(|catalog_name| {
-                                catalog_list.catalog(catalog_name).map_or(false, |catalog| {
-                                    db_name.clone().map_or_else(
-                                        || {
-                                            catalog.schema(default_schema).map_or(false, |schema| {
-                                                schema.table_exist(table_name)
-                                            })
-                                        },
-                                        |db_name| {
-                                            catalog.schema(&db_name).map_or(false, |schema| {
-                                                schema.table_exist(table_name)
-                                            })
-                                        },
-                                    )
-                                })
-                            })
-                        },
-                        |catalog_name| {
-                            catalog_list
-                                .catalog(&catalog_name)
-                                .map_or(false, |catalog| {
-                                    db_name.clone().map_or_else(
-                                        || {
-                                            catalog.schema_names().iter().any(|schema_name| {
-                                                catalog
-                                                    .schema(schema_name)
-                                                    .map_or(false, |schema| {
-                                                        schema.table_exist(table_name)
-                                                    })
-                                            })
-                                        },
-                                        |db_name| {
-                                            catalog.schema(&db_name).map_or(false, |schema| {
-                                                schema.table_exist(table_name)
-                                            })
-                                        },
-                                    )
-                                })
-                        },
-                    );
-
+                    let (catalog_pattern, database_pattern) = parse_optional_db_name_with_defaults(
+                        table_exists.db_name.as_ref(),
+                        &state.config().options().catalog.default_catalog,
+                        &state.config().options().catalog.default_schema,
+                    )?;
+                    let catalog_tables: Vec<CatalogTable> =
+                        get_catalog_table(&table_name, &catalog_pattern, &database_pattern, &ctx)
+                            .await?;
+                    let table_exists = !catalog_tables.is_empty();
                     let results = ctx
                         .sql("SELECT CAST($1 AS BOOLEAN)")
                         .await?

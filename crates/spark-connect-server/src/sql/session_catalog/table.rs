@@ -11,6 +11,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::schema::SchemaProvider;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
+use datafusion_common::TableReference;
 use datafusion_expr::TableType;
 
 #[derive(Debug, Clone)]
@@ -206,4 +207,27 @@ pub(crate) async fn list_catalog_tables_in_schema(
         }
     }
     Ok(catalog_tables)
+}
+
+pub(crate) async fn get_catalog_table(
+    table_name: &String,
+    catalog_pattern: &String,
+    database_pattern: &String,
+    ctx: &SessionContext,
+) -> SparkResult<Vec<CatalogTable>> {
+    let table_ref = TableReference::from(table_name);
+    let table_name = table_ref.table().to_string();
+    let database_pattern = table_ref
+        .schema()
+        .map_or(database_pattern.clone(), |schema| schema.to_string());
+    let catalog_pattern = table_ref
+        .catalog()
+        .map_or(catalog_pattern.clone(), |catalog| catalog.to_string());
+    Ok(list_catalog_tables(
+        Some(&catalog_pattern),
+        Some(&database_pattern),
+        Some(&table_name),
+        &ctx,
+    )
+    .await?)
 }
