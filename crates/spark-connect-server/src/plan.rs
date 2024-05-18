@@ -1043,32 +1043,8 @@ pub(crate) async fn from_spark_relation(
                 CatType::GetFunction(_) => Err(SparkError::unsupported("CatType::GetFunction")),
                 CatType::DatabaseExists(database_exists) => {
                     let db_name = database_exists.db_name.to_string();
-
-                    let catalog_list: &Arc<dyn CatalogProviderList> = &state.catalog_list();
-                    let parts: Vec<&str> = db_name.trim().split('.').collect();
-                    let (catalog_name, db_name) = if parts.len() == 2 {
-                        (Some(parts[0].to_string()), parts[1].to_string())
-                    } else {
-                        (None, db_name)
-                    };
-
-                    let db_exists: bool = match catalog_name {
-                        Some(cat_name) => {
-                            if let Some(catalog) = catalog_list.catalog(&cat_name) {
-                                catalog.schema(&db_name).is_some()
-                            } else {
-                                false
-                            }
-                        }
-                        None => catalog_list.catalog_names().iter().any(|cat_name| {
-                            if let Some(catalog) = catalog_list.catalog(cat_name) {
-                                catalog.schema(&db_name).is_some()
-                            } else {
-                                false
-                            }
-                        }),
-                    };
-
+                    let catalog_databases = get_catalog_database(&db_name, &ctx)?;
+                    let db_exists = !catalog_databases.is_empty();
                     let results = ctx
                         .sql("SELECT CAST($1 AS BOOLEAN)")
                         .await?
