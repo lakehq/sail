@@ -33,7 +33,7 @@ use crate::extension::analyzer::alias::rewrite_multi_alias;
 use crate::extension::analyzer::explode::rewrite_explode;
 use crate::extension::analyzer::wildcard::rewrite_wildcard;
 use crate::extension::analyzer::window::rewrite_window;
-use crate::schema::{cast_record_batch, from_spark_built_in_data_type};
+use crate::schema::{cast_record_batch, from_spark_built_in_data_type, to_spark_data_type};
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::Relation;
@@ -761,11 +761,16 @@ pub(crate) async fn from_spark_relation(
                                     if let Some(schema) = catalog.schema(&db_name) {
                                         if let Ok(Some(table)) = schema.table(&table_name).await {
                                             for field in table.schema().fields() {
+                                                let spark_data_type =
+                                                    to_spark_data_type(field.data_type())?;
+                                                let sc::DataType { ref kind } = spark_data_type;
+                                                let kind =
+                                                    kind.as_ref().required("data type kind")?;
                                                 columns.push(CatalogColumn {
                                                     name: field.name().to_string(),
                                                     // TODO: Add actual description if available
                                                     description: None,
-                                                    data_type: field.data_type().to_string(),
+                                                    data_type: format!("{:?}", kind),
                                                     nullable: field.is_nullable(),
                                                     // TODO: Add actual is_partition if available
                                                     is_partition: false,
@@ -786,11 +791,16 @@ pub(crate) async fn from_spark_relation(
                                             if let Ok(Some(table)) = schema.table(&table_name).await
                                             {
                                                 for field in table.schema().fields() {
+                                                    let spark_data_type =
+                                                        to_spark_data_type(field.data_type())?;
+                                                    let sc::DataType { ref kind } = spark_data_type;
+                                                    let kind =
+                                                        kind.as_ref().required("data type kind")?;
                                                     columns.push(CatalogColumn {
                                                         name: field.name().to_string(),
                                                         // TODO: Add actual description if available
                                                         description: None,
-                                                        data_type: field.data_type().to_string(),
+                                                        data_type: format!("{:?}", kind),
                                                         nullable: field.is_nullable(),
                                                         // TODO: Add actual is_partition if available
                                                         is_partition: false,
