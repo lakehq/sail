@@ -37,8 +37,7 @@ pub(crate) fn filter_pattern(names: &Vec<String>, pattern: Option<&String>) -> V
 }
 
 pub(crate) fn parse_identifiers(s: &str) -> SparkResult<Vec<Ident>> {
-    let dialect = GenericDialect;
-    let mut parser = Parser::new(&dialect).try_with_sql(s)?;
+    let mut parser = Parser::new(&GenericDialect {}).try_with_sql(s)?;
     let idents = parser.parse_multipart_identifier()?;
     Ok(idents)
 }
