@@ -68,7 +68,7 @@ pub(crate) fn list_catalog_databases(
     ctx: &SessionContext,
 ) -> SparkResult<Vec<CatalogDatabase>> {
     let catalogs: HashMap<String, Arc<dyn CatalogProvider>> = list_catalogs(catalog_pattern, &ctx)?;
-    let databases: Vec<CatalogDatabase> = catalogs
+    let catalog_databases: Vec<CatalogDatabase> = catalogs
         .iter()
         .flat_map(|(catalog_name, catalog)| {
             catalog
@@ -91,7 +91,7 @@ pub(crate) fn list_catalog_databases(
                 .collect::<Vec<CatalogDatabase>>()
         })
         .collect();
-    Ok(databases)
+    Ok(catalog_databases)
 }
 
 pub(crate) fn get_catalog_database(
