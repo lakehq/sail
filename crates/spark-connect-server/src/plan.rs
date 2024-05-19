@@ -727,7 +727,7 @@ pub(crate) async fn from_spark_relation(
                         None,
                     )?))
                 }
-                CatType::ListFunctions(_) => Err(SparkError::unsupported("CatType::ListFunctions")),
+                CatType::ListFunctions(_) => Err(SparkError::todo("CatType::ListFunctions")),
                 CatType::ListColumns(list_columns) => {
                     let table_name = list_columns.table_name.to_string();
                     let (catalog_name, database_name) = parse_optional_db_name_with_defaults(
@@ -782,7 +782,7 @@ pub(crate) async fn from_spark_relation(
                         None,
                     )?))
                 }
-                CatType::GetFunction(_) => Err(SparkError::unsupported("CatType::GetFunction")),
+                CatType::GetFunction(_) => Err(SparkError::todo("CatType::GetFunction")),
                 CatType::DatabaseExists(database_exists) => {
                     let db_name = database_exists.db_name.to_string();
                     let catalog_databases = get_catalog_database(&db_name, &ctx)?;
@@ -810,9 +810,7 @@ pub(crate) async fn from_spark_relation(
                         .with_param_values(vec![("1", ScalarValue::Boolean(Some(table_exists)))])?;
                     Ok(results.into_optimized_plan()?)
                 }
-                CatType::FunctionExists(_) => {
-                    Err(SparkError::unsupported("CatType::FunctionExists"))
-                }
+                CatType::FunctionExists(_) => Err(SparkError::todo("CatType::FunctionExists")),
                 CatType::CreateExternalTable(create_external_table) => {
                     let table_name = create_external_table.table_name.to_string();
                     let path: Option<&String> = create_external_table.path.as_ref();
@@ -825,7 +823,7 @@ pub(crate) async fn from_spark_relation(
                     let options: &HashMap<String, String> = &create_external_table.options;
                     if !options.is_empty() {
                         // TODO: Handle options
-                        return Err(SparkError::unsupported("table options"));
+                        return Err(SparkError::todo("table options"));
                     }
 
                     // Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
@@ -847,7 +845,7 @@ pub(crate) async fn from_spark_relation(
                     //         column_defaults: HashMap<String, Expr>,
                     //     },
                     // )))
-                    Err(SparkError::unsupported("CatType::CreateExternalTable"))
+                    Err(SparkError::todo("CatType::CreateExternalTable"))
                 }
                 CatType::CreateTable(create_table) => {
                     let table_name = create_table.table_name.to_string();
@@ -862,7 +860,7 @@ pub(crate) async fn from_spark_relation(
                     let options: &HashMap<String, String> = &create_table.options;
                     if !options.is_empty() {
                         // TODO: Handle options
-                        return Err(SparkError::unsupported("table options"));
+                        return Err(SparkError::todo("table options"));
                     }
 
                     // Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
@@ -875,7 +873,7 @@ pub(crate) async fn from_spark_relation(
                     //         column_defaults: Vec<(String, Expr)>,
                     //     },
                     // )))
-                    Err(SparkError::unsupported("CatType::CreateTable"))
+                    Err(SparkError::todo("CatType::CreateTable"))
                 }
                 CatType::DropTempView(drop_temp_view) => {
                     let view_name = drop_temp_view.view_name.to_string();
@@ -894,14 +892,14 @@ pub(crate) async fn from_spark_relation(
                     })))
                 }
                 CatType::RecoverPartitions(_) => {
-                    Err(SparkError::unsupported("CatType::RecoverPartitions"))
+                    Err(SparkError::todo("CatType::RecoverPartitions"))
                 }
-                CatType::IsCached(_) => Err(SparkError::unsupported("CatType::IsCached")),
-                CatType::CacheTable(_) => Err(SparkError::unsupported("CatType::CacheTable")),
-                CatType::UncacheTable(_) => Err(SparkError::unsupported("CatType::UncacheTable")),
-                CatType::ClearCache(_) => Err(SparkError::unsupported("CatType::ClearCache")),
-                CatType::RefreshTable(_) => Err(SparkError::unsupported("CatType::RefreshTable")),
-                CatType::RefreshByPath(_) => Err(SparkError::unsupported("CatType::RefreshByPath")),
+                CatType::IsCached(_) => Err(SparkError::todo("CatType::IsCached")),
+                CatType::CacheTable(_) => Err(SparkError::todo("CatType::CacheTable")),
+                CatType::UncacheTable(_) => Err(SparkError::todo("CatType::UncacheTable")),
+                CatType::ClearCache(_) => Err(SparkError::todo("CatType::ClearCache")),
+                CatType::RefreshTable(_) => Err(SparkError::todo("CatType::RefreshTable")),
+                CatType::RefreshByPath(_) => Err(SparkError::todo("CatType::RefreshByPath")),
                 CatType::CurrentCatalog(_) => {
                     let default_catalog = &state.config().options().catalog.default_catalog;
                     let results = ctx
