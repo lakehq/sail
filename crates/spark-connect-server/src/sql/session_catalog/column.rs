@@ -9,7 +9,7 @@ use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 
 #[derive(Debug, Clone)]
-pub(crate) struct CatalogColumn {
+pub(crate) struct CatalogTableColumn {
     pub(crate) name: String,
     pub(crate) description: Option<String>,
     pub(crate) data_type: String,
@@ -18,7 +18,7 @@ pub(crate) struct CatalogColumn {
     pub(crate) is_bucket: bool,
 }
 
-impl CatalogColumn {
+impl CatalogTableColumn {
     pub fn schema() -> SchemaRef {
         SchemaRef::new(Schema::new(vec![
             Field::new("name", DataType::Utf8, false),
@@ -31,8 +31,10 @@ impl CatalogColumn {
     }
 }
 
-pub(crate) fn create_catalog_column_memtable(columns: Vec<CatalogColumn>) -> SparkResult<MemTable> {
-    let schema_ref = CatalogColumn::schema();
+pub(crate) fn create_catalog_column_memtable(
+    columns: Vec<CatalogTableColumn>,
+) -> SparkResult<MemTable> {
+    let schema_ref = CatalogTableColumn::schema();
 
     let mut names: Vec<String> = Vec::with_capacity(columns.len());
     let mut descriptions: Vec<Option<String>> = Vec::with_capacity(columns.len());
@@ -66,12 +68,12 @@ pub(crate) fn create_catalog_column_memtable(columns: Vec<CatalogColumn>) -> Spa
 }
 
 pub(crate) async fn list_catalog_table_columns(
-    catalog_pattern: &String,
-    database_pattern: &String,
-    table_name: &String,
+    catalog_pattern: &str,
+    database_pattern: &str,
+    table_name: &str,
     ctx: &SessionContext,
-) -> SparkResult<Vec<CatalogColumn>> {
-    let mut catalog_table_columns: Vec<CatalogColumn> = Vec::new();
+) -> SparkResult<Vec<CatalogTableColumn>> {
+    let mut catalog_table_columns: Vec<CatalogTableColumn> = Vec::new();
     let catalog_table: Vec<CatalogTable> =
         get_catalog_table(&table_name, &catalog_pattern, &database_pattern, &ctx).await?;
 
@@ -86,7 +88,7 @@ pub(crate) async fn list_catalog_table_columns(
                 if let Ok(Some(table)) = &schema.table(&catalog_table.name).await {
                     for column in table.schema().fields() {
                         let spark_data_type = to_spark_data_type(column.data_type())?;
-                        catalog_table_columns.push(CatalogColumn {
+                        catalog_table_columns.push(CatalogTableColumn {
                             name: column.name().clone(),
                             description: None, // TODO: Add actual description if available
                             data_type: spark_data_type.to_simple_string()?,

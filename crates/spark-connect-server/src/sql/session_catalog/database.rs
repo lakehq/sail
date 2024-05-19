@@ -63,8 +63,8 @@ pub(crate) fn create_catalog_database_memtable(
 }
 
 pub(crate) fn list_catalog_databases(
-    catalog_pattern: Option<&String>,
-    database_pattern: Option<&String>,
+    catalog_pattern: Option<&str>,
+    database_pattern: Option<&str>,
     ctx: &SessionContext,
 ) -> SparkResult<Vec<CatalogDatabase>> {
     let catalogs: HashMap<String, Arc<dyn CatalogProvider>> = list_catalogs(catalog_pattern, &ctx)?;
@@ -76,7 +76,7 @@ pub(crate) fn list_catalog_databases(
                 .iter()
                 .filter_map(|schema_name| {
                     let filtered_names: Vec<String> =
-                        filter_pattern(&vec![schema_name.clone()], database_pattern);
+                        filter_pattern(vec![&schema_name], database_pattern);
                     if filtered_names.is_empty() {
                         None
                     } else {
@@ -95,7 +95,7 @@ pub(crate) fn list_catalog_databases(
 }
 
 pub(crate) fn get_catalog_database(
-    db_name: &String,
+    db_name: &str,
     ctx: &SessionContext,
 ) -> SparkResult<Vec<CatalogDatabase>> {
     let (catalog_name, db_name) = parse_optional_db_name_with_defaults(
@@ -107,7 +107,7 @@ pub(crate) fn get_catalog_database(
 }
 
 pub(crate) fn parse_optional_db_name_with_defaults(
-    db_name: Option<&String>,
+    db_name: Option<&str>,
     default_catalog: &str,
     default_database: &str,
 ) -> SparkResult<(String, String)> {

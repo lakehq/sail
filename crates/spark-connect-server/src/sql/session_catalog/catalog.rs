@@ -49,7 +49,7 @@ pub(crate) fn create_catalog_metadata_memtable(
 }
 
 pub(crate) fn list_catalogs(
-    pattern: Option<&String>,
+    pattern: Option<&str>,
     ctx: &SessionContext,
 ) -> SparkResult<HashMap<String, Arc<dyn CatalogProvider>>> {
     let catalog_list: &Arc<dyn CatalogProviderList> = &ctx.state().catalog_list();
@@ -58,7 +58,7 @@ pub(crate) fn list_catalogs(
         .iter()
         .filter_map(|catalog_name| {
             catalog_list.catalog(catalog_name).and_then(|catalog| {
-                let filtered_names = filter_pattern(&vec![catalog_name.to_string()], pattern);
+                let filtered_names = filter_pattern(vec![&catalog_name], pattern);
                 if filtered_names.is_empty() {
                     None
                 } else {
@@ -71,7 +71,7 @@ pub(crate) fn list_catalogs(
 }
 
 pub(crate) fn list_catalogs_metadata(
-    pattern: Option<&String>,
+    pattern: Option<&str>,
     ctx: &SessionContext,
 ) -> SparkResult<Vec<CatalogMetadata>> {
     let catalogs: HashMap<String, Arc<dyn CatalogProvider>> = list_catalogs(pattern, &ctx)?;

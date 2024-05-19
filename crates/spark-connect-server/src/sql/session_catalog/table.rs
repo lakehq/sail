@@ -1,8 +1,6 @@
+use std::fmt;
 use std::sync::Arc;
 
-use crate::error::SparkResult;
-use crate::sql::session_catalog::database::{list_catalog_databases, CatalogDatabase};
-use crate::sql::utils::filter_pattern;
 use datafusion::arrow::array::{
     BooleanArray, GenericListBuilder, GenericStringBuilder, ListBuilder, RecordBatch, StringArray,
     StringBuilder,
@@ -13,6 +11,56 @@ use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use datafusion_common::TableReference;
 use datafusion_expr::TableType;
+
+use crate::error::SparkResult;
+use crate::sql::session_catalog::database::{list_catalog_databases, CatalogDatabase};
+use crate::sql::utils::filter_pattern;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CatalogTableType {
+    EXTERNAL,
+    MANAGED,
+    VIEW,
+    TEMPORARY,
+}
+
+impl CatalogTableType {
+    fn as_str(&self) -> &str {
+        match self {
+            CatalogTableType::EXTERNAL => "EXTERNAL",
+            CatalogTableType::MANAGED => "MANAGED",
+            CatalogTableType::VIEW => "VIEW",
+            CatalogTableType::TEMPORARY => "TEMPORARY",
+        }
+    }
+}
+
+impl fmt::Display for CatalogTableType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+pub(crate) fn table_type_to_catalog_table_type(table_type: TableType) -> CatalogTableType {
+    match table_type {
+        TableType::Base => CatalogTableType::MANAGED, // TODO: Could also be EXTERNAL
+        TableType::Temporary => CatalogTableType::TEMPORARY,
+        TableType::View => CatalogTableType::TEMPORARY,
+    }
+    // TODO: handle_execute_create_dataframe_view
+    //  is currently creating a View table from DataFrame.
+    //  Unsure if this would be considered a Temporary View Table or not.
+    //  Spark's expectation is that a Temporary View Table is created.
+}
+
+pub(crate) fn catalog_table_type_to_table_type(catalog_table_type: CatalogTableType) -> TableType {
+    match catalog_table_type {
+        CatalogTableType::EXTERNAL => TableType::Base,
+        CatalogTableType::MANAGED => TableType::Base,
+        CatalogTableType::VIEW => TableType::View,
+        CatalogTableType::TEMPORARY => TableType::Temporary,
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct CatalogTable {
@@ -86,27 +134,16 @@ pub(crate) fn create_catalog_table_memtable(tables: Vec<CatalogTable>) -> SparkR
 }
 
 pub(crate) async fn list_catalog_tables(
-    catalog_pattern: Option<&String>,
-    database_pattern: Option<&String>,
-    table_pattern: Option<&String>,
+    catalog_pattern: Option<&str>,
+    database_pattern: Option<&str>,
+    table_pattern: Option<&str>,
     ctx: &SessionContext,
 ) -> SparkResult<Vec<CatalogTable>> {
     let catalog_databases: Vec<CatalogDatabase> =
         list_catalog_databases(catalog_pattern, database_pattern, ctx)?;
-    let default_catalog_name = &ctx
-        .state()
-        .config()
-        .options()
-        .catalog
-        .default_catalog
-        .to_string();
-    let default_database_name = &ctx
-        .state()
-        .config()
-        .options()
-        .catalog
-        .default_schema
-        .to_string();
+    let state = &ctx.state();
+    let default_catalog_name = state.config().options().catalog.default_catalog.as_str();
+    let default_database_name = state.config().options().catalog.default_schema.as_str();
     let mut includes_default_database = false;
     let mut catalog_tables: Vec<CatalogTable> = Vec::new();
     for db in catalog_databases {
@@ -173,27 +210,19 @@ pub(crate) async fn list_catalog_tables_in_schema(
     schema: &Arc<dyn SchemaProvider>,
     catalog_name: &str,
     db_name: &str,
-    table_pattern: Option<&String>,
+    table_pattern: Option<&str>,
     table_type_filter: Option<TableType>,
 ) -> SparkResult<Vec<CatalogTable>> {
     let mut catalog_tables: Vec<CatalogTable> = Vec::new();
     for table_name in schema.table_names() {
-        let filtered_table_names: Vec<String> =
-            filter_pattern(&vec![table_name.clone()], table_pattern);
+        let filtered_table_names: Vec<String> = filter_pattern(vec![&table_name], table_pattern);
         if !filtered_table_names.is_empty() {
             if let Ok(Some(table)) = schema.table(&filtered_table_names[0]).await {
-                // Spark Table Types: EXTERNAL, MANAGED, VIEW
-                let (table_type, is_temporary) = match table.table_type() {
-                    TableType::Base => ("MANAGED".to_string(), false),
-                    // TODO: handle_execute_create_dataframe_view
-                    //  is currently creating a View table from DataFrame.
-                    //  Unsure if this would be considered a Temporary View Table or not.
-                    //  Spark's expectation is that a Temporary View Table is created.
-                    TableType::Temporary | TableType::View => ("TEMPORARY".to_string(), true),
-                };
+                let table_type: TableType = table.table_type();
+                let cat_table_type: CatalogTableType = table_type_to_catalog_table_type(table_type);
                 match table_type_filter {
                     Some(filter) => {
-                        if filter != table.table_type() {
+                        if filter != table_type {
                             continue;
                         }
                     }
@@ -202,23 +231,23 @@ pub(crate) async fn list_catalog_tables_in_schema(
                 catalog_tables.push(CatalogTable {
                     name: filtered_table_names[0].clone(),
                     // DataFrame Temp Views in Spark Session do not have a Catalog or Namespace
-                    catalog: if table.table_type() == TableType::Temporary
-                        || table.table_type() == TableType::View
+                    catalog: if cat_table_type == CatalogTableType::TEMPORARY
+                        || cat_table_type == CatalogTableType::VIEW
                     {
                         None
                     } else {
                         Some(catalog_name.to_string())
                     },
-                    namespace: if table.table_type() == TableType::Temporary
-                        || table.table_type() == TableType::View
+                    namespace: if cat_table_type == CatalogTableType::TEMPORARY
+                        || cat_table_type == CatalogTableType::VIEW
                     {
                         None
                     } else {
                         Some(vec![db_name.to_string()])
                     },
                     description: None, // TODO: Add actual description if available
-                    table_type: table_type,
-                    is_temporary: is_temporary,
+                    table_type: cat_table_type.to_string(),
+                    is_temporary: cat_table_type == CatalogTableType::TEMPORARY,
                 });
             }
         }
@@ -227,19 +256,19 @@ pub(crate) async fn list_catalog_tables_in_schema(
 }
 
 pub(crate) async fn get_catalog_table(
-    table_name: &String,
-    catalog_pattern: &String,
-    database_pattern: &String,
+    table_name: &str,
+    catalog_pattern: &str,
+    database_pattern: &str,
     ctx: &SessionContext,
 ) -> SparkResult<Vec<CatalogTable>> {
     let table_ref = TableReference::from(table_name);
-    let table_name = table_ref.table().to_string();
+    let table_name = table_ref.table();
     let database_pattern = table_ref
         .schema()
-        .map_or(database_pattern.clone(), |schema| schema.to_string());
+        .map_or(database_pattern.clone(), |schema| schema);
     let catalog_pattern = table_ref
         .catalog()
-        .map_or(catalog_pattern.clone(), |catalog| catalog.to_string());
+        .map_or(catalog_pattern.clone(), |catalog| catalog);
     Ok(list_catalog_tables(
         Some(&catalog_pattern),
         Some(&database_pattern),

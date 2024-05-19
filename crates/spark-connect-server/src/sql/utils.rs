@@ -8,10 +8,10 @@ use sqlparser::parser::Parser;
 // Translation of Spark's `filterPattern` function.
 // Only '*' and '|' are allowed as wildcards, others will follow regular expression convention.
 // Will do a case-insensitive match, and white spaces on both ends will be ignored.
-pub(crate) fn filter_pattern(names: &Vec<String>, pattern: Option<&String>) -> Vec<String> {
+pub(crate) fn filter_pattern(names: Vec<&str>, pattern: Option<&str>) -> Vec<String> {
     let pattern = match pattern {
         Some(pattern) => pattern.to_string(),
-        None => return names.clone(),
+        None => return names.iter().map(|&s| s.to_string()).collect(),
     };
 
     let mut func_names: Vec<String> = Vec::new();
@@ -21,9 +21,10 @@ pub(crate) fn filter_pattern(names: &Vec<String>, pattern: Option<&String>) -> V
         let regex_pattern = format!("(?i)^{}$", sub_pattern.replace("*", ".*"));
         match Regex::new(&regex_pattern) {
             Ok(regex) => {
-                for name in names {
-                    if regex.is_match(name) && !func_names.contains(name) {
-                        func_names.push(name.clone());
+                for &name in &names {
+                    let name = name.to_string();
+                    if regex.is_match(&name) && !func_names.contains(&name) {
+                        func_names.push(name);
                     }
                 }
             }
