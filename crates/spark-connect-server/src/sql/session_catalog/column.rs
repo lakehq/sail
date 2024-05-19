@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::error::SparkResult;
+use crate::schema::to_spark_data_type;
 use crate::sql::session_catalog::table::{get_catalog_table, CatalogTable};
 use datafusion::arrow::array::{BooleanArray, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -84,11 +85,11 @@ pub(crate) async fn list_catalog_table_columns(
             if let Some(schema) = &catalog.schema(&catalog_table.namespace.as_ref().unwrap()[0]) {
                 if let Ok(Some(table)) = &schema.table(&catalog_table.name).await {
                     for column in table.schema().fields() {
+                        let spark_data_type = to_spark_data_type(column.data_type())?;
                         catalog_table_columns.push(CatalogColumn {
                             name: column.name().clone(),
                             description: None, // TODO: Add actual description if available
-                            // TODO: needs to be sql data type e.g. "int"
-                            data_type: column.data_type().to_string(),
+                            data_type: spark_data_type.to_simple_string()?,
                             nullable: column.is_nullable(),
                             is_partition: false, // TODO: Add actual is_partition if available
                             is_bucket: false,    // TODO: Add actual is_bucket if available

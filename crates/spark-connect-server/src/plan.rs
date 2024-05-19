@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Fields};
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::dataframe::DataFrame;
@@ -864,26 +864,27 @@ pub(crate) async fn from_spark_relation(
                     Err(SparkError::todo("CatType::CreateExternalTable"))
                 }
                 CatType::CreateTable(create_table) => {
-                    let table_name = create_table.table_name.to_string();
+                    let table_name = create_table.table_name.as_str();
+
                     let path: Option<&String> = create_table.path.as_ref();
-                    let source: Option<&String> = create_table.source.as_ref();
-                    let description: Option<&String> = create_table.description.as_ref();
-                    let schema: Option<&sc::DataType> = create_table.schema.as_ref();
-                    let schema: Option<DataType> = match schema {
+
+                    // TODO: use spark.sql.sources.default to get the default source
+                    let source: &str = create_table.source.as_deref().unwrap_or("parquet");
+
+                    let description: &str = create_table.description.as_deref().unwrap_or("");
+
+                    let schema: Fields = match create_table.schema.as_ref() {
                         Some(schema) => {
                             let data_type = from_spark_built_in_data_type(schema)?;
                             match data_type {
-                                DataType::Struct(fields) => Some(DataType::Struct(fields)),
+                                DataType::Struct(fields) => fields,
                                 _ => return Err(SparkError::invalid("external table schema")),
                             }
                         }
-                        None => None,
+                        None => Fields::empty(),
                     };
+                    let path: Option<&String> = create_table.path.as_ref();
                     let options: &HashMap<String, String> = &create_table.options;
-                    if !options.is_empty() {
-                        // TODO: Handle options
-                        return Err(SparkError::todo("table options"));
-                    }
 
                     // Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
                     //     plan::CreateMemoryTable {
