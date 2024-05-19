@@ -130,139 +130,6 @@ impl From<LiteralValue<Decimal>> for LiteralType {
     }
 }
 
-impl TryFrom<String> for LiteralValue<Vec<u8>> {
-    type Error = SparkError;
-
-    fn try_from(value: String) -> SparkResult<Self> {
-        if value.len() % 2 != 0 {
-            return Err(SparkError::invalid(format!("hex string: {:?}", value)));
-        }
-        if !BINARY_REGEX.is_match(&value) {
-            return Err(SparkError::invalid(format!("hex string: {:?}", value)));
-        }
-        let bytes = value
-            .as_bytes()
-            .chunks(2)
-            .map(|chunk| {
-                let chunk = std::str::from_utf8(chunk)
-                    .or_else(|_| Err(SparkError::invalid(format!("hex string: {:?}", value))))?;
-                u8::from_str_radix(chunk, 16)
-                    .or_else(|_| Err(SparkError::invalid(format!("hex string: {:?}", value))))
-            })
-            .collect::<SparkResult<_>>()?;
-        Ok(LiteralValue(bytes))
-    }
-}
-
-impl TryFrom<String> for LiteralValue<i8> {
-    type Error = SparkError;
-
-    fn try_from(value: String) -> SparkResult<Self> {
-        let value = value
-            .parse::<i8>()
-            .or_else(|_| Err(SparkError::invalid(format!("tinyint: {:?}", value))))?;
-        Ok(LiteralValue(value))
-    }
-}
-
-impl TryFrom<String> for LiteralValue<i16> {
-    type Error = SparkError;
-
-    fn try_from(value: String) -> SparkResult<Self> {
-        let value = value
-            .parse::<i16>()
-            .or_else(|_| Err(SparkError::invalid(format!("smallint: {:?}", value))))?;
-        Ok(LiteralValue(value))
-    }
-}
-
-impl TryFrom<String> for LiteralValue<i32> {
-    type Error = SparkError;
-
-    fn try_from(value: String) -> SparkResult<Self> {
-        let value = value
-            .parse::<i32>()
-            .or_else(|_| Err(SparkError::invalid(format!("int: {:?}", value))))?;
-        Ok(LiteralValue(value))
-    }
-}
-
-impl TryFrom<String> for LiteralValue<i64> {
-    type Error = SparkError;
-
-    fn try_from(value: String) -> SparkResult<Self> {
-        let value = value
-            .parse::<i64>()
-            .or_else(|_| Err(SparkError::invalid(format!("bigint: {:?}", value))))?;
-        Ok(LiteralValue(value))
-    }
-}
-
-impl TryFrom<String> for LiteralValue<f32> {
-    type Error = SparkError;
-
-    fn try_from(value: String) -> SparkResult<Self> {
-        let value = value
-            .parse::<f32>()
-            .or_else(|_| Err(SparkError::invalid(format!("float: {:?}", value))))?;
-        Ok(LiteralValue(value))
-    }
-}
-
-impl TryFrom<String> for LiteralValue<f64> {
-    type Error = SparkError;
-
-    fn try_from(value: String) -> SparkResult<Self> {
-        let value = value
-            .parse::<f64>()
-            .or_else(|_| Err(SparkError::invalid(format!("double: {:?}", value))))?;
-        Ok(LiteralValue(value))
-    }
-}
-
-impl TryFrom<String> for LiteralValue<Decimal> {
-    type Error = SparkError;
-
-    fn try_from(value: String) -> SparkResult<Self> {
-        let captures = DECIMAL_REGEX
-            .captures(&value)
-            .ok_or_else(|| SparkError::invalid(format!("decimal: {:?}", value)))?;
-        let w = captures
-            .name("whole")
-            .map(|x| i32::try_from(x.as_str().len()))
-            .transpose()
-            .or_else(|_| Err(SparkError::invalid(format!("decimal: {:?}", value))))?
-            .unwrap_or(0);
-        let f = captures
-            .name("fraction")
-            .map(|x| i32::try_from(x.len()))
-            .transpose()
-            .or_else(|_| Err(SparkError::invalid(format!("decimal: {:?}", value))))?
-            .unwrap_or(0);
-        let e = captures
-            .name("exponent")
-            .map(|x| x.as_str().parse::<i32>())
-            .transpose()
-            .or_else(|_| Err(SparkError::invalid(format!("decimal: {:?}", value))))?
-            .unwrap_or(0);
-        let w = if w + e > 0 { w + e } else { 0 };
-        let f = if f - e > 0 { f - e } else { 0 };
-        let (precision, scale) = (w + f, f);
-        if precision > SPARK_DECIMAL_MAX_PRECISION {
-            return Err(SparkError::invalid(format!("decimal: {:?}", value)));
-        }
-        if scale > SPARK_DECIMAL_MAX_SCALE {
-            return Err(SparkError::invalid(format!("decimal: {:?}", value)));
-        }
-        let value = Decimal {
-            value,
-            precision: Some(precision),
-            scale: Some(scale),
-        };
-        Ok(LiteralValue(value))
-    }
-}
-
 impl TryFrom<LiteralValue<chrono::NaiveDate>> for LiteralType {
     type Error = SparkError;
 
@@ -448,6 +315,139 @@ impl TryFrom<LiteralValue<ast::Interval>> for LiteralType {
     }
 }
 
+impl TryFrom<String> for LiteralValue<Vec<u8>> {
+    type Error = SparkError;
+
+    fn try_from(value: String) -> SparkResult<Self> {
+        if value.len() % 2 != 0 {
+            return Err(SparkError::invalid(format!("hex string: {:?}", value)));
+        }
+        if !BINARY_REGEX.is_match(&value) {
+            return Err(SparkError::invalid(format!("hex string: {:?}", value)));
+        }
+        let bytes = value
+            .as_bytes()
+            .chunks(2)
+            .map(|chunk| {
+                let chunk = std::str::from_utf8(chunk)
+                    .or_else(|_| Err(SparkError::invalid(format!("hex string: {:?}", value))))?;
+                u8::from_str_radix(chunk, 16)
+                    .or_else(|_| Err(SparkError::invalid(format!("hex string: {:?}", value))))
+            })
+            .collect::<SparkResult<_>>()?;
+        Ok(LiteralValue(bytes))
+    }
+}
+
+impl TryFrom<String> for LiteralValue<i8> {
+    type Error = SparkError;
+
+    fn try_from(value: String) -> SparkResult<Self> {
+        let value = value
+            .parse::<i8>()
+            .or_else(|_| Err(SparkError::invalid(format!("tinyint: {:?}", value))))?;
+        Ok(LiteralValue(value))
+    }
+}
+
+impl TryFrom<String> for LiteralValue<i16> {
+    type Error = SparkError;
+
+    fn try_from(value: String) -> SparkResult<Self> {
+        let value = value
+            .parse::<i16>()
+            .or_else(|_| Err(SparkError::invalid(format!("smallint: {:?}", value))))?;
+        Ok(LiteralValue(value))
+    }
+}
+
+impl TryFrom<String> for LiteralValue<i32> {
+    type Error = SparkError;
+
+    fn try_from(value: String) -> SparkResult<Self> {
+        let value = value
+            .parse::<i32>()
+            .or_else(|_| Err(SparkError::invalid(format!("int: {:?}", value))))?;
+        Ok(LiteralValue(value))
+    }
+}
+
+impl TryFrom<String> for LiteralValue<i64> {
+    type Error = SparkError;
+
+    fn try_from(value: String) -> SparkResult<Self> {
+        let value = value
+            .parse::<i64>()
+            .or_else(|_| Err(SparkError::invalid(format!("bigint: {:?}", value))))?;
+        Ok(LiteralValue(value))
+    }
+}
+
+impl TryFrom<String> for LiteralValue<f32> {
+    type Error = SparkError;
+
+    fn try_from(value: String) -> SparkResult<Self> {
+        let value = value
+            .parse::<f32>()
+            .or_else(|_| Err(SparkError::invalid(format!("float: {:?}", value))))?;
+        Ok(LiteralValue(value))
+    }
+}
+
+impl TryFrom<String> for LiteralValue<f64> {
+    type Error = SparkError;
+
+    fn try_from(value: String) -> SparkResult<Self> {
+        let value = value
+            .parse::<f64>()
+            .or_else(|_| Err(SparkError::invalid(format!("double: {:?}", value))))?;
+        Ok(LiteralValue(value))
+    }
+}
+
+impl TryFrom<String> for LiteralValue<Decimal> {
+    type Error = SparkError;
+
+    fn try_from(value: String) -> SparkResult<Self> {
+        let captures = DECIMAL_REGEX
+            .captures(&value)
+            .ok_or_else(|| SparkError::invalid(format!("decimal: {:?}", value)))?;
+        let w = captures
+            .name("whole")
+            .map(|x| i32::try_from(x.as_str().len()))
+            .transpose()
+            .or_else(|_| Err(SparkError::invalid(format!("decimal: {:?}", value))))?
+            .unwrap_or(0);
+        let f = captures
+            .name("fraction")
+            .map(|x| i32::try_from(x.len()))
+            .transpose()
+            .or_else(|_| Err(SparkError::invalid(format!("decimal: {:?}", value))))?
+            .unwrap_or(0);
+        let e = captures
+            .name("exponent")
+            .map(|x| x.as_str().parse::<i32>())
+            .transpose()
+            .or_else(|_| Err(SparkError::invalid(format!("decimal: {:?}", value))))?
+            .unwrap_or(0);
+        let w = if w + e > 0 { w + e } else { 0 };
+        let f = if f - e > 0 { f - e } else { 0 };
+        let (precision, scale) = (w + f, f);
+        if precision > SPARK_DECIMAL_MAX_PRECISION {
+            return Err(SparkError::invalid(format!("decimal: {:?}", value)));
+        }
+        if scale > SPARK_DECIMAL_MAX_SCALE {
+            return Err(SparkError::invalid(format!("decimal: {:?}", value)));
+        }
+        let value = Decimal {
+            value,
+            precision: Some(precision),
+            scale: Some(scale),
+        };
+        Ok(LiteralValue(value))
+    }
+}
+
 type Negated = bool;
 
 impl TryFrom<ast::Expr> for LiteralValue<(String, Negated)> {
@@ -627,7 +627,84 @@ pub(crate) fn parse_timestamp_string(s: &str) -> SparkResult<LiteralType> {
     Ok(LiteralType::try_from(LiteralValue((dt, tz)))?)
 }
 
-pub(crate) fn parse_year_month_interval_string(
+#[derive(Debug)]
+pub(crate) enum TimeZoneVariant {
+    None,
+    Utc,
+    FixedOffset(chrono::FixedOffset),
+    Named(chrono_tz::Tz),
+}
+
+impl TimeZoneVariant {
+    fn time_delta_from_unix_epoch<Tz, O>(
+        dt: &chrono::NaiveDateTime,
+        tz: &Tz,
+    ) -> SparkResult<chrono::TimeDelta>
+    where
+        Tz: chrono::TimeZone<Offset = O> + Debug,
+        O: chrono::Offset,
+    {
+        let dt = tz
+            .from_local_datetime(&dt)
+            .single()
+            .ok_or_else(|| SparkError::invalid(format!("datetime: {:?} {:?}", dt, tz)))?;
+        Ok(dt - chrono::DateTime::UNIX_EPOCH.with_timezone(tz))
+    }
+}
+
+pub(crate) fn parse_timezone_string(tz: &str) -> SparkResult<TimeZoneVariant> {
+    if tz.trim().is_empty() {
+        return Ok(TimeZoneVariant::None);
+    }
+    if tz.trim() == "Z" {
+        return Ok(TimeZoneVariant::Utc);
+    }
+    let captures = TIMEZONE_OFFSET_REGEX
+        .captures(tz)
+        .or_else(|| TIMEZONE_OFFSET_COMPACT_REGEX.captures(tz));
+    if let Some(captures) = captures {
+        let hour = captures
+            .name("hour")
+            .ok_or_else(|| SparkError::invalid(format!("missing hour in timezone offset: {tz}")))?
+            .as_str()
+            .parse::<i32>()
+            .or_else(|_| {
+                Err(SparkError::invalid(format!(
+                    "invalid hour in timezone offset: {tz}"
+                )))
+            })?;
+        let minute = captures
+            .name("minute")
+            .map(|m| m.as_str().parse::<i32>())
+            .transpose()
+            .or_else(|_| {
+                Err(SparkError::invalid(format!(
+                    "invalid minute in timezone offset: {tz}"
+                )))
+            })?
+            .unwrap_or(0);
+        let second = captures
+            .name("second")
+            .map(|s| s.as_str().parse::<i32>())
+            .transpose()
+            .or_else(|_| {
+                Err(SparkError::invalid(format!(
+                    "invalid second in timezone offset: {tz}"
+                )))
+            })?
+            .unwrap_or(0);
+        let offset = chrono::FixedOffset::east_opt(hour * 3600 + minute * 60 + second)
+            .ok_or_else(|| SparkError::invalid(format!("timezone offset: {tz}")))?;
+        Ok(TimeZoneVariant::FixedOffset(offset))
+    } else {
+        let tz = tz
+            .parse::<chrono_tz::Tz>()
+            .or_else(|_| Err(SparkError::invalid(format!("timezone literal: {tz}"))))?;
+        Ok(TimeZoneVariant::Named(tz))
+    }
+}
+
+fn parse_year_month_interval_string(
     s: &str,
     negated: bool,
     interval_regex: &regex::Regex,
@@ -659,7 +736,7 @@ pub(crate) fn parse_year_month_interval_string(
     Ok(LiteralType::YearMonthInterval(months))
 }
 
-pub(crate) fn parse_day_time_interval_string(
+fn parse_day_time_interval_string(
     s: &str,
     negated: Negated,
     interval_regex: &regex::Regex,
@@ -787,82 +864,5 @@ fn parse_multi_unit_interval(
                 .ok_or_else(|| SparkError::invalid("interval"))?;
             Ok(LiteralType::DayTimeInterval(microseconds))
         }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum TimeZoneVariant {
-    None,
-    Utc,
-    FixedOffset(chrono::FixedOffset),
-    Named(chrono_tz::Tz),
-}
-
-impl TimeZoneVariant {
-    fn time_delta_from_unix_epoch<Tz, O>(
-        dt: &chrono::NaiveDateTime,
-        tz: &Tz,
-    ) -> SparkResult<chrono::TimeDelta>
-    where
-        Tz: chrono::TimeZone<Offset = O> + Debug,
-        O: chrono::Offset,
-    {
-        let dt = tz
-            .from_local_datetime(&dt)
-            .single()
-            .ok_or_else(|| SparkError::invalid(format!("datetime: {:?} {:?}", dt, tz)))?;
-        Ok(dt - chrono::DateTime::UNIX_EPOCH.with_timezone(tz))
-    }
-}
-
-pub(crate) fn parse_timezone_string(tz: &str) -> SparkResult<TimeZoneVariant> {
-    if tz.trim().is_empty() {
-        return Ok(TimeZoneVariant::None);
-    }
-    if tz.trim() == "Z" {
-        return Ok(TimeZoneVariant::Utc);
-    }
-    let captures = TIMEZONE_OFFSET_REGEX
-        .captures(tz)
-        .or_else(|| TIMEZONE_OFFSET_COMPACT_REGEX.captures(tz));
-    if let Some(captures) = captures {
-        let hour = captures
-            .name("hour")
-            .ok_or_else(|| SparkError::invalid(format!("missing hour in timezone offset: {tz}")))?
-            .as_str()
-            .parse::<i32>()
-            .or_else(|_| {
-                Err(SparkError::invalid(format!(
-                    "invalid hour in timezone offset: {tz}"
-                )))
-            })?;
-        let minute = captures
-            .name("minute")
-            .map(|m| m.as_str().parse::<i32>())
-            .transpose()
-            .or_else(|_| {
-                Err(SparkError::invalid(format!(
-                    "invalid minute in timezone offset: {tz}"
-                )))
-            })?
-            .unwrap_or(0);
-        let second = captures
-            .name("second")
-            .map(|s| s.as_str().parse::<i32>())
-            .transpose()
-            .or_else(|_| {
-                Err(SparkError::invalid(format!(
-                    "invalid second in timezone offset: {tz}"
-                )))
-            })?
-            .unwrap_or(0);
-        let offset = chrono::FixedOffset::east_opt(hour * 3600 + minute * 60 + second)
-            .ok_or_else(|| SparkError::invalid(format!("timezone offset: {tz}")))?;
-        Ok(TimeZoneVariant::FixedOffset(offset))
-    } else {
-        let tz = tz
-            .parse::<chrono_tz::Tz>()
-            .or_else(|_| Err(SparkError::invalid(format!("timezone literal: {tz}"))))?;
-        Ok(TimeZoneVariant::Named(tz))
     }
 }

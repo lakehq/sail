@@ -188,11 +188,7 @@ fn from_ast_value(value: ast::Value) -> SparkResult<sc::Expression> {
             let value: LiteralValue<Vec<u8>> = value.try_into()?;
             Ok(sc::Expression::from(value))
         }
-        Value::Boolean(value) => Ok(sc::Expression {
-            expr_type: Some(ExprType::Literal(sc::expression::Literal {
-                literal_type: Some(LiteralType::Boolean(value)),
-            })),
-        }),
+        Value::Boolean(value) => Ok(sc::Expression::from(LiteralValue(value))),
         Value::Null => Ok(sc::Expression {
             expr_type: Some(ExprType::Literal(sc::expression::Literal {
                 // We cannot infer the data type without a schema.
