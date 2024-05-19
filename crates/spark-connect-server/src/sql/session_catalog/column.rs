@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
 use crate::error::SparkResult;
+use crate::sql::session_catalog::table::{get_catalog_table, CatalogTable};
 use datafusion::arrow::array::{BooleanArray, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::MemTable;
+use datafusion::prelude::SessionContext;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CatalogColumn {
@@ -60,4 +62,42 @@ pub(crate) fn create_catalog_column_memtable(columns: Vec<CatalogColumn>) -> Spa
     )?;
 
     Ok(MemTable::try_new(schema_ref, vec![vec![record_batch]])?)
+}
+
+pub(crate) async fn list_catalog_table_columns(
+    catalog_pattern: &String,
+    database_pattern: &String,
+    table_name: &String,
+    ctx: &SessionContext,
+) -> SparkResult<Vec<CatalogColumn>> {
+    let mut catalog_table_columns: Vec<CatalogColumn> = Vec::new();
+    let catalog_table: Vec<CatalogTable> =
+        get_catalog_table(&table_name, &catalog_pattern, &database_pattern, &ctx).await?;
+
+    if catalog_table.is_empty() {
+        return Ok(catalog_table_columns);
+    }
+
+    let catalog_table: &CatalogTable = &catalog_table[0];
+    if let Some(catalog_name) = &catalog_table.catalog {
+        if let Some(catalog) = &ctx.catalog(catalog_name) {
+            if let Some(schema) = &catalog.schema(&catalog_table.namespace.as_ref().unwrap()[0]) {
+                if let Ok(Some(table)) = &schema.table(&catalog_table.name).await {
+                    for column in table.schema().fields() {
+                        catalog_table_columns.push(CatalogColumn {
+                            name: column.name().clone(),
+                            description: None, // TODO: Add actual description if available
+                            // TODO: needs to be sql data type e.g. "int"
+                            data_type: column.data_type().to_string(),
+                            nullable: column.is_nullable(),
+                            is_partition: false, // TODO: Add actual is_partition if available
+                            is_bucket: false,    // TODO: Add actual is_bucket if available
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(catalog_table_columns)
 }

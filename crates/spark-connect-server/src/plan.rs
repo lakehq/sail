@@ -39,6 +39,7 @@ use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::Relation;
 use crate::sql::data_type::parse_spark_schema;
 use crate::sql::session_catalog::catalog::list_catalogs_metadata;
+use crate::sql::session_catalog::column::list_catalog_table_columns;
 use crate::sql::session_catalog::database::{
     get_catalog_database, list_catalog_databases, parse_optional_db_name_with_defaults,
 };
@@ -728,96 +729,20 @@ pub(crate) async fn from_spark_relation(
                 }
                 CatType::ListFunctions(_) => Err(SparkError::unsupported("CatType::ListFunctions")),
                 CatType::ListColumns(list_columns) => {
-                    let (catalog_name, db_name) =
-                        list_columns
-                            .db_name
-                            .as_ref()
-                            .map_or((None, None), |db_name| {
-                                let parts: Vec<&str> = db_name.trim().split('.').collect();
-                                if parts.len() == 2 {
-                                    (Some(parts[0].to_string()), Some(parts[1].to_string()))
-                                } else {
-                                    (None, Some(db_name.to_string()))
-                                }
-                            });
-
                     let table_name = list_columns.table_name.to_string();
-                    let table_ref = TableReference::from(table_name);
-                    let table_name = table_ref.table();
-                    let db_name = table_ref
-                        .schema()
-                        .map_or(db_name, |schema| Some(schema.to_string()));
-                    let catalog_name = table_ref
-                        .catalog()
-                        .map_or(catalog_name, |catalog| Some(catalog.to_string()));
-
-                    let catalog_list: &Arc<dyn CatalogProviderList> = &state.catalog_list();
-                    let mut columns: Vec<CatalogColumn> = vec![];
-
-                    match catalog_name {
-                        Some(catalog_name) => {
-                            if let Some(catalog) = catalog_list.catalog(&catalog_name) {
-                                if let Some(db_name) = db_name {
-                                    if let Some(schema) = catalog.schema(&db_name) {
-                                        if let Ok(Some(table)) = schema.table(&table_name).await {
-                                            for field in table.schema().fields() {
-                                                let spark_data_type =
-                                                    to_spark_data_type(field.data_type())?;
-                                                let sc::DataType { ref kind } = spark_data_type;
-                                                let kind =
-                                                    kind.as_ref().required("data type kind")?;
-                                                columns.push(CatalogColumn {
-                                                    name: field.name().to_string(),
-                                                    // TODO: Add actual description if available
-                                                    description: None,
-                                                    data_type: format!("{:?}", kind),
-                                                    nullable: field.is_nullable(),
-                                                    // TODO: Add actual is_partition if available
-                                                    is_partition: false,
-                                                    // TODO: Add actual is_bucket if available
-                                                    is_bucket: false,
-                                                });
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        None => {
-                            for catalog_name in catalog_list.catalog_names() {
-                                if let Some(catalog) = catalog_list.catalog(&catalog_name) {
-                                    if let Some(db_name) = db_name.clone() {
-                                        if let Some(schema) = catalog.schema(&db_name) {
-                                            if let Ok(Some(table)) = schema.table(&table_name).await
-                                            {
-                                                for field in table.schema().fields() {
-                                                    let spark_data_type =
-                                                        to_spark_data_type(field.data_type())?;
-                                                    let sc::DataType { ref kind } = spark_data_type;
-                                                    let kind =
-                                                        kind.as_ref().required("data type kind")?;
-                                                    columns.push(CatalogColumn {
-                                                        name: field.name().to_string(),
-                                                        // TODO: Add actual description if available
-                                                        description: None,
-                                                        data_type: format!("{:?}", kind),
-                                                        nullable: field.is_nullable(),
-                                                        // TODO: Add actual is_partition if available
-                                                        is_partition: false,
-                                                        // TODO: Add actual is_bucket if available
-                                                        is_bucket: false,
-                                                    });
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    let provider = create_catalog_column_memtable(columns)?;
-
+                    let (catalog_name, database_name) = parse_optional_db_name_with_defaults(
+                        list_columns.db_name.as_ref(),
+                        &state.config().options().catalog.default_catalog,
+                        &state.config().options().catalog.default_schema,
+                    )?;
+                    let catalog_table_columns = list_catalog_table_columns(
+                        &catalog_name,
+                        &database_name,
+                        &table_name,
+                        &ctx,
+                    )
+                    .await?;
+                    let provider = create_catalog_column_memtable(catalog_table_columns)?;
                     Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
                         UNNAMED_TABLE,
                         provider_as_source(Arc::new(provider)),
