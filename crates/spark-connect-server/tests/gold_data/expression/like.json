@@ -3,235 +3,1241 @@
     {
       "input": "a ilike all ('Foo%', 'b%')",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "ilike",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "all",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "Foo%"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "b%"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a ilike all()",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "ilike",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "all"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a ilike any ('FOO%', 'b%')",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "ilike",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "any",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "FOO%"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "b%"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a ilike any()",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "ilike",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "any"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a ilike some ('FOO%', 'b%')",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "ilike",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "some",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "FOO%"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "b%"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a ilike some()",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "ilike",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "some"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a like 'pattern%'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "like",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "literal": {
+                  "string": "pattern%"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a like 'pattern%' escape '\"'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "like",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "literal": {
+                  "string": "pattern%"
+                }
+              },
+              {
+                "literal": {
+                  "string": "\""
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a like 'pattern%' escape '##'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "like",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "literal": {
+                  "string": "pattern%"
+                }
+              },
+              {
+                "literal": {
+                  "string": "##"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a like 'pattern%' escape '#'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "like",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "literal": {
+                  "string": "pattern%"
+                }
+              },
+              {
+                "literal": {
+                  "string": "#"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a like 'pattern%' escape ''",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "like",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "literal": {
+                  "string": "pattern%"
+                }
+              },
+              {
+                "literal": {
+                  "string": ""
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a like all ('foo%', 'b%')",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "like",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "all",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "foo%"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "b%"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a like all()",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "like",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "all"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a like any ('foo%', 'b%')",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "like",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "any",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "foo%"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "b%"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a like any()",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "like",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "any"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a like some ('foo%', 'b%')",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "like",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "some",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "foo%"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "b%"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a like some()",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "like",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "some"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a not ilike all ('foo%', 'B%')",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "ilike",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "all",
+                        "arguments": [
+                          {
+                            "literal": {
+                              "string": "foo%"
+                            }
+                          },
+                          {
+                            "literal": {
+                              "string": "B%"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a not ilike any ('foo%', 'B%')",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "ilike",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "any",
+                        "arguments": [
+                          {
+                            "literal": {
+                              "string": "foo%"
+                            }
+                          },
+                          {
+                            "literal": {
+                              "string": "B%"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a not ilike some ('foo%', 'B%')",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "ilike",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "some",
+                        "arguments": [
+                          {
+                            "literal": {
+                              "string": "foo%"
+                            }
+                          },
+                          {
+                            "literal": {
+                              "string": "B%"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a not like 'pattern%'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "like",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "pattern%"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a not like 'pattern%' escape '\"'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "like",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "pattern%"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "\""
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a not like 'pattern%' escape '\"/'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "like",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "pattern%"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "\"/"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a not like 'pattern%' escape '#'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "like",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "pattern%"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "#"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a not like 'pattern%' escape ''",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "like",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "pattern%"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": ""
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a not like all ('foo%', 'b%')",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "like",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "all",
+                        "arguments": [
+                          {
+                            "literal": {
+                              "string": "foo%"
+                            }
+                          },
+                          {
+                            "literal": {
+                              "string": "b%"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a not like any ('foo%', 'b%')",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "like",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "any",
+                        "arguments": [
+                          {
+                            "literal": {
+                              "string": "foo%"
+                            }
+                          },
+                          {
+                            "literal": {
+                              "string": "b%"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a not like some ('foo%', 'b%')",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "like",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "some",
+                        "arguments": [
+                          {
+                            "literal": {
+                              "string": "foo%"
+                            }
+                          },
+                          {
+                            "literal": {
+                              "string": "b%"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a not rlike 'pattern%'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "rlike",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "pattern%"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a rlike '^\\x20[\\x20-\\x23]+$'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "rlike",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "literal": {
+                  "string": "^\\x20[\\x20-\\x23]+$"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a rlike 'pattern%'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "rlike",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "literal": {
+                  "string": "pattern%"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a rlike 'pattern\\\\'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "rlike",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "literal": {
+                  "string": "pattern\\\\"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a rlike 'pattern\\t\\n'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "rlike",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "literal": {
+                  "string": "pattern\\t\\n"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "not (a ilike all ('foO%', 'b%'))",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "ilike",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "all",
+                        "arguments": [
+                          {
+                            "literal": {
+                              "string": "foO%"
+                            }
+                          },
+                          {
+                            "literal": {
+                              "string": "b%"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "not (a ilike any ('FOO%', 'B%'))",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "ilike",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "any",
+                        "arguments": [
+                          {
+                            "literal": {
+                              "string": "FOO%"
+                            }
+                          },
+                          {
+                            "literal": {
+                              "string": "B%"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "not (a ilike some ('FOO%', 'B%'))",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "ilike",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "some",
+                        "arguments": [
+                          {
+                            "literal": {
+                              "string": "FOO%"
+                            }
+                          },
+                          {
+                            "literal": {
+                              "string": "B%"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "not (a like all ('foo%', 'b%'))",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "like",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "all",
+                        "arguments": [
+                          {
+                            "literal": {
+                              "string": "foo%"
+                            }
+                          },
+                          {
+                            "literal": {
+                              "string": "b%"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "not (a like any ('foo%', 'b%'))",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "like",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "any",
+                        "arguments": [
+                          {
+                            "literal": {
+                              "string": "foo%"
+                            }
+                          },
+                          {
+                            "literal": {
+                              "string": "b%"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "not (a like some ('foo%', 'b%'))",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "like",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "some",
+                        "arguments": [
+                          {
+                            "literal": {
+                              "string": "foo%"
+                            }
+                          },
+                          {
+                            "literal": {
+                              "string": "b%"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     }
   ]

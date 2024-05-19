@@ -3,25 +3,81 @@
     {
       "input": "cast(a as array<int>)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "cast": {
+            "expr": {
+              "unresolvedAttribute": {
+                "unparsedIdentifier": "a"
+              }
+            },
+            "type": {
+              "array": {
+                "elementType": {
+                  "integer": {}
+                },
+                "containsNull": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "cast(a as int)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "cast": {
+            "expr": {
+              "unresolvedAttribute": {
+                "unparsedIdentifier": "a"
+              }
+            },
+            "type": {
+              "integer": {}
+            }
+          }
+        }
       }
     },
     {
       "input": "cast(a as timestamp)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "cast": {
+            "expr": {
+              "unresolvedAttribute": {
+                "unparsedIdentifier": "a"
+              }
+            },
+            "type": {
+              "timestamp": {}
+            }
+          }
+        }
       }
     },
     {
       "input": "cast(cast(a as int) as long)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "cast": {
+            "expr": {
+              "cast": {
+                "expr": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "a"
+                  }
+                },
+                "type": {
+                  "integer": {}
+                }
+              }
+            },
+            "type": {
+              "long": {}
+            }
+          }
+        }
       }
     }
   ]

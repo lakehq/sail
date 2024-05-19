@@ -3,673 +3,2054 @@
     {
       "input": "!a",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "(a + b).b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedExtractValue": {
+            "child": {
+              "unresolvedFunction": {
+                "functionName": "+",
+                "arguments": [
+                  {
+                    "unresolvedAttribute": {
+                      "unparsedIdentifier": "a"
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "unparsedIdentifier": "b"
+                    }
+                  }
+                ]
+              }
+            },
+            "extraction": {
+              "unresolvedAttribute": {
+                "unparsedIdentifier": "b"
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "(a as b, b as c)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: sql parser error: Expected ), found: as at Line: 1, Column 4"
       }
     },
     {
       "input": "(a)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedAttribute": {
+            "unparsedIdentifier": "a"
+          }
+        }
       }
     },
     {
       "input": "(a) in (select b from c)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "not supported: expression: InSubquery { expr: Nested(Identifier(Ident { value: \"a\", quote_style: None })), subquery: Query { with: None, body: Select(Select { distinct: None, top: None, projection: [UnnamedExpr(Identifier(Ident { value: \"b\", quote_style: None }))], into: None, from: [TableWithJoins { relation: Table { name: ObjectName([Ident { value: \"c\", quote_style: None }]), alias: None, args: None, with_hints: [], version: None, partitions: [] }, joins: [] }], lateral_views: [], selection: None, group_by: Expressions([]), cluster_by: [], distribute_by: [], sort_by: [], having: None, named_window: [], qualify: None, window_before_qualify: false, value_table_mode: None, connect_by: None }), order_by: [], limit: None, limit_by: [], offset: None, fetch: None, locks: [], for_clause: None }, negated: false }"
       }
     },
     {
       "input": "(a, b)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "not supported: expression: Tuple([Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None })])"
       }
     },
     {
       "input": "(a, b) in (select c from d)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "not supported: expression: InSubquery { expr: Tuple([Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None })]), subquery: Query { with: None, body: Select(Select { distinct: None, top: None, projection: [UnnamedExpr(Identifier(Ident { value: \"c\", quote_style: None }))], into: None, from: [TableWithJoins { relation: Table { name: ObjectName([Ident { value: \"d\", quote_style: None }]), alias: None, args: None, with_hints: [], version: None, partitions: [] }, joins: [] }], lateral_views: [], selection: None, group_by: Expressions([]), cluster_by: [], distribute_by: [], sort_by: [], having: None, named_window: [], qualify: None, window_before_qualify: false, value_table_mode: None, connect_by: None }), order_by: [], limit: None, limit_by: [], offset: None, fetch: None, locks: [], for_clause: None }, negated: false }"
       }
     },
     {
       "input": "(a, b, c)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "not supported: expression: Tuple([Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None }), Identifier(Ident { value: \"c\", quote_style: None })])"
       }
     },
     {
       "input": "(a, b, c) in (select d, e, f from g)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "not supported: expression: InSubquery { expr: Tuple([Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None }), Identifier(Ident { value: \"c\", quote_style: None })]), subquery: Query { with: None, body: Select(Select { distinct: None, top: None, projection: [UnnamedExpr(Identifier(Ident { value: \"d\", quote_style: None })), UnnamedExpr(Identifier(Ident { value: \"e\", quote_style: None })), UnnamedExpr(Identifier(Ident { value: \"f\", quote_style: None }))], into: None, from: [TableWithJoins { relation: Table { name: ObjectName([Ident { value: \"g\", quote_style: None }]), alias: None, args: None, with_hints: [], version: None, partitions: [] }, joins: [] }], lateral_views: [], selection: None, group_by: Expressions([]), cluster_by: [], distribute_by: [], sort_by: [], having: None, named_window: [], qualify: None, window_before_qualify: false, value_table_mode: None, connect_by: None }), order_by: [], limit: None, limit_by: [], offset: None, fetch: None, locks: [], for_clause: None }, negated: false }"
       }
     },
     {
       "input": "(select max(val) from tbl) > current",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "not supported: expression: Subquery(Query { with: None, body: Select(Select { distinct: None, top: None, projection: [UnnamedExpr(Function(Function { name: ObjectName([Ident { value: \"max\", quote_style: None }]), args: List(FunctionArgumentList { duplicate_treatment: None, args: [Unnamed(Expr(Identifier(Ident { value: \"val\", quote_style: None })))], clauses: [] }), filter: None, null_treatment: None, over: None, within_group: [] }))], into: None, from: [TableWithJoins { relation: Table { name: ObjectName([Ident { value: \"tbl\", quote_style: None }]), alias: None, args: None, with_hints: [], version: None, partitions: [] }, joins: [] }], lateral_views: [], selection: None, group_by: Expressions([]), cluster_by: [], distribute_by: [], sort_by: [], having: None, named_window: [], qualify: None, window_before_qualify: false, value_table_mode: None, connect_by: None }), order_by: [], limit: None, limit_by: [], offset: None, fetch: None, locks: [], for_clause: None })"
       }
     },
     {
       "input": "(x, y) -> x + y",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "lambdaFunction": {
+            "function": {
+              "unresolvedFunction": {
+                "functionName": "+",
+                "arguments": [
+                  {
+                    "unresolvedAttribute": {
+                      "unparsedIdentifier": "x"
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "unparsedIdentifier": "y"
+                    }
+                  }
+                ]
+              }
+            },
+            "arguments": [
+              {
+                "nameParts": [
+                  "x"
+                ]
+              },
+              {
+                "nameParts": [
+                  "y"
+                ]
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-+~~a",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: sql parser error: Expected an expression:, found: ~~ at Line: 1, Column 3"
       }
     },
     {
       "input": "1 + r.r As q",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after expression: As"
       }
     },
     {
       "input": "1 - f('o', o(bar))",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "integer": 1
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "f",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "o"
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "o",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "bar"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "1 - f('o', o(bar)) hello * world",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after expression: hello"
       }
     },
     {
       "input": "123_",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after expression: _"
       }
     },
     {
       "input": "1a.123_",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after expression: .123"
       }
     },
     {
       "input": "False",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "boolean": false
+          }
+        }
       }
     },
     {
       "input": "GEO '(10,-6)'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after expression: '(10,-6)'"
       }
     },
     {
       "input": "X'A'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: hex string: \"A\""
       }
     },
     {
       "input": "```fo``o`.```ba``r`",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedAttribute": {
+            "unparsedIdentifier": "```fo``o`.```ba``r`"
+          }
+        }
       }
     },
     {
       "input": "`c`.a[b]",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedExtractValue": {
+            "child": {
+              "unresolvedAttribute": {
+                "unparsedIdentifier": "`c`.a"
+              }
+            },
+            "extraction": {
+              "unresolvedAttribute": {
+                "unparsedIdentifier": "b"
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "`fo````o`.`ba````r`",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedAttribute": {
+            "unparsedIdentifier": "`fo``o`.`ba``r`"
+          }
+        }
       }
     },
     {
       "input": "`fo`o.`ba`r",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after expression: o"
       }
     },
     {
       "input": "`select`",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedAttribute": {
+            "unparsedIdentifier": "select"
+          }
+        }
       }
     },
     {
       "input": "`select`(all a, b)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "`select`",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "`select`.b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedAttribute": {
+            "unparsedIdentifier": "`select`.b"
+          }
+        }
       }
     },
     {
       "input": "a",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedAttribute": {
+            "unparsedIdentifier": "a"
+          }
+        }
       }
     },
     {
       "input": "a !< b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "not supported: unary operator: PGPostfixFactorial"
       }
     },
     {
       "input": "a != b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "!=",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a !> b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "not supported: unary operator: PGPostfixFactorial"
       }
     },
     {
       "input": "a % b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "%",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a & b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "&",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a * b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "*",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a * t | b ^ c & d - e + f % g DIV h / i * k",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "|",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "*",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "t"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "^",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "b"
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "&",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "c"
+                            }
+                          },
+                          {
+                            "unresolvedFunction": {
+                              "functionName": "+",
+                              "arguments": [
+                                {
+                                  "unresolvedFunction": {
+                                    "functionName": "-",
+                                    "arguments": [
+                                      {
+                                        "unresolvedAttribute": {
+                                          "unparsedIdentifier": "d"
+                                        }
+                                      },
+                                      {
+                                        "unresolvedAttribute": {
+                                          "unparsedIdentifier": "e"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                },
+                                {
+                                  "unresolvedFunction": {
+                                    "functionName": "div",
+                                    "arguments": [
+                                      {
+                                        "unresolvedFunction": {
+                                          "functionName": "%",
+                                          "arguments": [
+                                            {
+                                              "unresolvedAttribute": {
+                                                "unparsedIdentifier": "f"
+                                              }
+                                            },
+                                            {
+                                              "unresolvedAttribute": {
+                                                "unparsedIdentifier": "g"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "unresolvedFunction": {
+                                          "functionName": "*",
+                                          "arguments": [
+                                            {
+                                              "unresolvedFunction": {
+                                                "functionName": "/",
+                                                "arguments": [
+                                                  {
+                                                    "unresolvedAttribute": {
+                                                      "unparsedIdentifier": "h"
+                                                    }
+                                                  },
+                                                  {
+                                                    "unresolvedAttribute": {
+                                                      "unparsedIdentifier": "i"
+                                                    }
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "unresolvedAttribute": {
+                                                "unparsedIdentifier": "k"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a + b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "+",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a - b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a / b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "/",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a < b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "<",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a <= b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "<=",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a <=> b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "<=>",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a <> b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "!=",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a = (select b from s)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "not supported: expression: Subquery(Query { with: None, body: Select(Select { distinct: None, top: None, projection: [UnnamedExpr(Identifier(Ident { value: \"b\", quote_style: None }))], into: None, from: [TableWithJoins { relation: Table { name: ObjectName([Ident { value: \"s\", quote_style: None }]), alias: None, args: None, with_hints: [], version: None, partitions: [] }, joins: [] }], lateral_views: [], selection: None, group_by: Expressions([]), cluster_by: [], distribute_by: [], sort_by: [], having: None, named_window: [], qualify: None, window_before_qualify: false, value_table_mode: None, connect_by: None }), order_by: [], limit: None, limit_by: [], offset: None, fetch: None, locks: [], for_clause: None })"
       }
     },
     {
       "input": "a = b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "==",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a = b is not null",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "isnotnull",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "==",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "b"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a = b is null",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "isnull",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "==",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "b"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a == b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "==",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a > b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": ">",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a >= b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": ">=",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a DIV b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "div",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a ^ b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "^",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a and b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "and",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a and b and c and d and e and f",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "and",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "and",
+                  "arguments": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "and",
+                        "arguments": [
+                          {
+                            "unresolvedFunction": {
+                              "functionName": "and",
+                              "arguments": [
+                                {
+                                  "unresolvedFunction": {
+                                    "functionName": "and",
+                                    "arguments": [
+                                      {
+                                        "unresolvedAttribute": {
+                                          "unparsedIdentifier": "a"
+                                        }
+                                      },
+                                      {
+                                        "unresolvedAttribute": {
+                                          "unparsedIdentifier": "b"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                },
+                                {
+                                  "unresolvedAttribute": {
+                                    "unparsedIdentifier": "c"
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "d"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "e"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "f"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a and b or c and d",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "or",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "and",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "b"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "and",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "c"
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "d"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a as (b, c)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after expression: as"
       }
     },
     {
       "input": "a as b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after expression: as"
       }
     },
     {
       "input": "a b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after expression: b"
       }
     },
     {
       "input": "a between b and c",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "and",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": ">=",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "b"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "<=",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "c"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a in (b, c, d)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "array_contains",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "array",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "b"
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "c"
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "d"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a in (select b from c)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "not supported: expression: InSubquery { expr: Identifier(Ident { value: \"a\", quote_style: None }), subquery: Query { with: None, body: Select(Select { distinct: None, top: None, projection: [UnnamedExpr(Identifier(Ident { value: \"b\", quote_style: None }))], into: None, from: [TableWithJoins { relation: Table { name: ObjectName([Ident { value: \"c\", quote_style: None }]), alias: None, args: None, with_hints: [], version: None, partitions: [] }, joins: [] }], lateral_views: [], selection: None, group_by: Expressions([]), cluster_by: [], distribute_by: [], sort_by: [], having: None, named_window: [], qualify: None, window_before_qualify: false, value_table_mode: None, connect_by: None }), order_by: [], limit: None, limit_by: [], offset: None, fetch: None, locks: [], for_clause: None }, negated: false }"
       }
     },
     {
       "input": "a is distinct from b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "<=>",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "b"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a is not distinct from b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "<=>",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a is not null",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "isnotnull",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a is null",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "isnull",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a not between b and c",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "and",
+                  "arguments": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": ">=",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "a"
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "b"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "<=",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "a"
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "c"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a not in (b, c, d)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "array_contains",
+                  "arguments": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "array",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "b"
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "c"
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "d"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a not regexp 'pattern%'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "rlike",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "pattern%"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a or b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "or",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a or b or c and d",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "or",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "or",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "b"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "and",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "c"
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "d"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a or b or c or d or e or f",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "or",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "or",
+                  "arguments": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "or",
+                        "arguments": [
+                          {
+                            "unresolvedFunction": {
+                              "functionName": "or",
+                              "arguments": [
+                                {
+                                  "unresolvedFunction": {
+                                    "functionName": "or",
+                                    "arguments": [
+                                      {
+                                        "unresolvedAttribute": {
+                                          "unparsedIdentifier": "a"
+                                        }
+                                      },
+                                      {
+                                        "unresolvedAttribute": {
+                                          "unparsedIdentifier": "b"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                },
+                                {
+                                  "unresolvedAttribute": {
+                                    "unparsedIdentifier": "c"
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "d"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "e"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "f"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a regexp 'pattern%'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "rlike",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "literal": {
+                  "string": "pattern%"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a | b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "|",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "a() (b, c)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after expression: ("
       }
     },
     {
       "input": "a.* b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: sql parser error: Expected an identifier after '.', found: * at Line: 1, Column 3"
       }
     },
     {
       "input": "a.123A",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after expression: .123A"
       }
     },
     {
       "input": "a.123BD_column",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after expression: .123BD"
       }
     },
     {
       "input": "a.123D_column",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after expression: .123D"
       }
     },
     {
       "input": "a.123E3_column",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after expression: .123E3"
       }
     },
     {
       "input": "a.b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedAttribute": {
+            "unparsedIdentifier": "a.b"
+          }
+        }
       }
     },
     {
       "input": "a.b.*",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: sql parser error: Expected an identifier after '.', found: * at Line: 1, Column 5"
       }
     },
     {
       "input": "a[1 + 1]",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedExtractValue": {
+            "child": {
+              "unresolvedAttribute": {
+                "unparsedIdentifier": "a"
+              }
+            },
+            "extraction": {
+              "unresolvedFunction": {
+                "functionName": "+",
+                "arguments": [
+                  {
+                    "literal": {
+                      "integer": 1
+                    }
+                  },
+                  {
+                    "literal": {
+                      "integer": 1
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "a[b]",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedExtractValue": {
+            "child": {
+              "unresolvedAttribute": {
+                "unparsedIdentifier": "a"
+              }
+            },
+            "extraction": {
+              "unresolvedAttribute": {
+                "unparsedIdentifier": "b"
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "columns",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedAttribute": {
+            "unparsedIdentifier": "columns"
+          }
+        }
       }
     },
     {
       "input": "count(*)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "count",
+            "arguments": [
+              {
+                "unresolvedStar": {}
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "encode('abc', charset => 'utf' || '-8')",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "not supported: named function argument"
       }
     },
     {
       "input": "encode('abc', charset => 'utf-8')",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "not supported: named function argument"
       }
     },
     {
       "input": "encode(charset => 'utf-8', 'abc')",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "not supported: named function argument"
       }
     },
     {
       "input": "encode(value => 'abc', charset => 'utf-8')",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "not supported: named function argument"
       }
     },
     {
       "input": "encode(value => ((select '1')), charset => 'utf-8')",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "not supported: named function argument"
       }
     },
     {
       "input": "exists (select 1 from b where b.x = a.x)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "not supported: expression: Exists { subquery: Query { with: None, body: Select(Select { distinct: None, top: None, projection: [UnnamedExpr(Value(Number(\"1\", None)))], into: None, from: [TableWithJoins { relation: Table { name: ObjectName([Ident { value: \"b\", quote_style: None }]), alias: None, args: None, with_hints: [], version: None, partitions: [] }, joins: [] }], lateral_views: [], selection: Some(BinaryOp { left: CompoundIdentifier([Ident { value: \"b\", quote_style: None }, Ident { value: \"x\", quote_style: None }]), op: Eq, right: CompoundIdentifier([Ident { value: \"a\", quote_style: None }, Ident { value: \"x\", quote_style: None }]) }), group_by: Expressions([]), cluster_by: [], distribute_by: [], sort_by: [], having: None, named_window: [], qualify: None, window_before_qualify: false, value_table_mode: None, connect_by: None }), order_by: [], limit: None, limit_by: [], offset: None, fetch: None, locks: [], for_clause: None }, negated: false }"
       }
     },
     {
       "input": "first(a ignore nulls)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: sql parser error: Expected ), found: ignore at Line: 1, Column 9"
       }
     },
     {
       "input": "first(a)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "first",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "foo()",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "foo"
+          }
+        }
       }
     },
     {
       "input": "foo(*)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "foo",
+            "arguments": [
+              {
+                "unresolvedStar": {}
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "foo(a x)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: sql parser error: Expected ), found: x at Line: 1, Column 7"
       }
     },
     {
       "input": "foo(a, b)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "foo",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "foo(all a, b)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "foo",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "foo(distinct a, b)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "foo",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ],
+            "isDistinct": true
+          }
+        }
       }
     },
     {
       "input": "foo.bar()",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "foo.bar"
+          }
+        }
       }
     },
     {
       "input": "grouping(distinct a, b)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "grouping",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ],
+            "isDistinct": true
+          }
+        }
       }
     },
     {
       "input": "last(a ignore nulls)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: sql parser error: Expected ), found: ignore at Line: 1, Column 8"
       }
     },
     {
       "input": "last(a)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "last",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "not a",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "not true > true",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": ">",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "boolean": true
+                      }
+                    },
+                    {
+                      "literal": {
+                        "boolean": true
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "null",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "null": {
+              "unparsed": {}
+            }
+          }
+        }
       }
     },
     {
       "input": "r * (a + b)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "*",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "r"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "+",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "b"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "struct(a, b).b",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after expression: ."
       }
     },
     {
       "input": "trUe",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "boolean": true
+          }
+        }
       }
     },
     {
       "input": "x -> x + 1",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "lambdaFunction": {
+            "function": {
+              "unresolvedFunction": {
+                "functionName": "+",
+                "arguments": [
+                  {
+                    "unresolvedAttribute": {
+                      "unparsedIdentifier": "x"
+                    }
+                  },
+                  {
+                    "literal": {
+                      "integer": 1
+                    }
+                  }
+                ]
+              }
+            },
+            "arguments": [
+              {
+                "nameParts": [
+                  "x"
+                ]
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "x'A10C'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "binary": "oQw="
+          }
+        }
       }
     },
     {
       "input": "x'A1OC'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: hex string: \"A1OC\""
       }
     },
     {
       "input": "~a",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: sql parser error: Expected an expression:, found: ~ at Line: 1, Column 1"
       }
     }
   ]

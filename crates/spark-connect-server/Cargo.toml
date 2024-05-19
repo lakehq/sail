@@ -39,6 +39,8 @@ serde_json = { workspace = true }
 monostate = { workspace = true }
 regex = { workspace = true }
 glob = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
 pyo3 = { workspace = true }
 arrow = { workspace = true }
 arrow-cast = { workspace = true }
