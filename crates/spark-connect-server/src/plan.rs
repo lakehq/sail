@@ -33,7 +33,7 @@ use crate::extension::analyzer::alias::rewrite_multi_alias;
 use crate::extension::analyzer::explode::rewrite_explode;
 use crate::extension::analyzer::wildcard::rewrite_wildcard;
 use crate::extension::analyzer::window::rewrite_window;
-use crate::schema::{cast_record_batch, from_spark_built_in_data_type, to_spark_data_type};
+use crate::schema::{cast_record_batch, from_spark_built_in_data_type};
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::Relation;
@@ -575,8 +575,23 @@ pub(crate) async fn from_spark_relation(
         RelType::Unpivot(_) => {
             return Err(SparkError::todo("unpivot"));
         }
-        RelType::ToSchema(_) => {
-            return Err(SparkError::todo("to schema"));
+        RelType::ToSchema(to_schema) => {
+            let input = to_schema.input.as_ref().required("input relation")?;
+            let input = from_spark_relation(ctx, input).await?;
+            let schema = to_schema.schema.as_ref().required("schema")?;
+            let schema: DataType = from_spark_built_in_data_type(schema)?;
+            let fields = match &schema {
+                DataType::Struct(fields) => fields,
+                _ => return Err(SparkError::invalid("expected struct type")),
+            };
+            let expr: Vec<Expr> = fields
+                .iter()
+                .map(|field| Expr::Column(Column::from_name(field.name())))
+                .collect();
+            Ok(LogicalPlan::Projection(plan::Projection::try_new(
+                expr,
+                Arc::new(input),
+            )?))
         }
         RelType::RepartitionByExpression(repartition) => {
             let input = repartition.input.as_ref().required("repartition input")?;
@@ -817,7 +832,13 @@ pub(crate) async fn from_spark_relation(
                     let source: Option<&String> = create_external_table.source.as_ref();
                     let schema: Option<&sc::DataType> = create_external_table.schema.as_ref();
                     let schema: Option<DataType> = match schema {
-                        Some(schema) => Some(from_spark_built_in_data_type(schema)?),
+                        Some(schema) => {
+                            let data_type = from_spark_built_in_data_type(schema)?;
+                            match data_type {
+                                DataType::Struct(fields) => Some(DataType::Struct(fields)),
+                                _ => return Err(SparkError::invalid("external table schema")),
+                            }
+                        }
                         None => None,
                     };
                     let options: &HashMap<String, String> = &create_external_table.options;
@@ -854,7 +875,13 @@ pub(crate) async fn from_spark_relation(
                     let description: Option<&String> = create_table.description.as_ref();
                     let schema: Option<&sc::DataType> = create_table.schema.as_ref();
                     let schema: Option<DataType> = match schema {
-                        Some(schema) => Some(from_spark_built_in_data_type(schema)?),
+                        Some(schema) => {
+                            let data_type = from_spark_built_in_data_type(schema)?;
+                            match data_type {
+                                DataType::Struct(fields) => Some(DataType::Struct(fields)),
+                                _ => return Err(SparkError::invalid("external table schema")),
+                            }
+                        }
                         None => None,
                     };
                     let options: &HashMap<String, String> = &create_table.options;
