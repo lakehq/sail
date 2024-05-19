@@ -7,7 +7,6 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
-use datafusion::catalog::CatalogProviderList;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::json::JsonFormat;
@@ -22,10 +21,8 @@ use datafusion::logical_expr::{
 use datafusion::sql::parser::Statement;
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
-use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
-};
-use datafusion_expr::{build_join_schema, DdlStatement, TableType};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference};
+use datafusion_expr::{build_join_schema, DdlStatement};
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::expression::{from_spark_expression, from_spark_literal_to_scalar};
@@ -46,12 +43,10 @@ use crate::sql::session_catalog::database::{
 use crate::sql::session_catalog::table::{get_catalog_table, list_catalog_tables};
 use crate::sql::session_catalog::{
     catalog::{create_catalog_metadata_memtable, CatalogMetadata},
-    column::{create_catalog_column_memtable, CatalogColumn},
+    column::create_catalog_column_memtable,
     database::{create_catalog_database_memtable, CatalogDatabase},
-    function::{create_catalog_function_memtable, CatalogFunction},
     table::{create_catalog_table_memtable, CatalogTable},
 };
-use crate::sql::utils::{build_schema_reference, filter_pattern};
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
     let cursor = Cursor::new(data);
