@@ -12,11 +12,11 @@ use sqlparser::tokenizer::Token;
 
 struct Identifier(String);
 
-impl From<Identifier> for crate::spark::connect::Expression {
-    fn from(identifier: Identifier) -> crate::spark::connect::Expression {
-        crate::spark::connect::Expression {
+impl From<Identifier> for sc::Expression {
+    fn from(identifier: Identifier) -> sc::Expression {
+        sc::Expression {
             expr_type: Some(ExprType::UnresolvedAttribute(
-                crate::spark::connect::expression::UnresolvedAttribute {
+                sc::expression::UnresolvedAttribute {
                     unparsed_identifier: identifier.0,
                     plan_id: None,
                 },
@@ -27,14 +27,14 @@ impl From<Identifier> for crate::spark::connect::Expression {
 
 struct Function {
     name: String,
-    args: Vec<crate::spark::connect::Expression>,
+    args: Vec<sc::Expression>,
 }
 
-impl From<Function> for crate::spark::connect::Expression {
-    fn from(function: Function) -> crate::spark::connect::Expression {
-        crate::spark::connect::Expression {
+impl From<Function> for sc::Expression {
+    fn from(function: Function) -> sc::Expression {
+        sc::Expression {
             expr_type: Some(ExprType::UnresolvedFunction(
-                crate::spark::connect::expression::UnresolvedFunction {
+                sc::expression::UnresolvedFunction {
                     function_name: function.name,
                     arguments: function.args,
                     is_distinct: false,
@@ -142,36 +142,36 @@ fn from_ast_value(value: ast::Value) -> SparkResult<sc::Expression> {
         Value::Number(value, postfix) => match postfix.as_deref() {
             Some("Y") | Some("y") => {
                 let value = LiteralValue::<i8>::try_from(value.clone())?;
-                Ok(sc::Expression::from(value))
+                sc::Expression::try_from(value)
             }
             Some("S") | Some("s") => {
                 let value = LiteralValue::<i16>::try_from(value.clone())?;
-                Ok(sc::Expression::from(value))
+                sc::Expression::try_from(value)
             }
             Some("L") | Some("l") => {
                 let value = LiteralValue::<i64>::try_from(value.clone())?;
-                Ok(sc::Expression::from(value))
+                sc::Expression::try_from(value)
             }
             Some("F") | Some("f") => {
                 let value = LiteralValue::<f32>::try_from(value.clone())?;
-                Ok(sc::Expression::from(value))
+                sc::Expression::try_from(value)
             }
             Some("D") | Some("d") => {
                 let value = LiteralValue::<f64>::try_from(value.clone())?;
-                Ok(sc::Expression::from(value))
+                sc::Expression::try_from(value)
             }
             Some(x) if x.to_uppercase() == "BD" => {
                 let value = LiteralValue::<Decimal>::try_from(value.clone())?;
-                Ok(sc::Expression::from(value))
+                sc::Expression::try_from(value)
             }
             None | Some("") => {
                 if let Ok(value) = LiteralValue::<i32>::try_from(value.clone()) {
-                    Ok(sc::Expression::from(value))
+                    sc::Expression::try_from(value)
                 } else if let Ok(value) = LiteralValue::<i64>::try_from(value.clone()) {
-                    Ok(sc::Expression::from(value))
+                    sc::Expression::try_from(value)
                 } else {
                     let value = LiteralValue::<Decimal>::try_from(value.clone())?;
-                    Ok(sc::Expression::from(value))
+                    sc::Expression::try_from(value)
                 }
             }
             Some(&_) => Err(SparkError::invalid(format!(
@@ -183,12 +183,12 @@ fn from_ast_value(value: ast::Value) -> SparkResult<sc::Expression> {
         | Value::DoubleQuotedString(value)
         | Value::DollarQuotedString(ast::DollarQuotedString { value, .. })
         | Value::TripleSingleQuotedString(value)
-        | Value::TripleDoubleQuotedString(value) => Ok(sc::Expression::from(LiteralValue(value))),
+        | Value::TripleDoubleQuotedString(value) => sc::Expression::try_from(LiteralValue(value)),
         Value::HexStringLiteral(value) => {
             let value: LiteralValue<Vec<u8>> = value.try_into()?;
-            Ok(sc::Expression::from(value))
+            sc::Expression::try_from(value)
         }
-        Value::Boolean(value) => Ok(sc::Expression::from(LiteralValue(value))),
+        Value::Boolean(value) => sc::Expression::try_from(LiteralValue(value)),
         Value::Null => Ok(sc::Expression {
             expr_type: Some(ExprType::Literal(sc::expression::Literal {
                 // We cannot infer the data type without a schema.
@@ -333,10 +333,7 @@ fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression> {
         ))),
         Expr::IsFalse(e) => Ok(sc::Expression::from(Function {
             name: "<=>".to_string(),
-            args: vec![
-                from_ast_expression(*e)?,
-                sc::Expression::from(LiteralValue(false)),
-            ],
+            args: vec![from_ast_expression(*e)?, LiteralValue(false).try_into()?],
         })),
         Expr::IsNotFalse(e) => Ok(negate_expression(
             from_ast_expression(Expr::IsFalse(e))?,
@@ -344,10 +341,7 @@ fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression> {
         )),
         Expr::IsTrue(e) => Ok(sc::Expression::from(Function {
             name: "<=>".to_string(),
-            args: vec![
-                from_ast_expression(*e)?,
-                sc::Expression::from(LiteralValue(true)),
-            ],
+            args: vec![from_ast_expression(*e)?, LiteralValue(true).try_into()?],
         })),
         Expr::IsNotTrue(e) => Ok(negate_expression(
             from_ast_expression(Expr::IsTrue(e))?,
@@ -420,7 +414,7 @@ fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression> {
         } => {
             let mut args = vec![from_ast_expression(*expr)?, from_ast_expression(*pattern)?];
             if let Some(escape_char) = escape_char {
-                args.push(LiteralValue(escape_char).into());
+                args.push(LiteralValue(escape_char).try_into()?);
             };
             let result = sc::Expression::from(Function {
                 name: "like".to_string(),
@@ -436,7 +430,7 @@ fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression> {
         } => {
             let mut args = vec![from_ast_expression(*expr)?, from_ast_expression(*pattern)?];
             if let Some(escape_char) = escape_char {
-                args.push(LiteralValue(escape_char).into());
+                args.push(LiteralValue(escape_char).try_into()?);
             };
             let result = sc::Expression::from(Function {
                 name: "ilike".to_string(),
@@ -485,7 +479,7 @@ fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression> {
             name: "extract".to_string(),
             args: vec![
                 from_ast_expression(*expr)?,
-                LiteralValue(from_ast_date_time_field(field)?).into(),
+                LiteralValue(from_ast_date_time_field(field)?).try_into()?,
             ],
         })),
         Expr::Substring {

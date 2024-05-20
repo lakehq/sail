@@ -2843,7 +2843,7 @@
     {
       "input": "-interval 3 monThs 4 dayS 22 sEcond 1 millisecond",
       "output": {
-        "failure": "invalid argument: Cannot mix year-month and day-time fields in interval"
+        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
       }
     },
     {
@@ -4328,7 +4328,7 @@
     {
       "input": "interval 10 nanoseconds",
       "output": {
-        "failure": "invalid argument: interval"
+        "failure": "invalid argument: multi-unit interval"
       }
     },
     {
@@ -4604,7 +4604,7 @@
     {
       "input": "interval 3 monThs 4 dayS 22 sEcond 1 millisecond",
       "output": {
-        "failure": "invalid argument: Cannot mix year-month and day-time fields in interval"
+        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
       }
     },
     {
