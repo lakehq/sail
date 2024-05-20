@@ -407,10 +407,16 @@ impl TryFrom<String> for LiteralValue<f32> {
     type Error = SparkError;
 
     fn try_from(value: String) -> SparkResult<Self> {
-        let value = value
+        let n = value
             .parse::<f32>()
             .or_else(|_| Err(SparkError::invalid(format!("float: {:?}", value))))?;
-        Ok(LiteralValue(value))
+        if n.is_infinite() || n.is_nan() {
+            return Err(SparkError::invalid(format!(
+                "out-of-range float: {:?}",
+                value
+            )));
+        }
+        Ok(LiteralValue(n))
     }
 }
 
@@ -418,10 +424,16 @@ impl TryFrom<String> for LiteralValue<f64> {
     type Error = SparkError;
 
     fn try_from(value: String) -> SparkResult<Self> {
-        let value = value
+        let n = value
             .parse::<f64>()
             .or_else(|_| Err(SparkError::invalid(format!("double: {:?}", value))))?;
-        Ok(LiteralValue(value))
+        if n.is_infinite() || n.is_nan() {
+            return Err(SparkError::invalid(format!(
+                "out-of-range double: {:?}",
+                value
+            )));
+        }
+        Ok(LiteralValue(n))
     }
 }
 

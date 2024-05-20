@@ -41,18 +41,7 @@
     {
       "input": "-1.8E308D",
       "output": {
-        "success": {
-          "unresolvedFunction": {
-            "functionName": "-",
-            "arguments": [
-              {
-                "literal": {
-                  "double": null
-                }
-              }
-            ]
-          }
-        }
+        "failure": "invalid argument: out-of-range double: \"1.8E308\""
       }
     },
     {
@@ -142,11 +131,7 @@
     {
       "input": "1.8E308D",
       "output": {
-        "success": {
-          "literal": {
-            "double": null
-          }
-        }
+        "failure": "invalid argument: out-of-range double: \"1.8E308\""
       }
     },
     {
