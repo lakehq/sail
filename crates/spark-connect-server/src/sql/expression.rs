@@ -3,7 +3,7 @@ use crate::spark::connect as sc;
 use crate::spark::connect::expression::literal::{Decimal, LiteralType};
 use crate::spark::connect::expression::ExprType;
 use crate::sql::data_type::from_ast_data_type;
-use crate::sql::literal::{parse_date_string, parse_timestamp_string, LiteralValue};
+use crate::sql::literal::{parse_date_string, parse_timestamp_string, LiteralValue, Signed};
 use crate::sql::parser::SparkDialect;
 use sqlparser::ast;
 use sqlparser::ast::DataType;
@@ -219,7 +219,7 @@ fn from_ast_value(value: ast::Value) -> SparkResult<sc::Expression> {
 fn from_ast_interval(interval: ast::Interval) -> SparkResult<sc::Expression> {
     Ok(sc::Expression {
         expr_type: Some(ExprType::Literal(sc::expression::Literal {
-            literal_type: Some(LiteralValue(interval).try_into()?),
+            literal_type: Some(LiteralValue(Signed(interval, false)).try_into()?),
         })),
     })
 }

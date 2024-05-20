@@ -9,7 +9,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": -10
+                  "yearMonthInterval": -14
                 }
               }
             ]
@@ -77,7 +77,7 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": "-67302876544"
+                  "dayTimeInterval": "-69497123456"
                 }
               }
             ]
@@ -94,7 +94,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": -21
+                  "yearMonthInterval": -27
                 }
               }
             ]
@@ -417,7 +417,7 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": "-8512646876544"
+                  "dayTimeInterval": "-8594553123456"
                 }
               }
             ]
@@ -802,13 +802,35 @@
     {
       "input": "-interval '1 day 2 hour 3 minute 4.005006 second'",
       "output": {
-        "failure": "invalid argument: interval: Standard { value: Value(SingleQuotedString(\"1 day 2 hour 3 minute 4.005006 second\")), unit: IntervalUnit { leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None } }"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "93784005006"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '1 year 2 month'",
       "output": {
-        "failure": "invalid argument: interval: Standard { value: Value(SingleQuotedString(\"1 year 2 month\")), unit: IntervalUnit { leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None } }"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 14
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
@@ -1477,7 +1499,7 @@
     {
       "input": "-interval '3 month 1 hour'",
       "output": {
-        "failure": "invalid argument: interval: Standard { value: Value(SingleQuotedString(\"3 month 1 hour\")), unit: IntervalUnit { leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None } }"
+        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
       }
     },
     {
@@ -2866,61 +2888,77 @@
     {
       "input": "INTERVAL '1 day 2 hour 3 minute 4.005006 second'",
       "output": {
-        "failure": "invalid argument: interval: Standard { value: Value(SingleQuotedString(\"1 day 2 hour 3 minute 4.005006 second\")), unit: IntervalUnit { leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None } }"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "93784005006"
+          }
+        }
       }
     },
     {
       "input": "INTERVAL '1 year 2 month'",
       "output": {
-        "failure": "invalid argument: interval: Standard { value: Value(SingleQuotedString(\"1 year 2 month\")), unit: IntervalUnit { leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None } }"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 14
+          }
+        }
       }
     },
     {
       "input": "INTERVAL '1 year 2 second'",
       "output": {
-        "failure": "invalid argument: interval: Standard { value: Value(SingleQuotedString(\"1 year 2 second\")), unit: IntervalUnit { leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None } }"
+        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
       }
     },
     {
       "input": "INTERVAL '3 month 1 hour'",
       "output": {
-        "failure": "invalid argument: interval: Standard { value: Value(SingleQuotedString(\"3 month 1 hour\")), unit: IntervalUnit { leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None } }"
+        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
       }
     },
     {
       "input": "InterVal 'interval 1 day 2 hour 3 minute 4.005006 second'",
       "output": {
-        "failure": "invalid argument: interval: Standard { value: Value(SingleQuotedString(\"interval 1 day 2 hour 3 minute 4.005006 second\")), unit: IntervalUnit { leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None } }"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "93784005006"
+          }
+        }
       }
     },
     {
       "input": "InterVal 'interval 1 year 2 month'",
       "output": {
-        "failure": "invalid argument: interval: Standard { value: Value(SingleQuotedString(\"interval 1 year 2 month\")), unit: IntervalUnit { leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None } }"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 14
+          }
+        }
       }
     },
     {
       "input": "InterVal 'interval 3 month 1 hour'",
       "output": {
-        "failure": "invalid argument: interval: Standard { value: Value(SingleQuotedString(\"interval 3 month 1 hour\")), unit: IntervalUnit { leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None } }"
+        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
       }
     },
     {
       "input": "Interval 'interval 1 daysss 2 hoursss'",
       "output": {
-        "failure": "invalid argument: interval: Standard { value: Value(SingleQuotedString(\"interval 1 daysss 2 hoursss\")), unit: IntervalUnit { leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None } }"
+        "failure": "invalid argument: extra tokens after interval: daysss"
       }
     },
     {
       "input": "Interval 'interval 1 yearsss 2 monthsss'",
       "output": {
-        "failure": "invalid argument: interval: Standard { value: Value(SingleQuotedString(\"interval 1 yearsss 2 monthsss\")), unit: IntervalUnit { leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None } }"
+        "failure": "invalid argument: extra tokens after interval: yearsss"
       }
     },
     {
       "input": "Interval 'interval 3 monthsss 1 hoursss'",
       "output": {
-        "failure": "invalid argument: interval: Standard { value: Value(SingleQuotedString(\"interval 3 monthsss 1 hoursss\")), unit: IntervalUnit { leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None } }"
+        "failure": "invalid argument: extra tokens after interval: monthsss"
       }
     },
     {
@@ -2928,7 +2966,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": -10
+            "yearMonthInterval": -14
           }
         }
       }
@@ -2968,7 +3006,7 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": "-67302876544"
+            "dayTimeInterval": "-69497123456"
           }
         }
       }
@@ -2978,7 +3016,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": -21
+            "yearMonthInterval": -27
           }
         }
       }
@@ -3168,7 +3206,7 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": "-8512646876544"
+            "dayTimeInterval": "-8594553123456"
           }
         }
       }
@@ -3396,7 +3434,7 @@
     {
       "input": "interval '1 year 3 months 2 weeks 2 days 1 hour 3 minutes 2 seconds 100 millisecond 200 microseconds'",
       "output": {
-        "failure": "invalid argument: interval: Standard { value: Value(SingleQuotedString(\"1 year 3 months 2 weeks 2 days 1 hour 3 minutes 2 seconds 100 millisecond 200 microseconds\")), unit: IntervalUnit { leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None } }"
+        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
       }
     },
     {
