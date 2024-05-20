@@ -806,7 +806,7 @@ fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression> {
 
 pub(crate) fn parse_spark_expression(sql: &str) -> SparkResult<sc::Expression> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
-    let expr = parser.parse_expr()?;
+    let expr = parser.parse_wildcard_expr()?;
     if parser.peek_token() != Token::EOF {
         let token = parser.next_token();
         return Err(SparkError::invalid(format!(

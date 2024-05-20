@@ -1559,7 +1559,7 @@
     {
       "input": "a.* b",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an identifier after '.', found: * at Line: 1, Column 3"
+        "failure": "invalid argument: extra tokens after expression: b"
       }
     },
     {
@@ -1599,7 +1599,11 @@
     {
       "input": "a.b.*",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an identifier after '.', found: * at Line: 1, Column 5"
+        "success": {
+          "unresolvedStar": {
+            "unparsedTarget": "a.b.*"
+          }
+        }
       }
     },
     {
