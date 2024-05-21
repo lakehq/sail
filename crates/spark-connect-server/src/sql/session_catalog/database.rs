@@ -6,6 +6,7 @@ use crate::sql::session_catalog::catalog::list_catalogs;
 use crate::sql::utils::{build_schema_reference, filter_pattern};
 use datafusion::arrow::array::{RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::catalog::listing_schema::ListingSchemaProvider;
 use datafusion::catalog::CatalogProvider;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
@@ -73,17 +74,15 @@ pub(crate) fn list_catalog_databases(
                 .schema_names()
                 .iter()
                 .filter_map(|schema_name| {
-                    let filtered_names: Vec<String> =
-                        filter_pattern(vec![&schema_name], database_pattern);
-                    if filtered_names.is_empty() {
-                        None
-                    } else {
+                    if !filter_pattern(vec![&schema_name], database_pattern).is_empty() {
                         Some(CatalogDatabase {
-                            name: filtered_names[0].clone(),
+                            name: schema_name.clone(),
                             catalog: Some(catalog_name.clone()),
                             description: None, // TODO: Add actual description if available
                             location_uri: None, // TODO: Add actual location URI if available
                         })
+                    } else {
+                        None
                     }
                 })
                 .collect::<Vec<CatalogDatabase>>()

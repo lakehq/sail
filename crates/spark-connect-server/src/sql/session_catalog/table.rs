@@ -228,6 +228,7 @@ pub(crate) async fn list_catalog_tables_in_schema(
                     }
                     None => {}
                 }
+                let table_schema = table.schema();
                 catalog_tables.push(CatalogTable {
                     name: filtered_table_names[0].clone(),
                     // DataFrame Temp Views in Spark Session do not have a Catalog or Namespace
@@ -245,7 +246,10 @@ pub(crate) async fn list_catalog_tables_in_schema(
                     } else {
                         Some(vec![db_name.to_string()])
                     },
-                    description: None, // TODO: Add actual description if available
+                    description: table_schema
+                        .metadata()
+                        .get("description")
+                        .map(|description| description.clone()),
                     table_type: cat_table_type.to_string(),
                     is_temporary: cat_table_type == CatalogTableType::TEMPORARY,
                 });

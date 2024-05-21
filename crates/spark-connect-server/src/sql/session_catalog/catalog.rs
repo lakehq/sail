@@ -79,7 +79,7 @@ pub(crate) fn list_catalogs_metadata(
         .iter()
         .map(|(catalog_name, _catalog)| CatalogMetadata {
             name: catalog_name.clone(),
-            description: None, // TODO: Add actual description if available
+            description: None, // Spark code sets all descriptions to None
         })
         .collect();
     Ok(catalogs_metadata)

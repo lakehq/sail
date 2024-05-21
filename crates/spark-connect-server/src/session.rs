@@ -40,7 +40,8 @@ impl Session {
     pub(crate) fn new(user_id: Option<String>, session_id: String) -> Self {
         let config = SessionConfig::new()
             .with_create_default_catalog_and_schema(true)
-            .with_default_catalog_and_schema(DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA);
+            .with_default_catalog_and_schema(DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA)
+            .with_information_schema(true);
         let runtime = Arc::new(RuntimeEnv::default());
         let state = DFSessionState::new_with_config_rt(config, runtime);
         let state = state.with_query_planner(new_query_planner());
