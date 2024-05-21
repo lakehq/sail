@@ -893,6 +893,8 @@ pub(crate) async fn from_spark_relation(
                     )))
                 }
                 CatType::DropTempView(drop_temp_view) => {
+                    // TODO: This works but returns an empty dataframe which is not the expected
+                    //  behavior that spark wants.
                     Ok(LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
                         name: TableReference::from(drop_temp_view.view_name.to_string()),
                         if_exists: true,
@@ -900,6 +902,8 @@ pub(crate) async fn from_spark_relation(
                     })))
                 }
                 CatType::DropGlobalTempView(drop_global_temp_view) => {
+                    // TODO: This works but returns an empty dataframe which is not the expected
+                    //  behavior that spark wants.
                     Ok(LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
                         name: TableReference::from(drop_global_temp_view.view_name.to_string()),
                         if_exists: true,
