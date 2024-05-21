@@ -3,61 +3,89 @@
     {
       "input": "TIMESTAMP '2019-01-14 20:54:00.000'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "timestampNtz": "1547499240000000"
+          }
+        }
       }
     },
     {
       "input": "TIMESTAMP '2019-01-16 20:50:00.567000+01:00'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "timestamp": "1547668200567000"
+          }
+        }
       }
     },
     {
       "input": "Timestamp '2000-01-01T00:55:00'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "timestampNtz": "946688100000000"
+          }
+        }
       }
     },
     {
       "input": "tImEstAmp '1970-01-01 00:00:00.000 +01:00'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "timestamp": "-3600000000"
+          }
+        }
       }
     },
     {
       "input": "tImEstAmp '2016-03-11 20:54:00.000'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "timestampNtz": "1457729640000000"
+          }
+        }
       }
     },
     {
       "input": "tImEstAmp_LTZ '2016-03-11 20:54:00.000'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "timestampNtz": "1457729640000000"
+          }
+        }
       }
     },
     {
       "input": "tImEstAmp_Ntz '2016-03-11 20:54:00.000'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "timestampNtz": "1457729640000000"
+          }
+        }
       }
     },
     {
       "input": "tImEstAmp_Ntz '2016-33-11 20:54:00.000'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: timestamp: 2016-33-11 20:54:00.000"
       }
     },
     {
       "input": "timestamP '2016-33-11 20:54:00.000'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: timestamp: 2016-33-11 20:54:00.000"
       }
     },
     {
       "input": "timestamP_LTZ '2016-33-11 20:54:00.000'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: timestamp: 2016-33-11 20:54:00.000"
       }
     }
   ]

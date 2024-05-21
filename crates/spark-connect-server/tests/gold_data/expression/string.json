@@ -3,115 +3,175 @@
     {
       "input": "\"hello\"",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "string": "hello"
+          }
+        }
       }
     },
     {
       "input": "\"hello\" 'world'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after expression: 'world'"
       }
     },
     {
       "input": "'''",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: sql parser error: Unterminated string literal at Line: 1, Column 1"
       }
     },
     {
       "input": "'\\\"'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "string": "\\\""
+          }
+        }
       }
     },
     {
       "input": "'\\''",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: sql parser error: Unterminated string literal at Line: 1, Column 1"
       }
     },
     {
       "input": "'\\0'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "string": "\\0"
+          }
+        }
       }
     },
     {
       "input": "'\\110\\145\\154\\154\\157\\041'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "string": "\\110\\145\\154\\154\\157\\041"
+          }
+        }
       }
     },
     {
       "input": "'\\Z'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "string": "\\Z"
+          }
+        }
       }
     },
     {
       "input": "'\\b'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "string": "\\b"
+          }
+        }
       }
     },
     {
       "input": "'\\n'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "string": "\\n"
+          }
+        }
       }
     },
     {
       "input": "'\\r'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "string": "\\r"
+          }
+        }
       }
     },
     {
       "input": "'\\t'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "string": "\\t"
+          }
+        }
       }
     },
     {
       "input": "'\\u0057\\u006F\\u0072\\u006C\\u0064\\u0020\\u003A\\u0029'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "string": "\\u0057\\u006F\\u0072\\u006C\\u0064\\u0020\\u003A\\u0029"
+          }
+        }
       }
     },
     {
       "input": "'hello'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "string": "hello"
+          }
+        }
       }
     },
     {
       "input": "'hello' \" \" 'world'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after expression: \" \""
       }
     },
     {
       "input": "'no-pattern\\%'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "string": "no-pattern\\%"
+          }
+        }
       }
     },
     {
       "input": "'pattern%'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "string": "pattern%"
+          }
+        }
       }
     },
     {
       "input": "'pattern\\\\%'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "string": "pattern\\\\%"
+          }
+        }
       }
     },
     {
       "input": "'pattern\\\\\\%'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "string": "pattern\\\\\\%"
+          }
+        }
       }
     }
   ]

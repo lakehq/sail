@@ -16,12 +16,14 @@ pub(crate) mod json;
 
 const DEFAULT_FIELD_NAME: &str = "value";
 
-const SPARK_DECIMAL_USER_DEFAULT_PRECISION: i32 = 10;
-const SPARK_DECIMAL_USER_DEFAULT_SCALE: i32 = 0;
+pub(crate) const SPARK_DECIMAL_MAX_PRECISION: i32 = 38;
+pub(crate) const SPARK_DECIMAL_MAX_SCALE: i32 = 38;
+pub(crate) const SPARK_DECIMAL_USER_DEFAULT_PRECISION: i32 = 10;
+pub(crate) const SPARK_DECIMAL_USER_DEFAULT_SCALE: i32 = 0;
 #[allow(dead_code)]
-const SPARK_DECIMAL_SYSTEM_DEFAULT_PRECISION: i32 = 38;
+pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_PRECISION: i32 = 38;
 #[allow(dead_code)]
-const SPARK_DECIMAL_SYSTEM_DEFAULT_SCALE: i32 = 18;
+pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_SCALE: i32 = 18;
 
 pub(crate) fn parse_spark_schema(schema: &str) -> SparkResult<SchemaRef> {
     let data_type = if let Ok(dt) = parse_spark_data_type(schema) {
@@ -103,7 +105,7 @@ fn from_ast_date_time_interval_field(field: &ast::DateTimeField) -> SparkResult<
     }
 }
 
-fn from_ast_data_type(sql_type: &ast::DataType) -> SparkResult<sc::DataType> {
+pub(crate) fn from_ast_data_type(sql_type: &ast::DataType) -> SparkResult<sc::DataType> {
     use sc::data_type::Kind;
 
     match sql_type {

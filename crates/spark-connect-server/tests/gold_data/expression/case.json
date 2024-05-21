@@ -3,31 +3,322 @@
     {
       "input": "case 'a'='a' when true then 1 end",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "when",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "==",
+                  "arguments": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "==",
+                        "arguments": [
+                          {
+                            "literal": {
+                              "string": "a"
+                            }
+                          },
+                          {
+                            "literal": {
+                              "string": "a"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "literal": {
+                        "boolean": true
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "literal": {
+                  "integer": 1
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "case (a or b) when true then c when false then d else e end",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "when",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "==",
+                  "arguments": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "or",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "a"
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "b"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "literal": {
+                        "boolean": true
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "c"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "==",
+                  "arguments": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "or",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "a"
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "b"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "literal": {
+                        "boolean": false
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "d"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "e"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "case a when 1 then b when 2 then c else d end",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "when",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "==",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "integer": 1
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "==",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "integer": 2
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "c"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "d"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "case when (1) + case when a > b then c else d end then f else g end",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "when",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "+",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "integer": 1
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "when",
+                        "arguments": [
+                          {
+                            "unresolvedFunction": {
+                              "functionName": ">",
+                              "arguments": [
+                                {
+                                  "unresolvedAttribute": {
+                                    "unparsedIdentifier": "a"
+                                  }
+                                },
+                                {
+                                  "unresolvedAttribute": {
+                                    "unparsedIdentifier": "b"
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "c"
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "d"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "f"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "g"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "case when a = 1 then b when a = 2 then c else d end",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "when",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "==",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "integer": 1
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "==",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "integer": 2
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "c"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "d"
+                }
+              }
+            ]
+          }
+        }
       }
     }
   ]
