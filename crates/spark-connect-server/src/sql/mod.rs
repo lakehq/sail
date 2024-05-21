@@ -21,4 +21,3 @@ pub(crate) fn fail_on_extra_token(parser: &mut Parser, kind: &str) -> SparkResul
         Ok(())
     }
 }
->>>>>>> 50cb0623c0457f55b1ea4ec5bc3dc99d000a13cb
