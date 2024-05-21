@@ -3,445 +3,3465 @@
     {
       "input": "foo(*) over ()",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (cluster by a, b)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (distribute by a, b sort by c)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "c"
+                  }
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (distribute by a, b)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (order by a desc, b asc)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "a"
+                  }
+                },
+                "direction": "SORT_DIRECTION_DESCENDING"
+              },
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                },
+                "direction": "SORT_DIRECTION_ASCENDING"
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range 0 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 0
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range 0 preceding)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 0
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range 10 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 10
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range 10 preceding)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 10
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range 2147483648 preceding)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "long": "2147483648"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range 2147483649 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "long": "2147483649"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range 3 + 1 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "value": {
+                  "unresolvedFunction": {
+                    "functionName": "+",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 3
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 1
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range 3 + 1 preceding)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "value": {
+                  "unresolvedFunction": {
+                    "functionName": "+",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 3
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 1
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between 0 preceding and current row)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 0
+                  }
+                }
+              },
+              "upper": {
+                "currentRow": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between 0 preceding and unbounded following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 0
+                  }
+                }
+              },
+              "upper": {
+                "unbounded": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between 10 preceding and 5 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 10
+                  }
+                }
+              },
+              "upper": {
+                "value": {
+                  "literal": {
+                    "integer": 5
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between 10 preceding and current row)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 10
+                  }
+                }
+              },
+              "upper": {
+                "currentRow": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between 10 preceding and unbounded following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 10
+                  }
+                }
+              },
+              "upper": {
+                "unbounded": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between 2147483648 preceding and current row)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "long": "2147483648"
+                  }
+                }
+              },
+              "upper": {
+                "currentRow": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between 2147483648 preceding and unbounded following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "long": "2147483648"
+                  }
+                }
+              },
+              "upper": {
+                "unbounded": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between 3 + 1 preceding and current row)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "value": {
+                  "unresolvedFunction": {
+                    "functionName": "+",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 3
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 1
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "upper": {
+                "currentRow": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between 3 + 1 preceding and unbounded following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "value": {
+                  "unresolvedFunction": {
+                    "functionName": "+",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 3
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 1
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "upper": {
+                "unbounded": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between current row and 0 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "currentRow": true
+              },
+              "upper": {
+                "value": {
+                  "literal": {
+                    "integer": 0
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between current row and 2147483649 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "currentRow": true
+              },
+              "upper": {
+                "value": {
+                  "literal": {
+                    "long": "2147483649"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between current row and 3 + 1 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "currentRow": true
+              },
+              "upper": {
+                "value": {
+                  "unresolvedFunction": {
+                    "functionName": "+",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 3
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 1
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between current row and 5 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "currentRow": true
+              },
+              "upper": {
+                "value": {
+                  "literal": {
+                    "integer": 5
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between current row and current row)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "currentRow": true
+              },
+              "upper": {
+                "currentRow": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between current row and unbounded following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "currentRow": true
+              },
+              "upper": {
+                "unbounded": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between unbounded preceding and 2147483649 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "unbounded": true
+              },
+              "upper": {
+                "value": {
+                  "literal": {
+                    "long": "2147483649"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between unbounded preceding and 3 + 1 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "unbounded": true
+              },
+              "upper": {
+                "value": {
+                  "unresolvedFunction": {
+                    "functionName": "+",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 3
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 1
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between unbounded preceding and 5 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "unbounded": true
+              },
+              "upper": {
+                "value": {
+                  "literal": {
+                    "integer": 5
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between unbounded preceding and current row)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "unbounded": true
+              },
+              "upper": {
+                "currentRow": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range between unbounded preceding and unbounded following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "unbounded": true
+              },
+              "upper": {
+                "unbounded": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range current row)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "currentRow": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range unbounded following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "unbounded": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b range unbounded preceding)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_RANGE",
+              "lower": {
+                "unbounded": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows 0 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 0
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows 0 preceding)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 0
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows 10 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 10
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows 10 preceding)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 10
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows 2147483648 preceding)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "long": "2147483648"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows 2147483649 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "long": "2147483649"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows 3 + 1 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "unresolvedFunction": {
+                    "functionName": "+",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 3
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 1
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows 3 + 1 preceding)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "unresolvedFunction": {
+                    "functionName": "+",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 3
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 1
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between 0 preceding and current row)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 0
+                  }
+                }
+              },
+              "upper": {
+                "currentRow": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between 0 preceding and unbounded following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 0
+                  }
+                }
+              },
+              "upper": {
+                "unbounded": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between 10 preceding and 5 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 10
+                  }
+                }
+              },
+              "upper": {
+                "value": {
+                  "literal": {
+                    "integer": 5
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between 10 preceding and current row)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 10
+                  }
+                }
+              },
+              "upper": {
+                "currentRow": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between 10 preceding and unbounded following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "integer": 10
+                  }
+                }
+              },
+              "upper": {
+                "unbounded": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between 2147483648 preceding and current row)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "long": "2147483648"
+                  }
+                }
+              },
+              "upper": {
+                "currentRow": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between 2147483648 preceding and unbounded following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "literal": {
+                    "long": "2147483648"
+                  }
+                }
+              },
+              "upper": {
+                "unbounded": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between 3 + 1 preceding and current row)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "unresolvedFunction": {
+                    "functionName": "+",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 3
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 1
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "upper": {
+                "currentRow": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between 3 + 1 preceding and unbounded following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "unresolvedFunction": {
+                    "functionName": "+",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 3
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 1
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "upper": {
+                "unbounded": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between current row and 0 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "currentRow": true
+              },
+              "upper": {
+                "value": {
+                  "literal": {
+                    "integer": 0
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between current row and 2147483649 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "currentRow": true
+              },
+              "upper": {
+                "value": {
+                  "literal": {
+                    "long": "2147483649"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between current row and 3 + 1 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "currentRow": true
+              },
+              "upper": {
+                "value": {
+                  "unresolvedFunction": {
+                    "functionName": "+",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 3
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 1
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between current row and 5 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "currentRow": true
+              },
+              "upper": {
+                "value": {
+                  "literal": {
+                    "integer": 5
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between current row and current row)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "currentRow": true
+              },
+              "upper": {
+                "currentRow": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between current row and unbounded following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "currentRow": true
+              },
+              "upper": {
+                "unbounded": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between unbounded preceding and 2147483649 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "unbounded": true
+              },
+              "upper": {
+                "value": {
+                  "literal": {
+                    "long": "2147483649"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between unbounded preceding and 3 + 1 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "unbounded": true
+              },
+              "upper": {
+                "value": {
+                  "unresolvedFunction": {
+                    "functionName": "+",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 3
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 1
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between unbounded preceding and 5 following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "unbounded": true
+              },
+              "upper": {
+                "value": {
+                  "literal": {
+                    "integer": 5
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between unbounded preceding and current row)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "unbounded": true
+              },
+              "upper": {
+                "currentRow": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows between unbounded preceding and unbounded following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "unbounded": true
+              },
+              "upper": {
+                "unbounded": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows current row)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "currentRow": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows exp(b) preceding)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "value": {
+                  "unresolvedFunction": {
+                    "functionName": "exp",
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "unparsedIdentifier": "b"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows unbounded following)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "unbounded": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a order by b rows unbounded preceding)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              }
+            ],
+            "frameSpec": {
+              "frameType": "FRAME_TYPE_ROW",
+              "lower": {
+                "unbounded": true
+              }
+            }
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a, b order by c)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "c"
+                  }
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (partition by a, b)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "foo(*) over (sort by a desc, b asc)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "foo",
+                "arguments": [
+                  {
+                    "unresolvedStar": {}
+                  }
+                ]
+              }
+            },
+            "orderSpec": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "a"
+                  }
+                },
+                "direction": "SORT_DIRECTION_DESCENDING"
+              },
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                },
+                "direction": "SORT_DIRECTION_ASCENDING"
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "foo(*) over w1",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "not supported: named window function"
       }
     },
     {
       "input": "sum(product + 1) over (partition by ((product / 2) + 1) order by 2)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "sum",
+                "arguments": [
+                  {
+                    "unresolvedFunction": {
+                      "functionName": "+",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "product"
+                          }
+                        },
+                        {
+                          "literal": {
+                            "integer": 1
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "+",
+                  "arguments": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "/",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "product"
+                            }
+                          },
+                          {
+                            "literal": {
+                              "integer": 2
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "literal": {
+                        "integer": 1
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "literal": {
+                    "integer": 2
+                  }
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "sum(product + 1) over (partition by ((product) + (1)) order by 2)",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "window": {
+            "windowFunction": {
+              "unresolvedFunction": {
+                "functionName": "sum",
+                "arguments": [
+                  {
+                    "unresolvedFunction": {
+                      "functionName": "+",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "product"
+                          }
+                        },
+                        {
+                          "literal": {
+                            "integer": 1
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "partitionSpec": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "+",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "product"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "integer": 1
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "orderSpec": [
+              {
+                "child": {
+                  "literal": {
+                    "integer": 2
+                  }
+                }
+              }
+            ]
+          }
+        }
       }
     }
   ]

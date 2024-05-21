@@ -3,31 +3,47 @@
     {
       "input": "DATE '2019'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "date": 17897
+          }
+        }
       }
     },
     {
       "input": "DATE '2019-01'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "date": 17897
+          }
+        }
       }
     },
     {
       "input": "DATE '2019-01-14'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "date": 17910
+          }
+        }
       }
     },
     {
       "input": "DAtE 'mar 11 2016'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: date: mar 11 2016"
       }
     },
     {
       "input": "dAte '2016-03-11'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "date": 16871
+          }
+        }
       }
     }
   ]

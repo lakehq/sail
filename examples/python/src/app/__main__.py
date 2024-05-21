@@ -36,7 +36,6 @@ if __name__ == "__main__":
     print(df.distinct().dropDuplicates(["a"]).repartition(3).repartition(2, "a").toPandas())
     print(df.select("a", "b").limit(1).toPandas())
     print(df.select(df.b["foo"]).toPandas())
-    print(df.selectExpr("b.foo").toPandas())
     print(df.withColumn("c", F.col("a")).withColumn("a", F.col("b")).toPandas())
     print(df.drop("b").toPandas())
     print(df.orderBy(F.col("a").desc_nulls_first()).toPandas())
@@ -82,6 +81,7 @@ if __name__ == "__main__":
         add_x_y(F.struct(F.col("x"), F.col("y")))).toPandas())
 
     # FIXME: not working
+    # print(df.selectExpr("b.foo").toPandas())
     # print(df.selectExpr("b.*").toPandas())
     # spark.readStream.format("rate").load().writeStream.format("console").start()
     # df.write.saveAsTable("meow")

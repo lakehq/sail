@@ -7,14 +7,12 @@ use crate::extension::function::struct_function::StructFunction;
 use crate::schema::from_spark_built_in_data_type;
 use crate::spark::connect as sc;
 use crate::sql::data_type::parse_spark_data_type;
+use crate::sql::expression::{parse_spark_expression, parse_spark_qualified_wildcard};
 use datafusion::arrow::datatypes::{DataType, IntervalMonthDayNanoType};
 use datafusion::catalog::TableReference;
 use datafusion::common::{Column, DFSchema, Result, ScalarValue};
 use datafusion::config::ConfigOptions;
-use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion::sql::sqlparser::ast;
-use datafusion::sql::sqlparser::dialect::GenericDialect;
-use datafusion::sql::sqlparser::parser::Parser;
+use datafusion::sql::planner::ContextProvider;
 use datafusion::{functions, functions_array};
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::DataFusionError;
@@ -211,46 +209,16 @@ pub(crate) fn from_spark_expression(
             Ok(get_scalar_function(func.function_name.as_str(), args)?)
         }
         ExprType::ExpressionString(expr) => {
-            let mut parser = Parser::new(&GenericDialect {}).try_with_sql(&expr.expression)?;
-            match parser.parse_wildcard_expr()? {
-                ast::Expr::Wildcard => Ok(expr::Expr::Wildcard { qualifier: None }),
-                ast::Expr::QualifiedWildcard(ast::ObjectName(name)) => {
-                    let qualifier = name
-                        .iter()
-                        .map(|x| x.to_string())
-                        .collect::<Vec<_>>()
-                        .join(".");
-                    Ok(expr::Expr::Wildcard {
-                        qualifier: Some(qualifier),
-                    })
-                }
-                expr => {
-                    let provider = EmptyContextProvider::default();
-                    let planner = SqlToRel::new(&provider);
-                    let expr = planner.sql_to_expr(expr, schema, &mut PlannerContext::default())?;
-                    Ok(expr)
-                }
-            }
+            let expr = parse_spark_expression(expr.expression.as_str())?;
+            from_spark_expression(&expr, schema)
         }
         ExprType::UnresolvedStar(star) => {
             // FIXME: column reference is parsed as qualifier
             if let Some(target) = &star.unparsed_target {
-                let mut parser = Parser::new(&GenericDialect {}).try_with_sql(target)?;
-                let expr = parser.parse_wildcard_expr()?;
-                match expr {
-                    ast::Expr::Wildcard => Ok(expr::Expr::Wildcard { qualifier: None }),
-                    ast::Expr::QualifiedWildcard(ast::ObjectName(names)) => {
-                        let qualifier = names
-                            .iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<_>>()
-                            .join(".");
-                        Ok(expr::Expr::Wildcard {
-                            qualifier: Some(qualifier),
-                        })
-                    }
-                    _ => Err(SparkError::todo("expression as wildcard target")),
-                }
+                let target = parse_spark_qualified_wildcard(target.as_str())?;
+                Ok(expr::Expr::Wildcard {
+                    qualifier: Some(target),
+                })
             } else {
                 Ok(expr::Expr::Wildcard { qualifier: None })
             }

@@ -3,2113 +3,4656 @@
     {
       "input": "-interval '\t -1-2\t' year to month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": -14
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '\t 1 0:0:1 ' day to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "86401000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-1 0:0:0' day to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-86400000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-123-0' year to month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": -1476
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-19:18:17.123456789' hour to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-69497123456"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-2-3' year to month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": -27
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' day",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-604800000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' days",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-604800000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' hour",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-25200000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' hours",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-25200000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' microsecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-7"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' microseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-7"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-7000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' milliseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-7000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' minute",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-420000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' minutes",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-420000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": -7
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": -7
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-7000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-7000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' week",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-4233600000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' weeks",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-4233600000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' year",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": -84
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-7' years",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": -84
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '-99 11:22:33.123456789' day to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-8594553123456"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' day",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' days",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' hour",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' hours",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' microsecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' microseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' milliseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' minute",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' minutes",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 0
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 0
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' week",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' weeks",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' year",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 0
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0' years",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 0
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0:0:0' hour to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '0:0:1' hour to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "1000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '1 0:0:0' day to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "86400000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '1 0:0:1' day to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "86401000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '1 day 2 hour 3 minute 4.005006 second'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "93784005006"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '1 year 2 month'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 14
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10 9:8:7.123456789' day to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "896887123456"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' day",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "864000000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' days",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "864000000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' hour",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "36000000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' hours",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "36000000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' microsecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "10"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' microseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "10"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "10000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' milliseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "10000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' minute",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "600000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' minutes",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "600000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 10
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 10
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "10000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "10000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' week",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "6048000000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' weeks",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "6048000000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' year",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 120
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '10' years",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 120
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '11:22:33.123456789' hour to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "40953123456"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '123-10' year to month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 1486
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' day",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "1814400000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' days",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "1814400000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' hour",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "75600000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' hours",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "75600000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' microsecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "21"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' microseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "21"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "21000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' milliseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "21000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' minute",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "1260000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' minutes",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "1260000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 21
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 21
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "21000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "21000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' week",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "12700800000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' weeks",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "12700800000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' year",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 252
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '21' years",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 252
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '3 month 1 hour'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
       }
     },
     {
       "input": "-interval '496-0' year to month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 5952
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '99 11:22:33.123456789' day to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "8594553123456"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval '9:8:7.123456789' hour to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "32887123456"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -13.123456789 second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-13123456"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 day",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-604800000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 days",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-604800000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 hour",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-25200000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 hours",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-25200000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 microsecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-7"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 microseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-7"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-7000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 milliseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-7000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 minute",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-420000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 minutes",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-420000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": -7
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": -7
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-7000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-7000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 week",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-4233600000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 weeks",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "-4233600000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 year",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": -84
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval -7 years",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": -84
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 day",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 days",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 hour",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 hours",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 microsecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 microseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 milliseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 minute",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 minutes",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 0
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 0
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 week",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 weeks",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "0"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 year",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 0
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 0 years",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 0
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 1.001 second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "1001000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 day",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "864000000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 days",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "864000000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 hour",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "36000000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 hours",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "36000000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 microsecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "10"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 microseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "10"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "10000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 milliseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "10000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 minute",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "600000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 minutes",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "600000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 10
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 10
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "10000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "10000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 week",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "6048000000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 weeks",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "6048000000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 year",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 120
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 years",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 120
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 10 years 3 months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 123
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 13.123456 second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "13123456"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 13.123456789 seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "13123456"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 day",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "1814400000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 days",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "1814400000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 hour",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "75600000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 hours",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "75600000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 microsecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "21"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 microseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "21"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "21000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 milliseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "21000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 minute",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "1260000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 minutes",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "1260000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 21
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 21
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "21000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "21000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 week",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "12700800000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 weeks",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "12700800000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 year",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 252
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 21 years",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "yearMonthInterval": 252
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "-interval 3 monThs 4 dayS 22 sEcond 1 millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
       }
     },
     {
       "input": "-interval 8 days 2 hours 3 minutes 21 seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "dayTimeInterval": "698601000000"
+                }
+              }
+            ]
+          }
+        }
       }
     },
     {
       "input": "INTERVAL '1 day 2 hour 3 minute 4.005006 second'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "93784005006"
+          }
+        }
       }
     },
     {
       "input": "INTERVAL '1 year 2 month'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 14
+          }
+        }
       }
     },
     {
       "input": "INTERVAL '1 year 2 second'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
       }
     },
     {
       "input": "INTERVAL '3 month 1 hour'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
       }
     },
     {
       "input": "InterVal 'interval 1 day 2 hour 3 minute 4.005006 second'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "93784005006"
+          }
+        }
       }
     },
     {
       "input": "InterVal 'interval 1 year 2 month'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 14
+          }
+        }
       }
     },
     {
       "input": "InterVal 'interval 3 month 1 hour'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
       }
     },
     {
       "input": "Interval 'interval 1 daysss 2 hoursss'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after interval: daysss"
       }
     },
     {
       "input": "Interval 'interval 1 yearsss 2 monthsss'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after interval: yearsss"
       }
     },
     {
       "input": "Interval 'interval 3 monthsss 1 hoursss'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: extra tokens after interval: monthsss"
       }
     },
     {
       "input": "interval '\t -1-2\t' year to month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": -14
+          }
+        }
       }
     },
     {
       "input": "interval '\t 1 0:0:1 ' day to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "86401000000"
+          }
+        }
       }
     },
     {
       "input": "interval '-1 0:0:0' day to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-86400000000"
+          }
+        }
       }
     },
     {
       "input": "interval '-123-0' year to month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": -1476
+          }
+        }
       }
     },
     {
       "input": "interval '-19:18:17.123456789' hour to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-69497123456"
+          }
+        }
       }
     },
     {
       "input": "interval '-2-3' year to month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": -27
+          }
+        }
       }
     },
     {
       "input": "interval '-7' day",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-604800000000"
+          }
+        }
       }
     },
     {
       "input": "interval '-7' days",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-604800000000"
+          }
+        }
       }
     },
     {
       "input": "interval '-7' hour",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-25200000000"
+          }
+        }
       }
     },
     {
       "input": "interval '-7' hours",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-25200000000"
+          }
+        }
       }
     },
     {
       "input": "interval '-7' microsecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-7"
+          }
+        }
       }
     },
     {
       "input": "interval '-7' microseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-7"
+          }
+        }
       }
     },
     {
       "input": "interval '-7' millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-7000"
+          }
+        }
       }
     },
     {
       "input": "interval '-7' milliseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-7000"
+          }
+        }
       }
     },
     {
       "input": "interval '-7' minute",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-420000000"
+          }
+        }
       }
     },
     {
       "input": "interval '-7' minutes",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-420000000"
+          }
+        }
       }
     },
     {
       "input": "interval '-7' month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": -7
+          }
+        }
       }
     },
     {
       "input": "interval '-7' months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": -7
+          }
+        }
       }
     },
     {
       "input": "interval '-7' second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-7000000"
+          }
+        }
       }
     },
     {
       "input": "interval '-7' seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-7000000"
+          }
+        }
       }
     },
     {
       "input": "interval '-7' week",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-4233600000000"
+          }
+        }
       }
     },
     {
       "input": "interval '-7' weeks",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-4233600000000"
+          }
+        }
       }
     },
     {
       "input": "interval '-7' year",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": -84
+          }
+        }
       }
     },
     {
       "input": "interval '-7' years",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": -84
+          }
+        }
       }
     },
     {
       "input": "interval '-99 11:22:33.123456789' day to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-8594553123456"
+          }
+        }
       }
     },
     {
       "input": "interval '0' day",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval '0' days",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval '0' hour",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval '0' hours",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval '0' microsecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval '0' microseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval '0' millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval '0' milliseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval '0' minute",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval '0' minutes",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval '0' month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 0
+          }
+        }
       }
     },
     {
       "input": "interval '0' months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 0
+          }
+        }
       }
     },
     {
       "input": "interval '0' second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval '0' seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval '0' week",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval '0' weeks",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval '0' year",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 0
+          }
+        }
       }
     },
     {
       "input": "interval '0' years",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 0
+          }
+        }
       }
     },
     {
       "input": "interval '0:0:0' hour to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval '0:0:1' hour to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "1000000"
+          }
+        }
       }
     },
     {
       "input": "interval '1 0:0:0' day to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "86400000000"
+          }
+        }
       }
     },
     {
       "input": "interval '1 0:0:1' day to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "86401000000"
+          }
+        }
       }
     },
     {
       "input": "interval '1 year 3 months 2 weeks 2 days 1 hour 3 minutes 2 seconds 100 millisecond 200 microseconds'",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
       }
     },
     {
       "input": "interval '10 9:8:7.123456789' day to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "896887123456"
+          }
+        }
       }
     },
     {
       "input": "interval '10' day",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "864000000000"
+          }
+        }
       }
     },
     {
       "input": "interval '10' days",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "864000000000"
+          }
+        }
       }
     },
     {
       "input": "interval '10' hour",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "36000000000"
+          }
+        }
       }
     },
     {
       "input": "interval '10' hours",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "36000000000"
+          }
+        }
       }
     },
     {
       "input": "interval '10' microsecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "10"
+          }
+        }
       }
     },
     {
       "input": "interval '10' microseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "10"
+          }
+        }
       }
     },
     {
       "input": "interval '10' millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "10000"
+          }
+        }
       }
     },
     {
       "input": "interval '10' milliseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "10000"
+          }
+        }
       }
     },
     {
       "input": "interval '10' minute",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "600000000"
+          }
+        }
       }
     },
     {
       "input": "interval '10' minutes",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "600000000"
+          }
+        }
       }
     },
     {
       "input": "interval '10' month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 10
+          }
+        }
       }
     },
     {
       "input": "interval '10' month to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: interval: Standard { value: Value(SingleQuotedString(\"10\")), unit: IntervalUnit { leading_field: Some(Month), leading_precision: None, last_field: Some(Second), fractional_seconds_precision: None } }"
       }
     },
     {
       "input": "interval '10' months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 10
+          }
+        }
       }
     },
     {
       "input": "interval '10' second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "10000000"
+          }
+        }
       }
     },
     {
       "input": "interval '10' seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "10000000"
+          }
+        }
       }
     },
     {
       "input": "interval '10' week",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "6048000000000"
+          }
+        }
       }
     },
     {
       "input": "interval '10' weeks",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "6048000000000"
+          }
+        }
       }
     },
     {
       "input": "interval '10' year",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 120
+          }
+        }
       }
     },
     {
       "input": "interval '10' years",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 120
+          }
+        }
       }
     },
     {
       "input": "interval '11:22:33.123456789' hour to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "40953123456"
+          }
+        }
       }
     },
     {
       "input": "interval '123-10' year to month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 1486
+          }
+        }
       }
     },
     {
       "input": "interval '21' day",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "1814400000000"
+          }
+        }
       }
     },
     {
       "input": "interval '21' days",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "1814400000000"
+          }
+        }
       }
     },
     {
       "input": "interval '21' hour",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "75600000000"
+          }
+        }
       }
     },
     {
       "input": "interval '21' hours",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "75600000000"
+          }
+        }
       }
     },
     {
       "input": "interval '21' microsecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "21"
+          }
+        }
       }
     },
     {
       "input": "interval '21' microseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "21"
+          }
+        }
       }
     },
     {
       "input": "interval '21' millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "21000"
+          }
+        }
       }
     },
     {
       "input": "interval '21' milliseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "21000"
+          }
+        }
       }
     },
     {
       "input": "interval '21' minute",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "1260000000"
+          }
+        }
       }
     },
     {
       "input": "interval '21' minutes",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "1260000000"
+          }
+        }
       }
     },
     {
       "input": "interval '21' month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 21
+          }
+        }
       }
     },
     {
       "input": "interval '21' months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 21
+          }
+        }
       }
     },
     {
       "input": "interval '21' second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "21000000"
+          }
+        }
       }
     },
     {
       "input": "interval '21' seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "21000000"
+          }
+        }
       }
     },
     {
       "input": "interval '21' week",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "12700800000000"
+          }
+        }
       }
     },
     {
       "input": "interval '21' weeks",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "12700800000000"
+          }
+        }
       }
     },
     {
       "input": "interval '21' year",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 252
+          }
+        }
       }
     },
     {
       "input": "interval '21' years",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 252
+          }
+        }
       }
     },
     {
       "input": "interval '496-0' year to month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 5952
+          }
+        }
       }
     },
     {
       "input": "interval '99 11:22:33.123456789' day to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "8594553123456"
+          }
+        }
       }
     },
     {
       "input": "interval '9:8:7.123456789' hour to second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "32887123456"
+          }
+        }
       }
     },
     {
       "input": "interval -13.123456789 second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-13123456"
+          }
+        }
       }
     },
     {
       "input": "interval -7 day",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-604800000000"
+          }
+        }
       }
     },
     {
       "input": "interval -7 days",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-604800000000"
+          }
+        }
       }
     },
     {
       "input": "interval -7 hour",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-25200000000"
+          }
+        }
       }
     },
     {
       "input": "interval -7 hours",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-25200000000"
+          }
+        }
       }
     },
     {
       "input": "interval -7 microsecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-7"
+          }
+        }
       }
     },
     {
       "input": "interval -7 microseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-7"
+          }
+        }
       }
     },
     {
       "input": "interval -7 millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-7000"
+          }
+        }
       }
     },
     {
       "input": "interval -7 milliseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-7000"
+          }
+        }
       }
     },
     {
       "input": "interval -7 minute",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-420000000"
+          }
+        }
       }
     },
     {
       "input": "interval -7 minutes",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-420000000"
+          }
+        }
       }
     },
     {
       "input": "interval -7 month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": -7
+          }
+        }
       }
     },
     {
       "input": "interval -7 months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": -7
+          }
+        }
       }
     },
     {
       "input": "interval -7 second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-7000000"
+          }
+        }
       }
     },
     {
       "input": "interval -7 seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-7000000"
+          }
+        }
       }
     },
     {
       "input": "interval -7 week",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-4233600000000"
+          }
+        }
       }
     },
     {
       "input": "interval -7 weeks",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "-4233600000000"
+          }
+        }
       }
     },
     {
       "input": "interval -7 year",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": -84
+          }
+        }
       }
     },
     {
       "input": "interval -7 years",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": -84
+          }
+        }
       }
     },
     {
       "input": "interval 0 day",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval 0 days",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval 0 hour",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval 0 hours",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval 0 microsecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval 0 microseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval 0 millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval 0 milliseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval 0 minute",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval 0 minutes",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval 0 month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 0
+          }
+        }
       }
     },
     {
       "input": "interval 0 months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 0
+          }
+        }
       }
     },
     {
       "input": "interval 0 second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval 0 seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval 0 week",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval 0 weeks",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "0"
+          }
+        }
       }
     },
     {
       "input": "interval 0 year",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 0
+          }
+        }
       }
     },
     {
       "input": "interval 0 years",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 0
+          }
+        }
       }
     },
     {
       "input": "interval 1.001 second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "1001000"
+          }
+        }
       }
     },
     {
       "input": "interval 10 day",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "864000000000"
+          }
+        }
       }
     },
     {
       "input": "interval 10 days",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "864000000000"
+          }
+        }
       }
     },
     {
       "input": "interval 10 hour",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "36000000000"
+          }
+        }
       }
     },
     {
       "input": "interval 10 hours",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "36000000000"
+          }
+        }
       }
     },
     {
       "input": "interval 10 microsecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "10"
+          }
+        }
       }
     },
     {
       "input": "interval 10 microseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "10"
+          }
+        }
       }
     },
     {
       "input": "interval 10 millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "10000"
+          }
+        }
       }
     },
     {
       "input": "interval 10 milliseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "10000"
+          }
+        }
       }
     },
     {
       "input": "interval 10 minute",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "600000000"
+          }
+        }
       }
     },
     {
       "input": "interval 10 minutes",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "600000000"
+          }
+        }
       }
     },
     {
       "input": "interval 10 month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 10
+          }
+        }
       }
     },
     {
       "input": "interval 10 months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 10
+          }
+        }
       }
     },
     {
       "input": "interval 10 nanoseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: multi-unit interval"
       }
     },
     {
       "input": "interval 10 second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "10000000"
+          }
+        }
       }
     },
     {
       "input": "interval 10 seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "10000000"
+          }
+        }
       }
     },
     {
       "input": "interval 10 week",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "6048000000000"
+          }
+        }
       }
     },
     {
       "input": "interval 10 weeks",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "6048000000000"
+          }
+        }
       }
     },
     {
       "input": "interval 10 year",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 120
+          }
+        }
       }
     },
     {
       "input": "interval 10 years",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 120
+          }
+        }
       }
     },
     {
       "input": "interval 10 years 3 months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 123
+          }
+        }
       }
     },
     {
       "input": "interval 13.123456 second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "13123456"
+          }
+        }
       }
     },
     {
       "input": "interval 13.123456789 seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "13123456"
+          }
+        }
       }
     },
     {
       "input": "interval 21 day",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "1814400000000"
+          }
+        }
       }
     },
     {
       "input": "interval 21 days",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "1814400000000"
+          }
+        }
       }
     },
     {
       "input": "interval 21 hour",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "75600000000"
+          }
+        }
       }
     },
     {
       "input": "interval 21 hours",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "75600000000"
+          }
+        }
       }
     },
     {
       "input": "interval 21 microsecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "21"
+          }
+        }
       }
     },
     {
       "input": "interval 21 microseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "21"
+          }
+        }
       }
     },
     {
       "input": "interval 21 millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "21000"
+          }
+        }
       }
     },
     {
       "input": "interval 21 milliseconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "21000"
+          }
+        }
       }
     },
     {
       "input": "interval 21 minute",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "1260000000"
+          }
+        }
       }
     },
     {
       "input": "interval 21 minutes",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "1260000000"
+          }
+        }
       }
     },
     {
       "input": "interval 21 month",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 21
+          }
+        }
       }
     },
     {
       "input": "interval 21 months",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 21
+          }
+        }
       }
     },
     {
       "input": "interval 21 second",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "21000000"
+          }
+        }
       }
     },
     {
       "input": "interval 21 seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "21000000"
+          }
+        }
       }
     },
     {
       "input": "interval 21 week",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "12700800000000"
+          }
+        }
       }
     },
     {
       "input": "interval 21 weeks",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "12700800000000"
+          }
+        }
       }
     },
     {
       "input": "interval 21 year",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 252
+          }
+        }
       }
     },
     {
       "input": "interval 21 years",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "yearMonthInterval": 252
+          }
+        }
       }
     },
     {
       "input": "interval 3 monThs 4 dayS 22 sEcond 1 millisecond",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
       }
     },
     {
       "input": "interval 8 days 2 hours 3 minutes 21 seconds",
       "output": {
-        "failure": "not supported: SQL to expression"
+        "success": {
+          "literal": {
+            "dayTimeInterval": "698601000000"
+          }
+        }
       }
     }
   ]
