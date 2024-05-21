@@ -16,7 +16,6 @@ pub(crate) struct CatalogDatabase {
     pub(crate) name: String,
     pub(crate) catalog: Option<String>,
     pub(crate) description: Option<String>,
-    // TODO: location_uri should technically not be nullable
     pub(crate) location_uri: Option<String>,
 }
 
@@ -26,7 +25,6 @@ impl CatalogDatabase {
             Field::new("name", DataType::Utf8, false),
             Field::new("catalog", DataType::Utf8, true),
             Field::new("description", DataType::Utf8, true),
-            // TODO: location_uri should technically not be nullable
             Field::new("location_uri", DataType::Utf8, true),
         ]))
     }
