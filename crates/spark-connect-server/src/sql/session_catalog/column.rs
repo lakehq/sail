@@ -90,7 +90,10 @@ pub(crate) async fn list_catalog_table_columns(
                         let spark_data_type = to_spark_data_type(column.data_type())?;
                         catalog_table_columns.push(CatalogTableColumn {
                             name: column.name().clone(),
-                            description: None, // TODO: Add actual description if available
+                            description: column
+                                .metadata()
+                                .get("description")
+                                .map(|description| description.clone()),
                             data_type: spark_data_type.to_simple_string()?,
                             nullable: column.is_nullable(),
                             is_partition: false, // TODO: Add actual is_partition if available
