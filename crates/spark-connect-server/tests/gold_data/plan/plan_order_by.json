@@ -3,109 +3,192 @@
     {
       "input": "SELECT PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY col DESC)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: function within group"
       }
     },
     {
       "input": "SELECT PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY col)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: function within group"
       }
     },
     {
       "input": "SELECT PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY col) FILTER (WHERE id > 10)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: function filter"
       }
     },
     {
       "input": "SELECT PERCENTILE_DISC(0.1) WITHIN GROUP (ORDER BY col DESC)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: function within group"
       }
     },
     {
       "input": "SELECT PERCENTILE_DISC(0.1) WITHIN GROUP (ORDER BY col)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: function within group"
       }
     },
     {
       "input": "SELECT PERCENTILE_DISC(0.1) WITHIN GROUP (ORDER BY col) FILTER (WHERE id > 10)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: function filter"
       }
     },
     {
       "input": "select * from t\nwindow w1 as (partition by a, b order by c rows between 1 preceding and 1 following),\n       w2 as w1,\n       w3 as w1",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: sql parser error: Expected (, found: w1 at Line: 3, Column 14"
       }
     },
     {
       "input": "select * from t order by a cluster by a",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: cluster"
       }
     },
     {
       "input": "select * from t order by a distribute by a",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: distribute"
       }
     },
     {
       "input": "select * from t order by a sort by a",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: sort"
       }
     },
     {
       "input": "select * from t order by a, b desc",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "sort": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "order": [
+                {
+                  "child": {
+                    "unresolvedAttribute": {
+                      "unparsedIdentifier": "a"
+                    }
+                  }
+                },
+                {
+                  "child": {
+                    "unresolvedAttribute": {
+                      "unparsedIdentifier": "b"
+                    }
+                  },
+                  "direction": "SORT_DIRECTION_DESCENDING"
+                }
+              ],
+              "isGlobal": true
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from t order by a, b desc limit 10",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "limit": {
+              "input": {
+                "sort": {
+                  "input": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t"
+                          }
+                        }
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedStar": {}
+                        }
+                      ]
+                    }
+                  },
+                  "order": [
+                    {
+                      "child": {
+                        "unresolvedAttribute": {
+                          "unparsedIdentifier": "a"
+                        }
+                      }
+                    },
+                    {
+                      "child": {
+                        "unresolvedAttribute": {
+                          "unparsedIdentifier": "b"
+                        }
+                      },
+                      "direction": "SORT_DIRECTION_DESCENDING"
+                    }
+                  ],
+                  "isGlobal": true
+                }
+              },
+              "limit": 10
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from t order by a, b desc window w1 as ()",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: window"
       }
     },
     {
       "input": "select * from t order by a, b desc window w1 as () limit 10",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: window"
       }
     },
     {
       "input": "select * from t sort by a, b desc",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: desc"
       }
     },
     {
       "input": "select * from t sort by a, b desc limit 10",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: desc"
       }
     },
     {
       "input": "select * from t sort by a, b desc window w1 as ()",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: desc"
       }
     },
     {
       "input": "select * from t sort by a, b desc window w1 as () limit 10",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: desc"
       }
     }
   ]

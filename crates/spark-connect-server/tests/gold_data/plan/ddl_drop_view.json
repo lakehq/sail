@@ -3,31 +3,31 @@
     {
       "input": "DROP VIEW IF EXISTS db.view",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: SQL drop"
       }
     },
     {
       "input": "DROP VIEW IF EXISTS view",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: SQL drop"
       }
     },
     {
       "input": "DROP VIEW db.view",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: SQL drop"
       }
     },
     {
       "input": "DROP VIEW testcat.db.view",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: SQL drop"
       }
     },
     {
       "input": "DROP VIEW view",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: SQL drop"
       }
     }
   ]

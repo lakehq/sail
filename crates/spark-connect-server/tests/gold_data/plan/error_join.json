@@ -3,13 +3,13 @@
     {
       "input": "\nSELECT a, b\nFROM t1 JOIN t2\nUSING (a, b, at-tr)\n        ",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: sql parser error: Expected ), found: - at Line: 4, Column 16"
       }
     },
     {
       "input": "\nSELECT tb.*\nFROM t-a INNER JOIN tb\nON ta.a = tb.a AND ta.tag = tb.tag\n        ",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: -"
       }
     }
   ]

@@ -3,7 +3,7 @@
     {
       "input": "LOAD DATA INPATH \"path\" INTO TABLE my-tab",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: INPATH"
       }
     }
   ]

@@ -3,79 +3,79 @@
     {
       "input": "COMMENT ON DATABASE a.b.c IS 'NULL'",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: COMMENT at Line: 1, Column 1"
       }
     },
     {
       "input": "COMMENT ON DATABASE a.b.c IS NULL",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: COMMENT at Line: 1, Column 1"
       }
     },
     {
       "input": "COMMENT ON NAMESPACE a.b.c IS ''",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: COMMENT at Line: 1, Column 1"
       }
     },
     {
       "input": "COMMENT ON TABLE a.b.c IS 'xYz'",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: COMMENT at Line: 1, Column 1"
       }
     },
     {
       "input": "REFRESH FUNCTION a.b.c",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: REFRESH at Line: 1, Column 1"
       }
     },
     {
       "input": "REFRESH FUNCTION b.c",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: REFRESH at Line: 1, Column 1"
       }
     },
     {
       "input": "REFRESH FUNCTION c",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: REFRESH at Line: 1, Column 1"
       }
     },
     {
       "input": "REFRESH TABLE a.b.c",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: REFRESH at Line: 1, Column 1"
       }
     },
     {
       "input": "SHOW COLUMNS FROM db1.t1 IN db1",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: SQL show columns"
       }
     },
     {
       "input": "SHOW COLUMNS FROM t1",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: SQL show columns"
       }
     },
     {
       "input": "SHOW COLUMNS FROM t1 IN db1",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: SQL show columns"
       }
     },
     {
       "input": "SHOW COLUMNS IN db1.t1",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: SQL show columns"
       }
     },
     {
       "input": "VALUES (1, 2, DEFAULT) AS val",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: AS"
       }
     }
   ]

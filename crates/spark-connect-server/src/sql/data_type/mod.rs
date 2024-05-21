@@ -1,6 +1,7 @@
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::schema::{from_spark_field, from_spark_fields};
 use crate::spark::connect as sc;
+use crate::sql::fail_on_extra_token;
 use crate::sql::parser::SparkDialect;
 use arrow::datatypes as adt;
 use arrow::datatypes::{Fields, SchemaRef};
@@ -53,12 +54,7 @@ pub(crate) fn parse_spark_data_type(sql: &str) -> SparkResult<sc::DataType> {
         return Err(SparkError::invalid("empty data type"));
     }
     let data_type = parser.parse_data_type()?;
-    if parser.peek_token() != Token::EOF {
-        let token = parser.next_token();
-        return Err(SparkError::invalid(format!(
-            "extra tokens after data type: {token}"
-        )));
-    }
+    fail_on_extra_token(&mut parser, "data type")?;
     Ok(from_ast_data_type(&data_type)?)
 }
 

@@ -3,25 +3,116 @@
     {
       "input": "\nSELECT * FROM tab\nWINDOW hyphen-window AS\n  (PARTITION BY a, b ORDER BY c rows BETWEEN 1 PRECEDING AND 1 FOLLOWING)\n        ",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: sql parser error: Expected AS, found: - at Line: 3, Column 14"
       }
     },
     {
       "input": "\nSELECT a, b\nFROM grammar-breaker\nWHERE a-b > 10\nGROUP BY fake-breaker\nORDER BY c\n        ",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: -"
       }
     },
     {
       "input": "\nSELECT a, b\nFROM t\nWHERE a-b > 10\nGROUP BY fake-breaker\nORDER BY c\n      ",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "sort": {
+              "input": {
+                "aggregate": {
+                  "input": {
+                    "filter": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t"
+                          }
+                        }
+                      },
+                      "condition": {
+                        "unresolvedFunction": {
+                          "functionName": ">",
+                          "arguments": [
+                            {
+                              "unresolvedFunction": {
+                                "functionName": "-",
+                                "arguments": [
+                                  {
+                                    "unresolvedAttribute": {
+                                      "unparsedIdentifier": "a"
+                                    }
+                                  },
+                                  {
+                                    "unresolvedAttribute": {
+                                      "unparsedIdentifier": "b"
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "literal": {
+                                "integer": 10
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "groupType": "GROUP_TYPE_GROUPBY",
+                  "groupingExpressions": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "-",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "fake"
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "breaker"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ],
+                  "aggregateExpressions": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a"
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "b"
+                      }
+                    }
+                  ]
+                }
+              },
+              "order": [
+                {
+                  "child": {
+                    "unresolvedAttribute": {
+                      "unparsedIdentifier": "c"
+                    }
+                  }
+                }
+              ],
+              "isGlobal": true
+            }
+          }
+        }
       }
     },
     {
       "input": "\nSELECT product, category, dense_rank()\nOVER (PARTITION BY category ORDER BY revenue DESC) as hyphen-rank\nFROM productRevenue\n        ",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: -"
       }
     }
   ]
