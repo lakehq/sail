@@ -893,22 +893,42 @@ pub(crate) async fn from_spark_relation(
                     )))
                 }
                 CatType::DropTempView(drop_temp_view) => {
-                    // TODO: This works but returns an empty dataframe which is not the expected
-                    //  behavior that spark wants.
-                    Ok(LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
+                    // DataFusion returns an empty DataFrame on DropView
+                    // But Spark expects a Boolean value.
+                    // We can do this instead of having to create a LogicalPlan Extension
+                    let drop_view_plan = LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
                         name: TableReference::from(drop_temp_view.view_name.to_string()),
-                        if_exists: true,
+                        if_exists: false,
                         schema: DFSchemaRef::new(DFSchema::empty()),
-                    })))
+                    }));
+                    let result = match ctx.execute_logical_plan(drop_view_plan).await {
+                        Ok(_) => ScalarValue::Boolean(Some(true)),
+                        Err(_) => ScalarValue::Boolean(Some(false)),
+                    };
+                    let df: DataFrame = ctx
+                        .sql("SELECT CAST($1 AS BOOLEAN)")
+                        .await?
+                        .with_param_values(vec![("1", result)])?;
+                    Ok(df.into_optimized_plan()?)
                 }
                 CatType::DropGlobalTempView(drop_global_temp_view) => {
-                    // TODO: This works but returns an empty dataframe which is not the expected
-                    //  behavior that spark wants.
-                    Ok(LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
+                    // DataFusion returns an empty DataFrame on DropView
+                    // But Spark expects a Boolean value.
+                    // We can do this instead of having to create a LogicalPlan Extension
+                    let drop_view_plan = LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
                         name: TableReference::from(drop_global_temp_view.view_name.to_string()),
-                        if_exists: true,
+                        if_exists: false,
                         schema: DFSchemaRef::new(DFSchema::empty()),
-                    })))
+                    }));
+                    let result = match ctx.execute_logical_plan(drop_view_plan).await {
+                        Ok(_) => ScalarValue::Boolean(Some(true)),
+                        Err(_) => ScalarValue::Boolean(Some(false)),
+                    };
+                    let df: DataFrame = ctx
+                        .sql("SELECT CAST($1 AS BOOLEAN)")
+                        .await?
+                        .with_param_values(vec![("1", result)])?;
+                    Ok(df.into_optimized_plan()?)
                 }
                 CatType::RecoverPartitions(_) => {
                     Err(SparkError::todo("CatType::RecoverPartitions"))
