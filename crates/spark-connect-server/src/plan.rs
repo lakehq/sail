@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::{DataType, Fields};
+use datafusion::arrow::datatypes::{
+    DataType, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+};
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::dataframe::DataFrame;
@@ -21,7 +23,9 @@ use datafusion::logical_expr::{
 use datafusion::sql::parser::Statement;
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
-use datafusion_common::{Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference};
+use datafusion_common::{
+    Column, Constraints, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference,
+};
 use datafusion_expr::{build_join_schema, DdlStatement, TableType};
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
@@ -833,37 +837,60 @@ pub(crate) async fn from_spark_relation(
                     // Same as create table essentially.
                     Err(SparkError::todo("CatType::CreateExternalTable"))
                 }
-                CatType::CreateTable(_create_table) => {
-                    // let table_ref: TableReference = TableReference::from(&create_table.table_name);
-                    // let (table_type, location): (TableType, Option<&str>) =
-                    //     if let Some(path) = create_table.path.as_deref() {
-                    //         // TODO: Should covert to a "Path" then uri
-                    //         return Err(SparkError::todo(format!(
-                    //             "CreateTable (External) with path: {:?}",
-                    //             path
-                    //         )));
-                    //     } else {
-                    //         (
-                    //             catalog_table_type_to_table_type(CatalogTableType::MANAGED),
-                    //             None,
-                    //         )
-                    //     };
-                    // // TODO: use spark.sql.sources.default to get the default source
-                    // let source: &str = create_table.source.as_deref().unwrap_or("parquet");
-                    // let description: &str = create_table.description.as_deref().unwrap_or("");
-                    // let schema: Fields = match create_table.schema.as_ref() {
-                    //     Some(schema) => {
-                    //         let data_type = from_spark_built_in_data_type(schema)?;
-                    //         match data_type {
-                    //             DataType::Struct(fields) => fields,
-                    //             _ => return Err(SparkError::invalid("external table schema")),
-                    //         }
-                    //     }
-                    //     None => Fields::empty(),
-                    // };
-                    // let options: CaseInsensitiveHashMap<String> =
-                    //     CaseInsensitiveHashMap::from(create_table.options.clone());
-                    Err(SparkError::todo("CatType::CreateTable"))
+                CatType::CreateTable(create_table) => {
+                    let table_name = create_table.table_name.as_str();
+                    let table_ref: TableReference = TableReference::from(table_name.to_string());
+                    let (table_type, location): (TableType, Option<&str>) =
+                        if let Some(path) = create_table.path.as_deref() {
+                            // TODO: Should covert to a "Path" then uri
+                            return Err(SparkError::todo(format!(
+                                "CreateTable (External) with path: {:?}",
+                                path
+                            )));
+                        } else {
+                            (
+                                catalog_table_type_to_table_type(CatalogTableType::MANAGED),
+                                None,
+                            )
+                        };
+                    // TODO: use spark.sql.sources.default to get the default source
+                    let source: &str = create_table.source.as_deref().unwrap_or("parquet");
+                    let description: &str = create_table.description.as_deref().unwrap_or("");
+                    let fields: Fields = match create_table.schema.as_ref() {
+                        Some(schema) => {
+                            let data_type = from_spark_built_in_data_type(schema)?;
+                            match data_type {
+                                DataType::Struct(fields) => fields,
+                                _ => return Err(SparkError::invalid("external table schema")),
+                            }
+                        }
+                        None => Fields::empty(),
+                    };
+                    let options: CaseInsensitiveHashMap<String> =
+                        CaseInsensitiveHashMap::from(create_table.options.clone());
+
+                    let mut metadata: HashMap<String, String> = HashMap::new();
+                    metadata.insert("description".to_string(), description.to_string());
+                    let schema = ArrowSchema::new_with_metadata(fields, metadata);
+                    let batch = RecordBatch::new_empty(ArrowSchemaRef::new(schema));
+                    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+
+                    Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                        plan::CreateMemoryTable {
+                            name: table_ref,
+                            constraints: Constraints::empty(), // TODO: Check if exists in options
+                            input: Arc::new(LogicalPlan::TableScan(plan::TableScan::try_new(
+                                UNNAMED_TABLE,
+                                provider_as_source(Arc::new(table)),
+                                None,
+                                vec![],
+                                None,
+                            )?)),
+                            if_not_exists: false, // TODO: Check if exists in options
+                            or_replace: false,    // TODO: Check if exists in options
+                            column_defaults: vec![], // TODO: Check if exists in options
+                        },
+                    )))
                 }
                 CatType::DropTempView(drop_temp_view) => {
                     Ok(LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
