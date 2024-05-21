@@ -17,7 +17,7 @@ opentelemetry-semantic-conventions = "0.14.0"
 opentelemetry-otlp = { version = "0.15.0", features = ["trace", "metrics", "grpc-tonic", "tls", "tls-roots"] }
 opentelemetry-proto = { version = "0.5.0" }
 opentelemetry-stdout = { version = "0.3.0", features = ["trace"] } # Temporary until we fully configure OpenTelemetry
-thiserror = { version = "1.0.58" }
+thiserror = { version = "1.0.61" }
 tokio = { version = "1.36.0", features = ["full"] }
 tonic = { version = "0.11", features = ["tls", "tls-roots"] }
 tonic-build = "0.11"
