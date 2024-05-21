@@ -67,4 +67,4 @@ polars-arrow = { version = "0.39.2", features = ["serde", "arrow_rs"] }
 # Override dependencies to use our forked versions.
 # You can use `path = "..."` to temporarily point to your local copy of the crates
 # to speed up local development.
-sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", branch = "dev" }
+sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "107e025" }
