@@ -3,25 +3,25 @@
     {
       "input": "DESC FUNCTION a",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: a"
       }
     },
     {
       "input": "DESCRIBE FUNCTION EXTENDED a.b.c",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: EXTENDED"
       }
     },
     {
       "input": "DESCRIBE FUNCTION a",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: a"
       }
     },
     {
       "input": "DESCRIBE FUNCTION a.b.c",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: a"
       }
     }
   ]

@@ -3,25 +3,25 @@
     {
       "input": "SELECT * FROM t1 JOIN (t2 UNPIVOT (val FOR col in (a, b)))",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: UNPIVOT"
       }
     },
     {
       "input": "SELECT * FROM t1 JOIN t2 UNPIVOT (val FOR col in (a, b))",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: UNPIVOT"
       }
     },
     {
       "input": "SELECT * FROM t1 UNPIVOT (val FOR col in (a, b)) JOIN t2",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: UNPIVOT"
       }
     },
     {
       "input": "SELECT * FROM t1, t2 JOIN t3 UNPIVOT (val FOR col in (a, b))",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: UNPIVOT"
       }
     }
   ]

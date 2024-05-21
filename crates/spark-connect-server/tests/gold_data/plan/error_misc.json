@@ -3,67 +3,67 @@
     {
       "input": "\nALTER DATABASE my-database\nSET DBPROPERTIES ('p1'='v1')",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: sql parser error: Expected one of VIEW or TABLE or INDEX or ROLE, found: DATABASE at Line: 2, Column 7"
       }
     },
     {
       "input": "\nFROM test-table\nSELECT a\nSELECT b\n        ",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: FROM at Line: 2, Column 1"
       }
     },
     {
       "input": "CREATE DATABASE IF NOT EXISTS my-database",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: -"
       }
     },
     {
       "input": "CREATE FUNCTION test-func as org.test.func",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: sql parser error: Expected (, found: - at Line: 1, Column 21"
       }
     },
     {
       "input": "DROP DATABASE my-database",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: sql parser error: Expected TABLE, VIEW, INDEX, ROLE, SCHEMA, FUNCTION, STAGE or SEQUENCE after DROP, found: DATABASE at Line: 1, Column 6"
       }
     },
     {
       "input": "DROP FUNCTION test-func as org.test.func",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: -"
       }
     },
     {
       "input": "SHOW COLUMNS IN t FROM test-db",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: -"
       }
     },
     {
       "input": "SHOW FUNCTIONS LIKE test-func",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: -"
       }
     },
     {
       "input": "SHOW TABLE EXTENDED IN hyphen-db LIKE \"str\"",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: Unsupported statement: ShowVariable { variable: [Ident { value: \"TABLE\", quote_style: None }, Ident { value: \"EXTENDED\", quote_style: None }, Ident { value: \"IN\", quote_style: None }, Ident { value: \"hyphen\", quote_style: None }, Ident { value: \"db\", quote_style: None }, Ident { value: \"LIKE\", quote_style: None }] }"
       }
     },
     {
       "input": "SHOW TABLES IN hyphen-database",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: -"
       }
     },
     {
       "input": "USE test-test",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: -"
       }
     }
   ]

@@ -3,7 +3,24 @@
     {
       "input": "SELECT 1",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "localRelation": {
+                  "schema": "struct<>"
+                }
+              },
+              "expressions": [
+                {
+                  "literal": {
+                    "integer": 1
+                  }
+                }
+              ]
+            }
+          }
+        }
       }
     }
   ]

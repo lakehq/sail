@@ -3,103 +3,675 @@
     {
       "input": "\nSELECT * FROM a\nUNION\nSELECT * FROM b\nEXCEPT\nSELECT * FROM c\nINTERSECT\nSELECT * FROM d\n      ",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "setOp": {
+              "leftInput": {
+                "setOp": {
+                  "leftInput": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "a"
+                          }
+                        }
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedStar": {}
+                        }
+                      ]
+                    }
+                  },
+                  "rightInput": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "b"
+                          }
+                        }
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedStar": {}
+                        }
+                      ]
+                    }
+                  },
+                  "setOpType": "SET_OP_TYPE_UNION",
+                  "isAll": false,
+                  "byName": false
+                }
+              },
+              "rightInput": {
+                "setOp": {
+                  "leftInput": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "c"
+                          }
+                        }
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedStar": {}
+                        }
+                      ]
+                    }
+                  },
+                  "rightInput": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "d"
+                          }
+                        }
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedStar": {}
+                        }
+                      ]
+                    }
+                  },
+                  "setOpType": "SET_OP_TYPE_INTERSECT",
+                  "isAll": false,
+                  "byName": false
+                }
+              },
+              "setOpType": "SET_OP_TYPE_EXCEPT",
+              "isAll": false,
+              "byName": false
+            }
+          }
+        }
       }
     },
     {
       "input": "\nSELECT * FROM a\nUNION\nSELECT * FROM b\nEXCEPT ALL\nSELECT * FROM c\nINTERSECT ALL\nSELECT * FROM d\n      ",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "setOp": {
+              "leftInput": {
+                "setOp": {
+                  "leftInput": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "a"
+                          }
+                        }
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedStar": {}
+                        }
+                      ]
+                    }
+                  },
+                  "rightInput": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "b"
+                          }
+                        }
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedStar": {}
+                        }
+                      ]
+                    }
+                  },
+                  "setOpType": "SET_OP_TYPE_UNION",
+                  "isAll": false,
+                  "byName": false
+                }
+              },
+              "rightInput": {
+                "setOp": {
+                  "leftInput": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "c"
+                          }
+                        }
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedStar": {}
+                        }
+                      ]
+                    }
+                  },
+                  "rightInput": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "d"
+                          }
+                        }
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedStar": {}
+                        }
+                      ]
+                    }
+                  },
+                  "setOpType": "SET_OP_TYPE_INTERSECT",
+                  "isAll": true,
+                  "byName": false
+                }
+              },
+              "setOpType": "SET_OP_TYPE_EXCEPT",
+              "isAll": true,
+              "byName": false
+            }
+          }
+        }
       }
     },
     {
       "input": "select  id\nfrom (((select id from t0)\n       union all\n       (select  id from t0))\n      union all\n      (select id from t0)) as u_1\n      ",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from ((select * from t1) union (select * from t2)) t",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from a except all select * from b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "setOp": {
+              "leftInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "rightInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "setOpType": "SET_OP_TYPE_EXCEPT",
+              "isAll": true,
+              "byName": false
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from a except distinct select * from b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "setOp": {
+              "leftInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "rightInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "setOpType": "SET_OP_TYPE_EXCEPT",
+              "isAll": false,
+              "byName": false
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from a except select * from b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "setOp": {
+              "leftInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "rightInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "setOpType": "SET_OP_TYPE_EXCEPT",
+              "isAll": false,
+              "byName": false
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from a intersect all select * from b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "setOp": {
+              "leftInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "rightInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "setOpType": "SET_OP_TYPE_INTERSECT",
+              "isAll": true,
+              "byName": false
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from a intersect distinct select * from b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "setOp": {
+              "leftInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "rightInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "setOpType": "SET_OP_TYPE_INTERSECT",
+              "isAll": false,
+              "byName": false
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from a intersect select * from b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "setOp": {
+              "leftInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "rightInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "setOpType": "SET_OP_TYPE_INTERSECT",
+              "isAll": false,
+              "byName": false
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from a minus all select * from b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: all"
       }
     },
     {
       "input": "select * from a minus distinct select * from b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: distinct"
       }
     },
     {
       "input": "select * from a minus select * from b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: select"
       }
     },
     {
       "input": "select * from a union all select * from b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "setOp": {
+              "leftInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "rightInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "setOpType": "SET_OP_TYPE_UNION",
+              "isAll": true,
+              "byName": false
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from a union distinct select * from b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "setOp": {
+              "leftInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "rightInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "setOpType": "SET_OP_TYPE_UNION",
+              "isAll": false,
+              "byName": false
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from a union select * from b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "setOp": {
+              "leftInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "rightInput": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b"
+                      }
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {}
+                    }
+                  ]
+                }
+              },
+              "setOpType": "SET_OP_TYPE_UNION",
+              "isAll": false,
+              "byName": false
+            }
+          }
+        }
       }
     },
     {
       "input": "select 1 union select 1",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "setOp": {
+              "leftInput": {
+                "project": {
+                  "input": {
+                    "localRelation": {
+                      "schema": "struct<>"
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "literal": {
+                        "integer": 1
+                      }
+                    }
+                  ]
+                }
+              },
+              "rightInput": {
+                "project": {
+                  "input": {
+                    "localRelation": {
+                      "schema": "struct<>"
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "literal": {
+                        "integer": 1
+                      }
+                    }
+                  ]
+                }
+              },
+              "setOpType": "SET_OP_TYPE_UNION",
+              "isAll": false,
+              "byName": false
+            }
+          }
+        }
       }
     }
   ]
