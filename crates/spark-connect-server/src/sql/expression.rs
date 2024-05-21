@@ -3,12 +3,12 @@ use crate::spark::connect as sc;
 use crate::spark::connect::expression::literal::{Decimal, LiteralType};
 use crate::spark::connect::expression::ExprType;
 use crate::sql::data_type::from_ast_data_type;
+use crate::sql::fail_on_extra_token;
 use crate::sql::literal::{parse_date_string, parse_timestamp_string, LiteralValue, Signed};
 use crate::sql::parser::SparkDialect;
 use sqlparser::ast;
 use sqlparser::ast::DataType;
 use sqlparser::parser::Parser;
-use sqlparser::tokenizer::Token;
 
 struct Identifier(String);
 
@@ -248,7 +248,9 @@ fn from_ast_function_arg(arg: ast::FunctionArg) -> SparkResult<sc::Expression> {
     }
 }
 
-fn from_ast_order_by(order_by: ast::OrderByExpr) -> SparkResult<sc::expression::SortOrder> {
+pub(crate) fn from_ast_order_by(
+    order_by: ast::OrderByExpr,
+) -> SparkResult<sc::expression::SortOrder> {
     use sc::expression::sort_order::{NullOrdering, SortDirection};
 
     let ast::OrderByExpr {
@@ -320,7 +322,7 @@ fn from_ast_window_frame_bound(
     })
 }
 
-fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression> {
+pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression> {
     use ast::Expr;
 
     match expr {
@@ -807,12 +809,7 @@ fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression> {
 pub(crate) fn parse_spark_expression(sql: &str) -> SparkResult<sc::Expression> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
     let expr = parser.parse_wildcard_expr()?;
-    if parser.peek_token() != Token::EOF {
-        let token = parser.next_token();
-        return Err(SparkError::invalid(format!(
-            "extra tokens after expression: {token}"
-        )));
-    }
+    fail_on_extra_token(&mut parser, "expression")?;
     from_ast_expression(expr)
 }
 

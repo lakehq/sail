@@ -3,67 +3,123 @@
     {
       "input": "SELECT a, b, count(distinct a, distinct b) as c FROM d GROUP BY a, b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: sql parser error: Expected ), found: b at Line: 1, Column 41"
       }
     },
     {
       "input": "select a, b, sum(c) as c from d group by a, b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "aggregate": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "unparsedIdentifier": "d"
+                  }
+                }
+              },
+              "groupType": "GROUP_TYPE_GROUPBY",
+              "groupingExpressions": [
+                {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "a"
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                }
+              ],
+              "aggregateExpressions": [
+                {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "a"
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b"
+                  }
+                },
+                {
+                  "alias": {
+                    "expr": {
+                      "unresolvedFunction": {
+                        "functionName": "sum",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "c"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "name": [
+                      "c"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
       }
     },
     {
       "input": "select a, b, sum(c) as c from d group by a, b grouping sets((a, b), (a), ())",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: grouping"
       }
     },
     {
       "input": "select a, b, sum(c) as c from d group by a, b with cube",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: with"
       }
     },
     {
       "input": "select a, b, sum(c) as c from d group by a, b with rollup",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: with"
       }
     },
     {
       "input": "select a, b, sum(c) as c from d group by cube (a, b)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: expression: Cube([[Identifier(Ident { value: \"a\", quote_style: None })], [Identifier(Ident { value: \"b\", quote_style: None })]])"
       }
     },
     {
       "input": "select a, b, sum(c) as c from d group by cube(a, b)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: expression: Cube([[Identifier(Ident { value: \"a\", quote_style: None })], [Identifier(Ident { value: \"b\", quote_style: None })]])"
       }
     },
     {
       "input": "select a, b, sum(c) as c from d group by grouping sets((a, b), (a), ())",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: expression: GroupingSets([[Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None })], [Identifier(Ident { value: \"a\", quote_style: None })], []])"
       }
     },
     {
       "input": "select a, b, sum(c) as c from d group by rollup (a, b)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: expression: Rollup([[Identifier(Ident { value: \"a\", quote_style: None })], [Identifier(Ident { value: \"b\", quote_style: None })]])"
       }
     },
     {
       "input": "select a, b, sum(c) as c from d group by rollup(a, b)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: expression: Rollup([[Identifier(Ident { value: \"a\", quote_style: None })], [Identifier(Ident { value: \"b\", quote_style: None })]])"
       }
     },
     {
       "input": "select g from t group by g having a > (select b from s)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: expression: Subquery(Query { with: None, body: Select(Select { distinct: None, top: None, projection: [UnnamedExpr(Identifier(Ident { value: \"b\", quote_style: None }))], into: None, from: [TableWithJoins { relation: Table { name: ObjectName([Ident { value: \"s\", quote_style: None }]), alias: None, args: None, with_hints: [], version: None, partitions: [] }, joins: [] }], lateral_views: [], selection: None, group_by: Expressions([]), cluster_by: [], distribute_by: [], sort_by: [], having: None, named_window: [], qualify: None, window_before_qualify: false, value_table_mode: None, connect_by: None }), order_by: [], limit: None, limit_by: [], offset: None, fetch: None, locks: [], for_clause: None })"
       }
     }
   ]

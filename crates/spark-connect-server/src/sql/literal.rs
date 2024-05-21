@@ -3,6 +3,7 @@ use crate::spark::connect as sc;
 use crate::spark::connect::expression::literal::{Decimal, LiteralType};
 use crate::spark::connect::expression::{ExprType, Literal};
 use crate::sql::data_type::{SPARK_DECIMAL_MAX_PRECISION, SPARK_DECIMAL_MAX_SCALE};
+use crate::sql::fail_on_extra_token;
 use crate::sql::parser::SparkDialect;
 use chrono;
 use chrono_tz;
@@ -10,7 +11,6 @@ use lazy_static::lazy_static;
 use sqlparser::ast;
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::Parser;
-use sqlparser::tokenizer::Token;
 use std::fmt::Debug;
 use std::ops::Neg;
 use std::str::FromStr;
@@ -816,12 +816,7 @@ fn parse_unqualified_interval_string(s: &str, negated: Negated) -> SparkResult<L
     // consume the `INTERVAL` keyword if any
     let _ = parser.parse_keyword(Keyword::INTERVAL);
     let expr = parser.parse_interval()?;
-    if parser.peek_token() != Token::EOF {
-        let token = parser.next_token();
-        return Err(SparkError::invalid(format!(
-            "extra tokens after interval: {token}"
-        )));
-    }
+    fail_on_extra_token(&mut parser, "interval")?;
     let interval = match expr {
         ast::Expr::Interval(interval) => interval,
         _ => return Err(SparkError::invalid(format!("interval: {s}"))),

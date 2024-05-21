@@ -3,13 +3,13 @@
     {
       "input": "DROP index IF EXISTS i1 ON a.b.c",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: ON"
       }
     },
     {
       "input": "DROP index i1 ON a.b.c",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: ON"
       }
     }
   ]

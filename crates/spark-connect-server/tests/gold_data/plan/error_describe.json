@@ -3,7 +3,7 @@
     {
       "input": "DESC SCHEMA EXTENDED test-db",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: EXTENDED"
       }
     }
   ]

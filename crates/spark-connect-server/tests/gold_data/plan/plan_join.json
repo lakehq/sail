@@ -3,373 +3,971 @@
     {
       "input": "SELECT * FROM (src1 s1 INNER JOIN src2 s2 ON s1.id = s2.id) dst(a, b, c, d)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: nested join"
       }
     },
     {
       "input": "select * from a join b join c right join d",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "join": {
+                      "left": {
+                        "join": {
+                          "left": {
+                            "read": {
+                              "namedTable": {
+                                "unparsedIdentifier": "a"
+                              }
+                            }
+                          },
+                          "right": {
+                            "read": {
+                              "namedTable": {
+                                "unparsedIdentifier": "b"
+                              }
+                            }
+                          },
+                          "joinType": "JOIN_TYPE_INNER"
+                        }
+                      },
+                      "right": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "c"
+                          }
+                        }
+                      },
+                      "joinType": "JOIN_TYPE_INNER"
+                    }
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "d"
+                      }
+                    }
+                  },
+                  "joinType": "JOIN_TYPE_RIGHT_OUTER"
+                }
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {}
+                }
+              ]
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from a natural cross join b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: sql parser error: Expected a join type after NATURAL, found: cross at Line: 1, Column 25"
       }
     },
     {
       "input": "select * from a natural join b on a.id = b.id",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: on"
       }
     },
     {
       "input": "select * from t anti join u as uu on a = b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t anti join u using(a, b)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t as tt anti join u",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: anti"
       }
     },
     {
       "input": "select * from t as tt cross join u",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t as tt full join u",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t as tt full outer join u",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t as tt inner join u",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t as tt join u",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t as tt left anti join u",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t as tt left join u",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t as tt left outer join u",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t as tt left semi join u",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t as tt right join u",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t as tt right outer join u",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t as tt semi join u",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: semi"
       }
     },
     {
       "input": "select * from t cross join lateral (select * from u) uu",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: LATERAL in derived table factor"
       }
     },
     {
       "input": "select * from t full join u as uu on a = b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t full join u using(a, b)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t"
+                      }
+                    }
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u"
+                      }
+                    }
+                  },
+                  "joinType": "JOIN_TYPE_FULL_OUTER",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ]
+                }
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {}
+                }
+              ]
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from t full outer join u as uu on a = b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t full outer join u using(a, b)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t"
+                      }
+                    }
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u"
+                      }
+                    }
+                  },
+                  "joinType": "JOIN_TYPE_FULL_OUTER",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ]
+                }
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {}
+                }
+              ]
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from t inner join lateral (select * from u) uu",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: LATERAL in derived table factor"
       }
     },
     {
       "input": "select * from t inner join u as uu on a = b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t inner join u using(a, b)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t"
+                      }
+                    }
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u"
+                      }
+                    }
+                  },
+                  "joinType": "JOIN_TYPE_INNER",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ]
+                }
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {}
+                }
+              ]
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from t join lateral (select * from u) uu",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: LATERAL in derived table factor"
       }
     },
     {
       "input": "select * from t join lateral (select * from u) uu on true",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: LATERAL in derived table factor"
       }
     },
     {
       "input": "select * from t join u as uu on a = b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t join u using(a, b)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t"
+                      }
+                    }
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u"
+                      }
+                    }
+                  },
+                  "joinType": "JOIN_TYPE_INNER",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ]
+                }
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {}
+                }
+              ]
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from t left anti join u as uu on a = b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t left anti join u using(a, b)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t"
+                      }
+                    }
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u"
+                      }
+                    }
+                  },
+                  "joinType": "JOIN_TYPE_LEFT_ANTI",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ]
+                }
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {}
+                }
+              ]
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from t left join lateral (select * from u) uu",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: LATERAL in derived table factor"
       }
     },
     {
       "input": "select * from t left join u as uu on a = b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t left join u using(a, b)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t"
+                      }
+                    }
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u"
+                      }
+                    }
+                  },
+                  "joinType": "JOIN_TYPE_LEFT_OUTER",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ]
+                }
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {}
+                }
+              ]
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from t left outer join lateral (select * from u) uu",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not supported: LATERAL in derived table factor"
       }
     },
     {
       "input": "select * from t left outer join u as uu on a = b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t left outer join u using(a, b)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t"
+                      }
+                    }
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u"
+                      }
+                    }
+                  },
+                  "joinType": "JOIN_TYPE_LEFT_OUTER",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ]
+                }
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {}
+                }
+              ]
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from t left semi join u as uu on a = b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t left semi join u using(a, b)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t"
+                      }
+                    }
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u"
+                      }
+                    }
+                  },
+                  "joinType": "JOIN_TYPE_LEFT_SEMI",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ]
+                }
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {}
+                }
+              ]
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from t right join u as uu on a = b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t right join u using(a, b)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t"
+                      }
+                    }
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u"
+                      }
+                    }
+                  },
+                  "joinType": "JOIN_TYPE_RIGHT_OUTER",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ]
+                }
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {}
+                }
+              ]
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from t right outer join u as uu on a = b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t right outer join u using(a, b)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t"
+                      }
+                    }
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u"
+                      }
+                    }
+                  },
+                  "joinType": "JOIN_TYPE_RIGHT_OUTER",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ]
+                }
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {}
+                }
+              ]
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from t semi join u as uu on a = b",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t semi join u using(a, b)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t tt natural full join u as uu",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t tt natural full outer join u as uu",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t tt natural inner join u as uu",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t tt natural join u as uu",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t tt natural left join u as uu",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t tt natural left outer join u as uu",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t tt natural right join u as uu",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t tt natural right outer join u as uu",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: table alias"
       }
     },
     {
       "input": "select * from t1 JOIN t2, t3 join t2 on t1.col1 = t2.col2",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "join": {
+                      "left": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t1"
+                          }
+                        }
+                      },
+                      "right": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t2"
+                          }
+                        }
+                      },
+                      "joinType": "JOIN_TYPE_INNER"
+                    }
+                  },
+                  "right": {
+                    "join": {
+                      "left": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t3"
+                          }
+                        }
+                      },
+                      "right": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t2"
+                          }
+                        }
+                      },
+                      "joinCondition": {
+                        "unresolvedFunction": {
+                          "functionName": "==",
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "unparsedIdentifier": "t1.col1"
+                              }
+                            },
+                            {
+                              "unresolvedAttribute": {
+                                "unparsedIdentifier": "t2.col2"
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "joinType": "JOIN_TYPE_INNER"
+                    }
+                  },
+                  "joinType": "JOIN_TYPE_CROSS"
+                }
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {}
+                }
+              ]
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from t1 cross join t2 join t3 on t3.id = t1.id join t4 on t4.id = t1.id",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "join": {
+                      "left": {
+                        "join": {
+                          "left": {
+                            "read": {
+                              "namedTable": {
+                                "unparsedIdentifier": "t1"
+                              }
+                            }
+                          },
+                          "right": {
+                            "read": {
+                              "namedTable": {
+                                "unparsedIdentifier": "t2"
+                              }
+                            }
+                          },
+                          "joinType": "JOIN_TYPE_CROSS"
+                        }
+                      },
+                      "right": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t3"
+                          }
+                        }
+                      },
+                      "joinCondition": {
+                        "unresolvedFunction": {
+                          "functionName": "==",
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "unparsedIdentifier": "t3.id"
+                              }
+                            },
+                            {
+                              "unresolvedAttribute": {
+                                "unparsedIdentifier": "t1.id"
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "joinType": "JOIN_TYPE_INNER"
+                    }
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t4"
+                      }
+                    }
+                  },
+                  "joinCondition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "t4.id"
+                          }
+                        },
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "t1.id"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "joinType": "JOIN_TYPE_INNER"
+                }
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {}
+                }
+              ]
+            }
+          }
+        }
       }
     },
     {
       "input": "select * from t1 inner join (t2 inner join t3 on col3 = col2)",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: nested join"
       }
     },
     {
       "input": "select * from t1 inner join (t2 inner join t3 on col3 = col2) on col3 = col1",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: nested join"
       }
     },
     {
       "input": "select * from t1 inner join (t2 inner join t3) on col3 = col2",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: nested join"
       }
     },
     {
       "input": "select * from t1 inner join t2 inner join t3 on col3 = col2 on col3 = col1",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "invalid argument: extra tokens after statement: on"
       }
     },
     {
       "input": "select * from t1, t3 join t2 on t1.col1 = t2.col2",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t1"
+                      }
+                    }
+                  },
+                  "right": {
+                    "join": {
+                      "left": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t3"
+                          }
+                        }
+                      },
+                      "right": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t2"
+                          }
+                        }
+                      },
+                      "joinCondition": {
+                        "unresolvedFunction": {
+                          "functionName": "==",
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "unparsedIdentifier": "t1.col1"
+                              }
+                            },
+                            {
+                              "unresolvedAttribute": {
+                                "unparsedIdentifier": "t2.col2"
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "joinType": "JOIN_TYPE_INNER"
+                    }
+                  },
+                  "joinType": "JOIN_TYPE_CROSS"
+                }
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {}
+                }
+              ]
+            }
+          }
+        }
       }
     }
   ]

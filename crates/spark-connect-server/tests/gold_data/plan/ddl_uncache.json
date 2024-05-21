@@ -3,13 +3,13 @@
     {
       "input": "UNCACHE TABLE IF EXISTS a.b.c",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: SQL uncache"
       }
     },
     {
       "input": "UNCACHE TABLE a.b.c",
       "output": {
-        "failure": "not supported: SQL to plan"
+        "failure": "not implemented: SQL uncache"
       }
     }
   ]
