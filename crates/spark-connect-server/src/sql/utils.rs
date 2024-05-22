@@ -1,8 +1,8 @@
 use crate::error::{SparkError, SparkResult};
+use crate::sql::parser::SparkDialect;
 use datafusion_common::SchemaReference;
 use regex::Regex;
 use sqlparser::ast::Ident;
-use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 
 // Translation of Spark's `filterPattern` function.
@@ -38,7 +38,7 @@ pub(crate) fn filter_pattern(names: Vec<&str>, pattern: Option<&str>) -> Vec<Str
 }
 
 pub(crate) fn parse_identifiers(s: &str) -> SparkResult<Vec<Ident>> {
-    let mut parser = Parser::new(&GenericDialect {}).try_with_sql(s)?;
+    let mut parser = Parser::new(&SparkDialect {}).try_with_sql(s)?;
     let idents = parser.parse_multipart_identifier()?;
     Ok(idents)
 }

@@ -689,12 +689,9 @@ pub(crate) async fn from_spark_relation(
                     let results: DataFrame = ctx
                         .sql("SELECT CAST($1 AS STRING)")
                         .await?
-                        .with_param_values(vec![(
-                            "1",
-                            ScalarValue::Utf8(Some(
-                                state.config().options().catalog.default_schema.to_string(),
-                            )),
-                        )])?;
+                        .with_param_values(vec![ScalarValue::Utf8(Some(
+                            state.config().options().catalog.default_schema.to_string(),
+                        ))])?;
                     Ok(results.into_optimized_plan()?)
                 }
                 CatType::SetCurrentDatabase(set_current_database) => {
@@ -811,7 +808,7 @@ pub(crate) async fn from_spark_relation(
                     let results: DataFrame = ctx
                         .sql("SELECT CAST($1 AS BOOLEAN)")
                         .await?
-                        .with_param_values(vec![("1", ScalarValue::Boolean(Some(db_exists)))])?;
+                        .with_param_values(vec![ScalarValue::Boolean(Some(db_exists))])?;
                     Ok(results.into_optimized_plan()?)
                 }
                 CatType::TableExists(table_exists) => {
@@ -828,7 +825,7 @@ pub(crate) async fn from_spark_relation(
                     let results: DataFrame = ctx
                         .sql("SELECT CAST($1 AS BOOLEAN)")
                         .await?
-                        .with_param_values(vec![("1", ScalarValue::Boolean(Some(table_exists)))])?;
+                        .with_param_values(vec![ScalarValue::Boolean(Some(table_exists))])?;
                     Ok(results.into_optimized_plan()?)
                 }
                 CatType::FunctionExists(_) => Err(SparkError::todo("CatType::FunctionExists")),
@@ -839,7 +836,7 @@ pub(crate) async fn from_spark_relation(
                 CatType::CreateTable(create_table) => {
                     let table_name = create_table.table_name.as_str();
                     let table_ref: TableReference = TableReference::from(table_name.to_string());
-                    let (table_type, location): (TableType, Option<&str>) =
+                    let (_table_type, _location): (TableType, Option<&str>) =
                         if let Some(path) = create_table.path.as_deref() {
                             // TODO: Should covert to a "Path" then uri
                             return Err(SparkError::todo(format!(
@@ -853,7 +850,7 @@ pub(crate) async fn from_spark_relation(
                             )
                         };
                     // TODO: use spark.sql.sources.default to get the default source
-                    let source: &str = create_table.source.as_deref().unwrap_or("parquet");
+                    let _source: &str = create_table.source.as_deref().unwrap_or("parquet");
                     let description: &str = create_table.description.as_deref().unwrap_or("");
                     let fields: Fields = match create_table.schema.as_ref() {
                         Some(schema) => {
@@ -865,7 +862,7 @@ pub(crate) async fn from_spark_relation(
                         }
                         None => Fields::empty(),
                     };
-                    let options: CaseInsensitiveHashMap<String> =
+                    let _options: CaseInsensitiveHashMap<String> =
                         CaseInsensitiveHashMap::from(create_table.options.clone());
 
                     let mut metadata: HashMap<String, String> = HashMap::new();
@@ -907,7 +904,7 @@ pub(crate) async fn from_spark_relation(
                     let df: DataFrame = ctx
                         .sql("SELECT CAST($1 AS BOOLEAN)")
                         .await?
-                        .with_param_values(vec![("1", result)])?;
+                        .with_param_values(vec![result])?;
                     Ok(df.into_optimized_plan()?)
                 }
                 CatType::DropGlobalTempView(drop_global_temp_view) => {
@@ -926,7 +923,7 @@ pub(crate) async fn from_spark_relation(
                     let df: DataFrame = ctx
                         .sql("SELECT CAST($1 AS BOOLEAN)")
                         .await?
-                        .with_param_values(vec![("1", result)])?;
+                        .with_param_values(vec![result])?;
                     Ok(df.into_optimized_plan()?)
                 }
                 CatType::RecoverPartitions(_) => {
@@ -942,12 +939,9 @@ pub(crate) async fn from_spark_relation(
                     let results: DataFrame = ctx
                         .sql("SELECT CAST($1 AS STRING)")
                         .await?
-                        .with_param_values(vec![(
-                            "1",
-                            ScalarValue::Utf8(Some(
-                                state.config().options().catalog.default_catalog.to_string(),
-                            )),
-                        )])?;
+                        .with_param_values(vec![ScalarValue::Utf8(Some(
+                            state.config().options().catalog.default_catalog.to_string(),
+                        ))])?;
                     Ok(results.into_optimized_plan()?)
                 }
                 CatType::SetCurrentCatalog(set_current_catalog) => {
