@@ -29,7 +29,7 @@ pub(crate) fn filter_pattern(names: Vec<&str>, pattern: Option<&str>) -> Vec<Str
                 }
             }
             Err(_) => {
-                // Ignore pattern syntax errors
+                // The Spark implementation ignores pattern syntax errors, so we do the same.
             }
         }
     }
