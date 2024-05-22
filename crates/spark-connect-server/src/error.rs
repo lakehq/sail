@@ -1,6 +1,7 @@
 use std::sync::PoisonError;
 
 use datafusion::common::DataFusionError;
+use framework_common::error::CommonError;
 use prost::DecodeError;
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
@@ -57,6 +58,15 @@ impl SparkError {
 
     pub fn internal(message: impl Into<String>) -> Self {
         SparkError::InternalError(message.into())
+    }
+}
+
+impl From<CommonError> for SparkError {
+    fn from(error: CommonError) -> Self {
+        match error {
+            CommonError::InvalidArgument(message) => SparkError::InvalidArgument(message),
+            CommonError::NotSupported(message) => SparkError::NotSupported(message),
+        }
     }
 }
 

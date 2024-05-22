@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 framework-telemetry = { path = "../framework-telemetry" }
 framework-python = { path = "../framework-python" }
+framework-common = { path = "../framework-common" }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }

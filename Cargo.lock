@@ -1298,6 +1298,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "framework-common"
+version = "0.1.0"
+dependencies = [
+ "datafusion",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "framework-python"
 version = "0.1.0"
 dependencies = [
@@ -3555,6 +3564,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "datafusion-functions-array",
+ "framework-common",
  "framework-python",
  "framework-telemetry",
  "glob",

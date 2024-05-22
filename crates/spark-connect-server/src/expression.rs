@@ -248,7 +248,7 @@ pub(crate) fn from_spark_expression(
             let data_type = cast.cast_to_type.as_ref().required("data type for cast")?;
             let data_type = match data_type {
                 CastToType::Type(t) => t.clone(),
-                CastToType::TypeStr(s) => parse_spark_data_type(s)?,
+                CastToType::TypeStr(s) => parse_spark_data_type(s)?.try_into()?,
             };
             let data_type = from_spark_built_in_data_type(&data_type)?;
             Ok(expr::Expr::Cast(expr::Cast {

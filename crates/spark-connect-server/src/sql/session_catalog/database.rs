@@ -6,7 +6,6 @@ use crate::sql::session_catalog::catalog::list_catalogs;
 use crate::sql::utils::{build_schema_reference, filter_pattern};
 use datafusion::arrow::array::{RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::catalog::listing_schema::ListingSchemaProvider;
 use datafusion::catalog::CatalogProvider;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
