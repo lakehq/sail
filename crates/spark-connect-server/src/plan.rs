@@ -892,9 +892,9 @@ pub(crate) async fn from_spark_relation(
                     )))
                 }
                 CatType::DropTempView(drop_temp_view) => {
-                    // DataFusion returns an empty DataFrame on DropView
-                    // But Spark expects a Boolean value.
-                    // We can do this instead of having to create a LogicalPlan Extension
+                    // TODO: DataFusion returns an empty DataFrame on DropView
+                    //  But Spark expects a Boolean value.
+                    //  We can do this for now instead of having to create a LogicalPlan Extension
                     let drop_view_plan = LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
                         name: TableReference::from(drop_temp_view.view_name.to_string()),
                         if_exists: false,
@@ -911,9 +911,9 @@ pub(crate) async fn from_spark_relation(
                     Ok(df.into_optimized_plan()?)
                 }
                 CatType::DropGlobalTempView(drop_global_temp_view) => {
-                    // DataFusion returns an empty DataFrame on DropView
-                    // But Spark expects a Boolean value.
-                    // We can do this instead of having to create a LogicalPlan Extension
+                    // TODO: DataFusion returns an empty DataFrame on DropView
+                    //  But Spark expects a Boolean value.
+                    //  We can do this for now instead of having to create a LogicalPlan Extension
                     let drop_view_plan = LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
                         name: TableReference::from(drop_global_temp_view.view_name.to_string()),
                         if_exists: false,
