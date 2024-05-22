@@ -720,7 +720,6 @@ pub(crate) async fn from_spark_relation(
                     )?))
                 }
                 CatType::ListTables(list_tables) => {
-                    // TODO: self.assertRaisesRegex(AnalysisException, "does_not_exist", lambda: spark.catalog.listTables("does_not_exist"),)
                     let db_name: Option<&str> = list_tables.db_name.as_deref();
                     let (catalog_name, database_name): (String, String) =
                         parse_optional_db_name_with_defaults(
