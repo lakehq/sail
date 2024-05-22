@@ -228,6 +228,7 @@ pub(crate) async fn execute_plan(
     ctx: &SessionContext,
     plan: &LogicalPlan,
 ) -> SparkResult<SendableRecordBatchStream> {
-    let plan = ctx.state().create_physical_plan(plan).await?;
+    let df = ctx.execute_logical_plan(plan.clone()).await?;
+    let plan = df.create_physical_plan().await?;
     Ok(execute_stream(plan, Arc::new(TaskContext::default()))?)
 }

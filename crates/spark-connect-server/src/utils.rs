@@ -1,37 +1,22 @@
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 
-#[derive(Default, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CaseInsensitiveStringMap(HashMap<String, String>);
+#[derive(Debug, Clone)]
+pub(crate) struct CaseInsensitiveHashMap<T> {
+    inner: HashMap<String, T>,
+}
 
-// TODO: Move to a more appropriate location and write tests.
-impl CaseInsensitiveStringMap {
-    pub fn new(map: &HashMap<String, String>) -> Self {
-        let mut case_insensitive_map = HashMap::new();
-        for (key, value) in map {
-            case_insensitive_map.insert(key.to_lowercase(), value.clone());
+impl<T> CaseInsensitiveHashMap<T> {
+    fn new(params: HashMap<String, T>) -> Self {
+        let mut map = HashMap::new();
+        for (key, value) in params {
+            map.insert(key.to_lowercase(), value);
         }
-        CaseInsensitiveStringMap(case_insensitive_map)
-    }
-
-    pub fn insert(&mut self, key: String, value: String) {
-        self.0.insert(key.to_lowercase(), value);
-    }
-
-    pub fn get(&self, key: &str) -> Option<&String> {
-        self.0.get(&key.to_lowercase())
+        CaseInsensitiveHashMap { inner: map }
     }
 }
 
-impl Hash for CaseInsensitiveStringMap {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        // HashMap does not implement Hash, we need to ensure the hashing is order-independent
-        // One way is to hash each key-value pair individually after sorting them by key
-        let mut options: Vec<_> = self.0.iter().collect();
-        options.sort_by_key(|&(key, _)| key);
-        for (key, value) in options {
-            key.hash(state);
-            value.hash(state);
-        }
+impl<T> From<HashMap<String, T>> for CaseInsensitiveHashMap<T> {
+    fn from(params: HashMap<String, T>) -> Self {
+        CaseInsensitiveHashMap::new(params)
     }
 }

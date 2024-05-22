@@ -8,6 +8,8 @@ pub(crate) mod function;
 pub(crate) mod literal;
 pub(crate) mod parser;
 pub(crate) mod plan;
+pub(crate) mod session_catalog;
+pub(crate) mod utils;
 
 pub(crate) fn fail_on_extra_token(parser: &mut Parser, kind: &str) -> SparkResult<()> {
     if parser.peek_token() != Token::EOF {

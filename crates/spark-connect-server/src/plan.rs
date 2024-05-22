@@ -4,16 +4,18 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::{
+    DataType, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+};
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
-use datafusion::common::{ParamValues, TableReference};
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion::datasource::provider_as_source;
+use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::execution::context::{DataFilePaths, SessionContext};
 use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
@@ -21,8 +23,10 @@ use datafusion::logical_expr::{
 use datafusion::sql::parser::Statement;
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
-use datafusion_common::Column;
-use datafusion_expr::build_join_schema;
+use datafusion_common::{
+    Column, Constraints, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference,
+};
+use datafusion_expr::{build_join_schema, DdlStatement, TableType};
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::expression::{from_spark_expression, from_spark_literal_to_scalar};
@@ -30,11 +34,26 @@ use crate::extension::analyzer::alias::rewrite_multi_alias;
 use crate::extension::analyzer::explode::rewrite_explode;
 use crate::extension::analyzer::wildcard::rewrite_wildcard;
 use crate::extension::analyzer::window::rewrite_window;
-use crate::schema::cast_record_batch;
+use crate::schema::{cast_record_batch, from_spark_built_in_data_type};
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
 use crate::spark::connect::Relation;
 use crate::sql::data_type::parse_spark_schema;
+use crate::sql::session_catalog::catalog::list_catalogs_metadata;
+use crate::sql::session_catalog::column::{list_catalog_table_columns, CatalogTableColumn};
+use crate::sql::session_catalog::database::{
+    get_catalog_database, list_catalog_databases, parse_optional_db_name_with_defaults,
+};
+use crate::sql::session_catalog::table::{
+    catalog_table_type_to_table_type, get_catalog_table, list_catalog_tables, CatalogTableType,
+};
+use crate::sql::session_catalog::{
+    catalog::{create_catalog_metadata_memtable, CatalogMetadata},
+    column::create_catalog_column_memtable,
+    database::{create_catalog_database_memtable, CatalogDatabase},
+    table::{create_catalog_table_memtable, CatalogTable},
+};
+use crate::utils::CaseInsensitiveHashMap;
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
     let cursor = Cursor::new(data);
@@ -79,6 +98,7 @@ pub(crate) async fn from_spark_relation(
                     let unparsed_identifier: &String = &named_table.unparsed_identifier;
                     let options: &HashMap<String, String> = &named_table.options;
                     if !options.is_empty() {
+                        // TODO: Handle options
                         return Err(SparkError::unsupported("table options"));
                     }
                     let table_reference = TableReference::from(unparsed_identifier);
@@ -284,6 +304,8 @@ pub(crate) async fn from_spark_relation(
             args,
             pos_args,
         }) => {
+            let query = &query.replace(" database ", " SCHEMA ");
+            let query = &query.replace(" DATABASE ", " SCHEMA ");
             let statement = Parser::new(&GenericDialect {})
                 .try_with_sql(query)?
                 .parse_statement()?;
@@ -328,7 +350,7 @@ pub(crate) async fn from_spark_relation(
             } else {
                 return Err(SparkError::invalid("missing schema for local relation"));
             };
-            let provider = datafusion::datasource::MemTable::try_new(schema, vec![batches])?;
+            let provider = MemTable::try_new(schema, vec![batches])?;
             Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
                 UNNAMED_TABLE,
                 provider_as_source(Arc::new(provider)),
@@ -555,8 +577,25 @@ pub(crate) async fn from_spark_relation(
         RelType::Unpivot(_) => {
             return Err(SparkError::todo("unpivot"));
         }
-        RelType::ToSchema(_) => {
+        RelType::ToSchema(to_schema) => {
             return Err(SparkError::todo("to schema"));
+            // TODO: Close but doesn't quite work.
+            // let input = to_schema.input.as_ref().required("input relation")?;
+            // let input = from_spark_relation(ctx, input).await?;
+            // let schema = to_schema.schema.as_ref().required("schema")?;
+            // let schema: DataType = from_spark_built_in_data_type(schema)?;
+            // let fields = match &schema {
+            //     DataType::Struct(fields) => fields,
+            //     _ => return Err(SparkError::invalid("expected struct type")),
+            // };
+            // let expr: Vec<Expr> = fields
+            //     .iter()
+            //     .map(|field| Expr::Column(Column::from_name(field.name())))
+            //     .collect();
+            // Ok(LogicalPlan::Projection(plan::Projection::try_new(
+            //     expr,
+            //     Arc::new(input),
+            // )?))
         }
         RelType::RepartitionByExpression(repartition) => {
             let input = repartition.input.as_ref().required("repartition input")?;
@@ -643,8 +682,291 @@ pub(crate) async fn from_spark_relation(
         RelType::SampleBy(_) => {
             return Err(SparkError::todo("sample by"));
         }
-        RelType::Catalog(_) => {
-            return Err(SparkError::todo("catalog"));
+        RelType::Catalog(catalog) => {
+            use sc::catalog::CatType;
+            match catalog.cat_type.as_ref().required("catalog type")? {
+                CatType::CurrentDatabase(_current_database) => {
+                    let results: DataFrame = ctx
+                        .sql("SELECT CAST($1 AS STRING)")
+                        .await?
+                        .with_param_values(vec![ScalarValue::Utf8(Some(
+                            state.config().options().catalog.default_schema.to_string(),
+                        ))])?;
+                    Ok(results.into_optimized_plan()?)
+                }
+                CatType::SetCurrentDatabase(set_current_database) => {
+                    let _db_name = set_current_database.db_name.as_str();
+                    // TODO: Uncomment when we upgrade to DataFusion 38.0.0
+                    // ctx.state().config().options_mut().catalog.default_schema = db_name;
+                    Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
+                        produce_one_row: false,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    }))
+                }
+                CatType::ListDatabases(list_databases) => {
+                    let database_pattern: Option<&str> = list_databases.pattern.as_deref();
+                    let catalog_databases: Vec<CatalogDatabase> =
+                        list_catalog_databases(None, database_pattern, &ctx)?;
+                    let provider: MemTable = create_catalog_database_memtable(catalog_databases)?;
+                    Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                        UNNAMED_TABLE,
+                        provider_as_source(Arc::new(provider)),
+                        None,
+                        vec![],
+                        None,
+                    )?))
+                }
+                CatType::ListTables(list_tables) => {
+                    let db_name: Option<&str> = list_tables.db_name.as_deref();
+                    let (catalog_name, database_name): (String, String) =
+                        parse_optional_db_name_with_defaults(
+                            db_name,
+                            &state.config().options().catalog.default_catalog,
+                            &state.config().options().catalog.default_schema,
+                        )?;
+                    let table_pattern: Option<&str> = list_tables.pattern.as_deref();
+                    let catalog_tables: Vec<CatalogTable> = list_catalog_tables(
+                        Some(&catalog_name),
+                        Some(&database_name),
+                        table_pattern,
+                        &ctx,
+                    )
+                    .await?;
+                    let provider: MemTable = create_catalog_table_memtable(catalog_tables)?;
+                    Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                        UNNAMED_TABLE,
+                        provider_as_source(Arc::new(provider)),
+                        None,
+                        vec![],
+                        None,
+                    )?))
+                }
+                CatType::ListFunctions(_) => Err(SparkError::todo("CatType::ListFunctions")),
+                CatType::ListColumns(list_columns) => {
+                    let table_name = list_columns.table_name.as_str();
+                    let (catalog_name, database_name): (String, String) =
+                        parse_optional_db_name_with_defaults(
+                            list_columns.db_name.as_deref(),
+                            &state.config().options().catalog.default_catalog,
+                            &state.config().options().catalog.default_schema,
+                        )?;
+                    let catalog_table_columns: Vec<CatalogTableColumn> =
+                        list_catalog_table_columns(
+                            &catalog_name,
+                            &database_name,
+                            &table_name,
+                            &ctx,
+                        )
+                        .await?;
+                    let provider: MemTable = create_catalog_column_memtable(catalog_table_columns)?;
+                    Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                        UNNAMED_TABLE,
+                        provider_as_source(Arc::new(provider)),
+                        None,
+                        vec![],
+                        None,
+                    )?))
+                }
+                CatType::GetDatabase(get_database) => {
+                    let db_name = get_database.db_name.as_str();
+                    let catalog_databases: Vec<CatalogDatabase> =
+                        get_catalog_database(&db_name, &ctx)?;
+                    let provider: MemTable = create_catalog_database_memtable(catalog_databases)?;
+                    Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                        UNNAMED_TABLE,
+                        provider_as_source(Arc::new(provider)),
+                        None,
+                        vec![],
+                        None,
+                    )?))
+                }
+                CatType::GetTable(get_table) => {
+                    let table_name = get_table.table_name.as_str();
+                    let (catalog_name, database_name): (String, String) =
+                        parse_optional_db_name_with_defaults(
+                            get_table.db_name.as_deref(),
+                            &state.config().options().catalog.default_catalog,
+                            &state.config().options().catalog.default_schema,
+                        )?;
+                    let catalog_tables: Vec<CatalogTable> =
+                        get_catalog_table(&table_name, &catalog_name, &database_name, &ctx).await?;
+                    let provider: MemTable = create_catalog_table_memtable(catalog_tables)?;
+                    Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                        UNNAMED_TABLE,
+                        provider_as_source(Arc::new(provider)),
+                        None,
+                        vec![],
+                        None,
+                    )?))
+                }
+                CatType::GetFunction(_) => Err(SparkError::todo("CatType::GetFunction")),
+                CatType::DatabaseExists(database_exists) => {
+                    let db_name = database_exists.db_name.as_str();
+                    let catalog_databases: Vec<CatalogDatabase> =
+                        get_catalog_database(&db_name, &ctx)?;
+                    let db_exists = !catalog_databases.is_empty();
+                    let results: DataFrame = ctx
+                        .sql("SELECT CAST($1 AS BOOLEAN)")
+                        .await?
+                        .with_param_values(vec![ScalarValue::Boolean(Some(db_exists))])?;
+                    Ok(results.into_optimized_plan()?)
+                }
+                CatType::TableExists(table_exists) => {
+                    let table_name = table_exists.table_name.as_str();
+                    let (catalog_name, database_name): (String, String) =
+                        parse_optional_db_name_with_defaults(
+                            table_exists.db_name.as_deref(),
+                            &state.config().options().catalog.default_catalog,
+                            &state.config().options().catalog.default_schema,
+                        )?;
+                    let catalog_tables: Vec<CatalogTable> =
+                        get_catalog_table(&table_name, &catalog_name, &database_name, &ctx).await?;
+                    let table_exists = !catalog_tables.is_empty();
+                    let results: DataFrame = ctx
+                        .sql("SELECT CAST($1 AS BOOLEAN)")
+                        .await?
+                        .with_param_values(vec![ScalarValue::Boolean(Some(table_exists))])?;
+                    Ok(results.into_optimized_plan()?)
+                }
+                CatType::FunctionExists(_) => Err(SparkError::todo("CatType::FunctionExists")),
+                CatType::CreateExternalTable(_create_external_table) => {
+                    // Same as create table essentially.
+                    Err(SparkError::todo("CatType::CreateExternalTable"))
+                }
+                CatType::CreateTable(create_table) => {
+                    let table_name = create_table.table_name.as_str();
+                    let table_ref: TableReference = TableReference::from(table_name.to_string());
+                    let (_table_type, _location): (TableType, Option<&str>) =
+                        if let Some(path) = create_table.path.as_deref() {
+                            // TODO: Should covert to a "Path" then uri
+                            return Err(SparkError::todo(format!(
+                                "CreateTable (External) with path: {:?}",
+                                path
+                            )));
+                        } else {
+                            (
+                                catalog_table_type_to_table_type(CatalogTableType::MANAGED),
+                                None,
+                            )
+                        };
+                    // TODO: use spark.sql.sources.default to get the default source
+                    let _source: &str = create_table.source.as_deref().unwrap_or("parquet");
+                    let description: &str = create_table.description.as_deref().unwrap_or("");
+                    let fields: Fields = match create_table.schema.as_ref() {
+                        Some(schema) => {
+                            let data_type = from_spark_built_in_data_type(schema)?;
+                            match data_type {
+                                DataType::Struct(fields) => fields,
+                                _ => return Err(SparkError::invalid("external table schema")),
+                            }
+                        }
+                        None => Fields::empty(),
+                    };
+                    let _options: CaseInsensitiveHashMap<String> =
+                        CaseInsensitiveHashMap::from(create_table.options.clone());
+
+                    let mut metadata: HashMap<String, String> = HashMap::new();
+                    metadata.insert("description".to_string(), description.to_string());
+                    let schema = ArrowSchema::new_with_metadata(fields, metadata);
+                    let batch = RecordBatch::new_empty(ArrowSchemaRef::new(schema));
+                    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+
+                    Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                        plan::CreateMemoryTable {
+                            name: table_ref,
+                            constraints: Constraints::empty(), // TODO: Check if exists in options
+                            input: Arc::new(LogicalPlan::TableScan(plan::TableScan::try_new(
+                                UNNAMED_TABLE,
+                                provider_as_source(Arc::new(table)),
+                                None,
+                                vec![],
+                                None,
+                            )?)),
+                            if_not_exists: false, // TODO: Check if exists in options
+                            or_replace: false,    // TODO: Check if exists in options
+                            column_defaults: vec![], // TODO: Check if exists in options
+                        },
+                    )))
+                }
+                CatType::DropTempView(drop_temp_view) => {
+                    // TODO: DataFusion returns an empty DataFrame on DropView
+                    //  But Spark expects a Boolean value.
+                    //  We can do this for now instead of having to create a LogicalPlan Extension
+                    let drop_view_plan = LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
+                        name: TableReference::from(drop_temp_view.view_name.to_string()),
+                        if_exists: false,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    }));
+                    let result = match ctx.execute_logical_plan(drop_view_plan).await {
+                        Ok(_) => ScalarValue::Boolean(Some(true)),
+                        Err(_) => ScalarValue::Boolean(Some(false)),
+                    };
+                    let df: DataFrame = ctx
+                        .sql("SELECT CAST($1 AS BOOLEAN)")
+                        .await?
+                        .with_param_values(vec![result])?;
+                    Ok(df.into_optimized_plan()?)
+                }
+                CatType::DropGlobalTempView(drop_global_temp_view) => {
+                    // TODO: DataFusion returns an empty DataFrame on DropView
+                    //  But Spark expects a Boolean value.
+                    //  We can do this for now instead of having to create a LogicalPlan Extension
+                    let drop_view_plan = LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
+                        name: TableReference::from(drop_global_temp_view.view_name.to_string()),
+                        if_exists: false,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    }));
+                    let result = match ctx.execute_logical_plan(drop_view_plan).await {
+                        Ok(_) => ScalarValue::Boolean(Some(true)),
+                        Err(_) => ScalarValue::Boolean(Some(false)),
+                    };
+                    let df: DataFrame = ctx
+                        .sql("SELECT CAST($1 AS BOOLEAN)")
+                        .await?
+                        .with_param_values(vec![result])?;
+                    Ok(df.into_optimized_plan()?)
+                }
+                CatType::RecoverPartitions(_) => {
+                    Err(SparkError::todo("CatType::RecoverPartitions"))
+                }
+                CatType::IsCached(_) => Err(SparkError::todo("CatType::IsCached")),
+                CatType::CacheTable(_) => Err(SparkError::todo("CatType::CacheTable")),
+                CatType::UncacheTable(_) => Err(SparkError::todo("CatType::UncacheTable")),
+                CatType::ClearCache(_) => Err(SparkError::todo("CatType::ClearCache")),
+                CatType::RefreshTable(_) => Err(SparkError::todo("CatType::RefreshTable")),
+                CatType::RefreshByPath(_) => Err(SparkError::todo("CatType::RefreshByPath")),
+                CatType::CurrentCatalog(_) => {
+                    let results: DataFrame = ctx
+                        .sql("SELECT CAST($1 AS STRING)")
+                        .await?
+                        .with_param_values(vec![ScalarValue::Utf8(Some(
+                            state.config().options().catalog.default_catalog.to_string(),
+                        ))])?;
+                    Ok(results.into_optimized_plan()?)
+                }
+                CatType::SetCurrentCatalog(set_current_catalog) => {
+                    let _catalog_name = set_current_catalog.catalog_name.as_str();
+                    // TODO: Uncomment when we upgrade to DataFusion 38.0.0
+                    // ctx.state().config().options_mut().catalog.default_catalog = catalog_name;
+                    Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
+                        produce_one_row: false,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    }))
+                }
+                CatType::ListCatalogs(list_catalogs) => {
+                    let pattern: Option<&str> = list_catalogs.pattern.as_deref();
+                    let catalogs_metadata: Vec<CatalogMetadata> =
+                        list_catalogs_metadata(pattern, &ctx)?;
+                    let provider: MemTable = create_catalog_metadata_memtable(catalogs_metadata)?;
+                    Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                        UNNAMED_TABLE,
+                        provider_as_source(Arc::new(provider)),
+                        None,
+                        vec![],
+                        None,
+                    )?))
+                }
+            }
         }
         RelType::Extension(_) => {
             return Err(SparkError::unsupported("Spark relation extension"));
