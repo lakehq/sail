@@ -1,11 +1,8 @@
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::schema::{from_spark_field, from_spark_fields};
-use crate::spark::connect as sc;
 use crate::sql::fail_on_extra_token;
 use crate::sql::parser::SparkDialect;
 use arrow::datatypes as adt;
-use arrow::datatypes::{Fields, SchemaRef};
-use sc::data_type as sdt;
+use framework_common::spec;
 use sqlparser::ast;
 use sqlparser::ast::DateTimeField;
 use sqlparser::parser::Parser;
@@ -26,29 +23,28 @@ pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_PRECISION: i32 = 38;
 #[allow(dead_code)]
 pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_SCALE: i32 = 18;
 
-pub(crate) fn parse_spark_schema(schema: &str) -> SparkResult<SchemaRef> {
-    let data_type = if let Ok(dt) = parse_spark_data_type(schema) {
+pub(crate) fn parse_spark_schema(schema: &str) -> SparkResult<adt::SchemaRef> {
+    let data_type: spec::DataType = if let Ok(dt) = parse_spark_data_type(schema) {
         dt
     } else if let Ok(dt) = parse_spark_data_type(format!("struct<{schema}>").as_str()) {
         dt
     } else {
-        json::parse_spark_json_data_type(schema)?
+        json::parse_spark_json_data_type(schema)?.try_into()?
     };
-    let sc::DataType { ref kind } = data_type;
-    let kind = kind.as_ref().required("data type kind")?;
-    let fields = match kind {
-        sdt::Kind::Struct(r#struct) => from_spark_fields(&r#struct.fields)?,
-        _ => Fields::from(vec![from_spark_field(
-            DEFAULT_FIELD_NAME,
-            &data_type,
-            true,
-            None,
-        )?]),
+    let fields = match data_type {
+        spec::DataType::Struct { fields } => fields,
+        x => spec::Fields::new(vec![spec::Field {
+            name: DEFAULT_FIELD_NAME.to_string(),
+            data_type: x,
+            nullable: true,
+            metadata: None,
+        }]),
     };
+    let fields: adt::Fields = fields.try_into()?;
     Ok(Arc::new(adt::Schema::new(fields)))
 }
 
-pub(crate) fn parse_spark_data_type(sql: &str) -> SparkResult<sc::DataType> {
+pub(crate) fn parse_spark_data_type(sql: &str) -> SparkResult<spec::DataType> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
     if parser.peek_token() == Token::EOF {
         return Err(SparkError::invalid("empty data type"));
@@ -101,110 +97,65 @@ fn from_ast_date_time_interval_field(field: &ast::DateTimeField) -> SparkResult<
     }
 }
 
-pub(crate) fn from_ast_data_type(sql_type: &ast::DataType) -> SparkResult<sc::DataType> {
-    use sc::data_type::Kind;
-
+pub(crate) fn from_ast_data_type(sql_type: &ast::DataType) -> SparkResult<spec::DataType> {
     match sql_type {
-        ast::DataType::Null | ast::DataType::Void => Ok(sc::DataType {
-            kind: Some(Kind::Null(sdt::Null::default())),
-        }),
-        ast::DataType::Boolean | ast::DataType::Bool => Ok(sc::DataType {
-            kind: Some(Kind::Boolean(sdt::Boolean::default())),
-        }),
-        ast::DataType::TinyInt(_) => Ok(sc::DataType {
-            kind: Some(Kind::Byte(sdt::Byte::default())),
-        }),
-        ast::DataType::SmallInt(_) => Ok(sc::DataType {
-            kind: Some(Kind::Short(sdt::Short::default())),
-        }),
-        ast::DataType::Int(_) | ast::DataType::Integer(_) => Ok(sc::DataType {
-            kind: Some(Kind::Integer(sdt::Integer::default())),
-        }),
-        ast::DataType::BigInt(_) | ast::DataType::Long(_) => Ok(sc::DataType {
-            kind: Some(Kind::Long(sdt::Long::default())),
-        }),
-        ast::DataType::Binary(_) | ast::DataType::Bytea => Ok(sc::DataType {
-            kind: Some(Kind::Binary(sdt::Binary::default())),
-        }),
-        ast::DataType::Float(_) | ast::DataType::Real => Ok(sc::DataType {
-            kind: Some(Kind::Float(sdt::Float::default())),
-        }),
-        ast::DataType::Double | ast::DataType::DoublePrecision => Ok(sc::DataType {
-            kind: Some(Kind::Double(sdt::Double::default())),
-        }),
+        ast::DataType::Null | ast::DataType::Void => Ok(spec::DataType::Null),
+        ast::DataType::Boolean | ast::DataType::Bool => Ok(spec::DataType::Boolean),
+        ast::DataType::TinyInt(_) => Ok(spec::DataType::Byte),
+        ast::DataType::SmallInt(_) => Ok(spec::DataType::Short),
+        ast::DataType::Int(_) | ast::DataType::Integer(_) => Ok(spec::DataType::Integer),
+        ast::DataType::BigInt(_) | ast::DataType::Long(_) => Ok(spec::DataType::Long),
+        ast::DataType::Binary(_) | ast::DataType::Bytea => Ok(spec::DataType::Binary),
+        ast::DataType::Float(_) | ast::DataType::Real => Ok(spec::DataType::Float),
+        ast::DataType::Double | ast::DataType::DoublePrecision => Ok(spec::DataType::Double),
         ast::DataType::Decimal(info) | ast::DataType::Dec(info) | ast::DataType::Numeric(info) => {
             use ast::ExactNumberInfo;
 
             let (precision, scale) = match *info {
                 ExactNumberInfo::None => (
-                    Some(SPARK_DECIMAL_USER_DEFAULT_PRECISION),
-                    Some(SPARK_DECIMAL_USER_DEFAULT_SCALE),
+                    SPARK_DECIMAL_USER_DEFAULT_PRECISION,
+                    SPARK_DECIMAL_USER_DEFAULT_SCALE,
                 ),
-                ExactNumberInfo::Precision(precision) => (
-                    Some(precision as i32),
-                    Some(SPARK_DECIMAL_USER_DEFAULT_SCALE),
-                ),
+                ExactNumberInfo::Precision(precision) => {
+                    (precision as i32, SPARK_DECIMAL_USER_DEFAULT_SCALE)
+                }
                 ExactNumberInfo::PrecisionAndScale(precision, scale) => {
-                    (Some(precision as i32), Some(scale as i32))
+                    (precision as i32, scale as i32)
                 }
             };
-            Ok(sc::DataType {
-                kind: Some(Kind::Decimal(sdt::Decimal {
-                    precision,
-                    scale,
-                    type_variation_reference: 0,
-                })),
-            })
+            Ok(spec::DataType::Decimal { precision, scale })
         }
-        ast::DataType::Char(n) | ast::DataType::Character(n) => Ok(sc::DataType {
-            kind: Some(Kind::Char(sdt::Char {
-                length: from_ast_char_length(n)?,
-                type_variation_reference: 0,
-            })),
+        ast::DataType::Char(n) | ast::DataType::Character(n) => Ok(spec::DataType::Char {
+            length: from_ast_char_length(n)?,
         }),
         ast::DataType::Varchar(n)
         | ast::DataType::CharVarying(n)
-        | ast::DataType::CharacterVarying(n) => Ok(sc::DataType {
-            kind: Some(Kind::VarChar(sdt::VarChar {
-                length: from_ast_char_length(n)?,
-                type_variation_reference: 0,
-            })),
+        | ast::DataType::CharacterVarying(n) => Ok(spec::DataType::VarChar {
+            length: from_ast_char_length(n)?,
         }),
-        ast::DataType::String(_) | ast::DataType::Text => Ok(sc::DataType {
-            kind: Some(Kind::String(sdt::String::default())),
-        }),
+        ast::DataType::String(_) | ast::DataType::Text => Ok(spec::DataType::String),
         ast::DataType::Timestamp(None, tz_info) => {
             use ast::TimezoneInfo;
 
             match tz_info {
                 // FIXME: `timestamp` can either be `timestamp_ltz` (default) or `timestamp_ntz`,
                 // We need to consider the `spark.sql.timestampType` configuration.
-                TimezoneInfo::None => Ok(sc::DataType {
-                    kind: Some(Kind::Timestamp(sdt::Timestamp::default())),
-                }),
-                TimezoneInfo::WithoutTimeZone => Ok(sc::DataType {
-                    kind: Some(Kind::TimestampNtz(sdt::TimestampNtz::default())),
-                }),
-                TimezoneInfo::WithLocalTimeZone => Ok(sc::DataType {
-                    kind: Some(Kind::Timestamp(sdt::Timestamp::default())),
-                }),
+                TimezoneInfo::None => Ok(spec::DataType::Timestamp),
+                TimezoneInfo::WithoutTimeZone => Ok(spec::DataType::TimestampNtz),
+                TimezoneInfo::WithLocalTimeZone => Ok(spec::DataType::Timestamp),
                 TimezoneInfo::WithTimeZone | TimezoneInfo::Tz => {
                     Err(SparkError::unsupported("timestamp with time zone"))
                 }
             }
         }
-        ast::DataType::Date => Ok(sc::DataType {
-            kind: Some(Kind::Date(sdt::Date::default())),
-        }),
+        ast::DataType::Date => Ok(spec::DataType::Date),
         ast::DataType::Interval(unit) => match unit {
             ast::IntervalUnit {
                 leading_field: None,
                 leading_precision: None,
                 last_field: None,
                 fractional_seconds_precision: None,
-            } => Ok(sc::DataType {
-                kind: Some(Kind::CalendarInterval(sdt::CalendarInterval::default())),
-            }),
+            } => Ok(spec::DataType::CalendarInterval),
             ast::IntervalUnit {
                 leading_field: Some(start),
                 leading_precision: None,
@@ -212,20 +163,14 @@ pub(crate) fn from_ast_data_type(sql_type: &ast::DataType) -> SparkResult<sc::Da
                 fractional_seconds_precision: None,
             } => {
                 if let Ok(start) = from_ast_year_month_interval_field(start) {
-                    Ok(sc::DataType {
-                        kind: Some(Kind::YearMonthInterval(sdt::YearMonthInterval {
-                            start_field: Some(start),
-                            end_field: None,
-                            type_variation_reference: 0,
-                        })),
+                    Ok(spec::DataType::YearMonthInterval {
+                        start_field: Some(start.try_into()?),
+                        end_field: None,
                     })
                 } else if let Ok(start) = from_ast_date_time_interval_field(start) {
-                    Ok(sc::DataType {
-                        kind: Some(Kind::DayTimeInterval(sdt::DayTimeInterval {
-                            start_field: Some(start),
-                            end_field: None,
-                            type_variation_reference: 0,
-                        })),
+                    Ok(spec::DataType::YearMonthInterval {
+                        start_field: Some(start.try_into()?),
+                        end_field: None,
                     })
                 } else {
                     Err(SparkError::invalid(format!(
@@ -244,24 +189,18 @@ pub(crate) fn from_ast_data_type(sql_type: &ast::DataType) -> SparkResult<sc::Da
                     if end <= start {
                         return Err(SparkError::invalid(format!("interval end field: {unit:?}")));
                     }
-                    Ok(sc::DataType {
-                        kind: Some(Kind::YearMonthInterval(sdt::YearMonthInterval {
-                            start_field: Some(start),
-                            end_field: Some(end),
-                            type_variation_reference: 0,
-                        })),
+                    Ok(spec::DataType::YearMonthInterval {
+                        start_field: Some(start.try_into()?),
+                        end_field: Some(end.try_into()?),
                     })
                 } else if let Ok(start) = from_ast_date_time_interval_field(start) {
                     let end = from_ast_date_time_interval_field(end)?;
                     if end <= start {
                         return Err(SparkError::invalid(format!("interval end field: {unit:?}")));
                     }
-                    Ok(sc::DataType {
-                        kind: Some(Kind::DayTimeInterval(sdt::DayTimeInterval {
-                            start_field: Some(start),
-                            end_field: Some(end),
-                            type_variation_reference: 0,
-                        })),
+                    Ok(spec::DataType::DayTimeInterval {
+                        start_field: Some(start.try_into()?),
+                        end_field: Some(end.try_into()?),
                     })
                 } else {
                     return Err(SparkError::invalid(format!(
@@ -277,12 +216,9 @@ pub(crate) fn from_ast_data_type(sql_type: &ast::DataType) -> SparkResult<sc::Da
             match def {
                 ArrayElemTypeDef::AngleBracket(inner) => {
                     let inner = from_ast_data_type(inner)?;
-                    Ok(sc::DataType {
-                        kind: Some(Kind::Array(Box::new(sdt::Array {
-                            element_type: Some(Box::new(inner)),
-                            contains_null: true,
-                            type_variation_reference: 0,
-                        }))),
+                    Ok(spec::DataType::Array {
+                        element_type: Box::new(inner),
+                        contains_null: true,
                     })
                 }
                 ArrayElemTypeDef::SquareBracket(_, _) | ArrayElemTypeDef::None => {
@@ -302,35 +238,29 @@ pub(crate) fn from_ast_data_type(sql_type: &ast::DataType) -> SparkResult<sc::Da
                     let metadata = if let Some(comment) = &f.comment {
                         let mut metadata = HashMap::new();
                         metadata.insert("comment".to_string(), comment.clone());
-                        Some(serde_json::to_string(&metadata)?)
+                        Some(metadata)
                     } else {
                         None
                     };
-                    Ok(sdt::StructField {
+                    Ok(spec::Field {
                         name,
-                        data_type: Some(data_type),
+                        data_type,
                         nullable: !f.not_null,
                         metadata,
                     })
                 })
                 .collect::<SparkResult<Vec<_>>>()?;
-            Ok(sc::DataType {
-                kind: Some(Kind::Struct(sdt::Struct {
-                    fields,
-                    type_variation_reference: 0,
-                })),
+            Ok(spec::DataType::Struct {
+                fields: spec::Fields::new(fields),
             })
         }
         ast::DataType::Map(key, value) => {
             let key = from_ast_data_type(key)?;
             let value = from_ast_data_type(value)?;
-            Ok(sc::DataType {
-                kind: Some(Kind::Map(Box::new(sdt::Map {
-                    key_type: Some(Box::new(key)),
-                    value_type: Some(Box::new(value)),
-                    value_contains_null: true,
-                    type_variation_reference: 0,
-                }))),
+            Ok(spec::DataType::Map {
+                key_type: Box::new(key),
+                value_type: Box::new(value),
+                value_contains_null: true,
             })
         }
         ast::DataType::Int2(_)

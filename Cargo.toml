@@ -2,6 +2,7 @@
 members = [
     "crates/hello",
     "crates/spark-connect-server",
+    "crates/framework-common",
     "crates/framework-telemetry",
     "crates/framework-python",
 ]

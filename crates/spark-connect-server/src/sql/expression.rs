@@ -471,9 +471,9 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
             Ok(sc::Expression {
                 expr_type: Some(ExprType::Cast(Box::new(sc::expression::Cast {
                     expr: Some(Box::new(from_ast_expression(*expr)?)),
-                    cast_to_type: Some(sc::expression::cast::CastToType::Type(from_ast_data_type(
-                        &data_type,
-                    )?)),
+                    cast_to_type: Some(sc::expression::cast::CastToType::Type(
+                        from_ast_data_type(&data_type)?.try_into()?,
+                    )),
                 }))),
             })
         }

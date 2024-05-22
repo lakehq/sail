@@ -3,6 +3,7 @@ mod executor;
 mod expression;
 mod extension;
 mod plan;
+mod proto;
 mod schema;
 pub mod server;
 mod service;

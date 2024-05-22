@@ -19,7 +19,8 @@
                             "precision": 10
                           }
                         },
-                        "nullable": true
+                        "nullable": true,
+                        "metadata": null
                       },
                       {
                         "name": "anotherDecimal",
@@ -29,20 +30,20 @@
                             "precision": 5
                           }
                         },
-                        "nullable": true
+                        "nullable": true,
+                        "metadata": null
                       }
                     ]
                   }
                 },
-                "nullable": true
+                "nullable": true,
+                "metadata": null
               },
               {
                 "name": "MAP",
                 "dataType": {
                   "map": {
-                    "keyType": {
-                      "timestamp": {}
-                    },
+                    "keyType": "timestamp",
                     "valueType": {
                       "varChar": {
                         "length": 10
@@ -51,19 +52,19 @@
                     "valueContainsNull": true
                   }
                 },
-                "nullable": true
+                "nullable": true,
+                "metadata": null
               },
               {
                 "name": "arrAy",
                 "dataType": {
                   "array": {
-                    "elementType": {
-                      "double": {}
-                    },
+                    "elementType": "double",
                     "containsNull": true
                   }
                 },
-                "nullable": true
+                "nullable": true,
+                "metadata": null
               },
               {
                 "name": "anotherArray",
@@ -77,7 +78,8 @@
                     "containsNull": true
                   }
                 },
-                "nullable": true
+                "nullable": true,
+                "metadata": null
               }
             ]
           }
@@ -91,12 +93,8 @@
           "array": {
             "elementType": {
               "map": {
-                "keyType": {
-                  "integer": {}
-                },
-                "valueType": {
-                  "byte": {}
-                },
+                "keyType": "integer",
+                "valueType": "byte",
                 "valueContainsNull": true
               }
             },
@@ -108,17 +106,13 @@
     {
       "input": "BINARY",
       "output": {
-        "success": {
-          "binary": {}
-        }
+        "success": "binary"
       }
     },
     {
       "input": "BooLean",
       "output": {
-        "success": {
-          "boolean": {}
-        }
+        "success": "boolean"
       }
     },
     {
@@ -144,9 +138,7 @@
     {
       "input": "DATE",
       "output": {
-        "success": {
-          "date": {}
-        }
+        "success": "date"
       }
     },
     {
@@ -163,17 +155,13 @@
     {
       "input": "INT",
       "output": {
-        "success": {
-          "integer": {}
-        }
+        "success": "integer"
       }
     },
     {
       "input": "INTEGER",
       "output": {
-        "success": {
-          "integer": {}
-        }
+        "success": "integer"
       }
     },
     {
@@ -181,8 +169,8 @@
       "output": {
         "success": {
           "yearMonthInterval": {
-            "startField": 0,
-            "endField": 1
+            "startField": "year",
+            "endField": "month"
           }
         }
       }
@@ -192,12 +180,8 @@
       "output": {
         "success": {
           "map": {
-            "keyType": {
-              "integer": {}
-            },
-            "valueType": {
-              "string": {}
-            },
+            "keyType": "integer",
+            "valueType": "string",
             "valueContainsNull": true
           }
         }
@@ -208,18 +192,15 @@
       "output": {
         "success": {
           "map": {
-            "keyType": {
-              "integer": {}
-            },
+            "keyType": "integer",
             "valueType": {
               "struct": {
                 "fields": [
                   {
                     "name": "varchar",
-                    "dataType": {
-                      "string": {}
-                    },
-                    "nullable": true
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": null
                   }
                 ]
               }
@@ -234,14 +215,10 @@
       "output": {
         "success": {
           "map": {
-            "keyType": {
-              "integer": {}
-            },
+            "keyType": "integer",
             "valueType": {
               "array": {
-                "elementType": {
-                  "double": {}
-                },
+                "elementType": "double",
                 "containsNull": true
               }
             },
@@ -258,17 +235,15 @@
             "fields": [
               {
                 "name": "TABLE",
-                "dataType": {
-                  "string": {}
-                },
-                "nullable": true
+                "dataType": "string",
+                "nullable": true,
+                "metadata": null
               },
               {
                 "name": "DATE",
-                "dataType": {
-                  "boolean": {}
-                },
-                "nullable": true
+                "dataType": "boolean",
+                "nullable": true,
+                "metadata": null
               }
             ]
           }
@@ -283,17 +258,15 @@
             "fields": [
               {
                 "name": "int",
-                "dataType": {
-                  "integer": {}
-                },
-                "nullable": true
+                "dataType": "integer",
+                "nullable": true,
+                "metadata": null
               },
               {
                 "name": "timestamp",
-                "dataType": {
-                  "timestamp": {}
-                },
-                "nullable": true
+                "dataType": "timestamp",
+                "nullable": true,
+                "metadata": null
               }
             ]
           }
@@ -308,18 +281,17 @@
             "fields": [
               {
                 "name": "x",
-                "dataType": {
-                  "integer": {}
-                },
-                "nullable": true
+                "dataType": "integer",
+                "nullable": true,
+                "metadata": null
               },
               {
                 "name": "y",
-                "dataType": {
-                  "string": {}
-                },
+                "dataType": "string",
                 "nullable": true,
-                "metadata": "{\"comment\":\"test\"}"
+                "metadata": {
+                  "comment": "test"
+                }
               }
             ]
           }
@@ -331,9 +303,7 @@
       "output": {
         "success": {
           "array": {
-            "elementType": {
-              "double": {}
-            },
+            "elementType": "double",
             "containsNull": true
           }
         }
@@ -349,10 +319,9 @@
                 "fields": [
                   {
                     "name": "tinYint",
-                    "dataType": {
-                      "byte": {}
-                    },
-                    "nullable": true
+                    "dataType": "byte",
+                    "nullable": true,
+                    "metadata": null
                   }
                 ]
               }
@@ -365,9 +334,7 @@
     {
       "input": "bigint",
       "output": {
-        "success": {
-          "long": {}
-        }
+        "success": "long"
       }
     },
     {
@@ -383,9 +350,7 @@
     {
       "input": "dOUBle",
       "output": {
-        "success": {
-          "double": {}
-        }
+        "success": "double"
       }
     },
     {
@@ -424,25 +389,19 @@
     {
       "input": "float",
       "output": {
-        "success": {
-          "float": {}
-        }
+        "success": "float"
       }
     },
     {
       "input": "integer",
       "output": {
-        "success": {
-          "integer": {}
-        }
+        "success": "integer"
       }
     },
     {
       "input": "interval",
       "output": {
-        "success": {
-          "calendarInterval": {}
-        }
+        "success": "calendarInterval"
       }
     },
     {
@@ -450,8 +409,8 @@
       "output": {
         "success": {
           "dayTimeInterval": {
-            "startField": 0,
-            "endField": 3
+            "startField": "day",
+            "endField": "second"
           }
         }
       }
@@ -465,25 +424,23 @@
     {
       "input": "smallINT",
       "output": {
-        "success": {
-          "short": {}
-        }
+        "success": "short"
       }
     },
     {
       "input": "strUCt<>",
       "output": {
         "success": {
-          "struct": {}
+          "struct": {
+            "fields": []
+          }
         }
       }
     },
     {
       "input": "string",
       "output": {
-        "success": {
-          "string": {}
-        }
+        "success": "string"
       }
     },
     {
@@ -494,17 +451,15 @@
             "fields": [
               {
                 "name": "x+y",
-                "dataType": {
-                  "integer": {}
-                },
-                "nullable": true
+                "dataType": "integer",
+                "nullable": true,
+                "metadata": null
               },
               {
                 "name": "!@#$%^&*()",
-                "dataType": {
-                  "string": {}
-                },
-                "nullable": true
+                "dataType": "string",
+                "nullable": true,
+                "metadata": null
               },
               {
                 "name": "1_2.345<>:\"",
@@ -513,7 +468,8 @@
                     "length": 20
                   }
                 },
-                "nullable": true
+                "nullable": true,
+                "metadata": null
               }
             ]
           }
@@ -528,24 +484,21 @@
             "fields": [
               {
                 "name": "end",
-                "dataType": {
-                  "long": {}
-                },
-                "nullable": true
+                "dataType": "long",
+                "nullable": true,
+                "metadata": null
               },
               {
                 "name": "select",
-                "dataType": {
-                  "integer": {}
-                },
-                "nullable": true
+                "dataType": "integer",
+                "nullable": true,
+                "metadata": null
               },
               {
                 "name": "from",
-                "dataType": {
-                  "string": {}
-                },
-                "nullable": true
+                "dataType": "string",
+                "nullable": true,
+                "metadata": null
               }
             ]
           }
@@ -560,17 +513,15 @@
             "fields": [
               {
                 "name": "intType",
-                "dataType": {
-                  "integer": {}
-                },
-                "nullable": true
+                "dataType": "integer",
+                "nullable": true,
+                "metadata": null
               },
               {
                 "name": "ts",
-                "dataType": {
-                  "timestamp": {}
-                },
-                "nullable": true
+                "dataType": "timestamp",
+                "nullable": true,
+                "metadata": null
               }
             ]
           }
@@ -585,17 +536,15 @@
             "fields": [
               {
                 "name": "x",
-                "dataType": {
-                  "integer": {}
-                },
-                "nullable": true
+                "dataType": "integer",
+                "nullable": true,
+                "metadata": null
               },
               {
                 "name": "y",
-                "dataType": {
-                  "string": {}
-                },
-                "nullable": true
+                "dataType": "string",
+                "nullable": true,
+                "metadata": null
               }
             ]
           }
@@ -617,33 +566,25 @@
     {
       "input": "timestamp",
       "output": {
-        "success": {
-          "timestamp": {}
-        }
+        "success": "timestamp"
       }
     },
     {
       "input": "timestamp_ltz",
       "output": {
-        "success": {
-          "timestamp": {}
-        }
+        "success": "timestamp"
       }
     },
     {
       "input": "timestamp_ntz",
       "output": {
-        "success": {
-          "timestampNtz": {}
-        }
+        "success": "timestampNtz"
       }
     },
     {
       "input": "tinYint",
       "output": {
-        "success": {
-          "byte": {}
-        }
+        "success": "byte"
       }
     },
     {
@@ -671,9 +612,7 @@
     {
       "input": "void",
       "output": {
-        "success": {
-          "null": {}
-        }
+        "success": "null"
       }
     }
   ]
