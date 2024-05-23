@@ -47,6 +47,7 @@ impl Plan {
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum PlanNode {
     Read {
+        #[serde(flatten)]
         read_type: ReadType,
         is_streaming: bool,
     },

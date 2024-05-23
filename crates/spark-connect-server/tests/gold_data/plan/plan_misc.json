@@ -8,11 +8,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "a",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "a",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -41,11 +39,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "a",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "a",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -74,11 +70,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "a",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "a",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -107,11 +101,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "a",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "a",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -198,11 +190,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "t1",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "t1",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -224,11 +214,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "t2",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "t2",
+                        "options": {}
                       },
                       "isStreaming": false
                     },

@@ -14,11 +14,9 @@
             "aggregate": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "d",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "d",
+                    "options": {}
                   },
                   "isStreaming": false
                 },

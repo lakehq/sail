@@ -70,11 +70,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "t",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -134,11 +132,9 @@
                     "project": {
                       "input": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "t",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
                           },
                           "isStreaming": false
                         },

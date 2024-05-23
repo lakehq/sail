@@ -8,11 +8,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -41,11 +39,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "testcat.db.tab",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "testcat.db.tab",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -74,11 +70,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -107,11 +101,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -140,11 +132,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -173,11 +163,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -206,11 +194,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -239,11 +225,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -272,11 +256,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -305,11 +287,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -338,11 +318,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -371,11 +349,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -404,11 +380,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -437,11 +411,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -470,11 +442,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -503,11 +473,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "default.t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "default.t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -536,11 +504,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -569,11 +535,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "`default.t`",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "`default.t`",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -606,11 +570,9 @@
                     "filter": {
                       "input": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "t",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
                           },
                           "isStreaming": false
                         },
@@ -676,11 +638,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -709,11 +669,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -742,11 +700,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -775,11 +731,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -808,11 +762,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -841,11 +793,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -874,11 +824,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -907,11 +855,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -940,11 +886,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },

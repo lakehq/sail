@@ -20,11 +20,9 @@
                         "join": {
                           "left": {
                             "read": {
-                              "readType": {
-                                "namedTable": {
-                                  "unparsedIdentifier": "a",
-                                  "options": {}
-                                }
+                              "namedTable": {
+                                "unparsedIdentifier": "a",
+                                "options": {}
                               },
                               "isStreaming": false
                             },
@@ -33,11 +31,9 @@
                           },
                           "right": {
                             "read": {
-                              "readType": {
-                                "namedTable": {
-                                  "unparsedIdentifier": "b",
-                                  "options": {}
-                                }
+                              "namedTable": {
+                                "unparsedIdentifier": "b",
+                                "options": {}
                               },
                               "isStreaming": false
                             },
@@ -54,11 +50,9 @@
                       },
                       "right": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "c",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "c",
+                            "options": {}
                           },
                           "isStreaming": false
                         },
@@ -75,11 +69,9 @@
                   },
                   "right": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "d",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "d",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -232,11 +224,9 @@
                 "join": {
                   "left": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "t",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -245,11 +235,9 @@
                   },
                   "right": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "u",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -297,11 +285,9 @@
                 "join": {
                   "left": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "t",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -310,11 +296,9 @@
                   },
                   "right": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "u",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -368,11 +352,9 @@
                 "join": {
                   "left": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "t",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -381,11 +363,9 @@
                   },
                   "right": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "u",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -445,11 +425,9 @@
                 "join": {
                   "left": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "t",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -458,11 +436,9 @@
                   },
                   "right": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "u",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -510,11 +486,9 @@
                 "join": {
                   "left": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "t",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -523,11 +497,9 @@
                   },
                   "right": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "u",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -581,11 +553,9 @@
                 "join": {
                   "left": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "t",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -594,11 +564,9 @@
                   },
                   "right": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "u",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -652,11 +620,9 @@
                 "join": {
                   "left": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "t",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -665,11 +631,9 @@
                   },
                   "right": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "u",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -717,11 +681,9 @@
                 "join": {
                   "left": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "t",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -730,11 +692,9 @@
                   },
                   "right": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "u",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -782,11 +742,9 @@
                 "join": {
                   "left": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "t",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -795,11 +753,9 @@
                   },
                   "right": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "u",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -847,11 +803,9 @@
                 "join": {
                   "left": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "t",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -860,11 +814,9 @@
                   },
                   "right": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "u",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -968,11 +920,9 @@
                     "join": {
                       "left": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "t1",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "t1",
+                            "options": {}
                           },
                           "isStreaming": false
                         },
@@ -981,11 +931,9 @@
                       },
                       "right": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "t2",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "t2",
+                            "options": {}
                           },
                           "isStreaming": false
                         },
@@ -1004,11 +952,9 @@
                     "join": {
                       "left": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "t3",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "t3",
+                            "options": {}
                           },
                           "isStreaming": false
                         },
@@ -1017,11 +963,9 @@
                       },
                       "right": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "t2",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "t2",
+                            "options": {}
                           },
                           "isStreaming": false
                         },
@@ -1092,11 +1036,9 @@
                         "join": {
                           "left": {
                             "read": {
-                              "readType": {
-                                "namedTable": {
-                                  "unparsedIdentifier": "t1",
-                                  "options": {}
-                                }
+                              "namedTable": {
+                                "unparsedIdentifier": "t1",
+                                "options": {}
                               },
                               "isStreaming": false
                             },
@@ -1105,11 +1047,9 @@
                           },
                           "right": {
                             "read": {
-                              "readType": {
-                                "namedTable": {
-                                  "unparsedIdentifier": "t2",
-                                  "options": {}
-                                }
+                              "namedTable": {
+                                "unparsedIdentifier": "t2",
+                                "options": {}
                               },
                               "isStreaming": false
                             },
@@ -1126,11 +1066,9 @@
                       },
                       "right": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "t3",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "t3",
+                            "options": {}
                           },
                           "isStreaming": false
                         },
@@ -1167,11 +1105,9 @@
                   },
                   "right": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "t4",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "t4",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -1254,11 +1190,9 @@
                 "join": {
                   "left": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "t1",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "t1",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -1269,11 +1203,9 @@
                     "join": {
                       "left": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "t3",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "t3",
+                            "options": {}
                           },
                           "isStreaming": false
                         },
@@ -1282,11 +1214,9 @@
                       },
                       "right": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "t2",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "t2",
+                            "options": {}
                           },
                           "isStreaming": false
                         },

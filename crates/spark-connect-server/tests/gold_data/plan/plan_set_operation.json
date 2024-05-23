@@ -12,11 +12,9 @@
                     "project": {
                       "input": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "a",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "a",
+                            "options": {}
                           },
                           "isStreaming": false
                         },
@@ -38,11 +36,9 @@
                     "project": {
                       "input": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "b",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "b",
+                            "options": {}
                           },
                           "isStreaming": false
                         },
@@ -74,11 +70,9 @@
                     "project": {
                       "input": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "c",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "c",
+                            "options": {}
                           },
                           "isStreaming": false
                         },
@@ -100,11 +94,9 @@
                     "project": {
                       "input": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "d",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "d",
+                            "options": {}
                           },
                           "isStreaming": false
                         },
@@ -153,11 +145,9 @@
                     "project": {
                       "input": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "a",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "a",
+                            "options": {}
                           },
                           "isStreaming": false
                         },
@@ -179,11 +169,9 @@
                     "project": {
                       "input": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "b",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "b",
+                            "options": {}
                           },
                           "isStreaming": false
                         },
@@ -215,11 +203,9 @@
                     "project": {
                       "input": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "c",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "c",
+                            "options": {}
                           },
                           "isStreaming": false
                         },
@@ -241,11 +227,9 @@
                     "project": {
                       "input": {
                         "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "d",
-                              "options": {}
-                            }
+                          "namedTable": {
+                            "unparsedIdentifier": "d",
+                            "options": {}
                           },
                           "isStreaming": false
                         },
@@ -304,11 +288,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "a",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -330,11 +312,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "b",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -373,11 +353,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "a",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -399,11 +377,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "b",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -442,11 +418,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "a",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -468,11 +442,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "b",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -511,11 +483,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "a",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -537,11 +507,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "b",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -580,11 +548,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "a",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -606,11 +572,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "b",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -649,11 +613,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "a",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -675,11 +637,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "b",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -736,11 +696,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "a",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -762,11 +720,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "b",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -805,11 +761,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "a",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -831,11 +785,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "b",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -874,11 +826,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "a",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -900,11 +850,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "b",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
                       },
                       "isStreaming": false
                     },

@@ -8,11 +8,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "a",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "a",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -83,11 +81,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "a",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "a",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -284,11 +280,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "testcat.db.tab",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "testcat.db.tab",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -771,11 +765,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "a",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "a",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -834,11 +826,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "a",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "a",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -951,11 +941,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -1016,11 +1004,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "t",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -1187,11 +1173,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "db.c",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "db.c",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -1247,11 +1231,9 @@
                 "filter": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "db.c",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "db.c",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -1329,11 +1311,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "db.c",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "db.c",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -1371,11 +1351,9 @@
                 "project": {
                   "input": {
                     "read": {
-                      "readType": {
-                        "namedTable": {
-                          "unparsedIdentifier": "db.c",
-                          "options": {}
-                        }
+                      "namedTable": {
+                        "unparsedIdentifier": "db.c",
+                        "options": {}
                       },
                       "isStreaming": false
                     },
@@ -1457,11 +1435,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t0",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t0",
+                    "options": {}
                   },
                   "isStreaming": false
                 },
@@ -1491,11 +1467,9 @@
             "project": {
               "input": {
                 "read": {
-                  "readType": {
-                    "namedTable": {
-                      "unparsedIdentifier": "t0",
-                      "options": {}
-                    }
+                  "namedTable": {
+                    "unparsedIdentifier": "t0",
+                    "options": {}
                   },
                   "isStreaming": false
                 },

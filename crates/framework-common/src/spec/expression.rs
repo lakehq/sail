@@ -115,6 +115,7 @@ pub struct CommonInlineUserDefinedFunction {
     pub function_name: String,
     pub deterministic: bool,
     pub arguments: Vec<Expr>,
+    #[serde(flatten)]
     pub function: FunctionType,
 }
 
@@ -146,6 +147,7 @@ pub struct CommonInlineUserDefinedTableFunction {
     pub function_name: String,
     pub deterministic: bool,
     pub arguments: Vec<Expr>,
+    #[serde(flatten)]
     pub function: TableFunctionType,
 }
 
