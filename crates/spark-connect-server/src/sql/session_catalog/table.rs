@@ -267,17 +267,13 @@ pub(crate) async fn get_catalog_table(
 ) -> SparkResult<Vec<CatalogTable>> {
     let table_ref = TableReference::from(table_name);
     let table_name = table_ref.table();
-    let database_pattern = table_ref
-        .schema()
-        .map_or(database_pattern.clone(), |schema| schema);
-    let catalog_pattern = table_ref
-        .catalog()
-        .map_or(catalog_pattern.clone(), |catalog| catalog);
+    let database_pattern = table_ref.schema().unwrap_or(database_pattern);
+    let catalog_pattern = table_ref.catalog().unwrap_or(catalog_pattern);
     Ok(list_catalog_tables(
-        Some(&catalog_pattern),
-        Some(&database_pattern),
-        Some(&table_name),
-        &ctx,
+        Some(catalog_pattern),
+        Some(database_pattern),
+        Some(table_name),
+        ctx,
     )
     .await?)
 }

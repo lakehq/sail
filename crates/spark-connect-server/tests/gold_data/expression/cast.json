@@ -7,14 +7,13 @@
           "cast": {
             "expr": {
               "unresolvedAttribute": {
-                "unparsedIdentifier": "a"
+                "unparsedIdentifier": "a",
+                "planId": null
               }
             },
-            "type": {
+            "castToType": {
               "array": {
-                "elementType": {
-                  "integer": {}
-                },
+                "elementType": "integer",
                 "containsNull": true
               }
             }
@@ -29,12 +28,11 @@
           "cast": {
             "expr": {
               "unresolvedAttribute": {
-                "unparsedIdentifier": "a"
+                "unparsedIdentifier": "a",
+                "planId": null
               }
             },
-            "type": {
-              "integer": {}
-            }
+            "castToType": "integer"
           }
         }
       }
@@ -46,12 +44,11 @@
           "cast": {
             "expr": {
               "unresolvedAttribute": {
-                "unparsedIdentifier": "a"
+                "unparsedIdentifier": "a",
+                "planId": null
               }
             },
-            "type": {
-              "timestamp": {}
-            }
+            "castToType": "timestamp"
           }
         }
       }
@@ -65,17 +62,14 @@
               "cast": {
                 "expr": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a"
+                    "unparsedIdentifier": "a",
+                    "planId": null
                   }
                 },
-                "type": {
-                  "integer": {}
-                }
+                "castToType": "integer"
               }
             },
-            "type": {
-              "long": {}
-            }
+            "castToType": "long"
           }
         }
       }

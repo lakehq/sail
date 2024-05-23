@@ -5,7 +5,9 @@
       "output": {
         "success": {
           "literal": {
-            "date": 17897
+            "date": {
+              "days": 17897
+            }
           }
         }
       }
@@ -15,7 +17,9 @@
       "output": {
         "success": {
           "literal": {
-            "date": 17897
+            "date": {
+              "days": 17897
+            }
           }
         }
       }
@@ -25,7 +29,9 @@
       "output": {
         "success": {
           "literal": {
-            "date": 17910
+            "date": {
+              "days": 17910
+            }
           }
         }
       }
@@ -41,7 +47,9 @@
       "output": {
         "success": {
           "literal": {
-            "date": 16871
+            "date": {
+              "days": 16871
+            }
           }
         }
       }

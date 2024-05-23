@@ -15,8 +15,8 @@
                         "name": "deciMal",
                         "dataType": {
                           "decimal": {
-                            "scale": 0,
-                            "precision": 10
+                            "precision": 10,
+                            "scale": 0
                           }
                         },
                         "nullable": true,
@@ -26,8 +26,8 @@
                         "name": "anotherDecimal",
                         "dataType": {
                           "decimal": {
-                            "scale": 2,
-                            "precision": 5
+                            "precision": 5,
+                            "scale": 2
                           }
                         },
                         "nullable": true,
@@ -146,8 +146,8 @@
       "output": {
         "success": {
           "decimal": {
-            "scale": 5,
-            "precision": 10
+            "precision": 10,
+            "scale": 5
           }
         }
       }
@@ -358,8 +358,8 @@
       "output": {
         "success": {
           "decimal": {
-            "scale": 0,
-            "precision": 10
+            "precision": 10,
+            "scale": 0
           }
         }
       }
@@ -369,8 +369,8 @@
       "output": {
         "success": {
           "decimal": {
-            "scale": 0,
-            "precision": 10
+            "precision": 10,
+            "scale": 0
           }
         }
       }
@@ -380,8 +380,8 @@
       "output": {
         "success": {
           "decimal": {
-            "scale": 5,
-            "precision": 10
+            "precision": 10,
+            "scale": 5
           }
         }
       }

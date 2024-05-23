@@ -3,13 +3,25 @@ use crate::spec::expression::{
     CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction, Expr, SortOrder,
 };
 use crate::spec::literal::Literal;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Plan {
-    node: PlanNode,
-    plan_id: Option<i64>,
-    source_info: Option<String>,
+    pub node: PlanNode,
+    pub plan_id: Option<i64>,
+    pub source_info: Option<String>,
+}
+
+impl Plan {
+    pub fn new(node: PlanNode) -> Self {
+        Self {
+            node,
+            plan_id: None,
+            source_info: None,
+        }
+    }
 }
 
 /// Unresolved logical plan node for the framework.
@@ -30,7 +42,8 @@ pub struct Plan {
 ///   4. We do not use abbreviations (e.g. "exprs", "cols", "func", "db", "temp") in names.
 ///   5. We use Pascal Case for acronyms (e.g. "Na", "Df", "Udf") in enum variant names.
 ///   6. Some names are modified for naming consistency.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum PlanNode {
     Read {
         read_type: ReadType,
@@ -392,7 +405,8 @@ pub enum PlanNode {
     // TODO: should streaming query request be added here?
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ReadType {
     NamedTable {
         unparsed_identifier: String,
@@ -407,7 +421,8 @@ pub enum ReadType {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum SaveType {
     Path(String),
     Table {
@@ -416,19 +431,22 @@ pub enum SaveType {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum TableSaveMethod {
     SaveAsTable,
     InsertInto,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SaveBucketBy {
     pub bucket_column_names: Vec<String>,
     pub num_buckets: i32,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SaveMode {
     // TODO: understand the difference between save modes in
     //  `WriteOperation` and `WriteOperationV2`
@@ -442,7 +460,8 @@ pub enum SaveMode {
     Replace,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum JoinType {
     Inner,
     FullOuter,
@@ -453,20 +472,23 @@ pub enum JoinType {
     Cross,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct JoinDataType {
     pub is_left_struct: bool,
     pub is_right_struct: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SetOpType {
     Intersect,
     Union,
     Except,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum GroupType {
     GroupBy,
     Rollup,
@@ -474,32 +496,37 @@ pub enum GroupType {
     Pivot,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ParseFormat {
     Unspecified,
     Csv,
     Json,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Fraction {
     pub stratum: Literal,
     pub fraction: f64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Pivot {
     pub column: Expr,
     pub values: Vec<Literal>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Replacement {
     pub old_value: Literal,
     pub new_value: Literal,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StorageLevel {
     pub use_disk: bool,
     pub use_memory: bool,

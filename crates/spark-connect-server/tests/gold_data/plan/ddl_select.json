@@ -4,12 +4,19 @@
       "input": "SELECT 1",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "localRelation": {
-                  "schema": "struct<>"
-                }
+                "node": {
+                  "localRelation": {
+                    "data": null,
+                    "schema": {
+                      "fields": []
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
@@ -19,7 +26,9 @@
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     }

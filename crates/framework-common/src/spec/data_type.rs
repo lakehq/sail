@@ -17,15 +17,15 @@ pub enum DataType {
     Float,
     Double,
     Decimal {
-        scale: i32,
-        precision: i32,
+        precision: u8,
+        scale: i8,
     },
     String,
     Char {
-        length: i32,
+        length: u32,
     },
     VarChar {
-        length: i32,
+        length: u32,
     },
     Date,
     Timestamp,
@@ -75,6 +75,10 @@ pub struct Fields(Vec<Field>);
 impl Fields {
     pub fn new(fields: Vec<Field>) -> Self {
         Fields(fields)
+    }
+
+    pub fn empty() -> Self {
+        Fields(Vec::new())
     }
 }
 
@@ -276,8 +280,8 @@ impl TryFrom<DataType> for adt::DataType {
             }
             DataType::Char { .. } => Ok(adt::DataType::Utf8),
             DataType::VarChar { .. } => Ok(adt::DataType::Utf8),
-            DataType::Date {} => Ok(adt::DataType::Date32),
-            DataType::Timestamp {} => {
+            DataType::Date => Ok(adt::DataType::Date32),
+            DataType::Timestamp => {
                 // TODO: should we use "spark.sql.session.timeZone"?
                 let timezone: Arc<str> = Arc::from("UTC");
                 Ok(adt::DataType::Timestamp(
@@ -285,10 +289,12 @@ impl TryFrom<DataType> for adt::DataType {
                     Some(timezone),
                 ))
             }
-            DataType::TimestampNtz {} => {
+            DataType::TimestampNtz => {
                 Ok(adt::DataType::Timestamp(adt::TimeUnit::Microsecond, None))
             }
-            DataType::CalendarInterval => Err(CommonError::unsupported("calendar interval")),
+            DataType::CalendarInterval => {
+                Ok(adt::DataType::Interval(adt::IntervalUnit::MonthDayNano))
+            }
             DataType::YearMonthInterval { .. } => {
                 Ok(adt::DataType::Interval(adt::IntervalUnit::YearMonth))
             }
@@ -367,6 +373,9 @@ impl TryFrom<adt::DataType> for DataType {
                     end_field: Some(YearMonthIntervalField::Month),
                 })
             }
+            adt::DataType::Interval(adt::IntervalUnit::MonthDayNano) => {
+                Ok(DataType::CalendarInterval)
+            }
             adt::DataType::Interval(_) => Err(CommonError::unsupported("interval")),
             adt::DataType::Binary
             | adt::DataType::FixedSizeBinary(_)
@@ -392,10 +401,9 @@ impl TryFrom<adt::DataType> for DataType {
             }
             adt::DataType::Union(_, _) => Err(CommonError::unsupported("union")),
             adt::DataType::Dictionary(_, _) => Err(CommonError::unsupported("dictionary")),
-            adt::DataType::Decimal128(precision, scale) => Ok(DataType::Decimal {
-                scale: scale as i32,
-                precision: precision as i32,
-            }),
+            adt::DataType::Decimal128(precision, scale) => {
+                Ok(DataType::Decimal { precision, scale })
+            }
             adt::DataType::Decimal256(_, _) => Err(CommonError::unsupported("decimal256")),
             adt::DataType::Map(field, _sorted) => {
                 let field: Field = field.clone().try_into()?;

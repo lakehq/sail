@@ -1,12 +1,10 @@
 use crate::error::{SparkError, SparkResult};
-use crate::spark::connect as sc;
-use crate::spark::connect::expression::literal::{Decimal, LiteralType};
-use crate::spark::connect::expression::{ExprType, Literal};
 use crate::sql::data_type::{SPARK_DECIMAL_MAX_PRECISION, SPARK_DECIMAL_MAX_SCALE};
 use crate::sql::fail_on_extra_token;
 use crate::sql::parser::SparkDialect;
 use chrono;
 use chrono_tz;
+use framework_common::spec;
 use lazy_static::lazy_static;
 use sqlparser::ast;
 use sqlparser::keywords::Keyword;
@@ -19,7 +17,9 @@ lazy_static! {
     static ref BINARY_REGEX: regex::Regex =
         regex::Regex::new(r"^[0-9a-fA-F]*$").unwrap();
     static ref DECIMAL_REGEX: regex::Regex =
-        regex::Regex::new(r"^(?P<sign>[+-]?)(?P<whole>\d+)[.]?(?P<fraction>\d*)([eE](?P<exponent>[+-]?\d+))?$").unwrap();
+        regex::Regex::new(r"^(?P<sign>[+-]?)(?P<whole>\d{1,38})[.]?(?P<fraction>\d{0,38})([eE](?P<exponent>[+-]?\d+))?$").unwrap();
+    static ref DECIMAL_FRACTION_REGEX: regex::Regex =
+        regex::Regex::new(r"^(?P<sign>[+-]?)[.](?P<fraction>\d{1,38})([eE](?P<exponent>[+-]?\d+))?$").unwrap();
     static ref DATE_REGEX: regex::Regex =
         regex::Regex::new(r"^\s*(?P<year>\d{4})(-(?P<month>\d{1,2})(-(?P<day>\d{1,2})T?)?)?\s*$")
             .unwrap();
@@ -63,123 +63,115 @@ lazy_static! {
 #[derive(Debug)]
 pub(crate) struct LiteralValue<T>(pub T);
 
-impl<T> TryFrom<LiteralValue<T>> for sc::Expression
+impl<T> TryFrom<LiteralValue<T>> for spec::Expr
 where
-    LiteralValue<T>: TryInto<LiteralType, Error = SparkError>,
+    LiteralValue<T>: TryInto<spec::Literal, Error = SparkError>,
 {
     type Error = SparkError;
 
-    fn try_from(literal: LiteralValue<T>) -> SparkResult<sc::Expression> {
-        Ok(sc::Expression {
-            expr_type: Some(ExprType::Literal(Literal {
-                literal_type: Some(literal.try_into()?),
-            })),
-        })
+    fn try_from(literal: LiteralValue<T>) -> SparkResult<spec::Expr> {
+        Ok(spec::Expr::Literal(literal.try_into()?))
     }
 }
 
-impl TryFrom<LiteralValue<bool>> for LiteralType {
+impl TryFrom<LiteralValue<bool>> for spec::Literal {
     type Error = SparkError;
 
-    fn try_from(literal: LiteralValue<bool>) -> SparkResult<LiteralType> {
-        Ok(LiteralType::Boolean(literal.0))
+    fn try_from(literal: LiteralValue<bool>) -> SparkResult<spec::Literal> {
+        Ok(spec::Literal::Boolean(literal.0))
     }
 }
 
-impl TryFrom<LiteralValue<String>> for LiteralType {
+impl TryFrom<LiteralValue<String>> for spec::Literal {
     type Error = SparkError;
 
-    fn try_from(literal: LiteralValue<String>) -> SparkResult<LiteralType> {
-        Ok(LiteralType::String(literal.0))
+    fn try_from(literal: LiteralValue<String>) -> SparkResult<spec::Literal> {
+        Ok(spec::Literal::String(literal.0))
     }
 }
 
-impl TryFrom<LiteralValue<Vec<u8>>> for LiteralType {
+impl TryFrom<LiteralValue<Vec<u8>>> for spec::Literal {
     type Error = SparkError;
 
-    fn try_from(literal: LiteralValue<Vec<u8>>) -> SparkResult<LiteralType> {
-        Ok(LiteralType::Binary(literal.0))
+    fn try_from(literal: LiteralValue<Vec<u8>>) -> SparkResult<spec::Literal> {
+        Ok(spec::Literal::Binary(literal.0))
     }
 }
 
-impl TryFrom<LiteralValue<i8>> for LiteralType {
+impl TryFrom<LiteralValue<i8>> for spec::Literal {
     type Error = SparkError;
 
-    fn try_from(literal: LiteralValue<i8>) -> SparkResult<LiteralType> {
-        Ok(LiteralType::Byte(literal.0 as i32))
+    fn try_from(literal: LiteralValue<i8>) -> SparkResult<spec::Literal> {
+        Ok(spec::Literal::Byte(literal.0))
     }
 }
 
-impl TryFrom<LiteralValue<i16>> for LiteralType {
+impl TryFrom<LiteralValue<i16>> for spec::Literal {
     type Error = SparkError;
 
-    fn try_from(literal: LiteralValue<i16>) -> SparkResult<LiteralType> {
-        Ok(LiteralType::Short(literal.0 as i32))
+    fn try_from(literal: LiteralValue<i16>) -> SparkResult<spec::Literal> {
+        Ok(spec::Literal::Short(literal.0))
     }
 }
 
-impl TryFrom<LiteralValue<i32>> for LiteralType {
+impl TryFrom<LiteralValue<i32>> for spec::Literal {
     type Error = SparkError;
 
-    fn try_from(literal: LiteralValue<i32>) -> SparkResult<LiteralType> {
-        Ok(LiteralType::Integer(literal.0))
+    fn try_from(literal: LiteralValue<i32>) -> SparkResult<spec::Literal> {
+        Ok(spec::Literal::Integer(literal.0))
     }
 }
 
-impl TryFrom<LiteralValue<i64>> for LiteralType {
+impl TryFrom<LiteralValue<i64>> for spec::Literal {
     type Error = SparkError;
 
-    fn try_from(literal: LiteralValue<i64>) -> SparkResult<LiteralType> {
-        Ok(LiteralType::Long(literal.0))
+    fn try_from(literal: LiteralValue<i64>) -> SparkResult<spec::Literal> {
+        Ok(spec::Literal::Long(literal.0))
     }
 }
 
-impl TryFrom<LiteralValue<f32>> for LiteralType {
+impl TryFrom<LiteralValue<f32>> for spec::Literal {
     type Error = SparkError;
 
-    fn try_from(literal: LiteralValue<f32>) -> SparkResult<LiteralType> {
-        Ok(LiteralType::Float(literal.0))
+    fn try_from(literal: LiteralValue<f32>) -> SparkResult<spec::Literal> {
+        Ok(spec::Literal::Float(literal.0))
     }
 }
 
-impl TryFrom<LiteralValue<f64>> for LiteralType {
+impl TryFrom<LiteralValue<f64>> for spec::Literal {
     type Error = SparkError;
 
-    fn try_from(literal: LiteralValue<f64>) -> SparkResult<LiteralType> {
-        Ok(LiteralType::Double(literal.0))
+    fn try_from(literal: LiteralValue<f64>) -> SparkResult<spec::Literal> {
+        Ok(spec::Literal::Double(literal.0))
     }
 }
 
-impl TryFrom<LiteralValue<Decimal>> for LiteralType {
+impl TryFrom<LiteralValue<spec::Decimal>> for spec::Literal {
     type Error = SparkError;
 
-    fn try_from(literal: LiteralValue<Decimal>) -> SparkResult<LiteralType> {
-        Ok(LiteralType::Decimal(literal.0))
+    fn try_from(literal: LiteralValue<spec::Decimal>) -> SparkResult<spec::Literal> {
+        Ok(spec::Literal::Decimal(literal.0))
     }
 }
 
-impl TryFrom<LiteralValue<chrono::NaiveDate>> for LiteralType {
+impl TryFrom<LiteralValue<chrono::NaiveDate>> for spec::Literal {
     type Error = SparkError;
 
-    fn try_from(literal: LiteralValue<chrono::NaiveDate>) -> SparkResult<LiteralType> {
+    fn try_from(literal: LiteralValue<chrono::NaiveDate>) -> SparkResult<spec::Literal> {
         let value = chrono::NaiveDateTime::from(literal.0);
         let days = (value - chrono::NaiveDateTime::UNIX_EPOCH).num_days();
-        let days = i32::try_from(days).or_else(|_| {
-            Err(SparkError::invalid(format!(
-                "date literal: {:?}",
-                literal.0
-            )))
-        })?;
-        Ok(LiteralType::Date(days))
+        let days = i32::try_from(days)
+            .map_err(|_| SparkError::invalid(format!("date literal: {:?}", literal.0)))?;
+        Ok(spec::Literal::Date { days })
     }
 }
 
-impl TryFrom<LiteralValue<(chrono::NaiveDateTime, TimeZoneVariant)>> for LiteralType {
+impl TryFrom<LiteralValue<(chrono::NaiveDateTime, TimeZoneVariant)>> for spec::Literal {
     type Error = SparkError;
 
     fn try_from(
         literal: LiteralValue<(chrono::NaiveDateTime, TimeZoneVariant)>,
-    ) -> SparkResult<LiteralType> {
+    ) -> SparkResult<spec::Literal> {
         let (dt, ref tz) = literal.0;
         let (delta, ntz) = match tz {
             TimeZoneVariant::FixedOffset(tz) => {
@@ -195,19 +187,19 @@ impl TryFrom<LiteralValue<(chrono::NaiveDateTime, TimeZoneVariant)>> for Literal
             .num_microseconds()
             .ok_or_else(|| SparkError::invalid(format!("datetime literal: {:?}", literal.0)))?;
         if ntz {
-            Ok(LiteralType::TimestampNtz(microseconds))
+            Ok(spec::Literal::TimestampNtz { microseconds })
         } else {
-            Ok(LiteralType::Timestamp(microseconds))
+            Ok(spec::Literal::Timestamp { microseconds })
         }
     }
 }
 
-impl TryFrom<LiteralValue<Signed<ast::Interval>>> for LiteralType {
+impl TryFrom<LiteralValue<Signed<ast::Interval>>> for spec::Literal {
     type Error = SparkError;
 
     // TODO: support the legacy calendar interval when `spark.sql.legacy.interval.enabled` is `true`
 
-    fn try_from(literal: LiteralValue<Signed<ast::Interval>>) -> SparkResult<LiteralType> {
+    fn try_from(literal: LiteralValue<Signed<ast::Interval>>) -> SparkResult<spec::Literal> {
         use ast::{DateTimeField, Interval, IntervalUnit, IntervalValueWithUnit};
 
         let Signed(interval, negated) = literal.0;
@@ -350,9 +342,9 @@ impl TryFrom<String> for LiteralValue<Vec<u8>> {
             .chunks(2)
             .map(|chunk| {
                 let chunk = std::str::from_utf8(chunk)
-                    .or_else(|_| Err(SparkError::invalid(format!("hex string: {:?}", value))))?;
+                    .map_err(|_| SparkError::invalid(format!("hex string: {:?}", value)))?;
                 u8::from_str_radix(chunk, 16)
-                    .or_else(|_| Err(SparkError::invalid(format!("hex string: {:?}", value))))
+                    .map_err(|_| SparkError::invalid(format!("hex string: {:?}", value)))
             })
             .collect::<SparkResult<_>>()?;
         Ok(LiteralValue(bytes))
@@ -365,7 +357,7 @@ impl TryFrom<String> for LiteralValue<i8> {
     fn try_from(value: String) -> SparkResult<Self> {
         let value = value
             .parse::<i8>()
-            .or_else(|_| Err(SparkError::invalid(format!("tinyint: {:?}", value))))?;
+            .map_err(|_| SparkError::invalid(format!("tinyint: {:?}", value)))?;
         Ok(LiteralValue(value))
     }
 }
@@ -376,7 +368,7 @@ impl TryFrom<String> for LiteralValue<i16> {
     fn try_from(value: String) -> SparkResult<Self> {
         let value = value
             .parse::<i16>()
-            .or_else(|_| Err(SparkError::invalid(format!("smallint: {:?}", value))))?;
+            .map_err(|_| SparkError::invalid(format!("smallint: {:?}", value)))?;
         Ok(LiteralValue(value))
     }
 }
@@ -387,7 +379,7 @@ impl TryFrom<String> for LiteralValue<i32> {
     fn try_from(value: String) -> SparkResult<Self> {
         let value = value
             .parse::<i32>()
-            .or_else(|_| Err(SparkError::invalid(format!("int: {:?}", value))))?;
+            .map_err(|_| SparkError::invalid(format!("int: {:?}", value)))?;
         Ok(LiteralValue(value))
     }
 }
@@ -398,7 +390,7 @@ impl TryFrom<String> for LiteralValue<i64> {
     fn try_from(value: String) -> SparkResult<Self> {
         let value = value
             .parse::<i64>()
-            .or_else(|_| Err(SparkError::invalid(format!("bigint: {:?}", value))))?;
+            .map_err(|_| SparkError::invalid(format!("bigint: {:?}", value)))?;
         Ok(LiteralValue(value))
     }
 }
@@ -409,7 +401,7 @@ impl TryFrom<String> for LiteralValue<f32> {
     fn try_from(value: String) -> SparkResult<Self> {
         let n = value
             .parse::<f32>()
-            .or_else(|_| Err(SparkError::invalid(format!("float: {:?}", value))))?;
+            .map_err(|_| SparkError::invalid(format!("float: {:?}", value)))?;
         if n.is_infinite() || n.is_nan() {
             return Err(SparkError::invalid(format!(
                 "out-of-range float: {:?}",
@@ -426,7 +418,7 @@ impl TryFrom<String> for LiteralValue<f64> {
     fn try_from(value: String) -> SparkResult<Self> {
         let n = value
             .parse::<f64>()
-            .or_else(|_| Err(SparkError::invalid(format!("double: {:?}", value))))?;
+            .map_err(|_| SparkError::invalid(format!("double: {:?}", value)))?;
         if n.is_infinite() || n.is_nan() {
             return Err(SparkError::invalid(format!(
                 "out-of-range double: {:?}",
@@ -437,33 +429,55 @@ impl TryFrom<String> for LiteralValue<f64> {
     }
 }
 
-impl TryFrom<String> for LiteralValue<Decimal> {
+impl TryFrom<String> for LiteralValue<spec::Decimal> {
     type Error = SparkError;
 
     fn try_from(value: String) -> SparkResult<Self> {
         let error = || SparkError::invalid(format!("decimal: {:?}", value));
-        let captures = DECIMAL_REGEX.captures(&value).ok_or_else(error)?;
-        let whole: String = extract_match(&captures, "whole", error)?.unwrap_or(Default::default());
-        let fraction: String =
-            extract_match(&captures, "fraction", error)?.unwrap_or(Default::default());
-        let e: i32 = extract_match(&captures, "exponent", error)?.unwrap_or(0);
-        let w = whole.len() as i32;
-        let w = if w + e > 0 { w + e } else { 0 };
-        let f = fraction.len() as i32;
-        let f = if f - e > 0 { f - e } else { 0 };
-        let (precision, scale) = (w + f, f);
-        if precision > SPARK_DECIMAL_MAX_PRECISION {
-            return Err(SparkError::invalid(format!("decimal: {:?}", value)));
-        }
-        if scale > SPARK_DECIMAL_MAX_SCALE {
-            return Err(SparkError::invalid(format!("decimal: {:?}", value)));
-        }
-        let value = Decimal {
-            value,
-            precision: Some(precision),
-            scale: Some(scale),
+        let captures = DECIMAL_REGEX
+            .captures(&value)
+            .or_else(|| DECIMAL_FRACTION_REGEX.captures(&value))
+            .ok_or_else(error)?;
+        let sign = captures.name("sign").map(|s| s.as_str()).unwrap_or("");
+        let whole = captures
+            .name("whole")
+            .map(|s| s.as_str())
+            .unwrap_or("")
+            .trim_start_matches('0');
+        let fraction = captures.name("fraction").map(|s| s.as_str()).unwrap_or("");
+        let e: i8 = extract_match(&captures, "exponent", error)?.unwrap_or(0);
+        let (whole, w, f) = match (whole, fraction) {
+            ("", "") => ("0", 1i8, 0i8),
+            (whole, fraction) => (whole, whole.len() as i8, fraction.len() as i8),
         };
-        Ok(LiteralValue(value))
+        let (scale, padding) = {
+            let scale = f.checked_sub(e).ok_or_else(error)?;
+            if scale < -SPARK_DECIMAL_MAX_SCALE || scale > SPARK_DECIMAL_MAX_SCALE {
+                return Err(error());
+            }
+            if scale < 0 {
+                // Although the decimal type allows negative scale,
+                // we always parse the literal as zero-scale and add padding.
+                (0, -scale)
+            } else {
+                (scale, 0)
+            }
+        };
+        let width = w + f + padding;
+        let precision = std::cmp::max(width, scale) as u8;
+        if precision > SPARK_DECIMAL_MAX_PRECISION {
+            return Err(error());
+        }
+        let num = format!("{whole}{fraction}");
+        let width = width as usize;
+        let value = format!("{sign}{num:0<width$}")
+            .parse()
+            .map_err(|_| error())?;
+        Ok(LiteralValue(spec::Decimal {
+            value,
+            precision,
+            scale,
+        }))
     }
 }
 
@@ -507,7 +521,7 @@ impl<T: FromStr> FromStr for Signed<T> {
     type Err = SparkError;
 
     fn from_str(s: &str) -> SparkResult<Self> {
-        let v = s.parse::<T>().or_else(|_| Err(SparkError::invalid(s)))?;
+        let v = s.parse::<T>().map_err(|_| SparkError::invalid(s))?;
         Ok(Signed(v, false))
     }
 }
@@ -538,7 +552,7 @@ where
             }))
             | ast::Expr::Value(Value::TripleSingleQuotedString(value))
             | ast::Expr::Value(Value::TripleDoubleQuotedString(value)) => {
-                let value = value.parse::<T>().or_else(|_| Err(error()))?;
+                let value = value.parse::<T>().map_err(|_| error())?;
                 Ok(LiteralValue(value))
             }
             _ => Err(error()),
@@ -558,7 +572,7 @@ where
         .name(name)
         .map(|x| x.as_str().parse::<T>())
         .transpose()
-        .or_else(|_| Err(error()))
+        .map_err(|_| error())
 }
 
 fn extract_second_fraction_match<T>(
@@ -581,10 +595,10 @@ where
                 .parse::<T>()
         })
         .transpose()
-        .or_else(|_| Err(error()))
+        .map_err(|_| error())
 }
 
-pub(crate) fn parse_date_string(s: &str) -> SparkResult<LiteralType> {
+pub(crate) fn parse_date_string(s: &str) -> SparkResult<spec::Literal> {
     let error = || SparkError::invalid(format!("date: {s}"));
     let captures = DATE_REGEX.captures(s).ok_or_else(error)?;
     let year = extract_match(&captures, "year", error)?.ok_or_else(error)?;
@@ -592,10 +606,10 @@ pub(crate) fn parse_date_string(s: &str) -> SparkResult<LiteralType> {
     let day = extract_match(&captures, "day", error)?.unwrap_or(1);
     let date = chrono::NaiveDate::from_ymd_opt(year, month, day)
         .ok_or_else(|| SparkError::invalid(format!("date: {s}")))?;
-    Ok(LiteralType::try_from(LiteralValue(date))?)
+    Ok(spec::Literal::try_from(LiteralValue(date))?)
 }
 
-pub(crate) fn parse_timestamp_string(s: &str) -> SparkResult<LiteralType> {
+pub(crate) fn parse_timestamp_string(s: &str) -> SparkResult<spec::Literal> {
     let error = || SparkError::invalid(format!("timestamp: {s}"));
     let captures = TIMESTAMP_REGEX.captures(s).ok_or_else(error)?;
     let year = extract_match(&captures, "year", error)?.ok_or_else(error)?;
@@ -611,7 +625,7 @@ pub(crate) fn parse_timestamp_string(s: &str) -> SparkResult<LiteralType> {
         .and_then(|d| d.and_hms_opt(hour, minute, second))
         .and_then(|d| d.checked_add_signed(chrono::Duration::microseconds(fraction)))
         .ok_or_else(error)?;
-    Ok(LiteralType::try_from(LiteralValue((dt, tz)))?)
+    Ok(spec::Literal::try_from(LiteralValue((dt, tz)))?)
 }
 
 #[derive(Debug)]
@@ -658,7 +672,7 @@ pub(crate) fn parse_timezone_string(tz: Option<&str>) -> SparkResult<TimeZoneVar
                 let offset = chrono::FixedOffset::east_opt(n).ok_or_else(error)?;
                 Ok(TimeZoneVariant::FixedOffset(offset))
             } else {
-                let tz = tz.parse::<chrono_tz::Tz>().or_else(|_| Err(error()))?;
+                let tz = tz.parse::<chrono_tz::Tz>().map_err(|_| error())?;
                 Ok(TimeZoneVariant::Named(tz))
             }
         }
@@ -669,7 +683,7 @@ fn parse_year_month_interval_string(
     s: &str,
     negated: Negated,
     interval_regex: &regex::Regex,
-) -> SparkResult<LiteralType> {
+) -> SparkResult<spec::Literal> {
     let error = || SparkError::invalid(format!("interval: {s}"));
     let captures = interval_regex.captures(s).ok_or_else(error)?;
     let negated = negated ^ (captures.name("sign").map(|s| s.as_str()) == Some("-"));
@@ -679,20 +693,20 @@ fn parse_year_month_interval_string(
         .checked_mul(12)
         .ok_or_else(error)?
         .checked_add(months)
-        .ok_or_else(error)? as i32;
+        .ok_or_else(error)?;
     let n = if negated {
         n.checked_mul(-1).ok_or_else(error)?
     } else {
         n
     };
-    Ok(LiteralType::YearMonthInterval(n))
+    Ok(spec::Literal::YearMonthInterval { months: n })
 }
 
 fn parse_day_time_interval_string(
     s: &str,
     negated: Negated,
     interval_regex: &regex::Regex,
-) -> SparkResult<LiteralType> {
+) -> SparkResult<spec::Literal> {
     let error = || SparkError::invalid(format!("interval: {s}"));
     let captures = interval_regex.captures(s).ok_or_else(error)?;
     let negated = negated ^ (captures.name("sign").map(|s| s.as_str()) == Some("-"));
@@ -718,13 +732,13 @@ fn parse_day_time_interval_string(
     } else {
         microseconds
     };
-    Ok(LiteralType::DayTimeInterval(n))
+    Ok(spec::Literal::DayTimeInterval { microseconds: n })
 }
 
 fn parse_multi_unit_interval(
     values: Vec<(ast::Expr, ast::DateTimeField)>,
     negated: Negated,
-) -> SparkResult<LiteralType> {
+) -> SparkResult<spec::Literal> {
     use ast::DateTimeField;
 
     let error = || SparkError::invalid("multi-unit interval");
@@ -794,7 +808,7 @@ fn parse_multi_unit_interval(
             } else {
                 months
             };
-            Ok(LiteralType::YearMonthInterval(n))
+            Ok(spec::Literal::YearMonthInterval { months: n })
         }
         (true, true) => Err(SparkError::invalid(
             "cannot mix year-month and day-time fields in interval",
@@ -806,12 +820,12 @@ fn parse_multi_unit_interval(
             } else {
                 microseconds
             };
-            Ok(LiteralType::DayTimeInterval(n))
+            Ok(spec::Literal::DayTimeInterval { microseconds: n })
         }
     }
 }
 
-fn parse_unqualified_interval_string(s: &str, negated: Negated) -> SparkResult<LiteralType> {
+fn parse_unqualified_interval_string(s: &str, negated: Negated) -> SparkResult<spec::Literal> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(s)?;
     // consume the `INTERVAL` keyword if any
     let _ = parser.parse_keyword(Keyword::INTERVAL);
@@ -836,12 +850,41 @@ fn parse_unqualified_interval_string(s: &str, negated: Negated) -> SparkResult<L
         // otherwise it could cause infinite recursion when creating the literal.
         return Err(SparkError::invalid(format!("interval: {s}")));
     }
-    LiteralType::try_from(LiteralValue(Signed(interval, negated)))
+    spec::Literal::try_from(LiteralValue(Signed(interval, negated)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_decimal() -> SparkResult<()> {
+        use framework_common::spec::Decimal;
+        let parse = |x: &str| -> SparkResult<Decimal> {
+            LiteralValue::<Decimal>::try_from(x.to_string()).map(|x| x.0)
+        };
+        assert_eq!(parse("123.45")?, Decimal::new(12345, 5, 2));
+        assert_eq!(parse("-123.45")?, Decimal::new(-12345, 5, 2));
+        assert_eq!(parse("123.45e1")?, Decimal::new(12345, 5, 1));
+        assert_eq!(parse("123.45E-2")?, Decimal::new(12345, 5, 4));
+        assert_eq!(parse("1.23e10")?, Decimal::new(12300000000, 11, 0));
+        assert_eq!(parse("1.23E-10")?, Decimal::new(123, 12, 12));
+        assert_eq!(parse("0")?, Decimal::new(0, 1, 0));
+        assert_eq!(parse("0.")?, Decimal::new(0, 1, 0));
+        assert_eq!(parse("0.0")?, Decimal::new(0, 1, 1));
+        assert_eq!(parse(".0")?, Decimal::new(0, 1, 1));
+        assert_eq!(parse(".0e1")?, Decimal::new(0, 1, 0));
+        assert_eq!(parse(".0e-1")?, Decimal::new(0, 2, 2));
+        assert_eq!(parse("001.2")?, Decimal::new(12, 2, 1));
+        assert_eq!(parse("001.20")?, Decimal::new(120, 3, 2));
+        assert!(parse(".").is_err());
+        assert!(parse("123.456.789").is_err());
+        assert!(parse("1E100").is_err());
+        assert!(parse("-.2E-100").is_err());
+        assert!(parse("12345678901234567890123456789012345678").is_ok());
+        assert!(parse("123456789012345678901234567890123456789").is_err());
+        Ok(())
+    }
 
     #[test]
     fn test_parse_interval() -> SparkResult<()> {

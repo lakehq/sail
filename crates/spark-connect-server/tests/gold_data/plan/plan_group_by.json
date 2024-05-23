@@ -10,37 +10,49 @@
       "input": "select a, b, sum(c) as c from d group by a, b",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "aggregate": {
               "input": {
-                "read": {
-                  "namedTable": {
-                    "unparsedIdentifier": "d"
+                "node": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "d",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
                   }
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
-              "groupType": "GROUP_TYPE_GROUPBY",
+              "groupType": "groupBy",
               "groupingExpressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a"
+                    "unparsedIdentifier": "a",
+                    "planId": null
                   }
                 },
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
                 }
               ],
               "aggregateExpressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a"
+                    "unparsedIdentifier": "a",
+                    "planId": null
                   }
                 },
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
                 },
                 {
@@ -51,20 +63,27 @@
                         "arguments": [
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "c"
+                              "unparsedIdentifier": "c",
+                              "planId": null
                             }
                           }
-                        ]
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
                       }
                     },
                     "name": [
                       "c"
-                    ]
+                    ],
+                    "metadata": null
                   }
                 }
-              ]
+              ],
+              "pivot": null
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },

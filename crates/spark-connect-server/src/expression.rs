@@ -1,26 +1,23 @@
 use std::sync::Arc;
 
-use crate::error::{ProtoFieldExt, SparkError, SparkResult};
+use crate::error::{SparkError, SparkResult};
 use crate::extension::function::alias::MultiAlias;
 use crate::extension::function::contains::Contains;
 use crate::extension::function::struct_function::StructFunction;
-use crate::schema::from_spark_built_in_data_type;
-use crate::spark::connect as sc;
-use crate::sql::data_type::parse_spark_data_type;
-use crate::sql::expression::{parse_spark_expression, parse_spark_qualified_wildcard};
-use datafusion::arrow::datatypes::{DataType, IntervalMonthDayNanoType};
+use crate::sql::expression::parse_spark_qualified_wildcard;
+use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::TableReference;
 use datafusion::common::{Column, DFSchema, Result, ScalarValue};
 use datafusion::config::ConfigOptions;
 use datafusion::sql::planner::ContextProvider;
 use datafusion::{functions, functions_array};
-use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
     expr, window_frame, AggregateFunction, AggregateUDF, BuiltInWindowFunction,
     BuiltinScalarFunction, ExprSchemable, GetFieldAccess, GetIndexedField, Operator,
     ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
 };
+use framework_common::spec;
 use framework_python::partial_python_udf::PartialPythonUDF;
 
 #[derive(Default)]
@@ -70,151 +67,123 @@ impl ContextProvider for EmptyContextProvider {
 }
 
 pub(crate) fn from_spark_sort_order(
-    sort: &sc::expression::SortOrder,
+    sort: spec::SortOrder,
     schema: &DFSchema,
 ) -> SparkResult<expr::Expr> {
-    use sc::expression::sort_order::{NullOrdering, SortDirection};
+    use spec::{NullOrdering, SortDirection};
 
-    let expr = sort.child.as_ref().required("expression for sort order")?;
-    let asc = match SortDirection::try_from(sort.direction) {
-        Ok(SortDirection::Ascending) => true,
-        Ok(SortDirection::Descending) => false,
-        Ok(SortDirection::Unspecified) => true,
-        Err(_) => {
-            return Err(SparkError::invalid("invalid sort direction"));
-        }
+    let spec::SortOrder {
+        child,
+        direction,
+        null_ordering,
+    } = sort;
+    let asc = match direction {
+        SortDirection::Ascending => true,
+        SortDirection::Descending => false,
+        SortDirection::Unspecified => true,
     };
-    let nulls_first = match NullOrdering::try_from(sort.null_ordering) {
-        Ok(NullOrdering::SortNullsFirst) => true,
-        Ok(NullOrdering::SortNullsLast) => false,
-        Ok(NullOrdering::SortNullsUnspecified) => asc,
-        Err(_) => {
-            return Err(SparkError::invalid("invalid null ordering"));
-        }
+    let nulls_first = match null_ordering {
+        NullOrdering::NullsFirst => true,
+        NullOrdering::NullsLast => false,
+        NullOrdering::Unspecified => asc,
     };
     Ok(expr::Expr::Sort(expr::Sort {
-        expr: Box::new(from_spark_expression(expr, schema)?),
+        expr: Box::new(from_spark_expression(*child, schema)?),
         asc,
         nulls_first,
     }))
 }
 
 pub(crate) fn from_spark_window_frame(
-    frame: &sc::expression::window::WindowFrame,
+    frame: spec::WindowFrame,
 ) -> SparkResult<window_frame::WindowFrame> {
-    use sc::expression::window::window_frame::frame_boundary::Boundary;
-    use sc::expression::window::window_frame::FrameType;
+    use spec::{WindowFrameBoundary, WindowFrameType};
 
-    let frame_type = FrameType::try_from(frame.frame_type)?;
-    let lower = frame
-        .lower
-        .as_ref()
-        .required("lower boundary")?
-        .boundary
-        .as_ref()
-        .required("lower boundary")?;
-    let upper = frame
-        .upper
-        .as_ref()
-        .required("upper boundary")?
-        .boundary
-        .as_ref()
-        .required("upper boundary")?;
+    let spec::WindowFrame {
+        frame_type,
+        lower,
+        upper,
+    } = frame;
 
     let units = match frame_type {
-        FrameType::Undefined => return Err(SparkError::invalid("undefined frame type")),
-        FrameType::Row => window_frame::WindowFrameUnits::Rows,
-        FrameType::Range => window_frame::WindowFrameUnits::Range,
+        WindowFrameType::Undefined => return Err(SparkError::invalid("undefined frame type")),
+        WindowFrameType::Row => window_frame::WindowFrameUnits::Rows,
+        WindowFrameType::Range => window_frame::WindowFrameUnits::Range,
     };
-
-    fn from_boundary_value(value: &sc::Expression) -> SparkResult<ScalarValue> {
-        let value = from_spark_expression(value, &DFSchema::empty())?;
-        match value {
-            expr::Expr::Literal(
-                v @ (ScalarValue::UInt32(_)
-                | ScalarValue::Int32(_)
-                | ScalarValue::UInt64(_)
-                | ScalarValue::Int64(_)),
-            ) => Ok(v),
-            _ => Err(SparkError::invalid(format!(
-                "invalid boundary value: {:?}",
-                value
-            ))),
-        }
-    }
-
     let start = match lower {
-        Boundary::CurrentRow(true) => window_frame::WindowFrameBound::CurrentRow,
-        Boundary::Unbounded(true) => {
+        WindowFrameBoundary::CurrentRow => window_frame::WindowFrameBound::CurrentRow,
+        WindowFrameBoundary::Unbounded => {
             window_frame::WindowFrameBound::Preceding(ScalarValue::UInt64(None))
         }
-        Boundary::Value(value) => {
-            window_frame::WindowFrameBound::Preceding(from_boundary_value(value)?)
-        }
-        _ => {
-            return Err(SparkError::invalid(format!(
-                "invalid lower boundary: {:?}",
-                lower
-            )));
+        WindowFrameBoundary::Value(value) => {
+            window_frame::WindowFrameBound::Preceding(from_spark_window_boundary_value(*value)?)
         }
     };
     let end = match upper {
-        Boundary::CurrentRow(true) => window_frame::WindowFrameBound::CurrentRow,
-        Boundary::Unbounded(true) => {
+        WindowFrameBoundary::CurrentRow => window_frame::WindowFrameBound::CurrentRow,
+        WindowFrameBoundary::Unbounded => {
             window_frame::WindowFrameBound::Following(ScalarValue::UInt64(None))
         }
-        Boundary::Value(value) => {
-            window_frame::WindowFrameBound::Following(from_boundary_value(value)?)
-        }
-        _ => {
-            return Err(SparkError::invalid(format!(
-                "invalid upper boundary: {:?}",
-                upper
-            )));
+        WindowFrameBoundary::Value(value) => {
+            window_frame::WindowFrameBound::Following(from_spark_window_boundary_value(*value)?)
         }
     };
     Ok(window_frame::WindowFrame::new_bounds(units, start, end))
 }
 
+fn from_spark_window_boundary_value(value: spec::Expr) -> SparkResult<ScalarValue> {
+    let value = from_spark_expression(value, &DFSchema::empty())?;
+    match value {
+        expr::Expr::Literal(
+            v @ (ScalarValue::UInt32(_)
+            | ScalarValue::Int32(_)
+            | ScalarValue::UInt64(_)
+            | ScalarValue::Int64(_)),
+        ) => Ok(v),
+        _ => Err(SparkError::invalid(format!(
+            "invalid boundary value: {:?}",
+            value
+        ))),
+    }
+}
+
 pub(crate) fn from_spark_expression(
-    expr: &sc::Expression,
+    expr: spec::Expr,
     schema: &DFSchema,
 ) -> SparkResult<expr::Expr> {
-    use sc::expression::ExprType;
+    use spec::Expr;
 
-    let sc::Expression { expr_type } = expr;
-    let expr_type = expr_type.as_ref().required("expression type")?;
-    match expr_type {
-        ExprType::Literal(literal) => {
-            Ok(expr::Expr::Literal(from_spark_literal_to_scalar(literal)?))
-        }
-        ExprType::UnresolvedAttribute(attr) => {
-            let col = Column::new_unqualified(&attr.unparsed_identifier);
-            let _plan_id = attr.plan_id;
+    match expr {
+        Expr::Literal(literal) => Ok(expr::Expr::Literal(literal.try_into()?)),
+        Expr::UnresolvedAttribute {
+            unparsed_identifier,
+            plan_id: _,
+        } => {
+            let col = Column::new_unqualified(unparsed_identifier);
             Ok(expr::Expr::Column(col))
         }
-        ExprType::UnresolvedFunction(func) => {
-            if func.is_user_defined_function {
+        Expr::UnresolvedFunction {
+            function_name,
+            arguments,
+            is_distinct,
+            is_user_defined_function,
+        } => {
+            if is_user_defined_function {
                 return Err(SparkError::unsupported("user defined function"));
             }
-            if func.is_distinct {
+            if is_distinct {
                 return Err(SparkError::unsupported("distinct function"));
             }
 
-            let args = func
-                .arguments
-                .iter()
+            let args = arguments
+                .into_iter()
                 .map(|x| from_spark_expression(x, schema))
                 .collect::<SparkResult<Vec<_>>>()?;
-            Ok(get_scalar_function(func.function_name.as_str(), args)?)
+            Ok(get_scalar_function(function_name.as_str(), args)?)
         }
-        ExprType::ExpressionString(expr) => {
-            let expr = parse_spark_expression(expr.expression.as_str())?;
-            from_spark_expression(&expr, schema)
-        }
-        ExprType::UnresolvedStar(star) => {
+        Expr::UnresolvedStar { unparsed_target } => {
             // FIXME: column reference is parsed as qualifier
-            if let Some(target) = &star.unparsed_target {
+            if let Some(target) = unparsed_target {
                 let target = parse_spark_qualified_wildcard(target.as_str())?;
                 Ok(expr::Expr::Wildcard {
                     qualifier: Some(target),
@@ -223,10 +192,16 @@ pub(crate) fn from_spark_expression(
                 Ok(expr::Expr::Wildcard { qualifier: None })
             }
         }
-        ExprType::Alias(alias) => {
-            let expr = alias.expr.as_ref().required("expression for alias")?;
-            let expr = from_spark_expression(expr, schema)?;
-            if let [name] = alias.name.as_slice() {
+        Expr::Alias {
+            expr,
+            name,
+            metadata,
+        } => {
+            if metadata.is_some() {
+                return Err(SparkError::unsupported("alias metadata"));
+            }
+            let expr = from_spark_expression(*expr, schema)?;
+            if let [name] = name.as_slice() {
                 Ok(expr::Expr::Alias(expr::Alias {
                     expr: Box::new(expr),
                     relation: None,
@@ -235,58 +210,48 @@ pub(crate) fn from_spark_expression(
             } else {
                 Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                     func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
-                        MultiAlias::new(alias.name.clone()),
+                        MultiAlias::new(name.clone()),
                     ))),
                     args: vec![expr],
                 }))
             }
         }
-        ExprType::Cast(cast) => {
-            use sc::expression::cast::CastToType;
-
-            let expr = cast.expr.as_ref().required("expression for cast")?;
-            let data_type = cast.cast_to_type.as_ref().required("data type for cast")?;
-            let data_type = match data_type {
-                CastToType::Type(t) => t.clone(),
-                CastToType::TypeStr(s) => parse_spark_data_type(s)?.try_into()?,
-            };
-            let data_type = from_spark_built_in_data_type(&data_type)?;
+        Expr::Cast { expr, cast_to_type } => {
+            let data_type = cast_to_type.try_into()?;
             Ok(expr::Expr::Cast(expr::Cast {
-                expr: Box::new(from_spark_expression(expr, schema)?),
+                expr: Box::new(from_spark_expression(*expr, schema)?),
                 data_type,
             }))
         }
-        ExprType::UnresolvedRegex(_) => Err(SparkError::todo("unresolved regex")),
-        ExprType::SortOrder(sort) => from_spark_sort_order(sort.as_ref(), schema),
-        ExprType::LambdaFunction(_) => Err(SparkError::todo("lambda function")),
-        ExprType::Window(window) => {
-            let func = window
-                .window_function
-                .as_ref()
-                .required("window function")?
-                .expr_type
-                .as_ref()
-                .required("window function expression")?;
-            let (func_name, args) = match func {
-                ExprType::UnresolvedFunction(sc::expression::UnresolvedFunction {
+        Expr::UnresolvedRegex { .. } => Err(SparkError::todo("unresolved regex")),
+        Expr::SortOrder(sort) => from_spark_sort_order(sort, schema),
+        Expr::LambdaFunction { .. } => Err(SparkError::todo("lambda function")),
+        Expr::Window {
+            window_function,
+            partition_spec,
+            order_spec,
+            frame_spec,
+        } => {
+            let (func_name, args) = match *window_function {
+                Expr::UnresolvedFunction {
                     function_name,
                     arguments,
                     is_user_defined_function,
                     is_distinct,
-                }) => {
-                    if *is_user_defined_function {
+                } => {
+                    if is_user_defined_function {
                         return Err(SparkError::unsupported("user defined window function"));
                     }
-                    if *is_distinct {
+                    if is_distinct {
                         return Err(SparkError::unsupported("distinct window function"));
                     }
                     let args = arguments
-                        .iter()
+                        .into_iter()
                         .map(|x| from_spark_expression(x, schema))
                         .collect::<SparkResult<Vec<_>>>()?;
                     (function_name, args)
                 }
-                ExprType::CommonInlineUserDefinedFunction(_) => {
+                Expr::CommonInlineUserDefinedFunction(_) => {
                     return Err(SparkError::unsupported(
                         "inline user defined window function",
                     ));
@@ -294,21 +259,19 @@ pub(crate) fn from_spark_expression(
                 _ => {
                     return Err(SparkError::invalid(format!(
                         "invalid window function expression: {:?}",
-                        func
+                        window_function
                     )));
                 }
             };
-            let partition_by = window
-                .partition_spec
-                .iter()
+            let partition_by = partition_spec
+                .into_iter()
                 .map(|x| from_spark_expression(x, schema))
                 .collect::<SparkResult<Vec<_>>>()?;
-            let order_by = window
-                .order_spec
-                .iter()
+            let order_by = order_spec
+                .into_iter()
                 .map(|x| from_spark_sort_order(x, schema))
                 .collect::<SparkResult<Vec<_>>>()?;
-            let window_frame = if let Some(frame) = window.frame_spec.as_ref() {
+            let window_frame = if let Some(frame) = frame_spec {
                 from_spark_window_frame(frame)?
             } else {
                 window_frame::WindowFrame::new(None)
@@ -322,35 +285,29 @@ pub(crate) fn from_spark_expression(
                 null_treatment: None,
             }))
         }
-        ExprType::UnresolvedExtractValue(extract) => {
-            use sc::expression::literal::LiteralType;
+        Expr::UnresolvedExtractValue { child, extraction } => {
+            use spec::Literal;
 
-            let child = extract
-                .child
-                .as_ref()
-                .required("child for extract value")?
-                .as_ref();
-            let extraction = extract
-                .extraction
-                .as_ref()
-                .required("extraction for extract value")?
-                .as_ref();
-            let literal = match extraction.expr_type.as_ref().required("extraction type")? {
-                ExprType::Literal(literal) => literal.literal_type.as_ref().required("literal")?,
+            let literal = match *extraction {
+                Expr::Literal(literal) => literal,
                 _ => {
                     return Err(SparkError::invalid("extraction must be a literal"));
                 }
             };
             let field = match literal {
-                LiteralType::Byte(x) | LiteralType::Short(x) | LiteralType::Integer(x) => {
-                    GetFieldAccess::ListIndex {
-                        key: Box::new(expr::Expr::Literal(ScalarValue::Int64(Some(*x as i64)))),
-                    }
-                }
-                LiteralType::Long(x) => GetFieldAccess::ListIndex {
-                    key: Box::new(expr::Expr::Literal(ScalarValue::Int64(Some(*x)))),
+                Literal::Byte(x) => GetFieldAccess::ListIndex {
+                    key: Box::new(expr::Expr::Literal(ScalarValue::Int8(Some(x)))),
                 },
-                LiteralType::String(s) => GetFieldAccess::NamedStructField {
+                Literal::Short(x) => GetFieldAccess::ListIndex {
+                    key: Box::new(expr::Expr::Literal(ScalarValue::Int16(Some(x)))),
+                },
+                Literal::Integer(x) => GetFieldAccess::ListIndex {
+                    key: Box::new(expr::Expr::Literal(ScalarValue::Int32(Some(x)))),
+                },
+                Literal::Long(x) => GetFieldAccess::ListIndex {
+                    key: Box::new(expr::Expr::Literal(ScalarValue::Int64(Some(x)))),
+                },
+                Literal::String(s) => GetFieldAccess::NamedStructField {
                     name: ScalarValue::Utf8(Some(s.clone())),
                 },
                 _ => {
@@ -358,67 +315,59 @@ pub(crate) fn from_spark_expression(
                 }
             };
             Ok(expr::Expr::GetIndexedField(GetIndexedField {
-                expr: Box::new(from_spark_expression(child, schema)?),
+                expr: Box::new(from_spark_expression(*child, schema)?),
                 field,
             }))
         }
-        ExprType::UpdateFields(_) => Err(SparkError::todo("update fields")),
-        ExprType::UnresolvedNamedLambdaVariable(_) => {
+        Expr::UpdateFields { .. } => Err(SparkError::todo("update fields")),
+        Expr::UnresolvedNamedLambdaVariable(_) => {
             Err(SparkError::todo("unresolved named lambda variable"))
         }
-        ExprType::CommonInlineUserDefinedFunction(udf) => {
+        Expr::CommonInlineUserDefinedFunction(function) => {
             use framework_python::partial_python_udf::deserialize_partial_python_udf;
             use framework_python::udf::PythonUDF;
             use pyo3::prelude::*;
-            use sc::common_inline_user_defined_function::Function::PythonUdf;
-            use sc::PythonUdf as PythonUDFStruct;
 
-            let function_name: &str = &udf.function_name;
+            let spec::CommonInlineUserDefinedFunction {
+                function_name,
+                deterministic,
+                arguments,
+                function,
+            } = function;
 
-            let deterministic: bool = udf.deterministic;
-
-            let arguments: Vec<expr::Expr> = udf
-                .arguments
-                .iter()
+            let function_name: &str = function_name.as_str();
+            let arguments: Vec<expr::Expr> = arguments
+                .into_iter()
                 .map(|x| from_spark_expression(x, schema))
                 .collect::<SparkResult<Vec<expr::Expr>>>()?;
-
             let input_types: Vec<DataType> = arguments
                 .iter()
                 .map(|arg| arg.get_type(schema))
                 .collect::<Result<Vec<DataType>, DataFusionError>>()?;
 
-            let function: &PythonUDFStruct = match &udf.function {
-                Some(PythonUdf(function)) => function,
+            let (output_type, eval_type, command, python_version) = match function {
+                spec::FunctionType::PythonUdf {
+                    output_type,
+                    eval_type,
+                    command,
+                    python_version,
+                } => (output_type, eval_type, command, python_version),
                 _ => {
                     return Err(SparkError::invalid("UDF function type must be Python UDF"));
                 }
             };
-
-            let output_type: DataType = from_spark_built_in_data_type(
-                function
-                    .output_type
-                    .as_ref()
-                    .required("UDF Function output type")?,
-            )?;
-
-            let eval_type: i32 = function.eval_type;
-
-            let command: &[u8] = &function.command;
-
-            let python_ver: &str = &function.python_ver;
+            let output_type: DataType = output_type.try_into()?;
 
             let pyo3_python_version: String = Python::with_gil(|py| py.version().to_string());
-
-            if !pyo3_python_version.starts_with(python_ver) {
+            if !pyo3_python_version.starts_with(python_version.as_str()) {
                 return Err(SparkError::invalid(format!(
                     "Python version mismatch. Version used to compile the UDF must match the version used to run the UDF. Version used to compile the UDF: {:?}. Version used to run the UDF: {:?}",
-                    python_ver,
+                    python_version,
                     pyo3_python_version,
                 )));
             }
 
-            let python_function: PartialPythonUDF = deserialize_partial_python_udf(command)
+            let python_function: PartialPythonUDF = deserialize_partial_python_udf(&command)
                 .map_err(|e| {
                     SparkError::invalid(format!("Python UDF deserialization error: {:?}", e))
                 })?;
@@ -437,86 +386,7 @@ pub(crate) fn from_spark_expression(
                 args: arguments,
             }))
         }
-        ExprType::CallFunction(_) => Err(SparkError::todo("call function")),
-        ExprType::Extension(_) => Err(SparkError::unsupported("expression extension")),
-    }
-}
-
-pub(crate) fn from_spark_literal_to_scalar(
-    literal: &sc::expression::Literal,
-) -> SparkResult<ScalarValue> {
-    use sc::expression::literal::LiteralType;
-
-    let sc::expression::Literal { literal_type } = literal;
-    let literal_type = literal_type.as_ref().required("literal type")?;
-    match literal_type {
-        LiteralType::Null(_) => Ok(ScalarValue::Null),
-        LiteralType::Binary(x) => Ok(ScalarValue::Binary(Some(x.clone()))),
-        LiteralType::Boolean(x) => Ok(ScalarValue::Boolean(Some(*x))),
-        LiteralType::Byte(x) => Ok(ScalarValue::Int8(Some(*x as i8))),
-        LiteralType::Short(x) => Ok(ScalarValue::Int16(Some(*x as i16))),
-        LiteralType::Integer(x) => Ok(ScalarValue::Int32(Some(*x))),
-        LiteralType::Long(x) => Ok(ScalarValue::Int64(Some(*x))),
-        LiteralType::Float(x) => Ok(ScalarValue::Float32(Some(*x))),
-        LiteralType::Double(x) => Ok(ScalarValue::Float64(Some(*x))),
-        LiteralType::Decimal(x) => {
-            let (value, precision, scale) = match x.value.parse::<i128>() {
-                Ok(v) => (v, x.precision() as u8, x.scale() as i8),
-                Err(_) => {
-                    return Err(SparkError::invalid(format!(
-                        "Failed to parse decimal value {:?}",
-                        Some(x.value.clone())
-                    )));
-                }
-            };
-            Ok(ScalarValue::Decimal128(Some(value), precision, scale))
-        }
-        LiteralType::String(x) => Ok(ScalarValue::Utf8(Some(x.clone()))),
-        LiteralType::Date(x) => Ok(ScalarValue::Date32(Some(*x))),
-        LiteralType::Timestamp(x) => {
-            // TODO: should we use "spark.sql.session.timeZone"?
-            let timezone: Arc<str> = Arc::from("UTC");
-            Ok(ScalarValue::TimestampMicrosecond(Some(*x), Some(timezone)))
-        }
-        LiteralType::TimestampNtz(x) => Ok(ScalarValue::TimestampMicrosecond(Some(*x), None)),
-        LiteralType::CalendarInterval(x) => Ok(ScalarValue::IntervalMonthDayNano(Some(
-            IntervalMonthDayNanoType::make_value(x.months, x.days, x.microseconds * 1000),
-        ))),
-        LiteralType::YearMonthInterval(x) => Ok(ScalarValue::IntervalYearMonth(Some(*x))),
-        LiteralType::DayTimeInterval(x) => Ok(ScalarValue::IntervalDayTime(Some(*x))),
-        LiteralType::Array(array) => {
-            // TODO: Validate that this works
-            let element_type: &sc::DataType =
-                array.element_type.as_ref().required("array element type")?;
-            let element_type: DataType = from_spark_built_in_data_type(element_type)?;
-            let scalars: Vec<ScalarValue> = array
-                .elements
-                .iter()
-                .map(|literal| from_spark_literal_to_scalar(literal))
-                .collect::<SparkResult<Vec<_>>>()?;
-            Ok(ScalarValue::List(ScalarValue::new_list(
-                &scalars,
-                &element_type,
-            )))
-        }
-        LiteralType::Map(_map) => Err(SparkError::todo("LiteralType::Map")),
-        LiteralType::Struct(r#struct) => {
-            // TODO: Validate that this works
-            let struct_type: &sc::DataType =
-                r#struct.struct_type.as_ref().required("struct type")?;
-            let struct_type: DataType = from_spark_built_in_data_type(struct_type)?;
-            let fields = match &struct_type {
-                DataType::Struct(fields) => fields,
-                _ => return Err(SparkError::invalid("expected struct type")),
-            };
-
-            let mut builder: ScalarStructBuilder = ScalarStructBuilder::new();
-            for (literal, field) in r#struct.elements.iter().zip(fields.iter()) {
-                let scalar = from_spark_literal_to_scalar(literal)?;
-                builder = builder.with_scalar(field, scalar);
-            }
-            Ok(builder.build()?)
-        }
+        Expr::CallFunction { .. } => Err(SparkError::todo("call function")),
     }
 }
 

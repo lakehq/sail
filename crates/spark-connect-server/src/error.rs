@@ -64,6 +64,7 @@ impl SparkError {
 impl From<CommonError> for SparkError {
     fn from(error: CommonError) -> Self {
         match error {
+            CommonError::DataFusionError(e) => SparkError::DataFusionError(e),
             CommonError::InvalidArgument(message) => SparkError::InvalidArgument(message),
             CommonError::NotSupported(message) => SparkError::NotSupported(message),
         }

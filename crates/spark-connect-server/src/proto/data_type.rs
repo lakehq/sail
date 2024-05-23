@@ -1,6 +1,5 @@
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::spark::connect as sc;
-use crate::spark::connect::data_type as sdt;
+use crate::spark::connect::{data_type as sdt, DataType};
 use crate::sql::data_type::{
     SPARK_DECIMAL_USER_DEFAULT_PRECISION, SPARK_DECIMAL_USER_DEFAULT_SCALE,
 };
@@ -31,13 +30,13 @@ impl TryFrom<sdt::StructField> for spec::Field {
     }
 }
 
-impl TryFrom<sc::DataType> for spec::DataType {
+impl TryFrom<DataType> for spec::DataType {
     type Error = SparkError;
 
-    fn try_from(data_type: sc::DataType) -> SparkResult<spec::DataType> {
+    fn try_from(data_type: DataType) -> SparkResult<spec::DataType> {
         use crate::spark::connect::data_type::Kind;
 
-        let sc::DataType { kind } = data_type;
+        let DataType { kind } = data_type;
         let kind = kind.required("data type kind")?;
         match kind {
             Kind::Null(_) => Ok(spec::DataType::Null),
@@ -54,19 +53,37 @@ impl TryFrom<sc::DataType> for spec::DataType {
                 precision,
                 type_variation_reference: _,
             }) => {
-                let scale = scale.unwrap_or(SPARK_DECIMAL_USER_DEFAULT_SCALE);
-                let precision = precision.unwrap_or(SPARK_DECIMAL_USER_DEFAULT_PRECISION);
+                let scale = scale
+                    .map(i8::try_from)
+                    .transpose()
+                    .map_err(|_| SparkError::invalid("decimal scale"))?
+                    .unwrap_or(SPARK_DECIMAL_USER_DEFAULT_SCALE);
+                let precision = precision
+                    .map(u8::try_from)
+                    .transpose()
+                    .map_err(|_| SparkError::invalid("decimal precision"))?
+                    .unwrap_or(SPARK_DECIMAL_USER_DEFAULT_PRECISION);
                 Ok(spec::DataType::Decimal { scale, precision })
             }
             Kind::String(_) => Ok(spec::DataType::String),
             Kind::Char(sdt::Char {
                 length,
                 type_variation_reference: _,
-            }) => Ok(spec::DataType::Char { length }),
+            }) => {
+                let length = length
+                    .try_into()
+                    .map_err(|_| SparkError::invalid("char length"))?;
+                Ok(spec::DataType::Char { length })
+            }
             Kind::VarChar(sdt::VarChar {
                 length,
                 type_variation_reference: _,
-            }) => Ok(spec::DataType::VarChar { length }),
+            }) => {
+                let length = length
+                    .try_into()
+                    .map_err(|_| SparkError::invalid("varchar length"))?;
+                Ok(spec::DataType::VarChar { length })
+            }
             Kind::Date(_) => Ok(spec::DataType::Date),
             Kind::Timestamp(_) => Ok(spec::DataType::Timestamp),
             Kind::TimestampNtz(_) => Ok(spec::DataType::TimestampNtz),
@@ -188,10 +205,10 @@ impl TryFrom<spec::Field> for sdt::StructField {
     }
 }
 
-impl TryFrom<spec::DataType> for sc::DataType {
+impl TryFrom<spec::DataType> for DataType {
     type Error = SparkError;
 
-    fn try_from(data_type: spec::DataType) -> SparkResult<sc::DataType> {
+    fn try_from(data_type: spec::DataType) -> SparkResult<DataType> {
         use crate::spark::connect::data_type::Kind;
 
         let kind = match data_type {
@@ -205,19 +222,29 @@ impl TryFrom<spec::DataType> for sc::DataType {
             spec::DataType::Float => Kind::Float(sdt::Float::default()),
             spec::DataType::Double => Kind::Double(sdt::Double::default()),
             spec::DataType::Decimal { scale, precision } => Kind::Decimal(sdt::Decimal {
-                scale: Some(scale),
-                precision: Some(precision),
+                scale: Some(scale as i32),
+                precision: Some(precision as i32),
                 type_variation_reference: 0,
             }),
             spec::DataType::String => Kind::String(sdt::String::default()),
-            spec::DataType::Char { length } => Kind::Char(sdt::Char {
-                length,
-                type_variation_reference: 0,
-            }),
-            spec::DataType::VarChar { length } => Kind::VarChar(sdt::VarChar {
-                length,
-                type_variation_reference: 0,
-            }),
+            spec::DataType::Char { length } => {
+                let length = length
+                    .try_into()
+                    .map_err(|_| SparkError::invalid("char length"))?;
+                Kind::Char(sdt::Char {
+                    length,
+                    type_variation_reference: 0,
+                })
+            }
+            spec::DataType::VarChar { length } => {
+                let length = length
+                    .try_into()
+                    .map_err(|_| SparkError::invalid("varchar length"))?;
+                Kind::VarChar(sdt::VarChar {
+                    length,
+                    type_variation_reference: 0,
+                })
+            }
             spec::DataType::Date => Kind::Date(sdt::Date::default()),
             spec::DataType::Timestamp => Kind::Timestamp(sdt::Timestamp::default()),
             spec::DataType::TimestampNtz => Kind::TimestampNtz(sdt::TimestampNtz::default()),
@@ -284,6 +311,6 @@ impl TryFrom<spec::DataType> for sc::DataType {
                 Kind::Unparsed(sdt::Unparsed { data_type_string })
             }
         };
-        Ok(sc::DataType { kind: Some(kind) })
+        Ok(DataType { kind: Some(kind) })
     }
 }

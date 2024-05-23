@@ -4,22 +4,34 @@
       "input": "\n/*\nSELECT 'trailing' as x1; -- inside block comment\n*/\nSELECT * FROM a\n      ",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "read": {
-                  "namedTable": {
-                    "unparsedIdentifier": "a"
+                "node": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
                   }
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -27,22 +39,34 @@
       "input": "\n/* This block comment surrounds a query which itself has a block comment...\n//* I am a nested bracketed comment.\n*/\n*/\nSELECT * FROM a\n      ",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "read": {
-                  "namedTable": {
-                    "unparsedIdentifier": "a"
+                "node": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
                   }
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -50,22 +74,34 @@
       "input": "\n/* This block comment surrounds a query which itself has a block comment...\nSELECT /* embedded single line */ 'embedded' AS x2;\n*/\nSELECT * FROM a\n      ",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "read": {
-                  "namedTable": {
-                    "unparsedIdentifier": "a"
+                "node": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
                   }
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -73,22 +109,34 @@
       "input": "\n/* This is an example of SQL which should not execute:\n * select 'multi-line';\n */\nSELECT * FROM a\n      ",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "read": {
-                  "namedTable": {
-                    "unparsedIdentifier": "a"
+                "node": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
                   }
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -114,12 +162,19 @@
       "input": "\n/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\n*/\n      ",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "localRelation": {
-                  "schema": "struct<>"
-                }
+                "node": {
+                  "localRelation": {
+                    "data": null,
+                    "schema": {
+                      "fields": []
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
@@ -131,12 +186,15 @@
                     },
                     "name": [
                       "a"
-                    ]
+                    ],
+                    "metadata": null
                   }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -144,45 +202,76 @@
       "input": "(select * from t1) union distinct (select * from t2)",
       "output": {
         "success": {
-          "root": {
-            "setOp": {
-              "leftInput": {
-                "project": {
-                  "input": {
-                    "read": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t1"
+          "node": {
+            "setOperation": {
+              "left": {
+                "node": {
+                  "project": {
+                    "input": {
+                      "node": {
+                        "read": {
+                          "readType": {
+                            "namedTable": {
+                              "unparsedIdentifier": "t1",
+                              "options": {}
+                            }
+                          },
+                          "isStreaming": false
+                        }
+                      },
+                      "planId": null,
+                      "sourceInfo": null
+                    },
+                    "expressions": [
+                      {
+                        "unresolvedStar": {
+                          "unparsedTarget": null
+                        }
                       }
-                    }
-                  },
-                  "expressions": [
-                    {
-                      "unresolvedStar": {}
-                    }
-                  ]
-                }
+                    ]
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
-              "rightInput": {
-                "project": {
-                  "input": {
-                    "read": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t2"
+              "right": {
+                "node": {
+                  "project": {
+                    "input": {
+                      "node": {
+                        "read": {
+                          "readType": {
+                            "namedTable": {
+                              "unparsedIdentifier": "t2",
+                              "options": {}
+                            }
+                          },
+                          "isStreaming": false
+                        }
+                      },
+                      "planId": null,
+                      "sourceInfo": null
+                    },
+                    "expressions": [
+                      {
+                        "unresolvedStar": {
+                          "unparsedTarget": null
+                        }
                       }
-                    }
-                  },
-                  "expressions": [
-                    {
-                      "unresolvedStar": {}
-                    }
-                  ]
-                }
+                    ]
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
-              "setOpType": "SET_OP_TYPE_UNION",
+              "setOpType": "union",
               "isAll": false,
-              "byName": false
+              "byName": false,
+              "allowMissingColumns": false
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },

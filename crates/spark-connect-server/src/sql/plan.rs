@@ -1,27 +1,25 @@
 use crate::error::{SparkError, SparkResult};
-use crate::spark::connect as sc;
 use crate::sql::expression::{from_ast_expression, from_ast_order_by};
 use crate::sql::fail_on_extra_token;
 use crate::sql::literal::LiteralValue;
 use crate::sql::parser::SparkDialect;
+use framework_common::spec;
 use sqlparser::ast;
 use sqlparser::parser::Parser;
 
 #[allow(dead_code)]
-pub(crate) fn parse_sql_statement(sql: &str) -> SparkResult<sc::Plan> {
+pub(crate) fn parse_sql_statement(sql: &str) -> SparkResult<spec::Plan> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
     let statement = parser.parse_statement()?;
     fail_on_extra_token(&mut parser, "statement")?;
     from_ast_statement(statement)
 }
 
-fn from_ast_statement(statement: ast::Statement) -> SparkResult<sc::Plan> {
+fn from_ast_statement(statement: ast::Statement) -> SparkResult<spec::Plan> {
     use ast::Statement;
 
     match statement {
-        Statement::Query(query) => Ok(sc::Plan {
-            op_type: Some(sc::plan::OpType::Root(from_ast_query(*query)?)),
-        }),
+        Statement::Query(query) => from_ast_query(*query),
         Statement::Insert(_) => Err(SparkError::todo("SQL insert")),
         Statement::Call(_) => Err(SparkError::todo("SQL call")),
         Statement::Copy { .. } => Err(SparkError::todo("SQL copy")),
@@ -107,7 +105,7 @@ fn from_ast_statement(statement: ast::Statement) -> SparkResult<sc::Plan> {
     }
 }
 
-pub(crate) fn from_ast_query(query: ast::Query) -> SparkResult<sc::Relation> {
+pub(crate) fn from_ast_query(query: ast::Query) -> SparkResult<spec::Plan> {
     let ast::Query {
         with,
         body,
@@ -141,40 +139,31 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SparkResult<sc::Relation> {
             .into_iter()
             .map(from_ast_order_by)
             .collect::<SparkResult<_>>()?;
-        sc::Relation {
-            common: None,
-            rel_type: Some(sc::relation::RelType::Sort(Box::new(sc::Sort {
-                input: Some(Box::new(relation)),
-                order: order_by,
-                is_global: Some(true),
-            }))),
-        }
+        spec::Plan::new(spec::PlanNode::Sort {
+            input: Box::new(relation),
+            order: order_by,
+            is_global: true,
+        })
     } else {
         relation
     };
 
     let relation = if let Some(ast::Offset { value, rows: _ }) = offset {
         let offset = LiteralValue::<i32>::try_from(value)?.0;
-        sc::Relation {
-            common: None,
-            rel_type: Some(sc::relation::RelType::Offset(Box::new(sc::Offset {
-                input: Some(Box::new(relation)),
-                offset,
-            }))),
-        }
+        spec::Plan::new(spec::PlanNode::Offset {
+            input: Box::new(relation),
+            offset,
+        })
     } else {
         relation
     };
 
     let relation = if let Some(limit) = limit {
         let limit = LiteralValue::<i32>::try_from(limit)?.0;
-        sc::Relation {
-            common: None,
-            rel_type: Some(sc::relation::RelType::Limit(Box::new(sc::Limit {
-                input: Some(Box::new(relation)),
-                limit,
-            }))),
-        }
+        spec::Plan::new(spec::PlanNode::Limit {
+            input: Box::new(relation),
+            limit,
+        })
     } else {
         relation
     };
@@ -182,7 +171,7 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SparkResult<sc::Relation> {
     Ok(relation)
 }
 
-fn from_ast_select(select: ast::Select) -> SparkResult<sc::Relation> {
+fn from_ast_select(select: ast::Select) -> SparkResult<spec::Plan> {
     use ast::{Distinct, GroupByExpr, SelectItem};
 
     let ast::Select {
@@ -236,41 +225,36 @@ fn from_ast_select(select: ast::Select) -> SparkResult<sc::Relation> {
         .into_iter()
         .try_fold(
             None,
-            |r: Option<sc::Relation>, table| -> SparkResult<Option<sc::Relation>> {
+            |r: Option<spec::Plan>, table| -> SparkResult<Option<spec::Plan>> {
                 let right = from_ast_table_with_joins(table)?;
                 match r {
-                    Some(left) => Ok(Some(sc::Relation {
-                        common: None,
-                        rel_type: Some(sc::relation::RelType::Join(Box::new(sc::Join {
-                            left: Some(Box::new(left)),
-                            right: Some(Box::new(right)),
-                            join_condition: None,
-                            join_type: sc::join::JoinType::Cross as i32,
-                            using_columns: vec![],
-                            join_data_type: None,
-                        }))),
-                    })),
+                    Some(left) => Ok(Some(spec::Plan::new(spec::PlanNode::Join {
+                        left: Box::new(left),
+                        right: Box::new(right),
+                        join_condition: None,
+                        join_type: spec::JoinType::Cross,
+                        using_columns: vec![],
+                        join_data_type: None,
+                    }))),
                     None => Ok(Some(right)),
                 }
             },
         )?
-        .unwrap_or_else(|| sc::Relation {
-            common: None,
-            rel_type: Some(sc::relation::RelType::LocalRelation(sc::LocalRelation {
+        .unwrap_or_else(|| {
+            spec::Plan::new(spec::PlanNode::LocalRelation {
                 data: None,
-                schema: Some("struct<>".to_string()),
-            })),
+                schema: Some(spec::Schema {
+                    fields: spec::Fields::empty(),
+                }),
+            })
         });
 
     let relation = if let Some(selection) = selection {
         let selection = from_ast_expression(selection)?;
-        sc::Relation {
-            common: None,
-            rel_type: Some(sc::relation::RelType::Filter(Box::new(sc::Filter {
-                input: Some(Box::new(relation)),
-                condition: Some(selection),
-            }))),
-        }
+        spec::Plan::new(spec::PlanNode::Filter {
+            input: Box::new(relation),
+            condition: selection,
+        })
     } else {
         relation
     };
@@ -284,29 +268,17 @@ fn from_ast_select(select: ast::Select) -> SparkResult<sc::Relation> {
                     SelectItem::UnnamedExpr(expr) => from_ast_expression(expr),
                     SelectItem::ExprWithAlias { expr, alias } => {
                         let expr = from_ast_expression(expr)?;
-                        Ok(sc::Expression {
-                            expr_type: Some(sc::expression::ExprType::Alias(Box::new(
-                                sc::expression::Alias {
-                                    expr: Some(Box::new(expr)),
-                                    name: vec![alias.to_string()],
-                                    metadata: None,
-                                },
-                            ))),
+                        Ok(spec::Expr::Alias {
+                            expr: Box::new(expr),
+                            name: vec![alias.to_string()],
+                            metadata: None,
                         })
                     }
-                    SelectItem::QualifiedWildcard(name, _) => Ok(sc::Expression {
-                        expr_type: Some(sc::expression::ExprType::UnresolvedStar(
-                            sc::expression::UnresolvedStar {
-                                unparsed_target: Some(name.to_string()),
-                            },
-                        )),
+                    SelectItem::QualifiedWildcard(name, _) => Ok(spec::Expr::UnresolvedStar {
+                        unparsed_target: Some(name.to_string()),
                     }),
-                    SelectItem::Wildcard(_) => Ok(sc::Expression {
-                        expr_type: Some(sc::expression::ExprType::UnresolvedStar(
-                            sc::expression::UnresolvedStar {
-                                unparsed_target: None,
-                            },
-                        )),
+                    SelectItem::Wildcard(_) => Ok(spec::Expr::UnresolvedStar {
+                        unparsed_target: None,
                     }),
                 })
                 .collect::<SparkResult<_>>()?;
@@ -314,37 +286,28 @@ fn from_ast_select(select: ast::Select) -> SparkResult<sc::Relation> {
                 if having.is_some() {
                     return Err(SparkError::unsupported("HAVING without GROUP BY"));
                 }
-                sc::Relation {
-                    common: None,
-                    rel_type: Some(sc::relation::RelType::Project(Box::new(sc::Project {
-                        input: Some(Box::new(relation)),
-                        expressions: projection,
-                    }))),
-                }
+                spec::Plan::new(spec::PlanNode::Project {
+                    input: Some(Box::new(relation)),
+                    expressions: projection,
+                })
             } else {
-                let group_by: Vec<sc::Expression> = group_by
+                let group_by: Vec<spec::Expr> = group_by
                     .into_iter()
                     .map(from_ast_expression)
                     .collect::<SparkResult<_>>()?;
-                let aggregate = sc::Relation {
-                    common: None,
-                    rel_type: Some(sc::relation::RelType::Aggregate(Box::new(sc::Aggregate {
-                        input: Some(Box::new(relation)),
-                        group_type: sc::aggregate::GroupType::Groupby as i32,
-                        grouping_expressions: group_by,
-                        aggregate_expressions: projection,
-                        pivot: None,
-                    }))),
-                };
+                let aggregate = spec::Plan::new(spec::PlanNode::Aggregate {
+                    input: Box::new(relation),
+                    group_type: spec::GroupType::GroupBy,
+                    grouping_expressions: group_by,
+                    aggregate_expressions: projection,
+                    pivot: None,
+                });
                 if let Some(having) = having {
                     let having = from_ast_expression(having)?;
-                    sc::Relation {
-                        common: None,
-                        rel_type: Some(sc::relation::RelType::Filter(Box::new(sc::Filter {
-                            input: Some(Box::new(aggregate)),
-                            condition: Some(having),
-                        }))),
-                    }
+                    spec::Plan::new(spec::PlanNode::Filter {
+                        input: Box::new(aggregate),
+                        condition: having,
+                    })
                 } else {
                     aggregate
                 }
@@ -364,40 +327,31 @@ fn from_ast_select(select: ast::Select) -> SparkResult<sc::Relation> {
                 from_ast_order_by(expr)
             })
             .collect::<SparkResult<_>>()?;
-        sc::Relation {
-            common: None,
-            rel_type: Some(sc::relation::RelType::Sort(Box::new(sc::Sort {
-                input: Some(Box::new(relation)),
-                order: sort_by,
-                is_global: Some(false),
-            }))),
-        }
+        spec::Plan::new(spec::PlanNode::Sort {
+            input: Box::new(relation),
+            order: sort_by,
+            is_global: false,
+        })
     } else {
         relation
     };
 
     let relation = match distinct {
         None => relation,
-        Some(Distinct::Distinct) => sc::Relation {
-            common: None,
-            rel_type: Some(sc::relation::RelType::Deduplicate(Box::new(
-                sc::Deduplicate {
-                    input: Some(Box::new(relation)),
-                    column_names: vec![],
-                    all_columns_as_keys: Some(true),
-                    within_watermark: None,
-                },
-            ))),
-        },
+        Some(Distinct::Distinct) => spec::Plan::new(spec::PlanNode::Deduplicate {
+            input: Box::new(relation),
+            column_names: vec![],
+            all_columns_as_keys: true,
+            within_watermark: false,
+        }),
         Some(Distinct::On(_)) => return Err(SparkError::unsupported("DISTINCT ON")),
     };
 
     Ok(relation)
 }
 
-fn from_ast_set_expr(set_expr: ast::SetExpr) -> SparkResult<sc::Relation> {
+fn from_ast_set_expr(set_expr: ast::SetExpr) -> SparkResult<spec::Plan> {
     use ast::{SetExpr, SetOperator, SetQuantifier};
-    use sc::set_operation::SetOpType;
 
     match set_expr {
         SetExpr::Select(select) => from_ast_select(*select),
@@ -416,22 +370,19 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SparkResult<sc::Relation> {
                 SetQuantifier::AllByName => (true, true),
                 SetQuantifier::ByName | SetQuantifier::DistinctByName => (false, true),
             };
-            let op_type = match op {
-                SetOperator::Union => SetOpType::Union,
-                SetOperator::Except => SetOpType::Except,
-                SetOperator::Intersect => SetOpType::Intersect,
+            let set_op_type = match op {
+                SetOperator::Union => spec::SetOpType::Union,
+                SetOperator::Except => spec::SetOpType::Except,
+                SetOperator::Intersect => spec::SetOpType::Intersect,
             };
-            Ok(sc::Relation {
-                common: None,
-                rel_type: Some(sc::relation::RelType::SetOp(Box::new(sc::SetOperation {
-                    left_input: Some(Box::new(left)),
-                    right_input: Some(Box::new(right)),
-                    set_op_type: op_type as i32,
-                    is_all: Some(is_all),
-                    by_name: Some(by_name),
-                    allow_missing_columns: None,
-                }))),
-            })
+            Ok(spec::Plan::new(spec::PlanNode::SetOperation {
+                left: Box::new(left),
+                right: Box::new(right),
+                set_op_type,
+                is_all,
+                by_name,
+                allow_missing_columns: false,
+            }))
         }
         SetExpr::Values(_) => Err(SparkError::unsupported("VALUES clause in set expression")),
         SetExpr::Insert(_) => Err(SparkError::unsupported(
@@ -452,22 +403,18 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SparkResult<sc::Relation> {
                     return Err(SparkError::invalid("missing table name in set expression"))
                 }
             };
-            Ok(sc::Relation {
-                common: None,
-                rel_type: Some(sc::relation::RelType::Read(sc::Read {
-                    is_streaming: false,
-                    read_type: Some(sc::read::ReadType::NamedTable(sc::read::NamedTable {
-                        unparsed_identifier: ast::ObjectName(names).to_string(),
-                        options: Default::default(),
-                    })),
-                })),
-            })
+            Ok(spec::Plan::new(spec::PlanNode::Read {
+                is_streaming: false,
+                read_type: spec::ReadType::NamedTable {
+                    unparsed_identifier: ast::ObjectName(names).to_string(),
+                    options: Default::default(),
+                },
+            }))
         }
     }
 }
 
-fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SparkResult<sc::Relation> {
-    use crate::spark::connect::join::JoinType;
+fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SparkResult<spec::Plan> {
     use sqlparser::ast::{JoinConstraint, JoinOperator};
 
     let ast::TableWithJoins { relation, joins } = table;
@@ -481,16 +428,22 @@ fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SparkResult<sc::Rela
             } = join;
             let right = from_ast_table_factor(right)?;
             let (join_type, constraint) = match join_operator {
-                JoinOperator::Inner(constraint) => (JoinType::Inner, Some(constraint)),
-                JoinOperator::LeftOuter(constraint) => (JoinType::LeftOuter, Some(constraint)),
-                JoinOperator::RightOuter(constraint) => (JoinType::RightOuter, Some(constraint)),
-                JoinOperator::FullOuter(constraint) => (JoinType::FullOuter, Some(constraint)),
-                JoinOperator::CrossJoin => (JoinType::Cross, None),
-                JoinOperator::LeftSemi(constraint) => (JoinType::LeftSemi, Some(constraint)),
+                JoinOperator::Inner(constraint) => (spec::JoinType::Inner, Some(constraint)),
+                JoinOperator::LeftOuter(constraint) => {
+                    (spec::JoinType::LeftOuter, Some(constraint))
+                }
+                JoinOperator::RightOuter(constraint) => {
+                    (spec::JoinType::RightOuter, Some(constraint))
+                }
+                JoinOperator::FullOuter(constraint) => {
+                    (spec::JoinType::FullOuter, Some(constraint))
+                }
+                JoinOperator::CrossJoin => (spec::JoinType::Cross, None),
+                JoinOperator::LeftSemi(constraint) => (spec::JoinType::LeftSemi, Some(constraint)),
                 JoinOperator::RightSemi(_) => {
                     return Err(SparkError::unsupported("RIGHT SEMI join"))
                 }
-                JoinOperator::LeftAnti(constraint) => (JoinType::LeftAnti, Some(constraint)),
+                JoinOperator::LeftAnti(constraint) => (spec::JoinType::LeftAnti, Some(constraint)),
                 JoinOperator::RightAnti(_) => {
                     return Err(SparkError::unsupported("RIGHT ANTI join"))
                 }
@@ -512,22 +465,19 @@ fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SparkResult<sc::Rela
                 }
                 Some(JoinConstraint::None) | None => (None, vec![]),
             };
-            Ok(sc::Relation {
-                common: None,
-                rel_type: Some(sc::relation::RelType::Join(Box::new(sc::Join {
-                    left: Some(Box::new(left)),
-                    right: Some(Box::new(right)),
-                    join_condition,
-                    join_type: join_type as i32,
-                    using_columns,
-                    join_data_type: None,
-                }))),
-            })
+            Ok(spec::Plan::new(spec::PlanNode::Join {
+                left: Box::new(left),
+                right: Box::new(right),
+                join_condition,
+                join_type,
+                using_columns,
+                join_data_type: None,
+            }))
         })?;
     Ok(relation)
 }
 
-fn from_ast_table_factor(table: ast::TableFactor) -> SparkResult<sc::Relation> {
+fn from_ast_table_factor(table: ast::TableFactor) -> SparkResult<spec::Plan> {
     use ast::TableFactor;
 
     match table {
@@ -554,16 +504,13 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SparkResult<sc::Relation> {
             if !partitions.is_empty() {
                 return Err(SparkError::unsupported("table partitions"));
             }
-            Ok(sc::Relation {
-                common: None,
-                rel_type: Some(sc::relation::RelType::Read(sc::Read {
-                    is_streaming: false,
-                    read_type: Some(sc::read::ReadType::NamedTable(sc::read::NamedTable {
-                        unparsed_identifier: name.to_string(),
-                        options: Default::default(),
-                    })),
-                })),
-            })
+            Ok(spec::Plan::new(spec::PlanNode::Read {
+                is_streaming: false,
+                read_type: spec::ReadType::NamedTable {
+                    unparsed_identifier: name.to_string(),
+                    options: Default::default(),
+                },
+            }))
         }
         TableFactor::Derived {
             lateral,

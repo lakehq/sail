@@ -4,22 +4,34 @@
       "input": "\nSELECT -- continued after the following block comments...\n/* Deeply nested comment.\n   This includes a single apostrophe to make sure we aren't decoding this part as a string.\nSELECT 'deep nest' AS n1;\n/* Second level of nesting...\nSELECT 'deeper nest' as n2;\n/* Third level of nesting...\nSELECT 'deepest nest' as n3;\n*/\nHoo boy. Still two deep...\n*/\nNow just one deep...\n*/\n* FROM a\n      ",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "read": {
-                  "namedTable": {
-                    "unparsedIdentifier": "a"
+                "node": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
                   }
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -69,22 +81,34 @@
       "input": "SELECT * FROM a",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "read": {
-                  "namedTable": {
-                    "unparsedIdentifier": "a"
+                "node": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
                   }
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -260,22 +284,34 @@
       "input": "SELECT * FROM testcat.db.tab",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "read": {
-                  "namedTable": {
-                    "unparsedIdentifier": "testcat.db.tab"
+                "node": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "testcat.db.tab",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
                   }
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -307,12 +343,19 @@
       "input": "SELECT OVERLAY('Spark SQL' PLACING 'ANSI ' FROM 7 FOR 0)",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "localRelation": {
-                  "schema": "struct<>"
-                }
+                "node": {
+                  "localRelation": {
+                    "data": null,
+                    "schema": {
+                      "fields": []
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
@@ -339,12 +382,16 @@
                           "integer": 0
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -352,12 +399,19 @@
       "input": "SELECT OVERLAY('Spark SQL' PLACING 'CORE' FROM 7)",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "localRelation": {
-                  "schema": "struct<>"
-                }
+                "node": {
+                  "localRelation": {
+                    "data": null,
+                    "schema": {
+                      "fields": []
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
@@ -379,12 +433,16 @@
                           "integer": 7
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -392,12 +450,19 @@
       "input": "SELECT OVERLAY('Spark SQL' PLACING '_' FROM 6)",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "localRelation": {
-                  "schema": "struct<>"
-                }
+                "node": {
+                  "localRelation": {
+                    "data": null,
+                    "schema": {
+                      "fields": []
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
@@ -419,12 +484,16 @@
                           "integer": 6
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -432,12 +501,19 @@
       "input": "SELECT OVERLAY('Spark SQL' PLACING 'tructured' FROM 2 FOR 4)",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "localRelation": {
-                  "schema": "struct<>"
-                }
+                "node": {
+                  "localRelation": {
+                    "data": null,
+                    "schema": {
+                      "fields": []
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
@@ -464,12 +540,16 @@
                           "integer": 4
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -483,12 +563,19 @@
       "input": "SELECT TRIM('xyz' FROM 'yxTomxx')",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "localRelation": {
-                  "schema": "struct<>"
-                }
+                "node": {
+                  "localRelation": {
+                    "data": null,
+                    "schema": {
+                      "fields": []
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
@@ -505,12 +592,16 @@
                           "string": "xyz"
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -518,12 +609,19 @@
       "input": "SELECT TRIM(BOTH '@$%&( )abc' FROM '@ $ % & ()abc ' )",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "localRelation": {
-                  "schema": "struct<>"
-                }
+                "node": {
+                  "localRelation": {
+                    "data": null,
+                    "schema": {
+                      "fields": []
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
@@ -540,12 +638,16 @@
                           "string": "@$%&( )abc"
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -559,12 +661,19 @@
       "input": "SELECT TRIM(LEADING 'c []' FROM '[ ccccbcc ')",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "localRelation": {
-                  "schema": "struct<>"
-                }
+                "node": {
+                  "localRelation": {
+                    "data": null,
+                    "schema": {
+                      "fields": []
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
@@ -581,12 +690,16 @@
                           "string": "c []"
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -600,12 +713,19 @@
       "input": "SELECT TRIM(TRAILING 'c&^,.' FROM 'bc...,,,&&&ccc')",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "localRelation": {
-                  "schema": "struct<>"
-                }
+                "node": {
+                  "localRelation": {
+                    "data": null,
+                    "schema": {
+                      "fields": []
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
@@ -622,12 +742,16 @@
                           "string": "c&^,."
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -665,22 +789,34 @@
       "input": "sELEct * FroM a",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "read": {
-                  "namedTable": {
-                    "unparsedIdentifier": "a"
+                "node": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
                   }
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -718,22 +854,34 @@
       "input": "select * fRoM a",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "read": {
-                  "namedTable": {
-                    "unparsedIdentifier": "a"
+                "node": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
                   }
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -825,22 +973,34 @@
       "input": "select * from t",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "read": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t"
+                "node": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
                   }
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -878,27 +1038,43 @@
       "input": "select * from t limit 10",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "limit": {
               "input": {
-                "project": {
-                  "input": {
-                    "read": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t"
+                "node": {
+                  "project": {
+                    "input": {
+                      "node": {
+                        "read": {
+                          "readType": {
+                            "namedTable": {
+                              "unparsedIdentifier": "t",
+                              "options": {}
+                            }
+                          },
+                          "isStreaming": false
+                        }
+                      },
+                      "planId": null,
+                      "sourceInfo": null
+                    },
+                    "expressions": [
+                      {
+                        "unresolvedStar": {
+                          "unparsedTarget": null
+                        }
                       }
-                    }
-                  },
-                  "expressions": [
-                    {
-                      "unresolvedStar": {}
-                    }
-                  ]
-                }
+                    ]
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "limit": 10
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -960,12 +1136,19 @@
       "input": "select 1",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "localRelation": {
-                  "schema": "struct<>"
-                }
+                "node": {
+                  "localRelation": {
+                    "data": null,
+                    "schema": {
+                      "fields": []
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
@@ -975,7 +1158,9 @@
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -995,27 +1180,38 @@
       "input": "select a, b",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "localRelation": {
-                  "schema": "struct<>"
-                }
+                "node": {
+                  "localRelation": {
+                    "data": null,
+                    "schema": {
+                      "fields": []
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a"
+                    "unparsedIdentifier": "a",
+                    "planId": null
                   }
                 },
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -1023,29 +1219,41 @@
       "input": "select a, b from db.c",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "read": {
-                  "namedTable": {
-                    "unparsedIdentifier": "db.c"
+                "node": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "db.c",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
                   }
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a"
+                    "unparsedIdentifier": "a",
+                    "planId": null
                   }
                 },
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -1071,50 +1279,69 @@
       "input": "select a, b from db.c where x < 1",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "filter": {
-                  "input": {
-                    "read": {
-                      "namedTable": {
-                        "unparsedIdentifier": "db.c"
+                "node": {
+                  "filter": {
+                    "input": {
+                      "node": {
+                        "read": {
+                          "readType": {
+                            "namedTable": {
+                              "unparsedIdentifier": "db.c",
+                              "options": {}
+                            }
+                          },
+                          "isStreaming": false
+                        }
+                      },
+                      "planId": null,
+                      "sourceInfo": null
+                    },
+                    "condition": {
+                      "unresolvedFunction": {
+                        "functionName": "<",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "x",
+                              "planId": null
+                            }
+                          },
+                          {
+                            "literal": {
+                              "integer": 1
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
                       }
                     }
-                  },
-                  "condition": {
-                    "unresolvedFunction": {
-                      "functionName": "<",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "unparsedIdentifier": "x"
-                          }
-                        },
-                        {
-                          "literal": {
-                            "integer": 1
-                          }
-                        }
-                      ]
-                    }
                   }
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a"
+                    "unparsedIdentifier": "a",
+                    "planId": null
                   }
                 },
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -1140,29 +1367,41 @@
       "input": "select all a, b from db.c",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "read": {
-                  "namedTable": {
-                    "unparsedIdentifier": "db.c"
+                "node": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "db.c",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
                   }
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a"
+                    "unparsedIdentifier": "a",
+                    "planId": null
                   }
                 },
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -1170,34 +1409,52 @@
       "input": "select distinct a, b from db.c",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "deduplicate": {
               "input": {
-                "project": {
-                  "input": {
-                    "read": {
-                      "namedTable": {
-                        "unparsedIdentifier": "db.c"
-                      }
-                    }
-                  },
-                  "expressions": [
-                    {
-                      "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
-                      }
+                "node": {
+                  "project": {
+                    "input": {
+                      "node": {
+                        "read": {
+                          "readType": {
+                            "namedTable": {
+                              "unparsedIdentifier": "db.c",
+                              "options": {}
+                            }
+                          },
+                          "isStreaming": false
+                        }
+                      },
+                      "planId": null,
+                      "sourceInfo": null
                     },
-                    {
-                      "unresolvedAttribute": {
-                        "unparsedIdentifier": "b"
+                    "expressions": [
+                      {
+                        "unresolvedAttribute": {
+                          "unparsedIdentifier": "a",
+                          "planId": null
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "unparsedIdentifier": "b",
+                          "planId": null
+                        }
                       }
-                    }
-                  ]
-                }
+                    ]
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
-              "allColumnsAsKeys": true
+              "columnNames": [],
+              "allColumnsAsKeys": true,
+              "withinWatermark": false
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -1205,29 +1462,40 @@
       "input": "select from tbl",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "localRelation": {
-                  "schema": "struct<>"
-                }
+                "node": {
+                  "localRelation": {
+                    "data": null,
+                    "schema": {
+                      "fields": []
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
                   "alias": {
                     "expr": {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "from"
+                        "unparsedIdentifier": "from",
+                        "planId": null
                       }
                     },
                     "name": [
                       "tbl"
-                    ]
+                    ],
+                    "metadata": null
                   }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -1235,24 +1503,35 @@
       "input": "select id from ((((((t0))))))",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "read": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t0"
+                "node": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t0",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
                   }
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "id"
+                    "unparsedIdentifier": "id",
+                    "planId": null
                   }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
@@ -1260,24 +1539,35 @@
       "input": "select id from (t0)",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "read": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t0"
+                "node": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t0",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
                   }
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "id"
+                    "unparsedIdentifier": "id",
+                    "planId": null
                   }
                 }
               ]
             }
-          }
+          },
+          "planId": null,
+          "sourceInfo": null
         }
       }
     },
