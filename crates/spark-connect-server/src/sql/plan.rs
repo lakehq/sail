@@ -542,12 +542,23 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SparkResult<spec::Plan> {
 mod tests {
     use super::parse_sql_statement;
     use crate::tests::test_gold_set;
+    use framework_common::spec;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    struct RootPlan {
+        root: spec::Plan,
+    }
 
     #[test]
     fn test_sql_to_plan() -> Result<(), Box<dyn std::error::Error>> {
         Ok(test_gold_set(
             "tests/gold_data/plan/*.json",
-            |sql: String| Ok(parse_sql_statement(&sql)?),
+            |sql: String| {
+                Ok(RootPlan {
+                    root: parse_sql_statement(&sql)?,
+                })
+            },
         )?)
     }
 }

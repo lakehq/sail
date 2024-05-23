@@ -16,52 +16,80 @@
       "input": "\nSELECT a, b\nFROM t\nWHERE a-b > 10\nGROUP BY fake-breaker\nORDER BY c\n      ",
       "output": {
         "success": {
-          "sort": {
-            "input": {
-              "aggregate": {
-                "input": {
-                  "filter": {
-                    "input": {
-                      "read": {
-                        "readType": {
-                          "namedTable": {
-                            "unparsedIdentifier": "t",
-                            "options": {}
-                          }
+          "root": {
+            "sort": {
+              "input": {
+                "aggregate": {
+                  "input": {
+                    "filter": {
+                      "input": {
+                        "read": {
+                          "readType": {
+                            "namedTable": {
+                              "unparsedIdentifier": "t",
+                              "options": {}
+                            }
+                          },
+                          "isStreaming": false
                         },
-                        "isStreaming": false
+                        "planId": null,
+                        "sourceInfo": null
                       },
-                      "planId": null,
-                      "sourceInfo": null
+                      "condition": {
+                        "unresolvedFunction": {
+                          "functionName": ">",
+                          "arguments": [
+                            {
+                              "unresolvedFunction": {
+                                "functionName": "-",
+                                "arguments": [
+                                  {
+                                    "unresolvedAttribute": {
+                                      "unparsedIdentifier": "a",
+                                      "planId": null
+                                    }
+                                  },
+                                  {
+                                    "unresolvedAttribute": {
+                                      "unparsedIdentifier": "b",
+                                      "planId": null
+                                    }
+                                  }
+                                ],
+                                "isDistinct": false,
+                                "isUserDefinedFunction": false
+                              }
+                            },
+                            {
+                              "literal": {
+                                "integer": 10
+                              }
+                            }
+                          ],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false
+                        }
+                      }
                     },
-                    "condition": {
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "groupType": "groupBy",
+                  "groupingExpressions": [
+                    {
                       "unresolvedFunction": {
-                        "functionName": ">",
+                        "functionName": "-",
                         "arguments": [
                           {
-                            "unresolvedFunction": {
-                              "functionName": "-",
-                              "arguments": [
-                                {
-                                  "unresolvedAttribute": {
-                                    "unparsedIdentifier": "a",
-                                    "planId": null
-                                  }
-                                },
-                                {
-                                  "unresolvedAttribute": {
-                                    "unparsedIdentifier": "b",
-                                    "planId": null
-                                  }
-                                }
-                              ],
-                              "isDistinct": false,
-                              "isUserDefinedFunction": false
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "fake",
+                              "planId": null
                             }
                           },
                           {
-                            "literal": {
-                              "integer": 10
+                            "unresolvedAttribute": {
+                              "unparsedIdentifier": "breaker",
+                              "planId": null
                             }
                           }
                         ],
@@ -69,69 +97,43 @@
                         "isUserDefinedFunction": false
                       }
                     }
-                  },
-                  "planId": null,
-                  "sourceInfo": null
+                  ],
+                  "aggregateExpressions": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a",
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "b",
+                        "planId": null
+                      }
+                    }
+                  ],
+                  "pivot": null
                 },
-                "groupType": "groupBy",
-                "groupingExpressions": [
-                  {
-                    "unresolvedFunction": {
-                      "functionName": "-",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "unparsedIdentifier": "fake",
-                            "planId": null
-                          }
-                        },
-                        {
-                          "unresolvedAttribute": {
-                            "unparsedIdentifier": "breaker",
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
-                    }
-                  }
-                ],
-                "aggregateExpressions": [
-                  {
-                    "unresolvedAttribute": {
-                      "unparsedIdentifier": "a",
-                      "planId": null
-                    }
-                  },
-                  {
-                    "unresolvedAttribute": {
-                      "unparsedIdentifier": "b",
-                      "planId": null
-                    }
-                  }
-                ],
-                "pivot": null
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
+              "order": [
+                {
+                  "child": {
+                    "unresolvedAttribute": {
+                      "unparsedIdentifier": "c",
+                      "planId": null
+                    }
+                  },
+                  "direction": "unspecified",
+                  "nullOrdering": "unspecified"
+                }
+              ],
+              "isGlobal": true
             },
-            "order": [
-              {
-                "child": {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "c",
-                    "planId": null
-                  }
-                },
-                "direction": "unspecified",
-                "nullOrdering": "unspecified"
-              }
-            ],
-            "isGlobal": true
-          },
-          "planId": null,
-          "sourceInfo": null
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },

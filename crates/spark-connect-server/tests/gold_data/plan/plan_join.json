@@ -10,99 +10,101 @@
       "input": "select * from a join b join c right join d",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "join": {
-                "left": {
-                  "join": {
-                    "left": {
-                      "join": {
-                        "left": {
-                          "read": {
-                            "readType": {
-                              "namedTable": {
-                                "unparsedIdentifier": "a",
-                                "options": {}
-                              }
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "join": {
+                      "left": {
+                        "join": {
+                          "left": {
+                            "read": {
+                              "readType": {
+                                "namedTable": {
+                                  "unparsedIdentifier": "a",
+                                  "options": {}
+                                }
+                              },
+                              "isStreaming": false
                             },
-                            "isStreaming": false
+                            "planId": null,
+                            "sourceInfo": null
                           },
-                          "planId": null,
-                          "sourceInfo": null
-                        },
-                        "right": {
-                          "read": {
-                            "readType": {
-                              "namedTable": {
-                                "unparsedIdentifier": "b",
-                                "options": {}
-                              }
+                          "right": {
+                            "read": {
+                              "readType": {
+                                "namedTable": {
+                                  "unparsedIdentifier": "b",
+                                  "options": {}
+                                }
+                              },
+                              "isStreaming": false
                             },
-                            "isStreaming": false
+                            "planId": null,
+                            "sourceInfo": null
                           },
-                          "planId": null,
-                          "sourceInfo": null
+                          "joinCondition": null,
+                          "joinType": "inner",
+                          "usingColumns": [],
+                          "joinDataType": null
                         },
-                        "joinCondition": null,
-                        "joinType": "inner",
-                        "usingColumns": [],
-                        "joinDataType": null
+                        "planId": null,
+                        "sourceInfo": null
                       },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "right": {
-                      "read": {
-                        "readType": {
-                          "namedTable": {
-                            "unparsedIdentifier": "c",
-                            "options": {}
-                          }
+                      "right": {
+                        "read": {
+                          "readType": {
+                            "namedTable": {
+                              "unparsedIdentifier": "c",
+                              "options": {}
+                            }
+                          },
+                          "isStreaming": false
                         },
-                        "isStreaming": false
+                        "planId": null,
+                        "sourceInfo": null
                       },
-                      "planId": null,
-                      "sourceInfo": null
+                      "joinCondition": null,
+                      "joinType": "inner",
+                      "usingColumns": [],
+                      "joinDataType": null
                     },
-                    "joinCondition": null,
-                    "joinType": "inner",
-                    "usingColumns": [],
-                    "joinDataType": null
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
-                },
-                "right": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "d",
-                        "options": {}
-                      }
+                  "right": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "d",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
+                  "joinCondition": null,
+                  "joinType": "rightOuter",
+                  "usingColumns": [],
+                  "joinDataType": null
                 },
-                "joinCondition": null,
-                "joinType": "rightOuter",
-                "usingColumns": [],
-                "joinDataType": null
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -224,56 +226,58 @@
       "input": "select * from t full join u using(a, b)",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "join": {
-                "left": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t",
-                        "options": {}
-                      }
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "t",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
-                },
-                "right": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "u",
-                        "options": {}
-                      }
+                  "right": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "u",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
+                  "joinCondition": null,
+                  "joinType": "fullOuter",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ],
+                  "joinDataType": null
                 },
-                "joinCondition": null,
-                "joinType": "fullOuter",
-                "usingColumns": [
-                  "a",
-                  "b"
-                ],
-                "joinDataType": null
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -287,56 +291,58 @@
       "input": "select * from t full outer join u using(a, b)",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "join": {
-                "left": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t",
-                        "options": {}
-                      }
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "t",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
-                },
-                "right": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "u",
-                        "options": {}
-                      }
+                  "right": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "u",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
+                  "joinCondition": null,
+                  "joinType": "fullOuter",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ],
+                  "joinDataType": null
                 },
-                "joinCondition": null,
-                "joinType": "fullOuter",
-                "usingColumns": [
-                  "a",
-                  "b"
-                ],
-                "joinDataType": null
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -356,56 +362,58 @@
       "input": "select * from t inner join u using(a, b)",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "join": {
-                "left": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t",
-                        "options": {}
-                      }
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "t",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
-                },
-                "right": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "u",
-                        "options": {}
-                      }
+                  "right": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "u",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
+                  "joinCondition": null,
+                  "joinType": "inner",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ],
+                  "joinDataType": null
                 },
-                "joinCondition": null,
-                "joinType": "inner",
-                "usingColumns": [
-                  "a",
-                  "b"
-                ],
-                "joinDataType": null
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -431,56 +439,58 @@
       "input": "select * from t join u using(a, b)",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "join": {
-                "left": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t",
-                        "options": {}
-                      }
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "t",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
-                },
-                "right": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "u",
-                        "options": {}
-                      }
+                  "right": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "u",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
+                  "joinCondition": null,
+                  "joinType": "inner",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ],
+                  "joinDataType": null
                 },
-                "joinCondition": null,
-                "joinType": "inner",
-                "usingColumns": [
-                  "a",
-                  "b"
-                ],
-                "joinDataType": null
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -494,56 +504,58 @@
       "input": "select * from t left anti join u using(a, b)",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "join": {
-                "left": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t",
-                        "options": {}
-                      }
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "t",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
-                },
-                "right": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "u",
-                        "options": {}
-                      }
+                  "right": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "u",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
+                  "joinCondition": null,
+                  "joinType": "leftAnti",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ],
+                  "joinDataType": null
                 },
-                "joinCondition": null,
-                "joinType": "leftAnti",
-                "usingColumns": [
-                  "a",
-                  "b"
-                ],
-                "joinDataType": null
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -563,56 +575,58 @@
       "input": "select * from t left join u using(a, b)",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "join": {
-                "left": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t",
-                        "options": {}
-                      }
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "t",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
-                },
-                "right": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "u",
-                        "options": {}
-                      }
+                  "right": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "u",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
+                  "joinCondition": null,
+                  "joinType": "leftOuter",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ],
+                  "joinDataType": null
                 },
-                "joinCondition": null,
-                "joinType": "leftOuter",
-                "usingColumns": [
-                  "a",
-                  "b"
-                ],
-                "joinDataType": null
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -632,56 +646,58 @@
       "input": "select * from t left outer join u using(a, b)",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "join": {
-                "left": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t",
-                        "options": {}
-                      }
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "t",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
-                },
-                "right": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "u",
-                        "options": {}
-                      }
+                  "right": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "u",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
+                  "joinCondition": null,
+                  "joinType": "leftOuter",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ],
+                  "joinDataType": null
                 },
-                "joinCondition": null,
-                "joinType": "leftOuter",
-                "usingColumns": [
-                  "a",
-                  "b"
-                ],
-                "joinDataType": null
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -695,56 +711,58 @@
       "input": "select * from t left semi join u using(a, b)",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "join": {
-                "left": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t",
-                        "options": {}
-                      }
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "t",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
-                },
-                "right": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "u",
-                        "options": {}
-                      }
+                  "right": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "u",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
+                  "joinCondition": null,
+                  "joinType": "leftSemi",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ],
+                  "joinDataType": null
                 },
-                "joinCondition": null,
-                "joinType": "leftSemi",
-                "usingColumns": [
-                  "a",
-                  "b"
-                ],
-                "joinDataType": null
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -758,56 +776,58 @@
       "input": "select * from t right join u using(a, b)",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "join": {
-                "left": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t",
-                        "options": {}
-                      }
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "t",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
-                },
-                "right": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "u",
-                        "options": {}
-                      }
+                  "right": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "u",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
+                  "joinCondition": null,
+                  "joinType": "rightOuter",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ],
+                  "joinDataType": null
                 },
-                "joinCondition": null,
-                "joinType": "rightOuter",
-                "usingColumns": [
-                  "a",
-                  "b"
-                ],
-                "joinDataType": null
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -821,56 +841,58 @@
       "input": "select * from t right outer join u using(a, b)",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "join": {
-                "left": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t",
-                        "options": {}
-                      }
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "t",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
-                },
-                "right": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "u",
-                        "options": {}
-                      }
+                  "right": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "u",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
+                  "joinCondition": null,
+                  "joinType": "rightOuter",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ],
+                  "joinDataType": null
                 },
-                "joinCondition": null,
-                "joinType": "rightOuter",
-                "usingColumns": [
-                  "a",
-                  "b"
-                ],
-                "joinDataType": null
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -938,119 +960,121 @@
       "input": "select * from t1 JOIN t2, t3 join t2 on t1.col1 = t2.col2",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "join": {
-                "left": {
-                  "join": {
-                    "left": {
-                      "read": {
-                        "readType": {
-                          "namedTable": {
-                            "unparsedIdentifier": "t1",
-                            "options": {}
-                          }
-                        },
-                        "isStreaming": false
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "right": {
-                      "read": {
-                        "readType": {
-                          "namedTable": {
-                            "unparsedIdentifier": "t2",
-                            "options": {}
-                          }
-                        },
-                        "isStreaming": false
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "joinCondition": null,
-                    "joinType": "inner",
-                    "usingColumns": [],
-                    "joinDataType": null
-                  },
-                  "planId": null,
-                  "sourceInfo": null
-                },
-                "right": {
-                  "join": {
-                    "left": {
-                      "read": {
-                        "readType": {
-                          "namedTable": {
-                            "unparsedIdentifier": "t3",
-                            "options": {}
-                          }
-                        },
-                        "isStreaming": false
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "right": {
-                      "read": {
-                        "readType": {
-                          "namedTable": {
-                            "unparsedIdentifier": "t2",
-                            "options": {}
-                          }
-                        },
-                        "isStreaming": false
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "joinCondition": {
-                      "unresolvedFunction": {
-                        "functionName": "==",
-                        "arguments": [
-                          {
-                            "unresolvedAttribute": {
-                              "unparsedIdentifier": "t1.col1",
-                              "planId": null
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "join": {
+                      "left": {
+                        "read": {
+                          "readType": {
+                            "namedTable": {
+                              "unparsedIdentifier": "t1",
+                              "options": {}
                             }
                           },
-                          {
-                            "unresolvedAttribute": {
-                              "unparsedIdentifier": "t2.col2",
-                              "planId": null
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "right": {
+                        "read": {
+                          "readType": {
+                            "namedTable": {
+                              "unparsedIdentifier": "t2",
+                              "options": {}
                             }
-                          }
-                        ],
-                        "isDistinct": false,
-                        "isUserDefinedFunction": false
-                      }
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "joinCondition": null,
+                      "joinType": "inner",
+                      "usingColumns": [],
+                      "joinDataType": null
                     },
-                    "joinType": "inner",
-                    "usingColumns": [],
-                    "joinDataType": null
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
+                  "right": {
+                    "join": {
+                      "left": {
+                        "read": {
+                          "readType": {
+                            "namedTable": {
+                              "unparsedIdentifier": "t3",
+                              "options": {}
+                            }
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "right": {
+                        "read": {
+                          "readType": {
+                            "namedTable": {
+                              "unparsedIdentifier": "t2",
+                              "options": {}
+                            }
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "joinCondition": {
+                        "unresolvedFunction": {
+                          "functionName": "==",
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "unparsedIdentifier": "t1.col1",
+                                "planId": null
+                              }
+                            },
+                            {
+                              "unresolvedAttribute": {
+                                "unparsedIdentifier": "t2.col2",
+                                "planId": null
+                              }
+                            }
+                          ],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false
+                        }
+                      },
+                      "joinType": "inner",
+                      "usingColumns": [],
+                      "joinDataType": null
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "cross",
+                  "usingColumns": [],
+                  "joinDataType": null
                 },
-                "joinCondition": null,
-                "joinType": "cross",
-                "usingColumns": [],
-                "joinDataType": null
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -1058,139 +1082,141 @@
       "input": "select * from t1 cross join t2 join t3 on t3.id = t1.id join t4 on t4.id = t1.id",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "join": {
-                "left": {
-                  "join": {
-                    "left": {
-                      "join": {
-                        "left": {
-                          "read": {
-                            "readType": {
-                              "namedTable": {
-                                "unparsedIdentifier": "t1",
-                                "options": {}
-                              }
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "join": {
+                      "left": {
+                        "join": {
+                          "left": {
+                            "read": {
+                              "readType": {
+                                "namedTable": {
+                                  "unparsedIdentifier": "t1",
+                                  "options": {}
+                                }
+                              },
+                              "isStreaming": false
                             },
-                            "isStreaming": false
+                            "planId": null,
+                            "sourceInfo": null
                           },
-                          "planId": null,
-                          "sourceInfo": null
-                        },
-                        "right": {
-                          "read": {
-                            "readType": {
-                              "namedTable": {
-                                "unparsedIdentifier": "t2",
-                                "options": {}
-                              }
+                          "right": {
+                            "read": {
+                              "readType": {
+                                "namedTable": {
+                                  "unparsedIdentifier": "t2",
+                                  "options": {}
+                                }
+                              },
+                              "isStreaming": false
                             },
-                            "isStreaming": false
+                            "planId": null,
+                            "sourceInfo": null
                           },
-                          "planId": null,
-                          "sourceInfo": null
+                          "joinCondition": null,
+                          "joinType": "cross",
+                          "usingColumns": [],
+                          "joinDataType": null
                         },
-                        "joinCondition": null,
-                        "joinType": "cross",
-                        "usingColumns": [],
-                        "joinDataType": null
+                        "planId": null,
+                        "sourceInfo": null
                       },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "right": {
-                      "read": {
-                        "readType": {
-                          "namedTable": {
-                            "unparsedIdentifier": "t3",
-                            "options": {}
-                          }
-                        },
-                        "isStreaming": false
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "joinCondition": {
-                      "unresolvedFunction": {
-                        "functionName": "==",
-                        "arguments": [
-                          {
-                            "unresolvedAttribute": {
-                              "unparsedIdentifier": "t3.id",
-                              "planId": null
+                      "right": {
+                        "read": {
+                          "readType": {
+                            "namedTable": {
+                              "unparsedIdentifier": "t3",
+                              "options": {}
                             }
                           },
-                          {
-                            "unresolvedAttribute": {
-                              "unparsedIdentifier": "t1.id",
-                              "planId": null
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "joinCondition": {
+                        "unresolvedFunction": {
+                          "functionName": "==",
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "unparsedIdentifier": "t3.id",
+                                "planId": null
+                              }
+                            },
+                            {
+                              "unresolvedAttribute": {
+                                "unparsedIdentifier": "t1.id",
+                                "planId": null
+                              }
                             }
-                          }
-                        ],
-                        "isDistinct": false,
-                        "isUserDefinedFunction": false
-                      }
-                    },
-                    "joinType": "inner",
-                    "usingColumns": [],
-                    "joinDataType": null
-                  },
-                  "planId": null,
-                  "sourceInfo": null
-                },
-                "right": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t4",
-                        "options": {}
-                      }
-                    },
-                    "isStreaming": false
-                  },
-                  "planId": null,
-                  "sourceInfo": null
-                },
-                "joinCondition": {
-                  "unresolvedFunction": {
-                    "functionName": "==",
-                    "arguments": [
-                      {
-                        "unresolvedAttribute": {
-                          "unparsedIdentifier": "t4.id",
-                          "planId": null
+                          ],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false
                         }
                       },
-                      {
-                        "unresolvedAttribute": {
-                          "unparsedIdentifier": "t1.id",
-                          "planId": null
+                      "joinType": "inner",
+                      "usingColumns": [],
+                      "joinDataType": null
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "t4",
+                          "options": {}
                         }
-                      }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
-                  }
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "t4.id",
+                            "planId": null
+                          }
+                        },
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "t1.id",
+                            "planId": null
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  },
+                  "joinType": "inner",
+                  "usingColumns": [],
+                  "joinDataType": null
                 },
-                "joinType": "inner",
-                "usingColumns": [],
-                "joinDataType": null
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -1222,96 +1248,98 @@
       "input": "select * from t1, t3 join t2 on t1.col1 = t2.col2",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "join": {
-                "left": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t1",
-                        "options": {}
-                      }
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "t1",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
-                },
-                "right": {
-                  "join": {
-                    "left": {
-                      "read": {
-                        "readType": {
-                          "namedTable": {
-                            "unparsedIdentifier": "t3",
-                            "options": {}
-                          }
-                        },
-                        "isStreaming": false
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "right": {
-                      "read": {
-                        "readType": {
-                          "namedTable": {
-                            "unparsedIdentifier": "t2",
-                            "options": {}
-                          }
-                        },
-                        "isStreaming": false
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "joinCondition": {
-                      "unresolvedFunction": {
-                        "functionName": "==",
-                        "arguments": [
-                          {
-                            "unresolvedAttribute": {
-                              "unparsedIdentifier": "t1.col1",
-                              "planId": null
+                  "right": {
+                    "join": {
+                      "left": {
+                        "read": {
+                          "readType": {
+                            "namedTable": {
+                              "unparsedIdentifier": "t3",
+                              "options": {}
                             }
                           },
-                          {
-                            "unresolvedAttribute": {
-                              "unparsedIdentifier": "t2.col2",
-                              "planId": null
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "right": {
+                        "read": {
+                          "readType": {
+                            "namedTable": {
+                              "unparsedIdentifier": "t2",
+                              "options": {}
                             }
-                          }
-                        ],
-                        "isDistinct": false,
-                        "isUserDefinedFunction": false
-                      }
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "joinCondition": {
+                        "unresolvedFunction": {
+                          "functionName": "==",
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "unparsedIdentifier": "t1.col1",
+                                "planId": null
+                              }
+                            },
+                            {
+                              "unresolvedAttribute": {
+                                "unparsedIdentifier": "t2.col2",
+                                "planId": null
+                              }
+                            }
+                          ],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false
+                        }
+                      },
+                      "joinType": "inner",
+                      "usingColumns": [],
+                      "joinDataType": null
                     },
-                    "joinType": "inner",
-                    "usingColumns": [],
-                    "joinDataType": null
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
+                  "joinCondition": null,
+                  "joinType": "cross",
+                  "usingColumns": [],
+                  "joinDataType": null
                 },
-                "joinCondition": null,
-                "joinType": "cross",
-                "usingColumns": [],
-                "joinDataType": null
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     }

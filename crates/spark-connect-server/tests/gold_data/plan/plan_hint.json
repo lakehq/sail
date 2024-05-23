@@ -4,30 +4,32 @@
       "input": "\nSELECT\n/*+ REPARTITION(100, c), BROADCASTJOIN(u), COALESCE(50), REPARTITION(300, c) */\n* FROM t\n        ",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -35,30 +37,32 @@
       "input": "SELECT /*+ BROADCAST(tab) */ * FROM testcat.db.tab",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "testcat.db.tab",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "testcat.db.tab",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -66,30 +70,32 @@
       "input": "SELECT /*+ BROADCASTJOIN(u) */ * FROM t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -97,30 +103,32 @@
       "input": "SELECT /*+ BROADCASTJOIN(u), REPARTITION(100) */ * FROM t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -128,30 +136,32 @@
       "input": "SELECT /*+ COALESCE(10) */ * FROM t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -159,30 +169,32 @@
       "input": "SELECT /*+ COALESCE(30 + 50) */ * FROM t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -190,30 +202,32 @@
       "input": "SELECT /*+ HINT */ * FROM t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -221,30 +235,32 @@
       "input": "SELECT /*+ HINT() */ * FROM t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -252,30 +268,32 @@
       "input": "SELECT /*+ HINT1('a', (b, c), (1, 2)) */ * from t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -283,30 +301,32 @@
       "input": "SELECT /*+ HINT1(a, 1) */ /*+ hint2(b, 2) */ * from t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -314,30 +334,32 @@
       "input": "SELECT /*+ HINT1(a, 1) hint2(b, 2) */ * from t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -345,30 +367,32 @@
       "input": "SELECT /*+ HINT1(a, 1), hint2(b, 2) */ /*+ hint3(c, 3) */ * from t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -376,30 +400,32 @@
       "input": "SELECT /*+ HINT1(a, 1),hint2(b, 2) */ * from t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -407,30 +433,32 @@
       "input": "SELECT /*+ HINT1(a, 5, 'a', b) */ * from t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -438,30 +466,32 @@
       "input": "SELECT /*+ HINT1(a, array(1, 2, 3)) */ * from t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -469,30 +499,32 @@
       "input": "SELECT /*+ INDEX(a b c) */ * from default.t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "default.t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "default.t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -500,30 +532,32 @@
       "input": "SELECT /*+ INDEX(t, emp_job_ix) */ * FROM t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -531,30 +565,32 @@
       "input": "SELECT /*+ MAPJOIN(`default.t`) */ * from `default.t`",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "`default.t`",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "`default.t`",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -562,71 +598,73 @@
       "input": "SELECT /*+ MAPJOIN(t) */ a from t where true group by a order by a",
       "output": {
         "success": {
-          "sort": {
-            "input": {
-              "aggregate": {
-                "input": {
-                  "filter": {
-                    "input": {
-                      "read": {
-                        "readType": {
-                          "namedTable": {
-                            "unparsedIdentifier": "t",
-                            "options": {}
-                          }
+          "root": {
+            "sort": {
+              "input": {
+                "aggregate": {
+                  "input": {
+                    "filter": {
+                      "input": {
+                        "read": {
+                          "readType": {
+                            "namedTable": {
+                              "unparsedIdentifier": "t",
+                              "options": {}
+                            }
+                          },
+                          "isStreaming": false
                         },
-                        "isStreaming": false
+                        "planId": null,
+                        "sourceInfo": null
                       },
-                      "planId": null,
-                      "sourceInfo": null
+                      "condition": {
+                        "literal": {
+                          "boolean": true
+                        }
+                      }
                     },
-                    "condition": {
-                      "literal": {
-                        "boolean": true
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "groupType": "groupBy",
+                  "groupingExpressions": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     }
-                  },
-                  "planId": null,
-                  "sourceInfo": null
+                  ],
+                  "aggregateExpressions": [
+                    {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a",
+                        "planId": null
+                      }
+                    }
+                  ],
+                  "pivot": null
                 },
-                "groupType": "groupBy",
-                "groupingExpressions": [
-                  {
-                    "unresolvedAttribute": {
-                      "unparsedIdentifier": "a",
-                      "planId": null
-                    }
-                  }
-                ],
-                "aggregateExpressions": [
-                  {
-                    "unresolvedAttribute": {
-                      "unparsedIdentifier": "a",
-                      "planId": null
-                    }
-                  }
-                ],
-                "pivot": null
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
+              "order": [
+                {
+                  "child": {
+                    "unresolvedAttribute": {
+                      "unparsedIdentifier": "a",
+                      "planId": null
+                    }
+                  },
+                  "direction": "unspecified",
+                  "nullOrdering": "unspecified"
+                }
+              ],
+              "isGlobal": true
             },
-            "order": [
-              {
-                "child": {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
-                    "planId": null
-                  }
-                },
-                "direction": "unspecified",
-                "nullOrdering": "unspecified"
-              }
-            ],
-            "isGlobal": true
-          },
-          "planId": null,
-          "sourceInfo": null
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -634,30 +672,32 @@
       "input": "SELECT /*+ MAPJOIN(u) */ * FROM t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -665,30 +705,32 @@
       "input": "SELECT /*+ REPARTITION(100) */ * FROM t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -696,30 +738,32 @@
       "input": "SELECT /*+ REPARTITION(100, c) */ * FROM t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -727,30 +771,32 @@
       "input": "SELECT /*+ REPARTITION(100, c), BROADCASTJOIN(u), COALESCE(50) */ * FROM t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -758,30 +804,32 @@
       "input": "SELECT /*+ REPARTITION(100, c), COALESCE(50) */ * FROM t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -789,30 +837,32 @@
       "input": "SELECT /*+ REPARTITION(c) */ * FROM t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -820,30 +870,32 @@
       "input": "SELECT /*+ REPARTITION_BY_RANGE(100, c) */ * FROM t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -851,30 +903,32 @@
       "input": "SELECT /*+ REPARTITION_BY_RANGE(c) */ * FROM t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -882,30 +936,32 @@
       "input": "SELECT /*+ STREAMTABLE(a,b,c) */ * FROM t",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "read": {
-                "readType": {
-                  "namedTable": {
-                    "unparsedIdentifier": "t",
-                    "options": {}
-                  }
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "readType": {
+                    "namedTable": {
+                      "unparsedIdentifier": "t",
+                      "options": {}
+                    }
+                  },
+                  "isStreaming": false
                 },
-                "isStreaming": false
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "unresolvedStar": {
-                  "unparsedTarget": null
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     }

@@ -4,27 +4,29 @@
       "input": "SELECT 1",
       "output": {
         "success": {
-          "project": {
-            "input": {
-              "localRelation": {
-                "data": null,
-                "schema": {
-                  "fields": []
-                }
+          "root": {
+            "project": {
+              "input": {
+                "localRelation": {
+                  "data": null,
+                  "schema": {
+                    "fields": []
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
-            },
-            "expressions": [
-              {
-                "literal": {
-                  "integer": 1
+              "expressions": [
+                {
+                  "literal": {
+                    "integer": 1
+                  }
                 }
-              }
-            ]
-          },
-          "planId": null,
-          "sourceInfo": null
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     }

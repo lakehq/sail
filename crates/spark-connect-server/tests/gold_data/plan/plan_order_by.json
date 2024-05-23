@@ -64,59 +64,61 @@
       "input": "select * from t order by a, b desc",
       "output": {
         "success": {
-          "sort": {
-            "input": {
-              "project": {
-                "input": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t",
-                        "options": {}
-                      }
+          "root": {
+            "sort": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "readType": {
+                        "namedTable": {
+                          "unparsedIdentifier": "t",
+                          "options": {}
+                        }
+                      },
+                      "isStreaming": false
                     },
-                    "isStreaming": false
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
-                },
-                "expressions": [
-                  {
-                    "unresolvedStar": {
-                      "unparsedTarget": null
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "unparsedTarget": null
+                      }
                     }
-                  }
-                ]
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
+              "order": [
+                {
+                  "child": {
+                    "unresolvedAttribute": {
+                      "unparsedIdentifier": "a",
+                      "planId": null
+                    }
+                  },
+                  "direction": "unspecified",
+                  "nullOrdering": "unspecified"
+                },
+                {
+                  "child": {
+                    "unresolvedAttribute": {
+                      "unparsedIdentifier": "b",
+                      "planId": null
+                    }
+                  },
+                  "direction": "descending",
+                  "nullOrdering": "unspecified"
+                }
+              ],
+              "isGlobal": true
             },
-            "order": [
-              {
-                "child": {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
-                    "planId": null
-                  }
-                },
-                "direction": "unspecified",
-                "nullOrdering": "unspecified"
-              },
-              {
-                "child": {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
-                    "planId": null
-                  }
-                },
-                "direction": "descending",
-                "nullOrdering": "unspecified"
-              }
-            ],
-            "isGlobal": true
-          },
-          "planId": null,
-          "sourceInfo": null
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
@@ -124,66 +126,68 @@
       "input": "select * from t order by a, b desc limit 10",
       "output": {
         "success": {
-          "limit": {
-            "input": {
-              "sort": {
-                "input": {
-                  "project": {
-                    "input": {
-                      "read": {
-                        "readType": {
-                          "namedTable": {
-                            "unparsedIdentifier": "t",
-                            "options": {}
-                          }
+          "root": {
+            "limit": {
+              "input": {
+                "sort": {
+                  "input": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "readType": {
+                            "namedTable": {
+                              "unparsedIdentifier": "t",
+                              "options": {}
+                            }
+                          },
+                          "isStreaming": false
                         },
-                        "isStreaming": false
+                        "planId": null,
+                        "sourceInfo": null
                       },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
+                      "expressions": [
+                        {
+                          "unresolvedStar": {
+                            "unparsedTarget": null
+                          }
                         }
-                      }
-                    ]
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
+                  "order": [
+                    {
+                      "child": {
+                        "unresolvedAttribute": {
+                          "unparsedIdentifier": "a",
+                          "planId": null
+                        }
+                      },
+                      "direction": "unspecified",
+                      "nullOrdering": "unspecified"
+                    },
+                    {
+                      "child": {
+                        "unresolvedAttribute": {
+                          "unparsedIdentifier": "b",
+                          "planId": null
+                        }
+                      },
+                      "direction": "descending",
+                      "nullOrdering": "unspecified"
+                    }
+                  ],
+                  "isGlobal": true
                 },
-                "order": [
-                  {
-                    "child": {
-                      "unresolvedAttribute": {
-                        "unparsedIdentifier": "a",
-                        "planId": null
-                      }
-                    },
-                    "direction": "unspecified",
-                    "nullOrdering": "unspecified"
-                  },
-                  {
-                    "child": {
-                      "unresolvedAttribute": {
-                        "unparsedIdentifier": "b",
-                        "planId": null
-                      }
-                    },
-                    "direction": "descending",
-                    "nullOrdering": "unspecified"
-                  }
-                ],
-                "isGlobal": true
+                "planId": null,
+                "sourceInfo": null
               },
-              "planId": null,
-              "sourceInfo": null
+              "limit": 10
             },
-            "limit": 10
-          },
-          "planId": null,
-          "sourceInfo": null
+            "planId": null,
+            "sourceInfo": null
+          }
         }
       }
     },
