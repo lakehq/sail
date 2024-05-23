@@ -4,10 +4,10 @@
       "input": "\nSELECT -- continued after the following block comments...\n/* Deeply nested comment.\n   This includes a single apostrophe to make sure we aren't decoding this part as a string.\nSELECT 'deep nest' AS n1;\n/* Second level of nesting...\nSELECT 'deeper nest' as n2;\n/* Third level of nesting...\nSELECT 'deepest nest' as n3;\n*/\nHoo boy. Still two deep...\n*/\nNow just one deep...\n*/\n* FROM a\n      ",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -81,10 +81,10 @@
       "input": "SELECT * FROM a",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -284,10 +284,10 @@
       "input": "SELECT * FROM testcat.db.tab",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -343,10 +343,10 @@
       "input": "SELECT OVERLAY('Spark SQL' PLACING 'ANSI ' FROM 7 FOR 0)",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "localRelation": {
                     "data": null,
                     "schema": {
@@ -399,10 +399,10 @@
       "input": "SELECT OVERLAY('Spark SQL' PLACING 'CORE' FROM 7)",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "localRelation": {
                     "data": null,
                     "schema": {
@@ -450,10 +450,10 @@
       "input": "SELECT OVERLAY('Spark SQL' PLACING '_' FROM 6)",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "localRelation": {
                     "data": null,
                     "schema": {
@@ -501,10 +501,10 @@
       "input": "SELECT OVERLAY('Spark SQL' PLACING 'tructured' FROM 2 FOR 4)",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "localRelation": {
                     "data": null,
                     "schema": {
@@ -563,10 +563,10 @@
       "input": "SELECT TRIM('xyz' FROM 'yxTomxx')",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "localRelation": {
                     "data": null,
                     "schema": {
@@ -609,10 +609,10 @@
       "input": "SELECT TRIM(BOTH '@$%&( )abc' FROM '@ $ % & ()abc ' )",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "localRelation": {
                     "data": null,
                     "schema": {
@@ -661,10 +661,10 @@
       "input": "SELECT TRIM(LEADING 'c []' FROM '[ ccccbcc ')",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "localRelation": {
                     "data": null,
                     "schema": {
@@ -713,10 +713,10 @@
       "input": "SELECT TRIM(TRAILING 'c&^,.' FROM 'bc...,,,&&&ccc')",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "localRelation": {
                     "data": null,
                     "schema": {
@@ -789,10 +789,10 @@
       "input": "sELEct * FroM a",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -854,10 +854,10 @@
       "input": "select * fRoM a",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -973,10 +973,10 @@
       "input": "select * from t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -1038,13 +1038,13 @@
       "input": "select * from t limit 10",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "limit": {
               "input": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -1136,10 +1136,10 @@
       "input": "select 1",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "localRelation": {
                     "data": null,
                     "schema": {
@@ -1180,10 +1180,10 @@
       "input": "select a, b",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "localRelation": {
                     "data": null,
                     "schema": {
@@ -1219,10 +1219,10 @@
       "input": "select a, b from db.c",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -1279,13 +1279,13 @@
       "input": "select a, b from db.c where x < 1",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "filter": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -1367,10 +1367,10 @@
       "input": "select all a, b from db.c",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -1409,13 +1409,13 @@
       "input": "select distinct a, b from db.c",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "deduplicate": {
               "input": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -1462,10 +1462,10 @@
       "input": "select from tbl",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "localRelation": {
                     "data": null,
                     "schema": {
@@ -1503,10 +1503,10 @@
       "input": "select id from ((((((t0))))))",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -1539,10 +1539,10 @@
       "input": "select id from (t0)",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {

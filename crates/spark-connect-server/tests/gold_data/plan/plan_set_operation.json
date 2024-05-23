@@ -4,16 +4,16 @@
       "input": "\nSELECT * FROM a\nUNION\nSELECT * FROM b\nEXCEPT\nSELECT * FROM c\nINTERSECT\nSELECT * FROM d\n      ",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "setOperation": {
               "left": {
-                "node": {
+                "root": {
                   "setOperation": {
                     "left": {
-                      "node": {
+                      "root": {
                         "project": {
                           "input": {
-                            "node": {
+                            "root": {
                               "read": {
                                 "readType": {
                                   "namedTable": {
@@ -40,10 +40,10 @@
                       "sourceInfo": null
                     },
                     "right": {
-                      "node": {
+                      "root": {
                         "project": {
                           "input": {
-                            "node": {
+                            "root": {
                               "read": {
                                 "readType": {
                                   "namedTable": {
@@ -79,13 +79,13 @@
                 "sourceInfo": null
               },
               "right": {
-                "node": {
+                "root": {
                   "setOperation": {
                     "left": {
-                      "node": {
+                      "root": {
                         "project": {
                           "input": {
-                            "node": {
+                            "root": {
                               "read": {
                                 "readType": {
                                   "namedTable": {
@@ -112,10 +112,10 @@
                       "sourceInfo": null
                     },
                     "right": {
-                      "node": {
+                      "root": {
                         "project": {
                           "input": {
-                            "node": {
+                            "root": {
                               "read": {
                                 "readType": {
                                   "namedTable": {
@@ -165,16 +165,16 @@
       "input": "\nSELECT * FROM a\nUNION\nSELECT * FROM b\nEXCEPT ALL\nSELECT * FROM c\nINTERSECT ALL\nSELECT * FROM d\n      ",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "setOperation": {
               "left": {
-                "node": {
+                "root": {
                   "setOperation": {
                     "left": {
-                      "node": {
+                      "root": {
                         "project": {
                           "input": {
-                            "node": {
+                            "root": {
                               "read": {
                                 "readType": {
                                   "namedTable": {
@@ -201,10 +201,10 @@
                       "sourceInfo": null
                     },
                     "right": {
-                      "node": {
+                      "root": {
                         "project": {
                           "input": {
-                            "node": {
+                            "root": {
                               "read": {
                                 "readType": {
                                   "namedTable": {
@@ -240,13 +240,13 @@
                 "sourceInfo": null
               },
               "right": {
-                "node": {
+                "root": {
                   "setOperation": {
                     "left": {
-                      "node": {
+                      "root": {
                         "project": {
                           "input": {
-                            "node": {
+                            "root": {
                               "read": {
                                 "readType": {
                                   "namedTable": {
@@ -273,10 +273,10 @@
                       "sourceInfo": null
                     },
                     "right": {
-                      "node": {
+                      "root": {
                         "project": {
                           "input": {
-                            "node": {
+                            "root": {
                               "read": {
                                 "readType": {
                                   "namedTable": {
@@ -338,13 +338,13 @@
       "input": "select * from a except all select * from b",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "setOperation": {
               "left": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -371,10 +371,10 @@
                 "sourceInfo": null
               },
               "right": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -415,13 +415,13 @@
       "input": "select * from a except distinct select * from b",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "setOperation": {
               "left": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -448,10 +448,10 @@
                 "sourceInfo": null
               },
               "right": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -492,13 +492,13 @@
       "input": "select * from a except select * from b",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "setOperation": {
               "left": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -525,10 +525,10 @@
                 "sourceInfo": null
               },
               "right": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -569,13 +569,13 @@
       "input": "select * from a intersect all select * from b",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "setOperation": {
               "left": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -602,10 +602,10 @@
                 "sourceInfo": null
               },
               "right": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -646,13 +646,13 @@
       "input": "select * from a intersect distinct select * from b",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "setOperation": {
               "left": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -679,10 +679,10 @@
                 "sourceInfo": null
               },
               "right": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -723,13 +723,13 @@
       "input": "select * from a intersect select * from b",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "setOperation": {
               "left": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -756,10 +756,10 @@
                 "sourceInfo": null
               },
               "right": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -818,13 +818,13 @@
       "input": "select * from a union all select * from b",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "setOperation": {
               "left": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -851,10 +851,10 @@
                 "sourceInfo": null
               },
               "right": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -895,13 +895,13 @@
       "input": "select * from a union distinct select * from b",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "setOperation": {
               "left": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -928,10 +928,10 @@
                 "sourceInfo": null
               },
               "right": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -972,13 +972,13 @@
       "input": "select * from a union select * from b",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "setOperation": {
               "left": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -1005,10 +1005,10 @@
                 "sourceInfo": null
               },
               "right": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -1049,13 +1049,13 @@
       "input": "select 1 union select 1",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "setOperation": {
               "left": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "localRelation": {
                           "data": null,
                           "schema": {
@@ -1079,10 +1079,10 @@
                 "sourceInfo": null
               },
               "right": {
-                "node": {
+                "root": {
                   "project": {
                     "input": {
-                      "node": {
+                      "root": {
                         "localRelation": {
                           "data": null,
                           "schema": {

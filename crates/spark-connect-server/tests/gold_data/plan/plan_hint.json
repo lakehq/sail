@@ -4,10 +4,10 @@
       "input": "\nSELECT\n/*+ REPARTITION(100, c), BROADCASTJOIN(u), COALESCE(50), REPARTITION(300, c) */\n* FROM t\n        ",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -39,10 +39,10 @@
       "input": "SELECT /*+ BROADCAST(tab) */ * FROM testcat.db.tab",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -74,10 +74,10 @@
       "input": "SELECT /*+ BROADCASTJOIN(u) */ * FROM t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -109,10 +109,10 @@
       "input": "SELECT /*+ BROADCASTJOIN(u), REPARTITION(100) */ * FROM t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -144,10 +144,10 @@
       "input": "SELECT /*+ COALESCE(10) */ * FROM t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -179,10 +179,10 @@
       "input": "SELECT /*+ COALESCE(30 + 50) */ * FROM t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -214,10 +214,10 @@
       "input": "SELECT /*+ HINT */ * FROM t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -249,10 +249,10 @@
       "input": "SELECT /*+ HINT() */ * FROM t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -284,10 +284,10 @@
       "input": "SELECT /*+ HINT1('a', (b, c), (1, 2)) */ * from t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -319,10 +319,10 @@
       "input": "SELECT /*+ HINT1(a, 1) */ /*+ hint2(b, 2) */ * from t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -354,10 +354,10 @@
       "input": "SELECT /*+ HINT1(a, 1) hint2(b, 2) */ * from t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -389,10 +389,10 @@
       "input": "SELECT /*+ HINT1(a, 1), hint2(b, 2) */ /*+ hint3(c, 3) */ * from t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -424,10 +424,10 @@
       "input": "SELECT /*+ HINT1(a, 1),hint2(b, 2) */ * from t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -459,10 +459,10 @@
       "input": "SELECT /*+ HINT1(a, 5, 'a', b) */ * from t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -494,10 +494,10 @@
       "input": "SELECT /*+ HINT1(a, array(1, 2, 3)) */ * from t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -529,10 +529,10 @@
       "input": "SELECT /*+ INDEX(a b c) */ * from default.t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -564,10 +564,10 @@
       "input": "SELECT /*+ INDEX(t, emp_job_ix) */ * FROM t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -599,10 +599,10 @@
       "input": "SELECT /*+ MAPJOIN(`default.t`) */ * from `default.t`",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -634,16 +634,16 @@
       "input": "SELECT /*+ MAPJOIN(t) */ a from t where true group by a order by a",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "sort": {
               "input": {
-                "node": {
+                "root": {
                   "aggregate": {
                     "input": {
-                      "node": {
+                      "root": {
                         "filter": {
                           "input": {
-                            "node": {
+                            "root": {
                               "read": {
                                 "readType": {
                                   "namedTable": {
@@ -714,10 +714,10 @@
       "input": "SELECT /*+ MAPJOIN(u) */ * FROM t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -749,10 +749,10 @@
       "input": "SELECT /*+ REPARTITION(100) */ * FROM t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -784,10 +784,10 @@
       "input": "SELECT /*+ REPARTITION(100, c) */ * FROM t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -819,10 +819,10 @@
       "input": "SELECT /*+ REPARTITION(100, c), BROADCASTJOIN(u), COALESCE(50) */ * FROM t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -854,10 +854,10 @@
       "input": "SELECT /*+ REPARTITION(100, c), COALESCE(50) */ * FROM t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -889,10 +889,10 @@
       "input": "SELECT /*+ REPARTITION(c) */ * FROM t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -924,10 +924,10 @@
       "input": "SELECT /*+ REPARTITION_BY_RANGE(100, c) */ * FROM t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -959,10 +959,10 @@
       "input": "SELECT /*+ REPARTITION_BY_RANGE(c) */ * FROM t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {
@@ -994,10 +994,10 @@
       "input": "SELECT /*+ STREAMTABLE(a,b,c) */ * FROM t",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "project": {
               "input": {
-                "node": {
+                "root": {
                   "read": {
                     "readType": {
                       "namedTable": {

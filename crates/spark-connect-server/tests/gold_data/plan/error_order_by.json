@@ -16,16 +16,16 @@
       "input": "\nSELECT a, b\nFROM t\nWHERE a-b > 10\nGROUP BY fake-breaker\nORDER BY c\n      ",
       "output": {
         "success": {
-          "node": {
+          "root": {
             "sort": {
               "input": {
-                "node": {
+                "root": {
                   "aggregate": {
                     "input": {
-                      "node": {
+                      "root": {
                         "filter": {
                           "input": {
-                            "node": {
+                            "root": {
                               "read": {
                                 "readType": {
                                   "namedTable": {
