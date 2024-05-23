@@ -10,10 +10,10 @@
       "input": "select a, b, sum(c) as c from d group by a, b",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "aggregate": {
               "input": {
-                "root": {
+                "node": {
                   "read": {
                     "readType": {
                       "namedTable": {

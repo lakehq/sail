@@ -4,10 +4,10 @@
       "input": "SELECT 1",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "project": {
               "input": {
-                "root": {
+                "node": {
                   "localRelation": {
                     "data": null,
                     "schema": {

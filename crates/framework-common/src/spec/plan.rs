@@ -9,15 +9,15 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
-    pub root: PlanNode,
+    pub node: PlanNode,
     pub plan_id: Option<i64>,
     pub source_info: Option<String>,
 }
 
 impl Plan {
-    pub fn new(root: PlanNode) -> Self {
+    pub fn new(node: PlanNode) -> Self {
         Self {
-            root,
+            node,
             plan_id: None,
             source_info: None,
         }

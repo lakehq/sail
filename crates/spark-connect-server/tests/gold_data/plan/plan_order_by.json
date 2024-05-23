@@ -64,13 +64,13 @@
       "input": "select * from t order by a, b desc",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "sort": {
               "input": {
-                "root": {
+                "node": {
                   "project": {
                     "input": {
-                      "root": {
+                      "node": {
                         "read": {
                           "readType": {
                             "namedTable": {
@@ -130,16 +130,16 @@
       "input": "select * from t order by a, b desc limit 10",
       "output": {
         "success": {
-          "root": {
+          "node": {
             "limit": {
               "input": {
-                "root": {
+                "node": {
                   "sort": {
                     "input": {
-                      "root": {
+                      "node": {
                         "project": {
                           "input": {
-                            "root": {
+                            "node": {
                               "read": {
                                 "readType": {
                                   "namedTable": {
