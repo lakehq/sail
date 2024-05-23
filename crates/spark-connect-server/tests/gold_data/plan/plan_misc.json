@@ -9,16 +9,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "a"
-                  }
-                }
+                    "unparsedIdentifier": "a",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -32,16 +40,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "a"
-                  }
-                }
+                    "unparsedIdentifier": "a",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -55,16 +71,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "a"
-                  }
-                }
+                    "unparsedIdentifier": "a",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -78,16 +102,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "a"
-                  }
-                }
+                    "unparsedIdentifier": "a",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -118,8 +150,13 @@
             "project": {
               "input": {
                 "localRelation": {
-                  "schema": "struct<>"
-                }
+                  "data": null,
+                  "schema": {
+                    "fields": []
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
@@ -131,11 +168,14 @@
                     },
                     "name": [
                       "a"
-                    ]
+                    ],
+                    "metadata": null
                   }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -145,43 +185,62 @@
       "output": {
         "success": {
           "root": {
-            "setOp": {
-              "leftInput": {
+            "setOperation": {
+              "left": {
                 "project": {
                   "input": {
                     "read": {
                       "namedTable": {
-                        "unparsedIdentifier": "t1"
-                      }
-                    }
+                        "unparsedIdentifier": "t1",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
                   },
                   "expressions": [
                     {
-                      "unresolvedStar": {}
+                      "unresolvedStar": {
+                        "unparsedTarget": null
+                      }
                     }
                   ]
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
-              "rightInput": {
+              "right": {
                 "project": {
                   "input": {
                     "read": {
                       "namedTable": {
-                        "unparsedIdentifier": "t2"
-                      }
-                    }
+                        "unparsedIdentifier": "t2",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
                   },
                   "expressions": [
                     {
-                      "unresolvedStar": {}
+                      "unresolvedStar": {
+                        "unparsedTarget": null
+                      }
                     }
                   ]
-                }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
-              "setOpType": "SET_OP_TYPE_UNION",
+              "setOpType": "union",
               "isAll": false,
-              "byName": false
-            }
+              "byName": false,
+              "allowMissingColumns": false
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }

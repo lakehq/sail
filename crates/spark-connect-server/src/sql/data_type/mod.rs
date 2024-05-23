@@ -14,14 +14,14 @@ pub(crate) mod json;
 
 const DEFAULT_FIELD_NAME: &str = "value";
 
-pub(crate) const SPARK_DECIMAL_MAX_PRECISION: i32 = 38;
-pub(crate) const SPARK_DECIMAL_MAX_SCALE: i32 = 38;
-pub(crate) const SPARK_DECIMAL_USER_DEFAULT_PRECISION: i32 = 10;
-pub(crate) const SPARK_DECIMAL_USER_DEFAULT_SCALE: i32 = 0;
+pub(crate) const SPARK_DECIMAL_MAX_PRECISION: u8 = 38;
+pub(crate) const SPARK_DECIMAL_MAX_SCALE: i8 = 38;
+pub(crate) const SPARK_DECIMAL_USER_DEFAULT_PRECISION: u8 = 10;
+pub(crate) const SPARK_DECIMAL_USER_DEFAULT_SCALE: i8 = 0;
 #[allow(dead_code)]
-pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_PRECISION: i32 = 38;
+pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_PRECISION: u8 = 38;
 #[allow(dead_code)]
-pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_SCALE: i32 = 18;
+pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_SCALE: i8 = 18;
 
 pub(crate) fn parse_spark_schema(schema: &str) -> SparkResult<adt::SchemaRef> {
     let data_type: spec::DataType = if let Ok(dt) = parse_spark_data_type(schema) {
@@ -54,18 +54,17 @@ pub(crate) fn parse_spark_data_type(sql: &str) -> SparkResult<spec::DataType> {
     Ok(from_ast_data_type(&data_type)?)
 }
 
-fn from_ast_char_length(length: &Option<ast::CharacterLength>) -> SparkResult<i32> {
+fn from_ast_char_length(length: &Option<ast::CharacterLength>) -> SparkResult<u32> {
     let length = length.required("char length")?;
     match length {
         ast::CharacterLength::IntegerLength { length, unit } => {
             if unit.is_some() {
                 return Err(SparkError::unsupported("char length unit"));
             }
-            // check if length can be converted to i32
-            if length <= 0 || length > i32::MAX as u64 {
-                return Err(SparkError::invalid("char length"));
-            }
-            Ok(length as i32)
+            let length = length
+                .try_into()
+                .map_err(|_| SparkError::invalid("char length"))?;
+            Ok(length)
         }
         ast::CharacterLength::Max => return Err(SparkError::unsupported("char length max")),
     }
@@ -117,10 +116,17 @@ pub(crate) fn from_ast_data_type(sql_type: &ast::DataType) -> SparkResult<spec::
                     SPARK_DECIMAL_USER_DEFAULT_SCALE,
                 ),
                 ExactNumberInfo::Precision(precision) => {
-                    (precision as i32, SPARK_DECIMAL_USER_DEFAULT_SCALE)
+                    let precision = precision
+                        .try_into()
+                        .map_err(|_| SparkError::invalid("precision"))?;
+                    (precision, SPARK_DECIMAL_USER_DEFAULT_SCALE)
                 }
                 ExactNumberInfo::PrecisionAndScale(precision, scale) => {
-                    (precision as i32, scale as i32)
+                    let precision = precision
+                        .try_into()
+                        .map_err(|_| SparkError::invalid("precision"))?;
+                    let scale = scale.try_into().map_err(|_| SparkError::invalid("scale"))?;
+                    (precision, scale)
                 }
             };
             Ok(spec::DataType::Decimal { precision, scale })

@@ -27,9 +27,10 @@ use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference,
 };
 use datafusion_expr::{build_join_schema, DdlStatement, TableType};
+use framework_common::spec;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::expression::{from_spark_expression, from_spark_literal_to_scalar};
+use crate::expression::from_spark_expression;
 use crate::extension::analyzer::alias::rewrite_multi_alias;
 use crate::extension::analyzer::explode::rewrite_explode;
 use crate::extension::analyzer::wildcard::rewrite_wildcard;
@@ -144,7 +145,7 @@ pub(crate) async fn from_spark_relation(
             let expr: Vec<Expr> = project
                 .expressions
                 .iter()
-                .map(|e| from_spark_expression(e, schema))
+                .map(|e| from_spark_expression(e.clone().try_into()?, schema))
                 .collect::<SparkResult<_>>()?;
             // TODO: handle rewrites in SQL parsing
             let expr = rewrite_multi_alias(expr)?;
@@ -161,7 +162,7 @@ pub(crate) async fn from_spark_relation(
             let condition = filter.condition.as_ref().required("filter condition")?;
             let input = from_spark_relation(ctx, input).await?;
             let schema = input.schema();
-            let predicate = from_spark_expression(condition, schema)?;
+            let predicate = from_spark_expression(condition.clone().try_into()?, schema)?;
             let filter = plan::Filter::try_new(predicate, Arc::new(input))?;
             Ok(LogicalPlan::Filter(filter))
         }
@@ -207,7 +208,7 @@ pub(crate) async fn from_spark_relation(
                     let condition = join
                         .join_condition
                         .as_ref()
-                        .map(|c| from_spark_expression(c, &schema))
+                        .map(|c| from_spark_expression(c.clone().try_into()?, &schema))
                         .transpose()?;
                     (vec![], condition, plan::JoinConstraint::On)
                 } else if join.join_condition.is_none() && !join.using_columns.is_empty() {
@@ -252,7 +253,7 @@ pub(crate) async fn from_spark_relation(
                     let expr = sc::Expression {
                         expr_type: Some(sc::expression::ExprType::SortOrder(o)),
                     };
-                    from_spark_expression(&expr, schema)
+                    from_spark_expression(expr.try_into()?, schema)
                 })
                 .collect::<SparkResult<_>>()?;
             Ok(LogicalPlan::Sort(plan::Sort {
@@ -286,12 +287,12 @@ pub(crate) async fn from_spark_relation(
             let group_expr = aggregate
                 .grouping_expressions
                 .iter()
-                .map(|e| from_spark_expression(e, schema))
+                .map(|e| from_spark_expression(e.clone().try_into()?, schema))
                 .collect::<SparkResult<_>>()?;
             let aggr_expr = aggregate
                 .aggregate_expressions
                 .iter()
-                .map(|e| from_spark_expression(e, schema))
+                .map(|e| from_spark_expression(e.clone().try_into()?, schema))
                 .collect::<SparkResult<_>>()?;
             Ok(LogicalPlan::Aggregate(Aggregate::try_new(
                 Arc::new(input),
@@ -317,13 +318,19 @@ pub(crate) async fn from_spark_relation(
             } else if pos_args.len() > 0 && args.len() == 0 {
                 let params = pos_args
                     .iter()
-                    .map(|arg| from_spark_literal_to_scalar(arg))
+                    .map(|arg| -> SparkResult<ScalarValue> {
+                        let arg: spec::Literal = arg.clone().try_into()?;
+                        Ok(arg.try_into()?)
+                    })
                     .collect::<SparkResult<_>>()?;
                 Ok(plan.with_param_values(ParamValues::List(params))?)
             } else if pos_args.len() == 0 && args.len() > 0 {
                 let params = args
                     .iter()
-                    .map(|(i, arg)| from_spark_literal_to_scalar(arg).map(|v| (i.clone(), v)))
+                    .map(|(i, arg)| -> SparkResult<(String, ScalarValue)> {
+                        let arg: spec::Literal = arg.clone().try_into()?;
+                        Ok((i.clone(), arg.try_into()?))
+                    })
                     .collect::<SparkResult<_>>()?;
                 Ok(plan.with_param_values(ParamValues::Map(params))?)
             } else {
@@ -536,10 +543,8 @@ pub(crate) async fn from_spark_relation(
                 .map(|x| {
                     // TODO: handle quoted identifiers
                     let name = x.name.join(".");
-                    let expr = from_spark_expression(
-                        x.expr.as_ref().required("column alias expression")?,
-                        schema,
-                    )?;
+                    let expr = x.expr.as_ref().required("column alias expression")?;
+                    let expr = from_spark_expression((*expr.clone()).try_into()?, schema)?;
                     // TODO: handle metadata
                     let _ = x.metadata;
                     Ok((name.clone(), (expr, false)))
@@ -577,7 +582,7 @@ pub(crate) async fn from_spark_relation(
         RelType::Unpivot(_) => {
             return Err(SparkError::todo("unpivot"));
         }
-        RelType::ToSchema(to_schema) => {
+        RelType::ToSchema(_to_schema) => {
             return Err(SparkError::todo("to schema"));
             // TODO: Close but doesn't quite work.
             // let input = to_schema.input.as_ref().required("input relation")?;
@@ -604,7 +609,7 @@ pub(crate) async fn from_spark_relation(
             let expr: Vec<Expr> = repartition
                 .partition_exprs
                 .iter()
-                .map(|e| from_spark_expression(e, schema))
+                .map(|e| from_spark_expression(e.clone().try_into()?, schema))
                 .collect::<SparkResult<_>>()?;
             let num_partitions = repartition
                 .num_partitions

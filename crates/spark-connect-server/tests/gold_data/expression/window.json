@@ -10,11 +10,18 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
-            }
+            },
+            "partitionSpec": [],
+            "orderSpec": [],
+            "frameSpec": null
           }
         }
       }
@@ -29,23 +36,31 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b"
+                  "unparsedIdentifier": "b",
+                  "planId": null
                 }
               }
-            ]
+            ],
+            "orderSpec": [],
+            "frameSpec": null
           }
         }
       }
@@ -60,20 +75,26 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b"
+                  "unparsedIdentifier": "b",
+                  "planId": null
                 }
               }
             ],
@@ -81,11 +102,15 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "c"
+                    "unparsedIdentifier": "c",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
-            ]
+            ],
+            "frameSpec": null
           }
         }
       }
@@ -100,23 +125,31 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b"
+                  "unparsedIdentifier": "b",
+                  "planId": null
                 }
               }
-            ]
+            ],
+            "orderSpec": [],
+            "frameSpec": null
           }
         }
       }
@@ -131,29 +164,39 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
+            "partitionSpec": [],
             "orderSpec": [
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a"
+                    "unparsedIdentifier": "a",
+                    "planId": null
                   }
                 },
-                "direction": "SORT_DIRECTION_DESCENDING"
+                "direction": "descending",
+                "nullOrdering": "unspecified"
               },
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
                 },
-                "direction": "SORT_DIRECTION_ASCENDING"
+                "direction": "ascending",
+                "nullOrdering": "unspecified"
               }
-            ]
+            ],
+            "frameSpec": null
           }
         }
       }
@@ -168,15 +211,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -184,20 +232,24 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
+              "frameType": "range",
               "lower": {
                 "value": {
                   "literal": {
                     "integer": 0
                   }
                 }
-              }
+              },
+              "upper": "currentRow"
             }
           }
         }
@@ -213,15 +265,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -229,20 +286,24 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
+              "frameType": "range",
               "lower": {
                 "value": {
                   "literal": {
                     "integer": 0
                   }
                 }
-              }
+              },
+              "upper": "currentRow"
             }
           }
         }
@@ -258,15 +319,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -274,20 +340,24 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
+              "frameType": "range",
               "lower": {
                 "value": {
                   "literal": {
                     "integer": 10
                   }
                 }
-              }
+              },
+              "upper": "currentRow"
             }
           }
         }
@@ -303,15 +373,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -319,20 +394,24 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
+              "frameType": "range",
               "lower": {
                 "value": {
                   "literal": {
                     "integer": 10
                   }
                 }
-              }
+              },
+              "upper": "currentRow"
             }
           }
         }
@@ -348,15 +427,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -364,20 +448,24 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
+              "frameType": "range",
               "lower": {
                 "value": {
                   "literal": {
-                    "long": "2147483648"
+                    "long": 2147483648
                   }
                 }
-              }
+              },
+              "upper": "currentRow"
             }
           }
         }
@@ -393,15 +481,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -409,20 +502,24 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
+              "frameType": "range",
               "lower": {
                 "value": {
                   "literal": {
-                    "long": "2147483649"
+                    "long": 2147483649
                   }
                 }
-              }
+              },
+              "upper": "currentRow"
             }
           }
         }
@@ -438,15 +535,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -454,13 +556,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
+              "frameType": "range",
               "lower": {
                 "value": {
                   "unresolvedFunction": {
@@ -476,10 +581,13 @@
                           "integer": 1
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
-              }
+              },
+              "upper": "currentRow"
             }
           }
         }
@@ -495,15 +603,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -511,13 +624,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
+              "frameType": "range",
               "lower": {
                 "value": {
                   "unresolvedFunction": {
@@ -533,10 +649,13 @@
                           "integer": 1
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
-              }
+              },
+              "upper": "currentRow"
             }
           }
         }
@@ -552,15 +671,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -568,13 +692,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
+              "frameType": "range",
               "lower": {
                 "value": {
                   "literal": {
@@ -582,9 +709,7 @@
                   }
                 }
               },
-              "upper": {
-                "currentRow": true
-              }
+              "upper": "currentRow"
             }
           }
         }
@@ -600,15 +725,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -616,13 +746,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
+              "frameType": "range",
               "lower": {
                 "value": {
                   "literal": {
@@ -630,9 +763,7 @@
                   }
                 }
               },
-              "upper": {
-                "unbounded": true
-              }
+              "upper": "unbounded"
             }
           }
         }
@@ -648,15 +779,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -664,13 +800,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
+              "frameType": "range",
               "lower": {
                 "value": {
                   "literal": {
@@ -700,15 +839,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -716,13 +860,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
+              "frameType": "range",
               "lower": {
                 "value": {
                   "literal": {
@@ -730,9 +877,7 @@
                   }
                 }
               },
-              "upper": {
-                "currentRow": true
-              }
+              "upper": "currentRow"
             }
           }
         }
@@ -748,15 +893,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -764,13 +914,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
+              "frameType": "range",
               "lower": {
                 "value": {
                   "literal": {
@@ -778,9 +931,7 @@
                   }
                 }
               },
-              "upper": {
-                "unbounded": true
-              }
+              "upper": "unbounded"
             }
           }
         }
@@ -796,15 +947,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -812,23 +968,24 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
+              "frameType": "range",
               "lower": {
                 "value": {
                   "literal": {
-                    "long": "2147483648"
+                    "long": 2147483648
                   }
                 }
               },
-              "upper": {
-                "currentRow": true
-              }
+              "upper": "currentRow"
             }
           }
         }
@@ -844,15 +1001,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -860,23 +1022,24 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
+              "frameType": "range",
               "lower": {
                 "value": {
                   "literal": {
-                    "long": "2147483648"
+                    "long": 2147483648
                   }
                 }
               },
-              "upper": {
-                "unbounded": true
-              }
+              "upper": "unbounded"
             }
           }
         }
@@ -892,15 +1055,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -908,13 +1076,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
+              "frameType": "range",
               "lower": {
                 "value": {
                   "unresolvedFunction": {
@@ -930,13 +1101,13 @@
                           "integer": 1
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
               },
-              "upper": {
-                "currentRow": true
-              }
+              "upper": "currentRow"
             }
           }
         }
@@ -952,15 +1123,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -968,13 +1144,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
+              "frameType": "range",
               "lower": {
                 "value": {
                   "unresolvedFunction": {
@@ -990,13 +1169,13 @@
                           "integer": 1
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
               },
-              "upper": {
-                "unbounded": true
-              }
+              "upper": "unbounded"
             }
           }
         }
@@ -1012,15 +1191,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1028,16 +1212,17 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
-              "lower": {
-                "currentRow": true
-              },
+              "frameType": "range",
+              "lower": "currentRow",
               "upper": {
                 "value": {
                   "literal": {
@@ -1060,15 +1245,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1076,20 +1266,21 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
-              "lower": {
-                "currentRow": true
-              },
+              "frameType": "range",
+              "lower": "currentRow",
               "upper": {
                 "value": {
                   "literal": {
-                    "long": "2147483649"
+                    "long": 2147483649
                   }
                 }
               }
@@ -1108,15 +1299,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1124,16 +1320,17 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
-              "lower": {
-                "currentRow": true
-              },
+              "frameType": "range",
+              "lower": "currentRow",
               "upper": {
                 "value": {
                   "unresolvedFunction": {
@@ -1149,7 +1346,9 @@
                           "integer": 1
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
               }
@@ -1168,15 +1367,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1184,16 +1388,17 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
-              "lower": {
-                "currentRow": true
-              },
+              "frameType": "range",
+              "lower": "currentRow",
               "upper": {
                 "value": {
                   "literal": {
@@ -1216,15 +1421,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1232,19 +1442,18 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
-              "lower": {
-                "currentRow": true
-              },
-              "upper": {
-                "currentRow": true
-              }
+              "frameType": "range",
+              "lower": "currentRow",
+              "upper": "currentRow"
             }
           }
         }
@@ -1260,15 +1469,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1276,19 +1490,18 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
-              "lower": {
-                "currentRow": true
-              },
-              "upper": {
-                "unbounded": true
-              }
+              "frameType": "range",
+              "lower": "currentRow",
+              "upper": "unbounded"
             }
           }
         }
@@ -1304,15 +1517,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1320,20 +1538,21 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
-              "lower": {
-                "unbounded": true
-              },
+              "frameType": "range",
+              "lower": "unbounded",
               "upper": {
                 "value": {
                   "literal": {
-                    "long": "2147483649"
+                    "long": 2147483649
                   }
                 }
               }
@@ -1352,15 +1571,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1368,16 +1592,17 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
-              "lower": {
-                "unbounded": true
-              },
+              "frameType": "range",
+              "lower": "unbounded",
               "upper": {
                 "value": {
                   "unresolvedFunction": {
@@ -1393,7 +1618,9 @@
                           "integer": 1
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
               }
@@ -1412,15 +1639,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1428,16 +1660,17 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
-              "lower": {
-                "unbounded": true
-              },
+              "frameType": "range",
+              "lower": "unbounded",
               "upper": {
                 "value": {
                   "literal": {
@@ -1460,15 +1693,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1476,19 +1714,18 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
-              "lower": {
-                "unbounded": true
-              },
-              "upper": {
-                "currentRow": true
-              }
+              "frameType": "range",
+              "lower": "unbounded",
+              "upper": "currentRow"
             }
           }
         }
@@ -1504,15 +1741,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1520,19 +1762,18 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
-              "lower": {
-                "unbounded": true
-              },
-              "upper": {
-                "unbounded": true
-              }
+              "frameType": "range",
+              "lower": "unbounded",
+              "upper": "unbounded"
             }
           }
         }
@@ -1548,15 +1789,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1564,16 +1810,18 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
-              "lower": {
-                "currentRow": true
-              }
+              "frameType": "range",
+              "lower": "currentRow",
+              "upper": "currentRow"
             }
           }
         }
@@ -1589,15 +1837,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1605,16 +1858,18 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
-              "lower": {
-                "unbounded": true
-              }
+              "frameType": "range",
+              "lower": "unbounded",
+              "upper": "currentRow"
             }
           }
         }
@@ -1630,15 +1885,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1646,16 +1906,18 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_RANGE",
-              "lower": {
-                "unbounded": true
-              }
+              "frameType": "range",
+              "lower": "unbounded",
+              "upper": "currentRow"
             }
           }
         }
@@ -1671,15 +1933,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1687,20 +1954,24 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "literal": {
                     "integer": 0
                   }
                 }
-              }
+              },
+              "upper": "currentRow"
             }
           }
         }
@@ -1716,15 +1987,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1732,20 +2008,24 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "literal": {
                     "integer": 0
                   }
                 }
-              }
+              },
+              "upper": "currentRow"
             }
           }
         }
@@ -1761,15 +2041,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1777,20 +2062,24 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "literal": {
                     "integer": 10
                   }
                 }
-              }
+              },
+              "upper": "currentRow"
             }
           }
         }
@@ -1806,15 +2095,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1822,20 +2116,24 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "literal": {
                     "integer": 10
                   }
                 }
-              }
+              },
+              "upper": "currentRow"
             }
           }
         }
@@ -1851,15 +2149,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1867,20 +2170,24 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "literal": {
-                    "long": "2147483648"
+                    "long": 2147483648
                   }
                 }
-              }
+              },
+              "upper": "currentRow"
             }
           }
         }
@@ -1896,15 +2203,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1912,20 +2224,24 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "literal": {
-                    "long": "2147483649"
+                    "long": 2147483649
                   }
                 }
-              }
+              },
+              "upper": "currentRow"
             }
           }
         }
@@ -1941,15 +2257,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -1957,13 +2278,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "unresolvedFunction": {
@@ -1979,10 +2303,13 @@
                           "integer": 1
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
-              }
+              },
+              "upper": "currentRow"
             }
           }
         }
@@ -1998,15 +2325,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2014,13 +2346,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "unresolvedFunction": {
@@ -2036,10 +2371,13 @@
                           "integer": 1
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
-              }
+              },
+              "upper": "currentRow"
             }
           }
         }
@@ -2055,15 +2393,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2071,13 +2414,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "literal": {
@@ -2085,9 +2431,7 @@
                   }
                 }
               },
-              "upper": {
-                "currentRow": true
-              }
+              "upper": "currentRow"
             }
           }
         }
@@ -2103,15 +2447,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2119,13 +2468,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "literal": {
@@ -2133,9 +2485,7 @@
                   }
                 }
               },
-              "upper": {
-                "unbounded": true
-              }
+              "upper": "unbounded"
             }
           }
         }
@@ -2151,15 +2501,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2167,13 +2522,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "literal": {
@@ -2203,15 +2561,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2219,13 +2582,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "literal": {
@@ -2233,9 +2599,7 @@
                   }
                 }
               },
-              "upper": {
-                "currentRow": true
-              }
+              "upper": "currentRow"
             }
           }
         }
@@ -2251,15 +2615,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2267,13 +2636,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "literal": {
@@ -2281,9 +2653,7 @@
                   }
                 }
               },
-              "upper": {
-                "unbounded": true
-              }
+              "upper": "unbounded"
             }
           }
         }
@@ -2299,15 +2669,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2315,23 +2690,24 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "literal": {
-                    "long": "2147483648"
+                    "long": 2147483648
                   }
                 }
               },
-              "upper": {
-                "currentRow": true
-              }
+              "upper": "currentRow"
             }
           }
         }
@@ -2347,15 +2723,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2363,23 +2744,24 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "literal": {
-                    "long": "2147483648"
+                    "long": 2147483648
                   }
                 }
               },
-              "upper": {
-                "unbounded": true
-              }
+              "upper": "unbounded"
             }
           }
         }
@@ -2395,15 +2777,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2411,13 +2798,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "unresolvedFunction": {
@@ -2433,13 +2823,13 @@
                           "integer": 1
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
               },
-              "upper": {
-                "currentRow": true
-              }
+              "upper": "currentRow"
             }
           }
         }
@@ -2455,15 +2845,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2471,13 +2866,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "unresolvedFunction": {
@@ -2493,13 +2891,13 @@
                           "integer": 1
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
               },
-              "upper": {
-                "unbounded": true
-              }
+              "upper": "unbounded"
             }
           }
         }
@@ -2515,15 +2913,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2531,16 +2934,17 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
-              "lower": {
-                "currentRow": true
-              },
+              "frameType": "row",
+              "lower": "currentRow",
               "upper": {
                 "value": {
                   "literal": {
@@ -2563,15 +2967,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2579,20 +2988,21 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
-              "lower": {
-                "currentRow": true
-              },
+              "frameType": "row",
+              "lower": "currentRow",
               "upper": {
                 "value": {
                   "literal": {
-                    "long": "2147483649"
+                    "long": 2147483649
                   }
                 }
               }
@@ -2611,15 +3021,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2627,16 +3042,17 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
-              "lower": {
-                "currentRow": true
-              },
+              "frameType": "row",
+              "lower": "currentRow",
               "upper": {
                 "value": {
                   "unresolvedFunction": {
@@ -2652,7 +3068,9 @@
                           "integer": 1
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
               }
@@ -2671,15 +3089,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2687,16 +3110,17 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
-              "lower": {
-                "currentRow": true
-              },
+              "frameType": "row",
+              "lower": "currentRow",
               "upper": {
                 "value": {
                   "literal": {
@@ -2719,15 +3143,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2735,19 +3164,18 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
-              "lower": {
-                "currentRow": true
-              },
-              "upper": {
-                "currentRow": true
-              }
+              "frameType": "row",
+              "lower": "currentRow",
+              "upper": "currentRow"
             }
           }
         }
@@ -2763,15 +3191,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2779,19 +3212,18 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
-              "lower": {
-                "currentRow": true
-              },
-              "upper": {
-                "unbounded": true
-              }
+              "frameType": "row",
+              "lower": "currentRow",
+              "upper": "unbounded"
             }
           }
         }
@@ -2807,15 +3239,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2823,20 +3260,21 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
-              "lower": {
-                "unbounded": true
-              },
+              "frameType": "row",
+              "lower": "unbounded",
               "upper": {
                 "value": {
                   "literal": {
-                    "long": "2147483649"
+                    "long": 2147483649
                   }
                 }
               }
@@ -2855,15 +3293,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2871,16 +3314,17 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
-              "lower": {
-                "unbounded": true
-              },
+              "frameType": "row",
+              "lower": "unbounded",
               "upper": {
                 "value": {
                   "unresolvedFunction": {
@@ -2896,7 +3340,9 @@
                           "integer": 1
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
               }
@@ -2915,15 +3361,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2931,16 +3382,17 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
-              "lower": {
-                "unbounded": true
-              },
+              "frameType": "row",
+              "lower": "unbounded",
               "upper": {
                 "value": {
                   "literal": {
@@ -2963,15 +3415,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -2979,19 +3436,18 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
-              "lower": {
-                "unbounded": true
-              },
-              "upper": {
-                "currentRow": true
-              }
+              "frameType": "row",
+              "lower": "unbounded",
+              "upper": "currentRow"
             }
           }
         }
@@ -3007,15 +3463,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -3023,19 +3484,18 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
-              "lower": {
-                "unbounded": true
-              },
-              "upper": {
-                "unbounded": true
-              }
+              "frameType": "row",
+              "lower": "unbounded",
+              "upper": "unbounded"
             }
           }
         }
@@ -3051,15 +3511,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -3067,16 +3532,18 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
-              "lower": {
-                "currentRow": true
-              }
+              "frameType": "row",
+              "lower": "currentRow",
+              "upper": "currentRow"
             }
           }
         }
@@ -3092,15 +3559,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -3108,13 +3580,16 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
+              "frameType": "row",
               "lower": {
                 "value": {
                   "unresolvedFunction": {
@@ -3122,13 +3597,17 @@
                     "arguments": [
                       {
                         "unresolvedAttribute": {
-                          "unparsedIdentifier": "b"
+                          "unparsedIdentifier": "b",
+                          "planId": null
                         }
                       }
-                    ]
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
-              }
+              },
+              "upper": "currentRow"
             }
           }
         }
@@ -3144,15 +3623,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -3160,16 +3644,18 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
-              "lower": {
-                "unbounded": true
-              }
+              "frameType": "row",
+              "lower": "unbounded",
+              "upper": "currentRow"
             }
           }
         }
@@ -3185,15 +3671,20 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               }
             ],
@@ -3201,16 +3692,18 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
             ],
             "frameSpec": {
-              "frameType": "FRAME_TYPE_ROW",
-              "lower": {
-                "unbounded": true
-              }
+              "frameType": "row",
+              "lower": "unbounded",
+              "upper": "currentRow"
             }
           }
         }
@@ -3226,20 +3719,26 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b"
+                  "unparsedIdentifier": "b",
+                  "planId": null
                 }
               }
             ],
@@ -3247,11 +3746,15 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "c"
+                    "unparsedIdentifier": "c",
+                    "planId": null
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
-            ]
+            ],
+            "frameSpec": null
           }
         }
       }
@@ -3266,23 +3769,31 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b"
+                  "unparsedIdentifier": "b",
+                  "planId": null
                 }
               }
-            ]
+            ],
+            "orderSpec": [],
+            "frameSpec": null
           }
         }
       }
@@ -3297,29 +3808,39 @@
                 "functionName": "foo",
                 "arguments": [
                   {
-                    "unresolvedStar": {}
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
+            "partitionSpec": [],
             "orderSpec": [
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a"
+                    "unparsedIdentifier": "a",
+                    "planId": null
                   }
                 },
-                "direction": "SORT_DIRECTION_DESCENDING"
+                "direction": "descending",
+                "nullOrdering": "unspecified"
               },
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b"
+                    "unparsedIdentifier": "b",
+                    "planId": null
                   }
                 },
-                "direction": "SORT_DIRECTION_ASCENDING"
+                "direction": "ascending",
+                "nullOrdering": "unspecified"
               }
-            ]
+            ],
+            "frameSpec": null
           }
         }
       }
@@ -3345,7 +3866,8 @@
                       "arguments": [
                         {
                           "unresolvedAttribute": {
-                            "unparsedIdentifier": "product"
+                            "unparsedIdentifier": "product",
+                            "planId": null
                           }
                         },
                         {
@@ -3353,10 +3875,14 @@
                             "integer": 1
                           }
                         }
-                      ]
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
                     }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
@@ -3370,7 +3896,8 @@
                         "arguments": [
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "product"
+                              "unparsedIdentifier": "product",
+                              "planId": null
                             }
                           },
                           {
@@ -3378,7 +3905,9 @@
                               "integer": 2
                             }
                           }
-                        ]
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
                       }
                     },
                     {
@@ -3386,7 +3915,9 @@
                         "integer": 1
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
             ],
@@ -3396,9 +3927,12 @@
                   "literal": {
                     "integer": 2
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
-            ]
+            ],
+            "frameSpec": null
           }
         }
       }
@@ -3418,7 +3952,8 @@
                       "arguments": [
                         {
                           "unresolvedAttribute": {
-                            "unparsedIdentifier": "product"
+                            "unparsedIdentifier": "product",
+                            "planId": null
                           }
                         },
                         {
@@ -3426,10 +3961,14 @@
                             "integer": 1
                           }
                         }
-                      ]
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
                     }
                   }
-                ]
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
               }
             },
             "partitionSpec": [
@@ -3439,7 +3978,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "product"
+                        "unparsedIdentifier": "product",
+                        "planId": null
                       }
                     },
                     {
@@ -3447,7 +3987,9 @@
                         "integer": 1
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
             ],
@@ -3457,9 +3999,12 @@
                   "literal": {
                     "integer": 2
                   }
-                }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
               }
-            ]
+            ],
+            "frameSpec": null
           }
         }
       }

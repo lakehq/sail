@@ -1,53 +1,43 @@
 use crate::error::{SparkError, SparkResult};
-use crate::spark::connect as sc;
-use crate::spark::connect::expression::literal::{Decimal, LiteralType};
-use crate::spark::connect::expression::ExprType;
 use crate::sql::data_type::from_ast_data_type;
 use crate::sql::fail_on_extra_token;
 use crate::sql::literal::{parse_date_string, parse_timestamp_string, LiteralValue, Signed};
 use crate::sql::parser::SparkDialect;
+use framework_common::spec;
 use sqlparser::ast;
 use sqlparser::ast::DataType;
 use sqlparser::parser::Parser;
 
 struct Identifier(String);
 
-impl From<Identifier> for sc::Expression {
-    fn from(identifier: Identifier) -> sc::Expression {
-        sc::Expression {
-            expr_type: Some(ExprType::UnresolvedAttribute(
-                sc::expression::UnresolvedAttribute {
-                    unparsed_identifier: identifier.0,
-                    plan_id: None,
-                },
-            )),
+impl From<Identifier> for spec::Expr {
+    fn from(identifier: Identifier) -> spec::Expr {
+        spec::Expr::UnresolvedAttribute {
+            unparsed_identifier: identifier.0,
+            plan_id: None,
         }
     }
 }
 
 struct Function {
     name: String,
-    args: Vec<sc::Expression>,
+    args: Vec<spec::Expr>,
 }
 
-impl From<Function> for sc::Expression {
-    fn from(function: Function) -> sc::Expression {
-        sc::Expression {
-            expr_type: Some(ExprType::UnresolvedFunction(
-                sc::expression::UnresolvedFunction {
-                    function_name: function.name,
-                    arguments: function.args,
-                    is_distinct: false,
-                    is_user_defined_function: false,
-                },
-            )),
+impl From<Function> for spec::Expr {
+    fn from(function: Function) -> spec::Expr {
+        spec::Expr::UnresolvedFunction {
+            function_name: function.name,
+            arguments: function.args,
+            is_distinct: false,
+            is_user_defined_function: false,
         }
     }
 }
 
-fn negate_expression(expr: sc::Expression, negated: bool) -> sc::Expression {
+fn negate_expression(expr: spec::Expr, negated: bool) -> spec::Expr {
     if negated {
-        sc::Expression::from(Function {
+        spec::Expr::from(Function {
             name: "not".to_string(),
             args: vec![expr],
         })
@@ -135,43 +125,43 @@ fn from_ast_date_time_field(field: ast::DateTimeField) -> SparkResult<String> {
     Ok(field.to_string())
 }
 
-fn from_ast_value(value: ast::Value) -> SparkResult<sc::Expression> {
+fn from_ast_value(value: ast::Value) -> SparkResult<spec::Expr> {
     use ast::Value;
 
     match value {
         Value::Number(value, postfix) => match postfix.as_deref() {
             Some("Y") | Some("y") => {
                 let value = LiteralValue::<i8>::try_from(value.clone())?;
-                sc::Expression::try_from(value)
+                spec::Expr::try_from(value)
             }
             Some("S") | Some("s") => {
                 let value = LiteralValue::<i16>::try_from(value.clone())?;
-                sc::Expression::try_from(value)
+                spec::Expr::try_from(value)
             }
             Some("L") | Some("l") => {
                 let value = LiteralValue::<i64>::try_from(value.clone())?;
-                sc::Expression::try_from(value)
+                spec::Expr::try_from(value)
             }
             Some("F") | Some("f") => {
                 let value = LiteralValue::<f32>::try_from(value.clone())?;
-                sc::Expression::try_from(value)
+                spec::Expr::try_from(value)
             }
             Some("D") | Some("d") => {
                 let value = LiteralValue::<f64>::try_from(value.clone())?;
-                sc::Expression::try_from(value)
+                spec::Expr::try_from(value)
             }
             Some(x) if x.to_uppercase() == "BD" => {
-                let value = LiteralValue::<Decimal>::try_from(value.clone())?;
-                sc::Expression::try_from(value)
+                let value = LiteralValue::<spec::Decimal>::try_from(value.clone())?;
+                spec::Expr::try_from(value)
             }
             None | Some("") => {
                 if let Ok(value) = LiteralValue::<i32>::try_from(value.clone()) {
-                    sc::Expression::try_from(value)
+                    spec::Expr::try_from(value)
                 } else if let Ok(value) = LiteralValue::<i64>::try_from(value.clone()) {
-                    sc::Expression::try_from(value)
+                    spec::Expr::try_from(value)
                 } else {
-                    let value = LiteralValue::<Decimal>::try_from(value.clone())?;
-                    sc::Expression::try_from(value)
+                    let value = LiteralValue::<spec::Decimal>::try_from(value.clone())?;
+                    spec::Expr::try_from(value)
                 }
             }
             Some(&_) => Err(SparkError::invalid(format!(
@@ -183,23 +173,13 @@ fn from_ast_value(value: ast::Value) -> SparkResult<sc::Expression> {
         | Value::DoubleQuotedString(value)
         | Value::DollarQuotedString(ast::DollarQuotedString { value, .. })
         | Value::TripleSingleQuotedString(value)
-        | Value::TripleDoubleQuotedString(value) => sc::Expression::try_from(LiteralValue(value)),
+        | Value::TripleDoubleQuotedString(value) => spec::Expr::try_from(LiteralValue(value)),
         Value::HexStringLiteral(value) => {
             let value: LiteralValue<Vec<u8>> = value.try_into()?;
-            sc::Expression::try_from(value)
+            spec::Expr::try_from(value)
         }
-        Value::Boolean(value) => sc::Expression::try_from(LiteralValue(value)),
-        Value::Null => Ok(sc::Expression {
-            expr_type: Some(ExprType::Literal(sc::expression::Literal {
-                // We cannot infer the data type without a schema.
-                // So we just use an "unparsed" data type here.
-                literal_type: Some(LiteralType::Null(sc::DataType {
-                    kind: Some(sc::data_type::Kind::Unparsed(sc::data_type::Unparsed {
-                        data_type_string: "".to_string(),
-                    })),
-                })),
-            })),
-        }),
+        Value::Boolean(value) => spec::Expr::try_from(LiteralValue(value)),
+        Value::Null => Ok(spec::Expr::Literal(spec::Literal::Null)),
         Value::Placeholder(_) => return Err(SparkError::todo("placeholder value")),
         Value::EscapedStringLiteral(_)
         | Value::SingleQuotedByteStringLiteral(_)
@@ -216,15 +196,13 @@ fn from_ast_value(value: ast::Value) -> SparkResult<sc::Expression> {
     }
 }
 
-fn from_ast_interval(interval: ast::Interval) -> SparkResult<sc::Expression> {
-    Ok(sc::Expression {
-        expr_type: Some(ExprType::Literal(sc::expression::Literal {
-            literal_type: Some(LiteralValue(Signed(interval, false)).try_into()?),
-        })),
-    })
+fn from_ast_interval(interval: ast::Interval) -> SparkResult<spec::Expr> {
+    Ok(spec::Expr::Literal(
+        LiteralValue(Signed(interval, false)).try_into()?,
+    ))
 }
 
-fn from_ast_function_arg(arg: ast::FunctionArg) -> SparkResult<sc::Expression> {
+fn from_ast_function_arg(arg: ast::FunctionArg) -> SparkResult<spec::Expr> {
     use ast::{FunctionArg, FunctionArgExpr};
 
     match arg {
@@ -232,15 +210,11 @@ fn from_ast_function_arg(arg: ast::FunctionArg) -> SparkResult<sc::Expression> {
         FunctionArg::Unnamed(arg) => {
             let arg = match arg {
                 FunctionArgExpr::Expr(e) => from_ast_expression(e)?,
-                FunctionArgExpr::QualifiedWildcard(name) => sc::Expression {
-                    expr_type: Some(ExprType::UnresolvedStar(sc::expression::UnresolvedStar {
-                        unparsed_target: Some(name.to_string()),
-                    })),
+                FunctionArgExpr::QualifiedWildcard(name) => spec::Expr::UnresolvedStar {
+                    unparsed_target: Some(name.to_string()),
                 },
-                FunctionArgExpr::Wildcard => sc::Expression {
-                    expr_type: Some(ExprType::UnresolvedStar(sc::expression::UnresolvedStar {
-                        unparsed_target: None,
-                    })),
+                FunctionArgExpr::Wildcard => spec::Expr::UnresolvedStar {
+                    unparsed_target: None,
                 },
             };
             Ok(arg)
@@ -248,55 +222,47 @@ fn from_ast_function_arg(arg: ast::FunctionArg) -> SparkResult<sc::Expression> {
     }
 }
 
-pub(crate) fn from_ast_order_by(
-    order_by: ast::OrderByExpr,
-) -> SparkResult<sc::expression::SortOrder> {
-    use sc::expression::sort_order::{NullOrdering, SortDirection};
-
+pub(crate) fn from_ast_order_by(order_by: ast::OrderByExpr) -> SparkResult<spec::SortOrder> {
     let ast::OrderByExpr {
         expr,
         asc,
         nulls_first,
     } = order_by;
     let direction = match asc {
-        None => SortDirection::Unspecified,
-        Some(true) => SortDirection::Ascending,
-        Some(false) => SortDirection::Descending,
+        None => spec::SortDirection::Unspecified,
+        Some(true) => spec::SortDirection::Ascending,
+        Some(false) => spec::SortDirection::Descending,
     };
     let null_ordering = match nulls_first {
-        None => NullOrdering::SortNullsUnspecified,
-        Some(true) => NullOrdering::SortNullsFirst,
-        Some(false) => NullOrdering::SortNullsLast,
+        None => spec::NullOrdering::Unspecified,
+        Some(true) => spec::NullOrdering::NullsFirst,
+        Some(false) => spec::NullOrdering::NullsLast,
     };
-    Ok(sc::expression::SortOrder {
-        child: Some(Box::new(from_ast_expression(expr)?)),
-        direction: direction as i32,
-        null_ordering: null_ordering as i32,
+    Ok(spec::SortOrder {
+        child: Box::new(from_ast_expression(expr)?),
+        direction,
+        null_ordering,
     })
 }
 
-fn from_ast_window_frame(
-    frame: ast::WindowFrame,
-) -> SparkResult<sc::expression::window::WindowFrame> {
+fn from_ast_window_frame(frame: ast::WindowFrame) -> SparkResult<spec::WindowFrame> {
     use ast::WindowFrameUnits;
-    use sc::expression::window::window_frame::FrameType;
 
     let ast::WindowFrame {
         units,
         start_bound,
         end_bound,
     } = frame;
-    let units = match units {
-        WindowFrameUnits::Rows => FrameType::Row,
-        WindowFrameUnits::Range => FrameType::Range,
+    let frame_type = match units {
+        WindowFrameUnits::Rows => spec::WindowFrameType::Row,
+        WindowFrameUnits::Range => spec::WindowFrameType::Range,
         WindowFrameUnits::Groups => return Err(SparkError::unsupported("window frame groups")),
     };
-    let lower = Some(Box::new(from_ast_window_frame_bound(start_bound)?));
-    let upper = end_bound
-        .map(|b| -> SparkResult<_> { Ok(Box::new(from_ast_window_frame_bound(b)?)) })
-        .transpose()?;
-    Ok(sc::expression::window::WindowFrame {
-        frame_type: units as i32,
+    let end_bound = end_bound.unwrap_or(ast::WindowFrameBound::CurrentRow);
+    let lower = from_ast_window_frame_bound(start_bound)?;
+    let upper = from_ast_window_frame_bound(end_bound)?;
+    Ok(spec::WindowFrame {
+        frame_type,
         lower,
         upper,
     })
@@ -304,36 +270,32 @@ fn from_ast_window_frame(
 
 fn from_ast_window_frame_bound(
     bound: ast::WindowFrameBound,
-) -> SparkResult<sc::expression::window::window_frame::FrameBoundary> {
+) -> SparkResult<spec::WindowFrameBoundary> {
     use ast::WindowFrameBound;
-    use sc::expression::window::window_frame::frame_boundary::Boundary;
 
-    let boundary = match bound {
-        WindowFrameBound::CurrentRow => Boundary::CurrentRow(true),
+    match bound {
+        WindowFrameBound::CurrentRow => Ok(spec::WindowFrameBoundary::CurrentRow),
         WindowFrameBound::Preceding(None) | WindowFrameBound::Following(None) => {
-            Boundary::Unbounded(true)
+            Ok(spec::WindowFrameBoundary::Unbounded)
         }
-        WindowFrameBound::Preceding(Some(e)) | WindowFrameBound::Following(Some(e)) => {
-            Boundary::Value(Box::new(from_ast_expression(*e)?))
-        }
-    };
-    Ok(sc::expression::window::window_frame::FrameBoundary {
-        boundary: Some(boundary),
-    })
+        WindowFrameBound::Preceding(Some(e)) | WindowFrameBound::Following(Some(e)) => Ok(
+            spec::WindowFrameBoundary::Value(Box::new(from_ast_expression(*e)?)),
+        ),
+    }
 }
 
-pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression> {
+pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<spec::Expr> {
     use ast::Expr;
 
     match expr {
         Expr::Identifier(ast::Ident {
             value,
             quote_style: _,
-        }) => Ok(sc::Expression::from(Identifier(value))),
-        Expr::CompoundIdentifier(x) => Ok(sc::Expression::from(Identifier(
-            ast::ObjectName(x).to_string(),
-        ))),
-        Expr::IsFalse(e) => Ok(sc::Expression::from(Function {
+        }) => Ok(spec::Expr::from(Identifier(value))),
+        Expr::CompoundIdentifier(x) => {
+            Ok(spec::Expr::from(Identifier(ast::ObjectName(x).to_string())))
+        }
+        Expr::IsFalse(e) => Ok(spec::Expr::from(Function {
             name: "<=>".to_string(),
             args: vec![from_ast_expression(*e)?, LiteralValue(false).try_into()?],
         })),
@@ -341,7 +303,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
             from_ast_expression(Expr::IsFalse(e))?,
             true,
         )),
-        Expr::IsTrue(e) => Ok(sc::Expression::from(Function {
+        Expr::IsTrue(e) => Ok(spec::Expr::from(Function {
             name: "<=>".to_string(),
             args: vec![from_ast_expression(*e)?, LiteralValue(true).try_into()?],
         })),
@@ -349,11 +311,11 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
             from_ast_expression(Expr::IsTrue(e))?,
             true,
         )),
-        Expr::IsNull(e) => Ok(sc::Expression::from(Function {
+        Expr::IsNull(e) => Ok(spec::Expr::from(Function {
             name: "isnull".to_string(),
             args: vec![from_ast_expression(*e)?],
         })),
-        Expr::IsNotNull(e) => Ok(sc::Expression::from(Function {
+        Expr::IsNotNull(e) => Ok(spec::Expr::from(Function {
             name: "isnotnull".to_string(),
             args: vec![from_ast_expression(*e)?],
         })),
@@ -362,10 +324,10 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
             list,
             negated,
         } => {
-            let result = sc::Expression::from(Function {
+            let result = spec::Expr::from(Function {
                 name: "array_contains".to_string(),
                 args: vec![
-                    sc::Expression::from(Function {
+                    spec::Expr::from(Function {
                         name: "array".to_string(),
                         args: list
                             .into_iter()
@@ -383,17 +345,17 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
             low,
             high,
         } => {
-            let result = sc::Expression::from(Function {
+            let result = spec::Expr::from(Function {
                 name: "and".to_string(),
                 args: vec![
-                    sc::Expression::from(Function {
+                    spec::Expr::from(Function {
                         name: ">=".to_string(),
                         args: vec![
                             from_ast_expression(*expr.clone())?,
                             from_ast_expression(*low)?,
                         ],
                     }),
-                    sc::Expression::from(Function {
+                    spec::Expr::from(Function {
                         name: "<=".to_string(),
                         args: vec![from_ast_expression(*expr)?, from_ast_expression(*high)?],
                     }),
@@ -403,7 +365,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
         }
         Expr::BinaryOp { left, op, right } => {
             let op = from_ast_binary_operator(op)?;
-            Ok(sc::Expression::from(Function {
+            Ok(spec::Expr::from(Function {
                 name: op,
                 args: vec![from_ast_expression(*left)?, from_ast_expression(*right)?],
             }))
@@ -418,7 +380,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
             if let Some(escape_char) = escape_char {
                 args.push(LiteralValue(escape_char).try_into()?);
             };
-            let result = sc::Expression::from(Function {
+            let result = spec::Expr::from(Function {
                 name: "like".to_string(),
                 args,
             });
@@ -434,7 +396,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
             if let Some(escape_char) = escape_char {
                 args.push(LiteralValue(escape_char).try_into()?);
             };
-            let result = sc::Expression::from(Function {
+            let result = spec::Expr::from(Function {
                 name: "ilike".to_string(),
                 args,
             });
@@ -446,13 +408,13 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
             pattern,
             regexp: _,
         } => {
-            let result = sc::Expression::from(Function {
+            let result = spec::Expr::from(Function {
                 name: "rlike".to_string(),
                 args: vec![from_ast_expression(*expr)?, from_ast_expression(*pattern)?],
             });
             Ok(negate_expression(result, negated))
         }
-        Expr::UnaryOp { op, expr } => Ok(sc::Expression::from(Function {
+        Expr::UnaryOp { op, expr } => Ok(spec::Expr::from(Function {
             name: from_ast_unary_operator(op)?,
             args: vec![from_ast_expression(*expr)?],
         })),
@@ -468,16 +430,12 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
             if let Some(f) = format {
                 return Err(SparkError::unsupported(format!("cast format: {:?}", f)));
             }
-            Ok(sc::Expression {
-                expr_type: Some(ExprType::Cast(Box::new(sc::expression::Cast {
-                    expr: Some(Box::new(from_ast_expression(*expr)?)),
-                    cast_to_type: Some(sc::expression::cast::CastToType::Type(
-                        from_ast_data_type(&data_type)?.try_into()?,
-                    )),
-                }))),
+            Ok(spec::Expr::Cast {
+                expr: Box::new(from_ast_expression(*expr)?),
+                cast_to_type: from_ast_data_type(&data_type)?,
             })
         }
-        Expr::Extract { field, expr } => Ok(sc::Expression::from(Function {
+        Expr::Extract { field, expr } => Ok(spec::Expr::from(Function {
             name: "extract".to_string(),
             args: vec![
                 from_ast_expression(*expr)?,
@@ -497,7 +455,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
             if let Some(substring_for) = substring_for {
                 args.push(from_ast_expression(*substring_for)?);
             }
-            Ok(sc::Expression::from(Function {
+            Ok(spec::Expr::from(Function {
                 name: "substring".to_string(),
                 args,
             }))
@@ -522,7 +480,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
             if let Some(trim_what) = trim_what {
                 args.push(from_ast_expression(*trim_what)?);
             }
-            Ok(sc::Expression::from(Function {
+            Ok(spec::Expr::from(Function {
                 name: name.to_string(),
                 args,
             }))
@@ -541,7 +499,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
             if let Some(overlay_for) = overlay_for {
                 args.push(from_ast_expression(*overlay_for)?);
             }
-            Ok(sc::Expression::from(Function {
+            Ok(spec::Expr::from(Function {
                 name: "overlay".to_string(),
                 args,
             }))
@@ -560,11 +518,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
                     expr
                 ))),
             }?;
-            Ok(sc::Expression {
-                expr_type: Some(ExprType::Literal(sc::expression::Literal {
-                    literal_type: Some(literal),
-                })),
-            })
+            Ok(spec::Expr::Literal(literal))
         }
         Expr::Function(ast::Function {
             name,
@@ -609,15 +563,11 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
                     (args, distinct)
                 }
             };
-            let function = sc::Expression {
-                expr_type: Some(ExprType::UnresolvedFunction(
-                    sc::expression::UnresolvedFunction {
-                        function_name: name.to_string(),
-                        arguments: args,
-                        is_distinct: distinct,
-                        is_user_defined_function: false,
-                    },
-                )),
+            let function = spec::Expr::UnresolvedFunction {
+                function_name: name.to_string(),
+                arguments: args,
+                is_distinct: distinct,
+                is_user_defined_function: false,
             };
             if let Some(over) = over {
                 use ast::WindowType;
@@ -638,15 +588,13 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
                             .map(from_ast_order_by)
                             .collect::<SparkResult<Vec<_>>>()?;
                         let frame_spec = window_frame
-                            .map(|f| -> SparkResult<_> { Ok(Box::new(from_ast_window_frame(f)?)) })
+                            .map(|f| -> SparkResult<_> { Ok(from_ast_window_frame(f)?) })
                             .transpose()?;
-                        Ok(sc::Expression {
-                            expr_type: Some(ExprType::Window(Box::new(sc::expression::Window {
-                                window_function: Some(Box::new(function)),
-                                partition_spec,
-                                order_spec,
-                                frame_spec,
-                            }))),
+                        Ok(spec::Expr::Window {
+                            window_function: Box::new(function),
+                            partition_spec,
+                            order_spec,
+                            frame_spec,
                         })
                     }
                     WindowType::NamedWindow(_) => {
@@ -669,7 +617,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
                 .zip(results.into_iter())
                 .try_for_each::<_, SparkResult<_>>(|(condition, result)| {
                     if let Some(ref operand) = operand {
-                        let condition = sc::Expression::from(Function {
+                        let condition = spec::Expr::from(Function {
                             name: "==".to_string(),
                             args: vec![
                                 from_ast_expression(*operand.clone())?,
@@ -686,21 +634,17 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
             if let Some(else_result) = else_result {
                 args.push(from_ast_expression(*else_result)?);
             }
-            Ok(sc::Expression::from(Function {
+            Ok(spec::Expr::from(Function {
                 name: "when".to_string(),
                 args,
             }))
         }
         Expr::Interval(interval) => from_ast_interval(interval),
-        Expr::Wildcard => Ok(sc::Expression {
-            expr_type: Some(ExprType::UnresolvedStar(sc::expression::UnresolvedStar {
-                unparsed_target: None,
-            })),
+        Expr::Wildcard => Ok(spec::Expr::UnresolvedStar {
+            unparsed_target: None,
         }),
-        Expr::QualifiedWildcard(name) => Ok(sc::Expression {
-            expr_type: Some(ExprType::UnresolvedStar(sc::expression::UnresolvedStar {
-                unparsed_target: Some(format!("{name}.*")),
-            })),
+        Expr::QualifiedWildcard(name) => Ok(spec::Expr::UnresolvedStar {
+            unparsed_target: Some(format!("{name}.*")),
         }),
         Expr::Lambda(ast::LambdaFunction { params, body }) => {
             use ast::OneOrManyWithParens;
@@ -712,29 +656,21 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
             };
             let args = args
                 .into_iter()
-                .map(|arg| sc::expression::UnresolvedNamedLambdaVariable {
+                .map(|arg| spec::UnresolvedNamedLambdaVariable {
                     name_parts: vec![arg.value],
                 })
                 .collect();
-            Ok(sc::Expression {
-                expr_type: Some(ExprType::LambdaFunction(Box::new(
-                    sc::expression::LambdaFunction {
-                        arguments: args,
-                        function: Some(Box::new(function)),
-                    },
-                ))),
+            Ok(spec::Expr::LambdaFunction {
+                arguments: args,
+                function: Box::new(function),
             })
         }
         Expr::MapAccess { column, keys } => {
             let mut column = from_ast_expression(*column)?;
             for key in keys {
-                column = sc::Expression {
-                    expr_type: Some(ExprType::UnresolvedExtractValue(Box::new(
-                        sc::expression::UnresolvedExtractValue {
-                            child: Some(Box::new(column)),
-                            extraction: Some(Box::new(from_ast_expression(key.key)?)),
-                        },
-                    ))),
+                column = spec::Expr::UnresolvedExtractValue {
+                    child: Box::new(column),
+                    extraction: Box::new(from_ast_expression(key.key)?),
                 };
             }
             Ok(column)
@@ -742,36 +678,28 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
         Expr::CompositeAccess {
             expr,
             key: ast::Ident { value, .. },
-        } => Ok(sc::Expression {
-            expr_type: Some(ExprType::UnresolvedExtractValue(Box::new(
-                sc::expression::UnresolvedExtractValue {
-                    child: Some(Box::new(from_ast_expression(*expr)?)),
-                    extraction: Some(Box::new(sc::Expression::from(Identifier(value)))),
-                },
-            ))),
+        } => Ok(spec::Expr::UnresolvedExtractValue {
+            child: Box::new(from_ast_expression(*expr)?),
+            extraction: Box::new(spec::Expr::from(Identifier(value))),
         }),
         Expr::ArrayIndex { obj, indexes } => {
             let mut obj = from_ast_expression(*obj)?;
             for index in indexes {
-                obj = sc::Expression {
-                    expr_type: Some(ExprType::UnresolvedExtractValue(Box::new(
-                        sc::expression::UnresolvedExtractValue {
-                            child: Some(Box::new(obj)),
-                            extraction: Some(Box::new(from_ast_expression(index)?)),
-                        },
-                    ))),
+                obj = spec::Expr::UnresolvedExtractValue {
+                    child: Box::new(obj),
+                    extraction: Box::new(from_ast_expression(index)?),
                 };
             }
             Ok(obj)
         }
         Expr::IsDistinctFrom(a, b) => {
-            let result = sc::Expression::from(Function {
+            let result = spec::Expr::from(Function {
                 name: "<=>".to_string(),
                 args: vec![from_ast_expression(*a)?, from_ast_expression(*b)?],
             });
             Ok(negate_expression(result, true))
         }
-        Expr::IsNotDistinctFrom(a, b) => Ok(sc::Expression::from(Function {
+        Expr::IsNotDistinctFrom(a, b) => Ok(spec::Expr::from(Function {
             name: "<=>".to_string(),
             args: vec![from_ast_expression(*a)?, from_ast_expression(*b)?],
         })),
@@ -806,7 +734,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<sc::Expression
     }
 }
 
-pub(crate) fn parse_spark_expression(sql: &str) -> SparkResult<sc::Expression> {
+pub(crate) fn parse_spark_expression(sql: &str) -> SparkResult<spec::Expr> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
     let expr = parser.parse_wildcard_expr()?;
     fail_on_extra_token(&mut parser, "expression")?;
@@ -849,6 +777,6 @@ mod tests {
         })?;
         Ok(handler
             .join()
-            .or_else(|_| Err(SparkError::internal("failed to join thread")))??)
+            .map_err(|_| SparkError::internal("failed to join thread"))??)
     }
 }

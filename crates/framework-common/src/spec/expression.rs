@@ -1,8 +1,10 @@
 use crate::spec::data_type::DataType;
 use crate::spec::literal::Literal;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Expr {
     Literal(Literal),
     UnresolvedAttribute {
@@ -51,9 +53,7 @@ pub enum Expr {
         field_name: String,
         value_expression: Option<Box<Expr>>,
     },
-    UnresolvedNamedLambdaVariable {
-        name_parts: Vec<String>,
-    },
+    UnresolvedNamedLambdaVariable(UnresolvedNamedLambdaVariable),
     CommonInlineUserDefinedFunction(CommonInlineUserDefinedFunction),
     CallFunction {
         function_name: String,
@@ -61,57 +61,66 @@ pub enum Expr {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SortOrder {
     pub child: Box<Expr>,
     pub direction: SortDirection,
     pub null_ordering: NullOrdering,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SortDirection {
     Unspecified,
     Ascending,
     Descending,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum NullOrdering {
     Unspecified,
     NullsFirst,
     NullsLast,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WindowFrame {
     pub frame_type: WindowFrameType,
     pub lower: WindowFrameBoundary,
     pub upper: WindowFrameBoundary,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum WindowFrameType {
     Undefined,
     Row,
     Range,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum WindowFrameBoundary {
     CurrentRow,
     Unbounded,
     Value(Box<Expr>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommonInlineUserDefinedFunction {
     pub function_name: String,
     pub deterministic: bool,
     pub arguments: Vec<Expr>,
+    #[serde(flatten)]
     pub function: FunctionType,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum FunctionType {
     PythonUdf {
         output_type: DataType,
@@ -132,15 +141,18 @@ pub enum FunctionType {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommonInlineUserDefinedTableFunction {
     pub function_name: String,
     pub deterministic: bool,
     pub arguments: Vec<Expr>,
+    #[serde(flatten)]
     pub function: TableFunctionType,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum TableFunctionType {
     PythonUdtf {
         return_type: Option<DataType>,
@@ -150,7 +162,8 @@ pub enum TableFunctionType {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UnresolvedNamedLambdaVariable {
     pub name_parts: Vec<String>,
 }

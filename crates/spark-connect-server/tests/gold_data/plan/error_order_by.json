@@ -25,9 +25,13 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "unparsedIdentifier": "t"
-                          }
-                        }
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
                       },
                       "condition": {
                         "unresolvedFunction": {
@@ -39,15 +43,19 @@
                                 "arguments": [
                                   {
                                     "unresolvedAttribute": {
-                                      "unparsedIdentifier": "a"
+                                      "unparsedIdentifier": "a",
+                                      "planId": null
                                     }
                                   },
                                   {
                                     "unresolvedAttribute": {
-                                      "unparsedIdentifier": "b"
+                                      "unparsedIdentifier": "b",
+                                      "planId": null
                                     }
                                   }
-                                ]
+                                ],
+                                "isDistinct": false,
+                                "isUserDefinedFunction": false
                               }
                             },
                             {
@@ -55,12 +63,16 @@
                                 "integer": 10
                               }
                             }
-                          ]
+                          ],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false
                         }
                       }
-                    }
+                    },
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "groupType": "GROUP_TYPE_GROUPBY",
+                  "groupType": "groupBy",
                   "groupingExpressions": [
                     {
                       "unresolvedFunction": {
@@ -68,43 +80,57 @@
                         "arguments": [
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "fake"
+                              "unparsedIdentifier": "fake",
+                              "planId": null
                             }
                           },
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "breaker"
+                              "unparsedIdentifier": "breaker",
+                              "planId": null
                             }
                           }
-                        ]
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
                       }
                     }
                   ],
                   "aggregateExpressions": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "b"
+                        "unparsedIdentifier": "b",
+                        "planId": null
                       }
                     }
-                  ]
-                }
+                  ],
+                  "pivot": null
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "order": [
                 {
                   "child": {
                     "unresolvedAttribute": {
-                      "unparsedIdentifier": "c"
+                      "unparsedIdentifier": "c",
+                      "planId": null
                     }
-                  }
+                  },
+                  "direction": "unspecified",
+                  "nullOrdering": "unspecified"
                 }
               ],
               "isGlobal": true
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }

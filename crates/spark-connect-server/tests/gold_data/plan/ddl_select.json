@@ -8,8 +8,13 @@
             "project": {
               "input": {
                 "localRelation": {
-                  "schema": "struct<>"
-                }
+                  "data": null,
+                  "schema": {
+                    "fields": []
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
@@ -18,7 +23,9 @@
                   }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }

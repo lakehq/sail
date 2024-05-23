@@ -9,16 +9,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -32,16 +40,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "testcat.db.tab"
-                  }
-                }
+                    "unparsedIdentifier": "testcat.db.tab",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -55,16 +71,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -78,16 +102,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -101,16 +133,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -124,16 +164,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -147,16 +195,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -170,16 +226,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -193,16 +257,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -216,16 +288,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -239,16 +319,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -262,16 +350,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -285,16 +381,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -308,16 +412,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -331,16 +443,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -354,16 +474,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "default.t"
-                  }
-                }
+                    "unparsedIdentifier": "default.t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -377,16 +505,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -400,16 +536,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "`default.t`"
-                  }
-                }
+                    "unparsedIdentifier": "`default.t`",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -427,45 +571,61 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "unparsedIdentifier": "t"
-                          }
-                        }
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
                       },
                       "condition": {
                         "literal": {
                           "boolean": true
                         }
                       }
-                    }
+                    },
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "groupType": "GROUP_TYPE_GROUPBY",
+                  "groupType": "groupBy",
                   "groupingExpressions": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     }
                   ],
                   "aggregateExpressions": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     }
-                  ]
-                }
+                  ],
+                  "pivot": null
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "order": [
                 {
                   "child": {
                     "unresolvedAttribute": {
-                      "unparsedIdentifier": "a"
+                      "unparsedIdentifier": "a",
+                      "planId": null
                     }
-                  }
+                  },
+                  "direction": "unspecified",
+                  "nullOrdering": "unspecified"
                 }
               ],
               "isGlobal": true
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -479,16 +639,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -502,16 +670,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -525,16 +701,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -548,16 +732,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -571,16 +763,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -594,16 +794,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -617,16 +825,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -640,16 +856,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }
@@ -663,16 +887,24 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t"
-                  }
-                }
+                    "unparsedIdentifier": "t",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
               },
               "expressions": [
                 {
-                  "unresolvedStar": {}
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
                 }
               ]
-            }
+            },
+            "planId": null,
+            "sourceInfo": null
           }
         }
       }

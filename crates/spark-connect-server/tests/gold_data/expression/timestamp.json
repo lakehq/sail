@@ -5,7 +5,9 @@
       "output": {
         "success": {
           "literal": {
-            "timestampNtz": "1547499240000000"
+            "timestampNtz": {
+              "microseconds": 1547499240000000
+            }
           }
         }
       }
@@ -15,7 +17,9 @@
       "output": {
         "success": {
           "literal": {
-            "timestamp": "1547668200567000"
+            "timestamp": {
+              "microseconds": 1547668200567000
+            }
           }
         }
       }
@@ -25,7 +29,9 @@
       "output": {
         "success": {
           "literal": {
-            "timestampNtz": "946688100000000"
+            "timestampNtz": {
+              "microseconds": 946688100000000
+            }
           }
         }
       }
@@ -35,7 +41,9 @@
       "output": {
         "success": {
           "literal": {
-            "timestamp": "-3600000000"
+            "timestamp": {
+              "microseconds": -3600000000
+            }
           }
         }
       }
@@ -45,7 +53,9 @@
       "output": {
         "success": {
           "literal": {
-            "timestampNtz": "1457729640000000"
+            "timestampNtz": {
+              "microseconds": 1457729640000000
+            }
           }
         }
       }
@@ -55,7 +65,9 @@
       "output": {
         "success": {
           "literal": {
-            "timestampNtz": "1457729640000000"
+            "timestampNtz": {
+              "microseconds": 1457729640000000
+            }
           }
         }
       }
@@ -65,7 +77,9 @@
       "output": {
         "success": {
           "literal": {
-            "timestampNtz": "1457729640000000"
+            "timestampNtz": {
+              "microseconds": 1457729640000000
+            }
           }
         }
       }

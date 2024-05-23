@@ -9,7 +9,8 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
@@ -26,10 +27,14 @@
                         "string": "b%"
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -43,15 +48,21 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
                 "unresolvedFunction": {
-                  "functionName": "all"
+                  "functionName": "all",
+                  "arguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -65,7 +76,8 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
@@ -82,10 +94,14 @@
                         "string": "b%"
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -99,15 +115,21 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
                 "unresolvedFunction": {
-                  "functionName": "any"
+                  "functionName": "any",
+                  "arguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -121,7 +143,8 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
@@ -138,10 +161,14 @@
                         "string": "b%"
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -155,15 +182,21 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
                 "unresolvedFunction": {
-                  "functionName": "some"
+                  "functionName": "some",
+                  "arguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -177,7 +210,8 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
@@ -185,7 +219,9 @@
                   "string": "pattern%"
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -199,7 +235,8 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
@@ -212,7 +249,9 @@
                   "string": "\""
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -226,7 +265,8 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
@@ -239,7 +279,9 @@
                   "string": "##"
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -253,7 +295,8 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
@@ -266,7 +309,9 @@
                   "string": "#"
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -280,7 +325,8 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
@@ -293,7 +339,9 @@
                   "string": ""
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -307,7 +355,8 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
@@ -324,10 +373,14 @@
                         "string": "b%"
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -341,15 +394,21 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
                 "unresolvedFunction": {
-                  "functionName": "all"
+                  "functionName": "all",
+                  "arguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -363,7 +422,8 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
@@ -380,10 +440,14 @@
                         "string": "b%"
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -397,15 +461,21 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
                 "unresolvedFunction": {
-                  "functionName": "any"
+                  "functionName": "any",
+                  "arguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -419,7 +489,8 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
@@ -436,10 +507,14 @@
                         "string": "b%"
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -453,15 +528,21 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
                 "unresolvedFunction": {
-                  "functionName": "some"
+                  "functionName": "some",
+                  "arguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -479,7 +560,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -496,13 +578,19 @@
                               "string": "B%"
                             }
                           }
-                        ]
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -520,7 +608,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -537,13 +626,19 @@
                               "string": "B%"
                             }
                           }
-                        ]
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -561,7 +656,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -578,13 +674,19 @@
                               "string": "B%"
                             }
                           }
-                        ]
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -602,7 +704,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -610,10 +713,14 @@
                         "string": "pattern%"
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -631,7 +738,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -644,10 +752,14 @@
                         "string": "\""
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -665,7 +777,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -678,10 +791,14 @@
                         "string": "\"/"
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -699,7 +816,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -712,10 +830,14 @@
                         "string": "#"
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -733,7 +855,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -746,10 +869,14 @@
                         "string": ""
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -767,7 +894,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -784,13 +912,19 @@
                               "string": "b%"
                             }
                           }
-                        ]
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -808,7 +942,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -825,13 +960,19 @@
                               "string": "b%"
                             }
                           }
-                        ]
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -849,7 +990,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -866,13 +1008,19 @@
                               "string": "b%"
                             }
                           }
-                        ]
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -890,7 +1038,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -898,10 +1047,14 @@
                         "string": "pattern%"
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -915,7 +1068,8 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
@@ -923,7 +1077,9 @@
                   "string": "^\\x20[\\x20-\\x23]+$"
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -937,7 +1093,8 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
@@ -945,7 +1102,9 @@
                   "string": "pattern%"
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -959,7 +1118,8 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
@@ -967,7 +1127,9 @@
                   "string": "pattern\\\\"
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -981,7 +1143,8 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a"
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
               },
               {
@@ -989,7 +1152,9 @@
                   "string": "pattern\\t\\n"
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -1007,7 +1172,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -1024,13 +1190,19 @@
                               "string": "b%"
                             }
                           }
-                        ]
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -1048,7 +1220,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -1065,13 +1238,19 @@
                               "string": "B%"
                             }
                           }
-                        ]
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -1089,7 +1268,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -1106,13 +1286,19 @@
                               "string": "B%"
                             }
                           }
-                        ]
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -1130,7 +1316,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -1147,13 +1334,19 @@
                               "string": "b%"
                             }
                           }
-                        ]
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -1171,7 +1364,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -1188,13 +1382,19 @@
                               "string": "b%"
                             }
                           }
-                        ]
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
@@ -1212,7 +1412,8 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a"
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
                     },
                     {
@@ -1229,13 +1430,19 @@
                               "string": "b%"
                             }
                           }
-                        ]
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
                       }
                     }
-                  ]
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
                 }
               }
-            ]
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
           }
         }
       }
