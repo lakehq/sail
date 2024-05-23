@@ -4,157 +4,135 @@
       "input": "\nSELECT * FROM a\nUNION\nSELECT * FROM b\nEXCEPT\nSELECT * FROM c\nINTERSECT\nSELECT * FROM d\n      ",
       "output": {
         "success": {
-          "node": {
-            "setOperation": {
-              "left": {
-                "node": {
-                  "setOperation": {
-                    "left": {
-                      "node": {
-                        "project": {
-                          "input": {
-                            "node": {
-                              "read": {
-                                "readType": {
-                                  "namedTable": {
-                                    "unparsedIdentifier": "a",
-                                    "options": {}
-                                  }
-                                },
-                                "isStreaming": false
-                              }
-                            },
-                            "planId": null,
-                            "sourceInfo": null
-                          },
-                          "expressions": [
-                            {
-                              "unresolvedStar": {
-                                "unparsedTarget": null
-                              }
-                            }
-                          ]
-                        }
+          "setOperation": {
+            "left": {
+              "setOperation": {
+                "left": {
+                  "project": {
+                    "input": {
+                      "read": {
+                        "readType": {
+                          "namedTable": {
+                            "unparsedIdentifier": "a",
+                            "options": {}
+                          }
+                        },
+                        "isStreaming": false
                       },
                       "planId": null,
                       "sourceInfo": null
                     },
-                    "right": {
-                      "node": {
-                        "project": {
-                          "input": {
-                            "node": {
-                              "read": {
-                                "readType": {
-                                  "namedTable": {
-                                    "unparsedIdentifier": "b",
-                                    "options": {}
-                                  }
-                                },
-                                "isStreaming": false
-                              }
-                            },
-                            "planId": null,
-                            "sourceInfo": null
-                          },
-                          "expressions": [
-                            {
-                              "unresolvedStar": {
-                                "unparsedTarget": null
-                              }
-                            }
-                          ]
+                    "expressions": [
+                      {
+                        "unresolvedStar": {
+                          "unparsedTarget": null
                         }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "setOpType": "union",
-                    "isAll": false,
-                    "byName": false,
-                    "allowMissingColumns": false
-                  }
+                      }
+                    ]
+                  },
+                  "planId": null,
+                  "sourceInfo": null
                 },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "right": {
-                "node": {
-                  "setOperation": {
-                    "left": {
-                      "node": {
-                        "project": {
-                          "input": {
-                            "node": {
-                              "read": {
-                                "readType": {
-                                  "namedTable": {
-                                    "unparsedIdentifier": "c",
-                                    "options": {}
-                                  }
-                                },
-                                "isStreaming": false
-                              }
-                            },
-                            "planId": null,
-                            "sourceInfo": null
-                          },
-                          "expressions": [
-                            {
-                              "unresolvedStar": {
-                                "unparsedTarget": null
-                              }
-                            }
-                          ]
-                        }
+                "right": {
+                  "project": {
+                    "input": {
+                      "read": {
+                        "readType": {
+                          "namedTable": {
+                            "unparsedIdentifier": "b",
+                            "options": {}
+                          }
+                        },
+                        "isStreaming": false
                       },
                       "planId": null,
                       "sourceInfo": null
                     },
-                    "right": {
-                      "node": {
-                        "project": {
-                          "input": {
-                            "node": {
-                              "read": {
-                                "readType": {
-                                  "namedTable": {
-                                    "unparsedIdentifier": "d",
-                                    "options": {}
-                                  }
-                                },
-                                "isStreaming": false
-                              }
-                            },
-                            "planId": null,
-                            "sourceInfo": null
-                          },
-                          "expressions": [
-                            {
-                              "unresolvedStar": {
-                                "unparsedTarget": null
-                              }
-                            }
-                          ]
+                    "expressions": [
+                      {
+                        "unresolvedStar": {
+                          "unparsedTarget": null
                         }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "setOpType": "intersect",
-                    "isAll": false,
-                    "byName": false,
-                    "allowMissingColumns": false
-                  }
+                      }
+                    ]
+                  },
+                  "planId": null,
+                  "sourceInfo": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "setOpType": "union",
+                "isAll": false,
+                "byName": false,
+                "allowMissingColumns": false
               },
-              "setOpType": "except",
-              "isAll": false,
-              "byName": false,
-              "allowMissingColumns": false
-            }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "right": {
+              "setOperation": {
+                "left": {
+                  "project": {
+                    "input": {
+                      "read": {
+                        "readType": {
+                          "namedTable": {
+                            "unparsedIdentifier": "c",
+                            "options": {}
+                          }
+                        },
+                        "isStreaming": false
+                      },
+                      "planId": null,
+                      "sourceInfo": null
+                    },
+                    "expressions": [
+                      {
+                        "unresolvedStar": {
+                          "unparsedTarget": null
+                        }
+                      }
+                    ]
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "right": {
+                  "project": {
+                    "input": {
+                      "read": {
+                        "readType": {
+                          "namedTable": {
+                            "unparsedIdentifier": "d",
+                            "options": {}
+                          }
+                        },
+                        "isStreaming": false
+                      },
+                      "planId": null,
+                      "sourceInfo": null
+                    },
+                    "expressions": [
+                      {
+                        "unresolvedStar": {
+                          "unparsedTarget": null
+                        }
+                      }
+                    ]
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "setOpType": "intersect",
+                "isAll": false,
+                "byName": false,
+                "allowMissingColumns": false
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "setOpType": "except",
+            "isAll": false,
+            "byName": false,
+            "allowMissingColumns": false
           },
           "planId": null,
           "sourceInfo": null
@@ -165,157 +143,135 @@
       "input": "\nSELECT * FROM a\nUNION\nSELECT * FROM b\nEXCEPT ALL\nSELECT * FROM c\nINTERSECT ALL\nSELECT * FROM d\n      ",
       "output": {
         "success": {
-          "node": {
-            "setOperation": {
-              "left": {
-                "node": {
-                  "setOperation": {
-                    "left": {
-                      "node": {
-                        "project": {
-                          "input": {
-                            "node": {
-                              "read": {
-                                "readType": {
-                                  "namedTable": {
-                                    "unparsedIdentifier": "a",
-                                    "options": {}
-                                  }
-                                },
-                                "isStreaming": false
-                              }
-                            },
-                            "planId": null,
-                            "sourceInfo": null
-                          },
-                          "expressions": [
-                            {
-                              "unresolvedStar": {
-                                "unparsedTarget": null
-                              }
-                            }
-                          ]
-                        }
+          "setOperation": {
+            "left": {
+              "setOperation": {
+                "left": {
+                  "project": {
+                    "input": {
+                      "read": {
+                        "readType": {
+                          "namedTable": {
+                            "unparsedIdentifier": "a",
+                            "options": {}
+                          }
+                        },
+                        "isStreaming": false
                       },
                       "planId": null,
                       "sourceInfo": null
                     },
-                    "right": {
-                      "node": {
-                        "project": {
-                          "input": {
-                            "node": {
-                              "read": {
-                                "readType": {
-                                  "namedTable": {
-                                    "unparsedIdentifier": "b",
-                                    "options": {}
-                                  }
-                                },
-                                "isStreaming": false
-                              }
-                            },
-                            "planId": null,
-                            "sourceInfo": null
-                          },
-                          "expressions": [
-                            {
-                              "unresolvedStar": {
-                                "unparsedTarget": null
-                              }
-                            }
-                          ]
+                    "expressions": [
+                      {
+                        "unresolvedStar": {
+                          "unparsedTarget": null
                         }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "setOpType": "union",
-                    "isAll": false,
-                    "byName": false,
-                    "allowMissingColumns": false
-                  }
+                      }
+                    ]
+                  },
+                  "planId": null,
+                  "sourceInfo": null
                 },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "right": {
-                "node": {
-                  "setOperation": {
-                    "left": {
-                      "node": {
-                        "project": {
-                          "input": {
-                            "node": {
-                              "read": {
-                                "readType": {
-                                  "namedTable": {
-                                    "unparsedIdentifier": "c",
-                                    "options": {}
-                                  }
-                                },
-                                "isStreaming": false
-                              }
-                            },
-                            "planId": null,
-                            "sourceInfo": null
-                          },
-                          "expressions": [
-                            {
-                              "unresolvedStar": {
-                                "unparsedTarget": null
-                              }
-                            }
-                          ]
-                        }
+                "right": {
+                  "project": {
+                    "input": {
+                      "read": {
+                        "readType": {
+                          "namedTable": {
+                            "unparsedIdentifier": "b",
+                            "options": {}
+                          }
+                        },
+                        "isStreaming": false
                       },
                       "planId": null,
                       "sourceInfo": null
                     },
-                    "right": {
-                      "node": {
-                        "project": {
-                          "input": {
-                            "node": {
-                              "read": {
-                                "readType": {
-                                  "namedTable": {
-                                    "unparsedIdentifier": "d",
-                                    "options": {}
-                                  }
-                                },
-                                "isStreaming": false
-                              }
-                            },
-                            "planId": null,
-                            "sourceInfo": null
-                          },
-                          "expressions": [
-                            {
-                              "unresolvedStar": {
-                                "unparsedTarget": null
-                              }
-                            }
-                          ]
+                    "expressions": [
+                      {
+                        "unresolvedStar": {
+                          "unparsedTarget": null
                         }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "setOpType": "intersect",
-                    "isAll": true,
-                    "byName": false,
-                    "allowMissingColumns": false
-                  }
+                      }
+                    ]
+                  },
+                  "planId": null,
+                  "sourceInfo": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "setOpType": "union",
+                "isAll": false,
+                "byName": false,
+                "allowMissingColumns": false
               },
-              "setOpType": "except",
-              "isAll": true,
-              "byName": false,
-              "allowMissingColumns": false
-            }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "right": {
+              "setOperation": {
+                "left": {
+                  "project": {
+                    "input": {
+                      "read": {
+                        "readType": {
+                          "namedTable": {
+                            "unparsedIdentifier": "c",
+                            "options": {}
+                          }
+                        },
+                        "isStreaming": false
+                      },
+                      "planId": null,
+                      "sourceInfo": null
+                    },
+                    "expressions": [
+                      {
+                        "unresolvedStar": {
+                          "unparsedTarget": null
+                        }
+                      }
+                    ]
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "right": {
+                  "project": {
+                    "input": {
+                      "read": {
+                        "readType": {
+                          "namedTable": {
+                            "unparsedIdentifier": "d",
+                            "options": {}
+                          }
+                        },
+                        "isStreaming": false
+                      },
+                      "planId": null,
+                      "sourceInfo": null
+                    },
+                    "expressions": [
+                      {
+                        "unresolvedStar": {
+                          "unparsedTarget": null
+                        }
+                      }
+                    ]
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "setOpType": "intersect",
+                "isAll": true,
+                "byName": false,
+                "allowMissingColumns": false
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "setOpType": "except",
+            "isAll": true,
+            "byName": false,
+            "allowMissingColumns": false
           },
           "planId": null,
           "sourceInfo": null
@@ -338,73 +294,63 @@
       "input": "select * from a except all select * from b",
       "output": {
         "success": {
-          "node": {
-            "setOperation": {
-              "left": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "a",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
+          "setOperation": {
+            "left": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       }
-                    ]
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "right": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "b",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
                     },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
-                      }
-                    ]
-                  }
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
               },
-              "setOpType": "except",
-              "isAll": true,
-              "byName": false,
-              "allowMissingColumns": false
-            }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "right": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "setOpType": "except",
+            "isAll": true,
+            "byName": false,
+            "allowMissingColumns": false
           },
           "planId": null,
           "sourceInfo": null
@@ -415,73 +361,63 @@
       "input": "select * from a except distinct select * from b",
       "output": {
         "success": {
-          "node": {
-            "setOperation": {
-              "left": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "a",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
+          "setOperation": {
+            "left": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       }
-                    ]
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "right": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "b",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
                     },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
-                      }
-                    ]
-                  }
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
               },
-              "setOpType": "except",
-              "isAll": false,
-              "byName": false,
-              "allowMissingColumns": false
-            }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "right": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "setOpType": "except",
+            "isAll": false,
+            "byName": false,
+            "allowMissingColumns": false
           },
           "planId": null,
           "sourceInfo": null
@@ -492,73 +428,63 @@
       "input": "select * from a except select * from b",
       "output": {
         "success": {
-          "node": {
-            "setOperation": {
-              "left": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "a",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
+          "setOperation": {
+            "left": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       }
-                    ]
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "right": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "b",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
                     },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
-                      }
-                    ]
-                  }
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
               },
-              "setOpType": "except",
-              "isAll": false,
-              "byName": false,
-              "allowMissingColumns": false
-            }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "right": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "setOpType": "except",
+            "isAll": false,
+            "byName": false,
+            "allowMissingColumns": false
           },
           "planId": null,
           "sourceInfo": null
@@ -569,73 +495,63 @@
       "input": "select * from a intersect all select * from b",
       "output": {
         "success": {
-          "node": {
-            "setOperation": {
-              "left": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "a",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
+          "setOperation": {
+            "left": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       }
-                    ]
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "right": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "b",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
                     },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
-                      }
-                    ]
-                  }
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
               },
-              "setOpType": "intersect",
-              "isAll": true,
-              "byName": false,
-              "allowMissingColumns": false
-            }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "right": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "setOpType": "intersect",
+            "isAll": true,
+            "byName": false,
+            "allowMissingColumns": false
           },
           "planId": null,
           "sourceInfo": null
@@ -646,73 +562,63 @@
       "input": "select * from a intersect distinct select * from b",
       "output": {
         "success": {
-          "node": {
-            "setOperation": {
-              "left": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "a",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
+          "setOperation": {
+            "left": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       }
-                    ]
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "right": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "b",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
                     },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
-                      }
-                    ]
-                  }
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
               },
-              "setOpType": "intersect",
-              "isAll": false,
-              "byName": false,
-              "allowMissingColumns": false
-            }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "right": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "setOpType": "intersect",
+            "isAll": false,
+            "byName": false,
+            "allowMissingColumns": false
           },
           "planId": null,
           "sourceInfo": null
@@ -723,73 +629,63 @@
       "input": "select * from a intersect select * from b",
       "output": {
         "success": {
-          "node": {
-            "setOperation": {
-              "left": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "a",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
+          "setOperation": {
+            "left": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       }
-                    ]
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "right": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "b",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
                     },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
-                      }
-                    ]
-                  }
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
               },
-              "setOpType": "intersect",
-              "isAll": false,
-              "byName": false,
-              "allowMissingColumns": false
-            }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "right": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "setOpType": "intersect",
+            "isAll": false,
+            "byName": false,
+            "allowMissingColumns": false
           },
           "planId": null,
           "sourceInfo": null
@@ -818,73 +714,63 @@
       "input": "select * from a union all select * from b",
       "output": {
         "success": {
-          "node": {
-            "setOperation": {
-              "left": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "a",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
+          "setOperation": {
+            "left": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       }
-                    ]
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "right": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "b",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
                     },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
-                      }
-                    ]
-                  }
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
               },
-              "setOpType": "union",
-              "isAll": true,
-              "byName": false,
-              "allowMissingColumns": false
-            }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "right": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "setOpType": "union",
+            "isAll": true,
+            "byName": false,
+            "allowMissingColumns": false
           },
           "planId": null,
           "sourceInfo": null
@@ -895,73 +781,63 @@
       "input": "select * from a union distinct select * from b",
       "output": {
         "success": {
-          "node": {
-            "setOperation": {
-              "left": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "a",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
+          "setOperation": {
+            "left": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       }
-                    ]
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "right": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "b",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
                     },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
-                      }
-                    ]
-                  }
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
               },
-              "setOpType": "union",
-              "isAll": false,
-              "byName": false,
-              "allowMissingColumns": false
-            }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "right": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "setOpType": "union",
+            "isAll": false,
+            "byName": false,
+            "allowMissingColumns": false
           },
           "planId": null,
           "sourceInfo": null
@@ -972,73 +848,63 @@
       "input": "select * from a union select * from b",
       "output": {
         "success": {
-          "node": {
-            "setOperation": {
-              "left": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "a",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
+          "setOperation": {
+            "left": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "a",
+                        "options": {}
                       }
-                    ]
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "right": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "b",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
                     },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
-                      }
-                    ]
-                  }
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
               },
-              "setOpType": "union",
-              "isAll": false,
-              "byName": false,
-              "allowMissingColumns": false
-            }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "right": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "b",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "setOpType": "union",
+            "isAll": false,
+            "byName": false,
+            "allowMissingColumns": false
           },
           "planId": null,
           "sourceInfo": null
@@ -1049,67 +915,57 @@
       "input": "select 1 union select 1",
       "output": {
         "success": {
-          "node": {
-            "setOperation": {
-              "left": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "localRelation": {
-                          "data": null,
-                          "schema": {
-                            "fields": []
-                          }
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "expressions": [
-                      {
-                        "literal": {
-                          "integer": 1
-                        }
-                      }
-                    ]
-                  }
+          "setOperation": {
+            "left": {
+              "project": {
+                "input": {
+                  "localRelation": {
+                    "data": null,
+                    "schema": {
+                      "fields": []
+                    }
+                  },
+                  "planId": null,
+                  "sourceInfo": null
                 },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "right": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "localRelation": {
-                          "data": null,
-                          "schema": {
-                            "fields": []
-                          }
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "expressions": [
-                      {
-                        "literal": {
-                          "integer": 1
-                        }
-                      }
-                    ]
+                "expressions": [
+                  {
+                    "literal": {
+                      "integer": 1
+                    }
                   }
-                },
-                "planId": null,
-                "sourceInfo": null
+                ]
               },
-              "setOpType": "union",
-              "isAll": false,
-              "byName": false,
-              "allowMissingColumns": false
-            }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "right": {
+              "project": {
+                "input": {
+                  "localRelation": {
+                    "data": null,
+                    "schema": {
+                      "fields": []
+                    }
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "literal": {
+                      "integer": 1
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "setOpType": "union",
+            "isAll": false,
+            "byName": false,
+            "allowMissingColumns": false
           },
           "planId": null,
           "sourceInfo": null

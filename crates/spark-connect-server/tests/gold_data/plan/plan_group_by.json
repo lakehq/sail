@@ -10,77 +10,73 @@
       "input": "select a, b, sum(c) as c from d group by a, b",
       "output": {
         "success": {
-          "node": {
-            "aggregate": {
-              "input": {
-                "node": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "d",
-                        "options": {}
-                      }
-                    },
-                    "isStreaming": false
+          "aggregate": {
+            "input": {
+              "read": {
+                "readType": {
+                  "namedTable": {
+                    "unparsedIdentifier": "d",
+                    "options": {}
                   }
                 },
-                "planId": null,
-                "sourceInfo": null
+                "isStreaming": false
               },
-              "groupType": "groupBy",
-              "groupingExpressions": [
-                {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
-                    "planId": null
-                  }
-                },
-                {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
-                    "planId": null
-                  }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "groupType": "groupBy",
+            "groupingExpressions": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
-              ],
-              "aggregateExpressions": [
-                {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
-                    "planId": null
-                  }
-                },
-                {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
-                    "planId": null
-                  }
-                },
-                {
-                  "alias": {
-                    "expr": {
-                      "unresolvedFunction": {
-                        "functionName": "sum",
-                        "arguments": [
-                          {
-                            "unresolvedAttribute": {
-                              "unparsedIdentifier": "c",
-                              "planId": null
-                            }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b",
+                  "planId": null
+                }
+              }
+            ],
+            "aggregateExpressions": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a",
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b",
+                  "planId": null
+                }
+              },
+              {
+                "alias": {
+                  "expr": {
+                    "unresolvedFunction": {
+                      "functionName": "sum",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "c",
+                            "planId": null
                           }
-                        ],
-                        "isDistinct": false,
-                        "isUserDefinedFunction": false
-                      }
-                    },
-                    "name": [
-                      "c"
-                    ],
-                    "metadata": null
-                  }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  },
+                  "name": [
+                    "c"
+                  ],
+                  "metadata": null
                 }
-              ],
-              "pivot": null
-            }
+              }
+            ],
+            "pivot": null
           },
           "planId": null,
           "sourceInfo": null

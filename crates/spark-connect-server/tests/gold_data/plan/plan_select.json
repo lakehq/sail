@@ -4,31 +4,27 @@
       "input": "\nSELECT -- continued after the following block comments...\n/* Deeply nested comment.\n   This includes a single apostrophe to make sure we aren't decoding this part as a string.\nSELECT 'deep nest' AS n1;\n/* Second level of nesting...\nSELECT 'deeper nest' as n2;\n/* Third level of nesting...\nSELECT 'deepest nest' as n3;\n*/\nHoo boy. Still two deep...\n*/\nNow just one deep...\n*/\n* FROM a\n      ",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "a",
-                        "options": {}
-                      }
-                    },
-                    "isStreaming": false
+          "project": {
+            "input": {
+              "read": {
+                "readType": {
+                  "namedTable": {
+                    "unparsedIdentifier": "a",
+                    "options": {}
                   }
                 },
-                "planId": null,
-                "sourceInfo": null
+                "isStreaming": false
               },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "unparsedTarget": null
-                  }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedStar": {
+                  "unparsedTarget": null
                 }
-              ]
-            }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -81,31 +77,27 @@
       "input": "SELECT * FROM a",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "a",
-                        "options": {}
-                      }
-                    },
-                    "isStreaming": false
+          "project": {
+            "input": {
+              "read": {
+                "readType": {
+                  "namedTable": {
+                    "unparsedIdentifier": "a",
+                    "options": {}
                   }
                 },
-                "planId": null,
-                "sourceInfo": null
+                "isStreaming": false
               },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "unparsedTarget": null
-                  }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedStar": {
+                  "unparsedTarget": null
                 }
-              ]
-            }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -284,31 +276,27 @@
       "input": "SELECT * FROM testcat.db.tab",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "testcat.db.tab",
-                        "options": {}
-                      }
-                    },
-                    "isStreaming": false
+          "project": {
+            "input": {
+              "read": {
+                "readType": {
+                  "namedTable": {
+                    "unparsedIdentifier": "testcat.db.tab",
+                    "options": {}
                   }
                 },
-                "planId": null,
-                "sourceInfo": null
+                "isStreaming": false
               },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "unparsedTarget": null
-                  }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedStar": {
+                  "unparsedTarget": null
                 }
-              ]
-            }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -343,52 +331,48 @@
       "input": "SELECT OVERLAY('Spark SQL' PLACING 'ANSI ' FROM 7 FOR 0)",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "localRelation": {
-                    "data": null,
-                    "schema": {
-                      "fields": []
-                    }
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": "overlay",
-                    "arguments": [
-                      {
-                        "literal": {
-                          "string": "Spark SQL"
-                        }
-                      },
-                      {
-                        "literal": {
-                          "string": "ANSI "
-                        }
-                      },
-                      {
-                        "literal": {
-                          "integer": 7
-                        }
-                      },
-                      {
-                        "literal": {
-                          "integer": 0
-                        }
-                      }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
-                  }
+          "project": {
+            "input": {
+              "localRelation": {
+                "data": null,
+                "schema": {
+                  "fields": []
                 }
-              ]
-            }
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "overlay",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "Spark SQL"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "ANSI "
+                      }
+                    },
+                    {
+                      "literal": {
+                        "integer": 7
+                      }
+                    },
+                    {
+                      "literal": {
+                        "integer": 0
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -399,47 +383,43 @@
       "input": "SELECT OVERLAY('Spark SQL' PLACING 'CORE' FROM 7)",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "localRelation": {
-                    "data": null,
-                    "schema": {
-                      "fields": []
-                    }
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": "overlay",
-                    "arguments": [
-                      {
-                        "literal": {
-                          "string": "Spark SQL"
-                        }
-                      },
-                      {
-                        "literal": {
-                          "string": "CORE"
-                        }
-                      },
-                      {
-                        "literal": {
-                          "integer": 7
-                        }
-                      }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
-                  }
+          "project": {
+            "input": {
+              "localRelation": {
+                "data": null,
+                "schema": {
+                  "fields": []
                 }
-              ]
-            }
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "overlay",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "Spark SQL"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "CORE"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "integer": 7
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -450,47 +430,43 @@
       "input": "SELECT OVERLAY('Spark SQL' PLACING '_' FROM 6)",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "localRelation": {
-                    "data": null,
-                    "schema": {
-                      "fields": []
-                    }
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": "overlay",
-                    "arguments": [
-                      {
-                        "literal": {
-                          "string": "Spark SQL"
-                        }
-                      },
-                      {
-                        "literal": {
-                          "string": "_"
-                        }
-                      },
-                      {
-                        "literal": {
-                          "integer": 6
-                        }
-                      }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
-                  }
+          "project": {
+            "input": {
+              "localRelation": {
+                "data": null,
+                "schema": {
+                  "fields": []
                 }
-              ]
-            }
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "overlay",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "Spark SQL"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "_"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "integer": 6
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -501,52 +477,48 @@
       "input": "SELECT OVERLAY('Spark SQL' PLACING 'tructured' FROM 2 FOR 4)",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "localRelation": {
-                    "data": null,
-                    "schema": {
-                      "fields": []
-                    }
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": "overlay",
-                    "arguments": [
-                      {
-                        "literal": {
-                          "string": "Spark SQL"
-                        }
-                      },
-                      {
-                        "literal": {
-                          "string": "tructured"
-                        }
-                      },
-                      {
-                        "literal": {
-                          "integer": 2
-                        }
-                      },
-                      {
-                        "literal": {
-                          "integer": 4
-                        }
-                      }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
-                  }
+          "project": {
+            "input": {
+              "localRelation": {
+                "data": null,
+                "schema": {
+                  "fields": []
                 }
-              ]
-            }
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "overlay",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "Spark SQL"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "tructured"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "integer": 2
+                      }
+                    },
+                    {
+                      "literal": {
+                        "integer": 4
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -563,42 +535,38 @@
       "input": "SELECT TRIM('xyz' FROM 'yxTomxx')",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "localRelation": {
-                    "data": null,
-                    "schema": {
-                      "fields": []
-                    }
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": "trim",
-                    "arguments": [
-                      {
-                        "literal": {
-                          "string": "yxTomxx"
-                        }
-                      },
-                      {
-                        "literal": {
-                          "string": "xyz"
-                        }
-                      }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
-                  }
+          "project": {
+            "input": {
+              "localRelation": {
+                "data": null,
+                "schema": {
+                  "fields": []
                 }
-              ]
-            }
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "trim",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "yxTomxx"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "xyz"
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -609,42 +577,38 @@
       "input": "SELECT TRIM(BOTH '@$%&( )abc' FROM '@ $ % & ()abc ' )",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "localRelation": {
-                    "data": null,
-                    "schema": {
-                      "fields": []
-                    }
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": "trim",
-                    "arguments": [
-                      {
-                        "literal": {
-                          "string": "@ $ % & ()abc "
-                        }
-                      },
-                      {
-                        "literal": {
-                          "string": "@$%&( )abc"
-                        }
-                      }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
-                  }
+          "project": {
+            "input": {
+              "localRelation": {
+                "data": null,
+                "schema": {
+                  "fields": []
                 }
-              ]
-            }
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "trim",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "@ $ % & ()abc "
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "@$%&( )abc"
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -661,42 +625,38 @@
       "input": "SELECT TRIM(LEADING 'c []' FROM '[ ccccbcc ')",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "localRelation": {
-                    "data": null,
-                    "schema": {
-                      "fields": []
-                    }
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": "ltrim",
-                    "arguments": [
-                      {
-                        "literal": {
-                          "string": "[ ccccbcc "
-                        }
-                      },
-                      {
-                        "literal": {
-                          "string": "c []"
-                        }
-                      }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
-                  }
+          "project": {
+            "input": {
+              "localRelation": {
+                "data": null,
+                "schema": {
+                  "fields": []
                 }
-              ]
-            }
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "ltrim",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "[ ccccbcc "
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "c []"
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -713,42 +673,38 @@
       "input": "SELECT TRIM(TRAILING 'c&^,.' FROM 'bc...,,,&&&ccc')",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "localRelation": {
-                    "data": null,
-                    "schema": {
-                      "fields": []
-                    }
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": "rtrim",
-                    "arguments": [
-                      {
-                        "literal": {
-                          "string": "bc...,,,&&&ccc"
-                        }
-                      },
-                      {
-                        "literal": {
-                          "string": "c&^,."
-                        }
-                      }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
-                  }
+          "project": {
+            "input": {
+              "localRelation": {
+                "data": null,
+                "schema": {
+                  "fields": []
                 }
-              ]
-            }
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "rtrim",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "bc...,,,&&&ccc"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "c&^,."
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -789,31 +745,27 @@
       "input": "sELEct * FroM a",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "a",
-                        "options": {}
-                      }
-                    },
-                    "isStreaming": false
+          "project": {
+            "input": {
+              "read": {
+                "readType": {
+                  "namedTable": {
+                    "unparsedIdentifier": "a",
+                    "options": {}
                   }
                 },
-                "planId": null,
-                "sourceInfo": null
+                "isStreaming": false
               },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "unparsedTarget": null
-                  }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedStar": {
+                  "unparsedTarget": null
                 }
-              ]
-            }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -854,31 +806,27 @@
       "input": "select * fRoM a",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "a",
-                        "options": {}
-                      }
-                    },
-                    "isStreaming": false
+          "project": {
+            "input": {
+              "read": {
+                "readType": {
+                  "namedTable": {
+                    "unparsedIdentifier": "a",
+                    "options": {}
                   }
                 },
-                "planId": null,
-                "sourceInfo": null
+                "isStreaming": false
               },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "unparsedTarget": null
-                  }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedStar": {
+                  "unparsedTarget": null
                 }
-              ]
-            }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -973,31 +921,27 @@
       "input": "select * from t",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t",
-                        "options": {}
-                      }
-                    },
-                    "isStreaming": false
+          "project": {
+            "input": {
+              "read": {
+                "readType": {
+                  "namedTable": {
+                    "unparsedIdentifier": "t",
+                    "options": {}
                   }
                 },
-                "planId": null,
-                "sourceInfo": null
+                "isStreaming": false
               },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "unparsedTarget": null
-                  }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedStar": {
+                  "unparsedTarget": null
                 }
-              ]
-            }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -1038,40 +982,34 @@
       "input": "select * from t limit 10",
       "output": {
         "success": {
-          "node": {
-            "limit": {
-              "input": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "t",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "expressions": [
-                      {
-                        "unresolvedStar": {
-                          "unparsedTarget": null
-                        }
+          "limit": {
+            "input": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
                       }
-                    ]
-                  }
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
               },
-              "limit": 10
-            }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "limit": 10
           },
           "planId": null,
           "sourceInfo": null
@@ -1136,28 +1074,24 @@
       "input": "select 1",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "localRelation": {
-                    "data": null,
-                    "schema": {
-                      "fields": []
-                    }
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "literal": {
-                    "integer": 1
-                  }
+          "project": {
+            "input": {
+              "localRelation": {
+                "data": null,
+                "schema": {
+                  "fields": []
                 }
-              ]
-            }
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "literal": {
+                  "integer": 1
+                }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -1180,35 +1114,31 @@
       "input": "select a, b",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "localRelation": {
-                    "data": null,
-                    "schema": {
-                      "fields": []
-                    }
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
-                    "planId": null
-                  }
-                },
-                {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
-                    "planId": null
-                  }
+          "project": {
+            "input": {
+              "localRelation": {
+                "data": null,
+                "schema": {
+                  "fields": []
                 }
-              ]
-            }
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a",
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b",
+                  "planId": null
+                }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -1219,38 +1149,34 @@
       "input": "select a, b from db.c",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "db.c",
-                        "options": {}
-                      }
-                    },
-                    "isStreaming": false
+          "project": {
+            "input": {
+              "read": {
+                "readType": {
+                  "namedTable": {
+                    "unparsedIdentifier": "db.c",
+                    "options": {}
                   }
                 },
-                "planId": null,
-                "sourceInfo": null
+                "isStreaming": false
               },
-              "expressions": [
-                {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
-                    "planId": null
-                  }
-                },
-                {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
-                    "planId": null
-                  }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
-              ]
-            }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b",
+                  "planId": null
+                }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -1279,66 +1205,60 @@
       "input": "select a, b from db.c where x < 1",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "filter": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "db.c",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
+          "project": {
+            "input": {
+              "filter": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "db.c",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "condition": {
+                  "unresolvedFunction": {
+                    "functionName": "<",
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "unparsedIdentifier": "x",
+                          "planId": null
                         }
                       },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "condition": {
-                      "unresolvedFunction": {
-                        "functionName": "<",
-                        "arguments": [
-                          {
-                            "unresolvedAttribute": {
-                              "unparsedIdentifier": "x",
-                              "planId": null
-                            }
-                          },
-                          {
-                            "literal": {
-                              "integer": 1
-                            }
-                          }
-                        ],
-                        "isDistinct": false,
-                        "isUserDefinedFunction": false
+                      {
+                        "literal": {
+                          "integer": 1
+                        }
                       }
-                    }
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
-                    "planId": null
-                  }
-                },
-                {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
-                    "planId": null
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
                   }
                 }
-              ]
-            }
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a",
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b",
+                  "planId": null
+                }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -1367,38 +1287,34 @@
       "input": "select all a, b from db.c",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "db.c",
-                        "options": {}
-                      }
-                    },
-                    "isStreaming": false
+          "project": {
+            "input": {
+              "read": {
+                "readType": {
+                  "namedTable": {
+                    "unparsedIdentifier": "db.c",
+                    "options": {}
                   }
                 },
-                "planId": null,
-                "sourceInfo": null
+                "isStreaming": false
               },
-              "expressions": [
-                {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
-                    "planId": null
-                  }
-                },
-                {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
-                    "planId": null
-                  }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "a",
+                  "planId": null
                 }
-              ]
-            }
+              },
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "b",
+                  "planId": null
+                }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -1409,49 +1325,43 @@
       "input": "select distinct a, b from db.c",
       "output": {
         "success": {
-          "node": {
-            "deduplicate": {
-              "input": {
-                "node": {
-                  "project": {
-                    "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "db.c",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "expressions": [
-                      {
-                        "unresolvedAttribute": {
-                          "unparsedIdentifier": "a",
-                          "planId": null
-                        }
-                      },
-                      {
-                        "unresolvedAttribute": {
-                          "unparsedIdentifier": "b",
-                          "planId": null
-                        }
+          "deduplicate": {
+            "input": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "db.c",
+                        "options": {}
                       }
-                    ]
-                  }
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "expressions": [
+                  {
+                    "unresolvedAttribute": {
+                      "unparsedIdentifier": "a",
+                      "planId": null
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "unparsedIdentifier": "b",
+                      "planId": null
+                    }
+                  }
+                ]
               },
-              "columnNames": [],
-              "allColumnsAsKeys": true,
-              "withinWatermark": false
-            }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "columnNames": [],
+            "allColumnsAsKeys": true,
+            "withinWatermark": false
           },
           "planId": null,
           "sourceInfo": null
@@ -1462,37 +1372,33 @@
       "input": "select from tbl",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "localRelation": {
-                    "data": null,
-                    "schema": {
-                      "fields": []
-                    }
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "alias": {
-                    "expr": {
-                      "unresolvedAttribute": {
-                        "unparsedIdentifier": "from",
-                        "planId": null
-                      }
-                    },
-                    "name": [
-                      "tbl"
-                    ],
-                    "metadata": null
-                  }
+          "project": {
+            "input": {
+              "localRelation": {
+                "data": null,
+                "schema": {
+                  "fields": []
                 }
-              ]
-            }
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "alias": {
+                  "expr": {
+                    "unresolvedAttribute": {
+                      "unparsedIdentifier": "from",
+                      "planId": null
+                    }
+                  },
+                  "name": [
+                    "tbl"
+                  ],
+                  "metadata": null
+                }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -1503,32 +1409,28 @@
       "input": "select id from ((((((t0))))))",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t0",
-                        "options": {}
-                      }
-                    },
-                    "isStreaming": false
+          "project": {
+            "input": {
+              "read": {
+                "readType": {
+                  "namedTable": {
+                    "unparsedIdentifier": "t0",
+                    "options": {}
                   }
                 },
-                "planId": null,
-                "sourceInfo": null
+                "isStreaming": false
               },
-              "expressions": [
-                {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "id",
-                    "planId": null
-                  }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "id",
+                  "planId": null
                 }
-              ]
-            }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null
@@ -1539,32 +1441,28 @@
       "input": "select id from (t0)",
       "output": {
         "success": {
-          "node": {
-            "project": {
-              "input": {
-                "node": {
-                  "read": {
-                    "readType": {
-                      "namedTable": {
-                        "unparsedIdentifier": "t0",
-                        "options": {}
-                      }
-                    },
-                    "isStreaming": false
+          "project": {
+            "input": {
+              "read": {
+                "readType": {
+                  "namedTable": {
+                    "unparsedIdentifier": "t0",
+                    "options": {}
                   }
                 },
-                "planId": null,
-                "sourceInfo": null
+                "isStreaming": false
               },
-              "expressions": [
-                {
-                  "unresolvedAttribute": {
-                    "unparsedIdentifier": "id",
-                    "planId": null
-                  }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "expressions": [
+              {
+                "unresolvedAttribute": {
+                  "unparsedIdentifier": "id",
+                  "planId": null
                 }
-              ]
-            }
+              }
+            ]
           },
           "planId": null,
           "sourceInfo": null

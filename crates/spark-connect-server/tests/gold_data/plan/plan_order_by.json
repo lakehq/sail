@@ -64,22 +64,80 @@
       "input": "select * from t order by a, b desc",
       "output": {
         "success": {
-          "node": {
-            "sort": {
-              "input": {
-                "node": {
+          "sort": {
+            "input": {
+              "project": {
+                "input": {
+                  "read": {
+                    "readType": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
+                      }
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedStar": {
+                      "unparsedTarget": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "order": [
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "a",
+                    "planId": null
+                  }
+                },
+                "direction": "unspecified",
+                "nullOrdering": "unspecified"
+              },
+              {
+                "child": {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b",
+                    "planId": null
+                  }
+                },
+                "direction": "descending",
+                "nullOrdering": "unspecified"
+              }
+            ],
+            "isGlobal": true
+          },
+          "planId": null,
+          "sourceInfo": null
+        }
+      }
+    },
+    {
+      "input": "select * from t order by a, b desc limit 10",
+      "output": {
+        "success": {
+          "limit": {
+            "input": {
+              "sort": {
+                "input": {
                   "project": {
                     "input": {
-                      "node": {
-                        "read": {
-                          "readType": {
-                            "namedTable": {
-                              "unparsedIdentifier": "t",
-                              "options": {}
-                            }
-                          },
-                          "isStreaming": false
-                        }
+                      "read": {
+                        "readType": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          }
+                        },
+                        "isStreaming": false
                       },
                       "planId": null,
                       "sourceInfo": null
@@ -91,110 +149,38 @@
                         }
                       }
                     ]
-                  }
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "order": [
-                {
-                  "child": {
-                    "unresolvedAttribute": {
-                      "unparsedIdentifier": "a",
-                      "planId": null
-                    }
                   },
-                  "direction": "unspecified",
-                  "nullOrdering": "unspecified"
+                  "planId": null,
+                  "sourceInfo": null
                 },
-                {
-                  "child": {
-                    "unresolvedAttribute": {
-                      "unparsedIdentifier": "b",
-                      "planId": null
-                    }
-                  },
-                  "direction": "descending",
-                  "nullOrdering": "unspecified"
-                }
-              ],
-              "isGlobal": true
-            }
-          },
-          "planId": null,
-          "sourceInfo": null
-        }
-      }
-    },
-    {
-      "input": "select * from t order by a, b desc limit 10",
-      "output": {
-        "success": {
-          "node": {
-            "limit": {
-              "input": {
-                "node": {
-                  "sort": {
-                    "input": {
-                      "node": {
-                        "project": {
-                          "input": {
-                            "node": {
-                              "read": {
-                                "readType": {
-                                  "namedTable": {
-                                    "unparsedIdentifier": "t",
-                                    "options": {}
-                                  }
-                                },
-                                "isStreaming": false
-                              }
-                            },
-                            "planId": null,
-                            "sourceInfo": null
-                          },
-                          "expressions": [
-                            {
-                              "unresolvedStar": {
-                                "unparsedTarget": null
-                              }
-                            }
-                          ]
-                        }
-                      },
-                      "planId": null,
-                      "sourceInfo": null
-                    },
-                    "order": [
-                      {
-                        "child": {
-                          "unresolvedAttribute": {
-                            "unparsedIdentifier": "a",
-                            "planId": null
-                          }
-                        },
-                        "direction": "unspecified",
-                        "nullOrdering": "unspecified"
-                      },
-                      {
-                        "child": {
-                          "unresolvedAttribute": {
-                            "unparsedIdentifier": "b",
-                            "planId": null
-                          }
-                        },
-                        "direction": "descending",
-                        "nullOrdering": "unspecified"
+                "order": [
+                  {
+                    "child": {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "a",
+                        "planId": null
                       }
-                    ],
-                    "isGlobal": true
+                    },
+                    "direction": "unspecified",
+                    "nullOrdering": "unspecified"
+                  },
+                  {
+                    "child": {
+                      "unresolvedAttribute": {
+                        "unparsedIdentifier": "b",
+                        "planId": null
+                      }
+                    },
+                    "direction": "descending",
+                    "nullOrdering": "unspecified"
                   }
-                },
-                "planId": null,
-                "sourceInfo": null
+                ],
+                "isGlobal": true
               },
-              "limit": 10
-            }
+              "planId": null,
+              "sourceInfo": null
+            },
+            "limit": 10
           },
           "planId": null,
           "sourceInfo": null

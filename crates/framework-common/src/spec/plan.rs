@@ -9,6 +9,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
+    #[serde(flatten)]
     pub node: PlanNode,
     pub plan_id: Option<i64>,
     pub source_info: Option<String>,
