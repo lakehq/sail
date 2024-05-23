@@ -296,13 +296,13 @@ pub(crate) fn from_spark_expression(
             };
             let field = match literal {
                 Literal::Byte(x) => GetFieldAccess::ListIndex {
-                    key: Box::new(expr::Expr::Literal(ScalarValue::Int8(Some(x)))),
+                    key: Box::new(expr::Expr::Literal(ScalarValue::Int64(Some(x as i64)))),
                 },
                 Literal::Short(x) => GetFieldAccess::ListIndex {
-                    key: Box::new(expr::Expr::Literal(ScalarValue::Int16(Some(x)))),
+                    key: Box::new(expr::Expr::Literal(ScalarValue::Int64(Some(x as i64)))),
                 },
                 Literal::Integer(x) => GetFieldAccess::ListIndex {
-                    key: Box::new(expr::Expr::Literal(ScalarValue::Int32(Some(x)))),
+                    key: Box::new(expr::Expr::Literal(ScalarValue::Int64(Some(x as i64)))),
                 },
                 Literal::Long(x) => GetFieldAccess::ListIndex {
                     key: Box::new(expr::Expr::Literal(ScalarValue::Int64(Some(x)))),
