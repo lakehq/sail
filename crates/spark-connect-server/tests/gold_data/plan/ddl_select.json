@@ -7,11 +7,8 @@
           "root": {
             "project": {
               "input": {
-                "localRelation": {
-                  "data": null,
-                  "schema": {
-                    "fields": []
-                  }
+                "empty": {
+                  "produceOneRow": true
                 },
                 "planId": null,
                 "sourceInfo": null

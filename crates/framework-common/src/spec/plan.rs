@@ -201,8 +201,8 @@ pub enum PlanNode {
         initial_input: Option<Box<Plan>>,
         initial_grouping_expressions: Vec<Expr>,
         is_map_groups_with_state: Option<bool>, // TODO: this should probably be an enum
-        output_mode: String,                    // TODO: this should probably be an enum
-        timeout_conf: String,                   // TODO: this should probably be a struct
+        output_mode: Option<String>,            // TODO: this should probably be an enum
+        timeout_conf: Option<String>,           // TODO: this should probably be a struct
     },
     CoGroupMap {
         input: Box<Plan>,
@@ -222,10 +222,10 @@ pub enum PlanNode {
         input: Box<Plan>,
         grouping_expressions: Vec<Expr>,
         function: CommonInlineUserDefinedFunction,
-        output_schema: String, // TODO: this should probably be `Schema`
-        state_schema: String,  // TODO: this should probably be `Schema`
-        output_mode: String,   // TODO: this should probably be an enum
-        timeout_conf: String,  // TODO: this should probably be a struct
+        output_schema: Schema,
+        state_schema: Schema,
+        output_mode: String,  // TODO: this should probably be an enum
+        timeout_conf: String, // TODO: this should probably be a struct
     },
     HtmlString {
         input: Box<Plan>,
@@ -242,17 +242,17 @@ pub enum PlanNode {
     },
     CommonInlineUserDefinedTableFunction(CommonInlineUserDefinedTableFunction),
     // NA operations
-    NaFill {
+    FillNa {
         input: Box<Plan>,
         columns: Vec<String>,
         values: Vec<Expr>,
     },
-    NaDrop {
+    DropNa {
         input: Box<Plan>,
         columns: Vec<String>,
         min_non_nulls: Option<i32>,
     },
-    NaReplace {
+    ReplaceNa {
         input: Box<Plan>,
         columns: Vec<String>,
         replacements: Vec<Replacement>,
@@ -405,6 +405,15 @@ pub enum PlanNode {
     },
     // TODO: add all the "analyze" requests
     // TODO: should streaming query request be added here?
+    // extensions
+    Empty {
+        produce_one_row: bool,
+    },
+    WithParameters {
+        input: Box<Plan>,
+        positional_arguments: Vec<Literal>,
+        named_arguments: HashMap<String, Literal>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

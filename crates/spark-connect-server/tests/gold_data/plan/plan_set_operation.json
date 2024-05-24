@@ -890,11 +890,8 @@
               "left": {
                 "project": {
                   "input": {
-                    "localRelation": {
-                      "data": null,
-                      "schema": {
-                        "fields": []
-                      }
+                    "empty": {
+                      "produceOneRow": true
                     },
                     "planId": null,
                     "sourceInfo": null
@@ -913,11 +910,8 @@
               "right": {
                 "project": {
                   "input": {
-                    "localRelation": {
-                      "data": null,
-                      "schema": {
-                        "fields": []
-                      }
+                    "empty": {
+                      "produceOneRow": true
                     },
                     "planId": null,
                     "sourceInfo": null

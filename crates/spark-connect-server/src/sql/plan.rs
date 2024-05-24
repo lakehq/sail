@@ -6,11 +6,17 @@ use crate::sql::parser::SparkDialect;
 use framework_common::spec;
 use sqlparser::ast;
 use sqlparser::parser::Parser;
+use sqlparser::tokenizer::Token;
 
 #[allow(dead_code)]
 pub(crate) fn parse_sql_statement(sql: &str) -> SparkResult<spec::Plan> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
     let statement = parser.parse_statement()?;
+    loop {
+        if !parser.consume_token(&Token::SemiColon) {
+            break;
+        }
+    }
     fail_on_extra_token(&mut parser, "statement")?;
     from_ast_statement(statement)
 }
@@ -241,11 +247,8 @@ fn from_ast_select(select: ast::Select) -> SparkResult<spec::Plan> {
             },
         )?
         .unwrap_or_else(|| {
-            spec::Plan::new(spec::PlanNode::LocalRelation {
-                data: None,
-                schema: Some(spec::Schema {
-                    fields: spec::Fields::empty(),
-                }),
+            spec::Plan::new(spec::PlanNode::Empty {
+                produce_one_row: true,
             })
         });
 

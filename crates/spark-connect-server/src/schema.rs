@@ -9,13 +9,6 @@ use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::spark::connect as sc;
 use crate::spark::connect::data_type as sdt;
 
-pub(crate) fn from_spark_built_in_data_type(
-    data_type: &sc::DataType,
-) -> SparkResult<adt::DataType> {
-    let data_type: spec::DataType = data_type.clone().try_into()?;
-    Ok(data_type.try_into()?)
-}
-
 pub(crate) fn to_spark_schema(schema: adt::SchemaRef) -> SparkResult<sc::DataType> {
     let fields: spec::Fields = schema.fields().clone().try_into()?;
     Ok(spec::DataType::Struct { fields }.try_into()?)

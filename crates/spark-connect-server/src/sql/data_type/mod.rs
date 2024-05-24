@@ -1,14 +1,12 @@
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::sql::fail_on_extra_token;
 use crate::sql::parser::SparkDialect;
-use arrow::datatypes as adt;
 use framework_common::spec;
 use sqlparser::ast;
 use sqlparser::ast::DateTimeField;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Token;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 pub(crate) mod json;
 
@@ -23,7 +21,7 @@ pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_PRECISION: u8 = 38;
 #[allow(dead_code)]
 pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_SCALE: i8 = 18;
 
-pub(crate) fn parse_spark_schema(schema: &str) -> SparkResult<adt::SchemaRef> {
+pub(crate) fn parse_spark_schema(schema: &str) -> SparkResult<spec::Schema> {
     let data_type: spec::DataType = if let Ok(dt) = parse_spark_data_type(schema) {
         dt
     } else if let Ok(dt) = parse_spark_data_type(format!("struct<{schema}>").as_str()) {
@@ -31,17 +29,7 @@ pub(crate) fn parse_spark_schema(schema: &str) -> SparkResult<adt::SchemaRef> {
     } else {
         json::parse_spark_json_data_type(schema)?.try_into()?
     };
-    let fields = match data_type {
-        spec::DataType::Struct { fields } => fields,
-        x => spec::Fields::new(vec![spec::Field {
-            name: DEFAULT_FIELD_NAME.to_string(),
-            data_type: x,
-            nullable: true,
-            metadata: None,
-        }]),
-    };
-    let fields: adt::Fields = fields.try_into()?;
-    Ok(Arc::new(adt::Schema::new(fields)))
+    Ok(data_type.into_schema(DEFAULT_FIELD_NAME, true))
 }
 
 pub(crate) fn parse_spark_data_type(sql: &str) -> SparkResult<spec::DataType> {

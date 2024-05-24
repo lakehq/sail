@@ -111,7 +111,7 @@ pub(crate) async fn handle_execute_relation(
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let ctx = session.context();
-    let plan = from_spark_relation(&ctx, &relation).await?;
+    let plan = from_spark_relation(&ctx, relation.try_into()?).await?;
     handle_execute_plan(session, plan, metadata).await
 }
 
@@ -143,7 +143,7 @@ pub(crate) async fn handle_execute_write_operation(
     // TODO: option compatibility
     let mut table_options = TableOptions::default_from_session_config(ctx.state().config_options());
     table_options.alter_with_string_hash_map(&write.options)?;
-    let plan = from_spark_relation(&ctx, &relation).await?;
+    let plan = from_spark_relation(&ctx, relation.try_into()?).await?;
     let plan = match write.save_type.required("save type")? {
         SaveType::Path(path) => {
             // always write multi-file output
@@ -231,7 +231,7 @@ pub(crate) async fn handle_execute_create_dataframe_view(
 ) -> SparkResult<ExecutePlanResponseStream> {
     let ctx = session.context();
     let relation = view.input.required("input relation")?;
-    let plan = from_spark_relation(&ctx, &relation).await?;
+    let plan = from_spark_relation(&ctx, relation.try_into()?).await?;
     let df = DataFrame::new(ctx.state(), plan);
     let table_ref = TableReference::from(view.name.as_str());
     let _ = view.is_global;

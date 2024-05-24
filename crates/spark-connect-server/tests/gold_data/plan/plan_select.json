@@ -334,11 +334,8 @@
           "root": {
             "project": {
               "input": {
-                "localRelation": {
-                  "data": null,
-                  "schema": {
-                    "fields": []
-                  }
+                "empty": {
+                  "produceOneRow": true
                 },
                 "planId": null,
                 "sourceInfo": null
@@ -388,11 +385,8 @@
           "root": {
             "project": {
               "input": {
-                "localRelation": {
-                  "data": null,
-                  "schema": {
-                    "fields": []
-                  }
+                "empty": {
+                  "produceOneRow": true
                 },
                 "planId": null,
                 "sourceInfo": null
@@ -437,11 +431,8 @@
           "root": {
             "project": {
               "input": {
-                "localRelation": {
-                  "data": null,
-                  "schema": {
-                    "fields": []
-                  }
+                "empty": {
+                  "produceOneRow": true
                 },
                 "planId": null,
                 "sourceInfo": null
@@ -486,11 +477,8 @@
           "root": {
             "project": {
               "input": {
-                "localRelation": {
-                  "data": null,
-                  "schema": {
-                    "fields": []
-                  }
+                "empty": {
+                  "produceOneRow": true
                 },
                 "planId": null,
                 "sourceInfo": null
@@ -546,11 +534,8 @@
           "root": {
             "project": {
               "input": {
-                "localRelation": {
-                  "data": null,
-                  "schema": {
-                    "fields": []
-                  }
+                "empty": {
+                  "produceOneRow": true
                 },
                 "planId": null,
                 "sourceInfo": null
@@ -590,11 +575,8 @@
           "root": {
             "project": {
               "input": {
-                "localRelation": {
-                  "data": null,
-                  "schema": {
-                    "fields": []
-                  }
+                "empty": {
+                  "produceOneRow": true
                 },
                 "planId": null,
                 "sourceInfo": null
@@ -640,11 +622,8 @@
           "root": {
             "project": {
               "input": {
-                "localRelation": {
-                  "data": null,
-                  "schema": {
-                    "fields": []
-                  }
+                "empty": {
+                  "produceOneRow": true
                 },
                 "planId": null,
                 "sourceInfo": null
@@ -690,11 +669,8 @@
           "root": {
             "project": {
               "input": {
-                "localRelation": {
-                  "data": null,
-                  "schema": {
-                    "fields": []
-                  }
+                "empty": {
+                  "produceOneRow": true
                 },
                 "planId": null,
                 "sourceInfo": null
@@ -1093,11 +1069,8 @@
           "root": {
             "project": {
               "input": {
-                "localRelation": {
-                  "data": null,
-                  "schema": {
-                    "fields": []
-                  }
+                "empty": {
+                  "produceOneRow": true
                 },
                 "planId": null,
                 "sourceInfo": null
@@ -1119,7 +1092,28 @@
     {
       "input": "select 1;",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: ;"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "literal": {
+                    "integer": 1
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -1135,11 +1129,8 @@
           "root": {
             "project": {
               "input": {
-                "localRelation": {
-                  "data": null,
-                  "schema": {
-                    "fields": []
-                  }
+                "empty": {
+                  "produceOneRow": true
                 },
                 "planId": null,
                 "sourceInfo": null
@@ -1288,19 +1279,111 @@
     {
       "input": "select a, b from db.c; ;;  ;",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: ;"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "unparsedIdentifier": "db.c",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "a",
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b",
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select a, b from db.c;;;",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: ;"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "unparsedIdentifier": "db.c",
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "a",
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b",
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select a, b;",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: ;"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "a",
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "b",
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -1395,11 +1478,8 @@
           "root": {
             "project": {
               "input": {
-                "localRelation": {
-                  "data": null,
-                  "schema": {
-                    "fields": []
-                  }
+                "empty": {
+                  "produceOneRow": true
                 },
                 "planId": null,
                 "sourceInfo": null

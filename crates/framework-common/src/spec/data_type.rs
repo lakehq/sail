@@ -60,6 +60,21 @@ pub enum DataType {
     Unparsed(String),
 }
 
+impl DataType {
+    pub fn into_schema(self, default_field_name: &str, nullable: bool) -> Schema {
+        let fields = match self {
+            DataType::Struct { fields } => fields,
+            x => Fields::new(vec![Field {
+                name: default_field_name.to_string(),
+                data_type: x,
+                nullable,
+                metadata: None,
+            }]),
+        };
+        Schema { fields }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Field {
@@ -139,6 +154,14 @@ impl TryFrom<i32> for YearMonthIntervalField {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Schema {
     pub fields: Fields,
+}
+
+impl Default for Schema {
+    fn default() -> Self {
+        Schema {
+            fields: Fields::empty(),
+        }
+    }
 }
 
 impl TryFrom<Field> for adt::Field {
@@ -428,5 +451,34 @@ impl TryFrom<adt::DataType> for DataType {
             adt::DataType::ListView(_) => Err(CommonError::unsupported("ListView")),
             adt::DataType::LargeListView(_) => Err(CommonError::unsupported("LargeListView")),
         }
+    }
+}
+
+impl TryFrom<Schema> for adt::Schema {
+    type Error = CommonError;
+
+    fn try_from(schema: Schema) -> CommonResult<adt::Schema> {
+        let fields = schema
+            .fields
+            .0
+            .into_iter()
+            .map(adt::Field::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(adt::Schema::new(fields))
+    }
+}
+
+impl TryFrom<adt::SchemaRef> for Schema {
+    type Error = CommonError;
+
+    fn try_from(schema: adt::SchemaRef) -> CommonResult<Schema> {
+        let fields = schema
+            .fields()
+            .iter()
+            .map(|f| Ok(f.clone().try_into()?))
+            .collect::<CommonResult<Vec<_>>>()?;
+        Ok(Schema {
+            fields: Fields(fields),
+        })
     }
 }
