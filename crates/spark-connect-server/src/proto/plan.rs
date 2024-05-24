@@ -34,7 +34,7 @@ impl TryFrom<RelType> for spec::PlanNode {
     type Error = SparkError;
 
     fn try_from(rel_type: RelType) -> SparkResult<spec::PlanNode> {
-        let node = match rel_type {
+        match rel_type {
             RelType::Read(read) => {
                 use sc::read::{DataSource, NamedTable, ReadType};
 
@@ -71,10 +71,10 @@ impl TryFrom<RelType> for spec::PlanNode {
                         }
                     }
                 };
-                spec::PlanNode::Read {
+                Ok(spec::PlanNode::Read {
                     is_streaming,
                     read_type,
-                }
+                })
             }
             RelType::Project(project) => {
                 let sc::Project { input, expressions } = *project;
@@ -85,16 +85,16 @@ impl TryFrom<RelType> for spec::PlanNode {
                     .into_iter()
                     .map(|e| e.try_into())
                     .collect::<SparkResult<Vec<_>>>()?;
-                spec::PlanNode::Project { input, expressions }
+                Ok(spec::PlanNode::Project { input, expressions })
             }
             RelType::Filter(filter) => {
                 let sc::Filter { input, condition } = *filter;
                 let input = input.required("filter input")?;
                 let condition = condition.required("filter condition")?;
-                spec::PlanNode::Filter {
+                Ok(spec::PlanNode::Filter {
                     input: Box::new((*input).try_into()?),
                     condition: condition.try_into()?,
-                }
+                })
             }
             RelType::Join(join) => {
                 use sc::join::{JoinDataType, JoinType};
@@ -132,14 +132,14 @@ impl TryFrom<RelType> for spec::PlanNode {
                         is_right_struct,
                     }
                 });
-                spec::PlanNode::Join {
+                Ok(spec::PlanNode::Join {
                     left: Box::new((*left).try_into()?),
                     right: Box::new((*right).try_into()?),
                     join_condition,
                     join_type,
                     using_columns,
                     join_data_type,
-                }
+                })
             }
             RelType::SetOp(set_op) => {
                 use sc::set_operation::SetOpType;
@@ -162,14 +162,14 @@ impl TryFrom<RelType> for spec::PlanNode {
                     SetOpType::Intersect => spec::SetOpType::Intersect,
                     SetOpType::Except => spec::SetOpType::Except,
                 };
-                spec::PlanNode::SetOperation {
+                Ok(spec::PlanNode::SetOperation {
                     left: Box::new((*left_input).try_into()?),
                     right: Box::new((*right_input).try_into()?),
                     set_op_type,
                     is_all: is_all.unwrap_or(false),
                     by_name: by_name.unwrap_or(false),
                     allow_missing_columns: allow_missing_columns.unwrap_or(false),
-                }
+                })
             }
             RelType::Sort(sort) => {
                 let sc::Sort {
@@ -182,19 +182,19 @@ impl TryFrom<RelType> for spec::PlanNode {
                     .into_iter()
                     .map(|x| x.try_into())
                     .collect::<SparkResult<Vec<_>>>()?;
-                spec::PlanNode::Sort {
+                Ok(spec::PlanNode::Sort {
                     input: Box::new((*input).try_into()?),
                     order,
                     is_global: is_global.unwrap_or(false),
-                }
+                })
             }
             RelType::Limit(limit) => {
                 let sc::Limit { input, limit } = *limit;
                 let input = input.required("limit input")?;
-                spec::PlanNode::Limit {
+                Ok(spec::PlanNode::Limit {
                     input: Box::new((*input).try_into()?),
                     limit,
-                }
+                })
             }
             RelType::Aggregate(aggregate) => {
                 use sc::aggregate::GroupType;
@@ -238,13 +238,13 @@ impl TryFrom<RelType> for spec::PlanNode {
                         })
                     })
                     .transpose()?;
-                spec::PlanNode::Aggregate {
+                Ok(spec::PlanNode::Aggregate {
                     input: Box::new((*input).try_into()?),
                     group_type,
                     grouping_expressions,
                     aggregate_expressions,
                     pivot,
-                }
+                })
             }
             RelType::Sql(sql) => {
                 let sc::Sql {
@@ -264,16 +264,16 @@ impl TryFrom<RelType> for spec::PlanNode {
                     .into_iter()
                     .map(|(k, v)| Ok((k, v.try_into()?)))
                     .collect::<SparkResult<HashMap<_, _>>>()?;
-                spec::PlanNode::WithParameters {
+                Ok(spec::PlanNode::WithParameters {
                     input,
                     positional_arguments,
                     named_arguments,
-                }
+                })
             }
             RelType::LocalRelation(local_relation) => {
                 let sc::LocalRelation { data, schema } = local_relation;
                 let schema = schema.map(|s| parse_spark_schema(s.as_str())).transpose()?;
-                spec::PlanNode::LocalRelation { data, schema }
+                Ok(spec::PlanNode::LocalRelation { data, schema })
             }
             RelType::Sample(sample) => {
                 let sc::Sample {
@@ -285,22 +285,22 @@ impl TryFrom<RelType> for spec::PlanNode {
                     deterministic_order,
                 } = *sample;
                 let input = input.required("sample input")?;
-                spec::PlanNode::Sample {
+                Ok(spec::PlanNode::Sample {
                     input: Box::new((*input).try_into()?),
                     lower_bound,
                     upper_bound,
                     with_replacement: with_replacement.unwrap_or(false),
                     seed,
                     deterministic_order,
-                }
+                })
             }
             RelType::Offset(offset) => {
                 let sc::Offset { input, offset } = *offset;
                 let input = input.required("offset input")?;
-                spec::PlanNode::Offset {
+                Ok(spec::PlanNode::Offset {
                     input: Box::new((*input).try_into()?),
                     offset,
-                }
+                })
             }
             RelType::Deduplicate(deduplicate) => {
                 let sc::Deduplicate {
@@ -310,12 +310,12 @@ impl TryFrom<RelType> for spec::PlanNode {
                     within_watermark,
                 } = *deduplicate;
                 let input = input.required("deduplicate input")?;
-                spec::PlanNode::Deduplicate {
+                Ok(spec::PlanNode::Deduplicate {
                     input: Box::new((*input).try_into()?),
                     column_names,
                     all_columns_as_keys: all_columns_as_keys.unwrap_or(false),
                     within_watermark: within_watermark.unwrap_or(false),
-                }
+                })
             }
             RelType::Range(range) => {
                 let sc::Range {
@@ -324,12 +324,12 @@ impl TryFrom<RelType> for spec::PlanNode {
                     step,
                     num_partitions,
                 } = range;
-                spec::PlanNode::Range {
+                Ok(spec::PlanNode::Range {
                     start,
                     end,
                     step,
                     num_partitions,
-                }
+                })
             }
             RelType::SubqueryAlias(subquery_alias) => {
                 let sc::SubqueryAlias {
@@ -338,11 +338,11 @@ impl TryFrom<RelType> for spec::PlanNode {
                     qualifier,
                 } = *subquery_alias;
                 let input = input.required("subquery alias input")?;
-                spec::PlanNode::SubqueryAlias {
+                Ok(spec::PlanNode::SubqueryAlias {
                     input: Box::new((*input).try_into()?),
                     alias,
                     qualifier,
-                }
+                })
             }
             RelType::Repartition(repartition) => {
                 let sc::Repartition {
@@ -351,11 +351,11 @@ impl TryFrom<RelType> for spec::PlanNode {
                     shuffle,
                 } = *repartition;
                 let input = input.required("repartition input")?;
-                spec::PlanNode::Repartition {
+                Ok(spec::PlanNode::Repartition {
                     input: Box::new((*input).try_into()?),
                     num_partitions,
                     shuffle: shuffle.unwrap_or(false),
-                }
+                })
             }
             RelType::ToDf(to_df) => {
                 let sc::ToDf {
@@ -363,10 +363,10 @@ impl TryFrom<RelType> for spec::PlanNode {
                     column_names,
                 } = *to_df;
                 let input = input.required("to dataframe input")?;
-                spec::PlanNode::ToDf {
+                Ok(spec::PlanNode::ToDf {
                     input: Box::new((*input).try_into()?),
                     column_names,
-                }
+                })
             }
             RelType::WithColumnsRenamed(with_columns_renamed) => {
                 let sc::WithColumnsRenamed {
@@ -374,10 +374,10 @@ impl TryFrom<RelType> for spec::PlanNode {
                     rename_columns_map,
                 } = *with_columns_renamed;
                 let input = input.required("with columns renamed input")?;
-                spec::PlanNode::WithColumnsRenamed {
+                Ok(spec::PlanNode::WithColumnsRenamed {
                     input: Box::new((*input).try_into()?),
                     rename_columns_map,
-                }
+                })
             }
             RelType::ShowString(show_string) => {
                 let sc::ShowString {
@@ -387,12 +387,12 @@ impl TryFrom<RelType> for spec::PlanNode {
                     vertical,
                 } = *show_string;
                 let input = input.required("show string input")?;
-                spec::PlanNode::ShowString {
+                Ok(spec::PlanNode::ShowString {
                     input: Box::new((*input).try_into()?),
                     num_rows,
                     truncate,
                     vertical,
-                }
+                })
             }
             RelType::Drop(drop) => {
                 let sc::Drop {
@@ -405,19 +405,19 @@ impl TryFrom<RelType> for spec::PlanNode {
                     .into_iter()
                     .map(|x| x.try_into())
                     .collect::<SparkResult<Vec<_>>>()?;
-                spec::PlanNode::Drop {
+                Ok(spec::PlanNode::Drop {
                     input: Box::new((*input).try_into()?),
                     columns,
                     column_names,
-                }
+                })
             }
             RelType::Tail(tail) => {
                 let sc::Tail { input, limit } = *tail;
                 let input = input.required("tail input")?;
-                spec::PlanNode::Tail {
+                Ok(spec::PlanNode::Tail {
                     input: Box::new((*input).try_into()?),
                     limit,
-                }
+                })
             }
             RelType::WithColumns(with_columns) => {
                 let sc::WithColumns { input, aliases } = *with_columns;
@@ -431,10 +431,10 @@ impl TryFrom<RelType> for spec::PlanNode {
                         .try_into()
                     })
                     .collect::<SparkResult<Vec<_>>>()?;
-                spec::PlanNode::WithColumns {
+                Ok(spec::PlanNode::WithColumns {
                     input: Box::new((*input).try_into()?),
                     aliases,
-                }
+                })
             }
             RelType::Hint(hint) => {
                 let sc::Hint {
@@ -447,11 +447,11 @@ impl TryFrom<RelType> for spec::PlanNode {
                     .into_iter()
                     .map(|x| x.try_into())
                     .collect::<SparkResult<Vec<_>>>()?;
-                spec::PlanNode::Hint {
+                Ok(spec::PlanNode::Hint {
                     input: Box::new((*input).try_into()?),
                     name,
                     parameters,
-                }
+                })
             }
             RelType::Unpivot(unpivot) => {
                 let sc::Unpivot {
@@ -476,13 +476,13 @@ impl TryFrom<RelType> for spec::PlanNode {
                     })
                     .transpose()?
                     .unwrap_or_else(|| vec![]);
-                spec::PlanNode::Unpivot {
+                Ok(spec::PlanNode::Unpivot {
                     input: Box::new((*input).try_into()?),
                     ids,
                     values,
                     variable_column_name,
                     value_column_name,
-                }
+                })
             }
             RelType::ToSchema(to_schema) => {
                 let sc::ToSchema { input, schema } = *to_schema;
@@ -490,10 +490,10 @@ impl TryFrom<RelType> for spec::PlanNode {
                 let schema = schema.required("to schema schema")?;
                 let schema: spec::DataType = schema.try_into()?;
                 let schema = schema.into_schema("value", true);
-                spec::PlanNode::ToSchema {
+                Ok(spec::PlanNode::ToSchema {
                     input: Box::new((*input).try_into()?),
                     schema,
-                }
+                })
             }
             RelType::RepartitionByExpression(repartition) => {
                 let sc::RepartitionByExpression {
@@ -506,11 +506,11 @@ impl TryFrom<RelType> for spec::PlanNode {
                     .into_iter()
                     .map(|x| x.try_into())
                     .collect::<SparkResult<Vec<_>>>()?;
-                spec::PlanNode::RepartitionByExpression {
+                Ok(spec::PlanNode::RepartitionByExpression {
                     input: Box::new((*input).try_into()?),
                     partition_expressions,
                     num_partitions,
-                }
+                })
             }
             RelType::MapPartitions(map_partitions) => {
                 let sc::MapPartitions {
@@ -520,11 +520,11 @@ impl TryFrom<RelType> for spec::PlanNode {
                 } = *map_partitions;
                 let input = input.required("map partitions input")?;
                 let func = func.required("map partitions function")?;
-                spec::PlanNode::MapPartitions {
+                Ok(spec::PlanNode::MapPartitions {
                     input: Box::new((*input).try_into()?),
                     function: func.try_into()?,
                     is_barrier: is_barrier.unwrap_or(false),
-                }
+                })
             }
             RelType::CollectMetrics(collect_metrics) => {
                 let sc::CollectMetrics {
@@ -537,11 +537,11 @@ impl TryFrom<RelType> for spec::PlanNode {
                     .into_iter()
                     .map(|x| x.try_into())
                     .collect::<SparkResult<Vec<_>>>()?;
-                spec::PlanNode::CollectMetrics {
+                Ok(spec::PlanNode::CollectMetrics {
                     input: Box::new((*input).try_into()?),
                     name,
                     metrics,
-                }
+                })
             }
             RelType::Parse(parse) => {
                 use sc::parse::ParseFormat;
@@ -559,12 +559,12 @@ impl TryFrom<RelType> for spec::PlanNode {
                     ParseFormat::Json => spec::ParseFormat::Json,
                 };
                 let schema: Option<spec::DataType> = schema.map(|x| x.try_into()).transpose()?;
-                spec::PlanNode::Parse {
+                Ok(spec::PlanNode::Parse {
                     input: Box::new((*input).try_into()?),
                     format,
                     schema: schema.map(|x| x.into_schema("value", true)),
                     options,
-                }
+                })
             }
             RelType::GroupMap(group_map) => {
                 let sc::GroupMap {
@@ -595,7 +595,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                     .into_iter()
                     .map(|x| x.try_into())
                     .collect::<SparkResult<Vec<_>>>()?;
-                spec::PlanNode::GroupMap {
+                Ok(spec::PlanNode::GroupMap {
                     input: Box::new((*input).try_into()?),
                     grouping_expressions,
                     function: func.try_into()?,
@@ -605,7 +605,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                     is_map_groups_with_state,
                     output_mode,
                     timeout_conf,
-                }
+                })
             }
             RelType::CoGroupMap(co_group_map) => {
                 let sc::CoGroupMap {
@@ -636,7 +636,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                     .into_iter()
                     .map(|x| x.try_into())
                     .collect::<SparkResult<Vec<_>>>()?;
-                spec::PlanNode::CoGroupMap {
+                Ok(spec::PlanNode::CoGroupMap {
                     input: Box::new((*input).try_into()?),
                     input_grouping_expressions,
                     other: Box::new((*other).try_into()?),
@@ -644,7 +644,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                     function: func.try_into()?,
                     input_sorting_expressions,
                     other_sorting_expressions,
-                }
+                })
             }
             RelType::WithWatermark(with_watermark) => {
                 let sc::WithWatermark {
@@ -653,11 +653,11 @@ impl TryFrom<RelType> for spec::PlanNode {
                     delay_threshold,
                 } = *with_watermark;
                 let input = input.required("with watermark input")?;
-                spec::PlanNode::WithWatermark {
+                Ok(spec::PlanNode::WithWatermark {
                     input: Box::new((*input).try_into()?),
                     event_time,
                     delay_threshold,
-                }
+                })
             }
             RelType::ApplyInPandasWithState(apply) => {
                 let sc::ApplyInPandasWithState {
@@ -677,7 +677,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                 let func = func.required("apply in pandas with state function")?;
                 let output_schema = parse_spark_schema(output_schema.as_str())?;
                 let state_schema = parse_spark_schema(state_schema.as_str())?;
-                spec::PlanNode::ApplyInPandasWithState {
+                Ok(spec::PlanNode::ApplyInPandasWithState {
                     input: Box::new((*input).try_into()?),
                     grouping_expressions,
                     function: func.try_into()?,
@@ -685,7 +685,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                     state_schema,
                     output_mode,
                     timeout_conf,
-                }
+                })
             }
             RelType::HtmlString(html_string) => {
                 let sc::HtmlString {
@@ -694,11 +694,11 @@ impl TryFrom<RelType> for spec::PlanNode {
                     truncate,
                 } = *html_string;
                 let input = input.required("html string input")?;
-                spec::PlanNode::HtmlString {
+                Ok(spec::PlanNode::HtmlString {
                     input: Box::new((*input).try_into()?),
                     num_rows,
                     truncate,
-                }
+                })
             }
             RelType::CachedLocalRelation(local_relation) => {
                 let sc::CachedLocalRelation {
@@ -706,19 +706,19 @@ impl TryFrom<RelType> for spec::PlanNode {
                     session_id,
                     hash,
                 } = local_relation;
-                spec::PlanNode::CachedLocalRelation {
+                Ok(spec::PlanNode::CachedLocalRelation {
                     user_id,
                     session_id,
                     hash,
-                }
+                })
             }
             RelType::CachedRemoteRelation(remote_relation) => {
                 let sc::CachedRemoteRelation { relation_id } = remote_relation;
-                spec::PlanNode::CachedRemoteRelation { relation_id }
+                Ok(spec::PlanNode::CachedRemoteRelation { relation_id })
             }
-            RelType::CommonInlineUserDefinedTableFunction(udtf) => {
-                spec::PlanNode::CommonInlineUserDefinedTableFunction(udtf.try_into()?)
-            }
+            RelType::CommonInlineUserDefinedTableFunction(udtf) => Ok(
+                spec::PlanNode::CommonInlineUserDefinedTableFunction(udtf.try_into()?),
+            ),
             RelType::FillNa(fill_na) => {
                 let sc::NaFill {
                     input,
@@ -730,11 +730,11 @@ impl TryFrom<RelType> for spec::PlanNode {
                     .into_iter()
                     .map(|x| Ok(spec::Expr::Literal(x.try_into()?)))
                     .collect::<SparkResult<Vec<_>>>()?;
-                spec::PlanNode::FillNa {
+                Ok(spec::PlanNode::FillNa {
                     input: Box::new((*input).try_into()?),
                     columns: cols,
                     values,
-                }
+                })
             }
             RelType::DropNa(drop_na) => {
                 let sc::NaDrop {
@@ -743,11 +743,11 @@ impl TryFrom<RelType> for spec::PlanNode {
                     min_non_nulls,
                 } = *drop_na;
                 let input = input.required("drop na input")?;
-                spec::PlanNode::DropNa {
+                Ok(spec::PlanNode::DropNa {
                     input: Box::new((*input).try_into()?),
                     columns: cols,
                     min_non_nulls,
-                }
+                })
             }
             RelType::Replace(replace) => {
                 let sc::NaReplace {
@@ -771,45 +771,45 @@ impl TryFrom<RelType> for spec::PlanNode {
                         })
                     })
                     .collect::<SparkResult<Vec<_>>>()?;
-                spec::PlanNode::ReplaceNa {
+                Ok(spec::PlanNode::ReplaceNa {
                     input: Box::new((*input).try_into()?),
                     columns: cols,
                     replacements,
-                }
+                })
             }
             RelType::Summary(summary) => {
                 let sc::StatSummary { input, statistics } = *summary;
                 let input = input.required("summary input")?;
-                spec::PlanNode::StatSummary {
+                Ok(spec::PlanNode::StatSummary {
                     input: Box::new((*input).try_into()?),
                     statistics,
-                }
+                })
             }
             RelType::Crosstab(crosstab) => {
                 let sc::StatCrosstab { input, col1, col2 } = *crosstab;
                 let input = input.required("crosstab input")?;
-                spec::PlanNode::StatCrosstab {
+                Ok(spec::PlanNode::StatCrosstab {
                     input: Box::new((*input).try_into()?),
                     left_column: col1,
                     right_column: col2,
-                }
+                })
             }
             RelType::Describe(describe) => {
                 let sc::StatDescribe { input, cols } = *describe;
                 let input = input.required("describe input")?;
-                spec::PlanNode::StatDescribe {
+                Ok(spec::PlanNode::StatDescribe {
                     input: Box::new((*input).try_into()?),
                     columns: cols,
-                }
+                })
             }
             RelType::Cov(cov) => {
                 let sc::StatCov { input, col1, col2 } = *cov;
                 let input = input.required("cov input")?;
-                spec::PlanNode::StatCov {
+                Ok(spec::PlanNode::StatCov {
                     input: Box::new((*input).try_into()?),
                     left_column: col1,
                     right_column: col2,
-                }
+                })
             }
             RelType::Corr(corr) => {
                 let sc::StatCorr {
@@ -819,12 +819,12 @@ impl TryFrom<RelType> for spec::PlanNode {
                     method,
                 } = *corr;
                 let input = input.required("corr input")?;
-                spec::PlanNode::StatCorr {
+                Ok(spec::PlanNode::StatCorr {
                     input: Box::new((*input).try_into()?),
                     left_column: col1,
                     right_column: col2,
                     method: method.unwrap_or_else(|| "pearson".to_string()),
-                }
+                })
             }
             RelType::ApproxQuantile(approx_quantile) => {
                 let sc::StatApproxQuantile {
@@ -834,12 +834,12 @@ impl TryFrom<RelType> for spec::PlanNode {
                     relative_error,
                 } = *approx_quantile;
                 let input = input.required("approx quantile input")?;
-                spec::PlanNode::StatApproxQuantile {
+                Ok(spec::PlanNode::StatApproxQuantile {
                     input: Box::new((*input).try_into()?),
                     columns: cols,
                     probabilities,
                     relative_error,
-                }
+                })
             }
             RelType::FreqItems(freq_items) => {
                 let sc::StatFreqItems {
@@ -848,11 +848,11 @@ impl TryFrom<RelType> for spec::PlanNode {
                     support,
                 } = *freq_items;
                 let input = input.required("freq items input")?;
-                spec::PlanNode::StatFreqItems {
+                Ok(spec::PlanNode::StatFreqItems {
                     input: Box::new((*input).try_into()?),
                     columns: cols,
                     support,
-                }
+                })
             }
             RelType::SampleBy(sample_by) => {
                 let sc::StatSampleBy {
@@ -874,18 +874,17 @@ impl TryFrom<RelType> for spec::PlanNode {
                         })
                     })
                     .collect::<SparkResult<Vec<_>>>()?;
-                spec::PlanNode::StatSampleBy {
+                Ok(spec::PlanNode::StatSampleBy {
                     input: Box::new((*input).try_into()?),
                     column: col.try_into()?,
                     fractions,
                     seed,
-                }
+                })
             }
-            RelType::Catalog(catalog) => catalog.try_into()?,
+            RelType::Catalog(catalog) => catalog.try_into(),
             RelType::Extension(_) => return Err(SparkError::unsupported("extension relation")),
             RelType::Unknown(_) => return Err(SparkError::unsupported("unknown relation")),
-        };
-        Ok(node)
+        }
     }
 }
 
