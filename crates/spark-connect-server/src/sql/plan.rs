@@ -4,9 +4,9 @@ use crate::sql::fail_on_extra_token;
 use crate::sql::literal::LiteralValue;
 use crate::sql::parser::SparkDialect;
 use framework_common::spec;
-use sqlparser::tokenizer::Token;
 use sqlparser::ast;
 use sqlparser::parser::Parser;
+use sqlparser::tokenizer::Token;
 
 #[allow(dead_code)]
 pub(crate) fn parse_sql_statement(sql: &str) -> SparkResult<spec::Plan> {
@@ -247,11 +247,8 @@ fn from_ast_select(select: ast::Select) -> SparkResult<spec::Plan> {
             },
         )?
         .unwrap_or_else(|| {
-            spec::Plan::new(spec::PlanNode::LocalRelation {
-                data: None,
-                schema: Some(spec::Schema {
-                    fields: spec::Fields::empty(),
-                }),
+            spec::Plan::new(spec::PlanNode::Empty {
+                produce_one_row: true,
             })
         });
 

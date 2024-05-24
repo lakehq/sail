@@ -135,7 +135,8 @@ pub(crate) async fn from_spark_relation(
             let input = match input {
                 Some(x) => from_spark_relation(ctx, *x).await?,
                 None => LogicalPlan::EmptyRelation(plan::EmptyRelation {
-                    produce_one_row: false,
+                    // allows literal projection with no input
+                    produce_one_row: true,
                     schema: DFSchemaRef::new(DFSchema::empty()),
                 }),
             };
@@ -960,5 +961,11 @@ pub(crate) async fn from_spark_relation(
         PlanNode::RegisterTableFunction(_) => Err(SparkError::todo("register table function")),
         PlanNode::CreateTemporaryView { .. } => Err(SparkError::todo("create temporary view")),
         PlanNode::Write { .. } => Err(SparkError::todo("write")),
+        PlanNode::Empty { produce_one_row } => {
+            Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
+                produce_one_row,
+                schema: DFSchemaRef::new(DFSchema::empty()),
+            }))
+        }
     }
 }

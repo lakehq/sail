@@ -406,6 +406,9 @@ pub enum PlanNode {
     // TODO: add all the "analyze" requests
     // TODO: should streaming query request be added here?
     // extensions
+    Empty {
+        produce_one_row: bool,
+    },
     WithParameters {
         input: Box<Plan>,
         positional_arguments: Vec<Literal>,
