@@ -4,6 +4,7 @@ use crate::sql::fail_on_extra_token;
 use crate::sql::literal::LiteralValue;
 use crate::sql::parser::SparkDialect;
 use framework_common::spec;
+use sqlparser::tokenizer::Token;
 use sqlparser::ast;
 use sqlparser::parser::Parser;
 
@@ -11,6 +12,11 @@ use sqlparser::parser::Parser;
 pub(crate) fn parse_sql_statement(sql: &str) -> SparkResult<spec::Plan> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
     let statement = parser.parse_statement()?;
+    loop {
+        if !parser.consume_token(&Token::SemiColon) {
+            break;
+        }
+    }
     fail_on_extra_token(&mut parser, "statement")?;
     from_ast_statement(statement)
 }
