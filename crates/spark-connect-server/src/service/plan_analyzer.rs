@@ -38,7 +38,7 @@ pub(crate) async fn handle_analyze_schema(
         plan::OpType::Root(relation) => relation,
         plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
     };
-    let plan = from_spark_relation(&ctx, &relation).await?;
+    let plan = from_spark_relation(&ctx, relation.try_into()?).await?;
     let schema: SchemaRef = Arc::new(plan.schema().as_ref().into());
     Ok(SchemaResponse {
         schema: Some(to_spark_schema(schema)?),
@@ -97,6 +97,7 @@ pub(crate) async fn handle_analyze_ddl_parse(
     request: DdlParseRequest,
 ) -> SparkResult<DdlParseResponse> {
     let schema = parse_spark_schema(request.ddl_string.as_str())?;
+    let schema = Arc::new(schema.try_into()?);
     Ok(DdlParseResponse {
         parsed: Some(to_spark_schema(schema)?),
     })

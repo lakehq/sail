@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "internal error: error"
       }
     },
     {
@@ -133,7 +133,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "internal error: error"
       }
     },
     {

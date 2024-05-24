@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "internal error: error"
       }
     },
     {

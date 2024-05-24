@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::{
-    DataType, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
-};
+use datafusion::arrow::datatypes as adt;
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::dataframe::DataFrame;
@@ -20,26 +18,20 @@ use datafusion::execution::context::{DataFilePaths, SessionContext};
 use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
-use datafusion::sql::parser::Statement;
-use datafusion::sql::sqlparser::dialect::GenericDialect;
-use datafusion::sql::sqlparser::parser::Parser;
 use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference,
 };
 use datafusion_expr::{build_join_schema, DdlStatement, TableType};
 use framework_common::spec;
 
-use crate::error::{ProtoFieldExt, SparkError, SparkResult};
+use crate::error::{SparkError, SparkResult};
 use crate::expression::from_spark_expression;
 use crate::extension::analyzer::alias::rewrite_multi_alias;
 use crate::extension::analyzer::explode::rewrite_explode;
 use crate::extension::analyzer::wildcard::rewrite_wildcard;
 use crate::extension::analyzer::window::rewrite_window;
-use crate::schema::{cast_record_batch, from_spark_built_in_data_type};
-use crate::spark::connect as sc;
+use crate::schema::cast_record_batch;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
-use crate::spark::connect::Relation;
-use crate::sql::data_type::parse_spark_schema;
 use crate::sql::session_catalog::catalog::list_catalogs_metadata;
 use crate::sql::session_catalog::column::{list_catalog_table_columns, CatalogTableColumn};
 use crate::sql::session_catalog::database::{
@@ -81,41 +73,42 @@ pub(crate) async fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatc
 #[async_recursion]
 pub(crate) async fn from_spark_relation(
     ctx: &SessionContext,
-    relation: &Relation,
+    plan: spec::Plan,
 ) -> SparkResult<LogicalPlan> {
-    use crate::spark::connect::relation::RelType;
+    use spec::PlanNode;
 
-    let Relation { common, rel_type } = relation;
-    let _common = common;
     let state = ctx.state();
-    let rel_type = rel_type.as_ref().required("relation type")?;
-    match rel_type {
-        RelType::Read(read) => {
-            use sc::read::ReadType;
+    match plan.node {
+        PlanNode::Read {
+            read_type,
+            is_streaming: _,
+        } => {
+            use spec::ReadType;
 
-            let _is_streaming = read.is_streaming;
-            match read.read_type.as_ref().required("read type")? {
-                ReadType::NamedTable(named_table) => {
-                    let unparsed_identifier: &String = &named_table.unparsed_identifier;
-                    let options: &HashMap<String, String> = &named_table.options;
+            match read_type {
+                ReadType::NamedTable {
+                    unparsed_identifier,
+                    options,
+                } => {
                     if !options.is_empty() {
-                        // TODO: Handle options
-                        return Err(SparkError::unsupported("table options"));
+                        return Err(SparkError::todo("table options"));
                     }
                     let table_reference = TableReference::from(unparsed_identifier);
-                    let df: DataFrame = ctx.table(table_reference.clone()).await?;
+                    let df: DataFrame = ctx.table(table_reference).await?;
                     Ok(df.into_optimized_plan()?)
                 }
-                ReadType::DataSource(source) => {
-                    let urls = source.paths.clone().to_urls()?;
+                ReadType::DataSource {
+                    format,
+                    schema: _,
+                    options: _,
+                    paths,
+                    predicates: _,
+                } => {
+                    let urls = paths.to_urls()?;
                     if urls.is_empty() {
                         return Err(SparkError::invalid("empty data source paths"));
                     }
-                    let (format, extension): (Arc<dyn FileFormat>, _) = match source
-                        .format
-                        .as_ref()
-                        .map(|f| f.as_str())
-                    {
+                    let (format, extension): (Arc<dyn FileFormat>, _) = match format.as_deref() {
                         Some("json") => (Arc::new(JsonFormat::default()), ".json"),
                         Some("csv") => (Arc::new(CsvFormat::default()), ".csv"),
                         Some("parquet") => (Arc::new(ParquetFormat::new()), ".parquet"),
@@ -138,14 +131,18 @@ pub(crate) async fn from_spark_relation(
                 }
             }
         }
-        RelType::Project(project) => {
-            let input = project.input.as_ref().required("projection input")?;
-            let input = from_spark_relation(ctx, input).await?;
+        PlanNode::Project { input, expressions } => {
+            let input = match input {
+                Some(x) => from_spark_relation(ctx, *x).await?,
+                None => LogicalPlan::EmptyRelation(plan::EmptyRelation {
+                    produce_one_row: false,
+                    schema: DFSchemaRef::new(DFSchema::empty()),
+                }),
+            };
             let schema = input.schema();
-            let expr: Vec<Expr> = project
-                .expressions
-                .iter()
-                .map(|e| from_spark_expression(e.clone().try_into()?, schema))
+            let expr: Vec<Expr> = expressions
+                .into_iter()
+                .map(|e| from_spark_expression(e, schema))
                 .collect::<SparkResult<_>>()?;
             // TODO: handle rewrites in SQL parsing
             let expr = rewrite_multi_alias(expr)?;
@@ -157,42 +154,44 @@ pub(crate) async fn from_spark_relation(
                 Arc::new(input),
             )?))
         }
-        RelType::Filter(filter) => {
-            let input = filter.input.as_ref().required("filter input")?;
-            let condition = filter.condition.as_ref().required("filter condition")?;
-            let input = from_spark_relation(ctx, input).await?;
+        PlanNode::Filter { input, condition } => {
+            let input = from_spark_relation(ctx, *input).await?;
             let schema = input.schema();
-            let predicate = from_spark_expression(condition.clone().try_into()?, schema)?;
+            let predicate = from_spark_expression(condition, schema)?;
             let filter = plan::Filter::try_new(predicate, Arc::new(input))?;
             Ok(LogicalPlan::Filter(filter))
         }
-        RelType::Join(join) => {
-            use sc::join::JoinType;
+        PlanNode::Join {
+            left,
+            right,
+            join_condition,
+            join_type,
+            using_columns,
+            join_data_type,
+        } => {
+            use spec::JoinType;
 
-            let left = join.left.as_ref().required("join left")?;
-            let right = join.right.as_ref().required("join right")?;
-            let left = from_spark_relation(ctx, left).await?;
-            let right = from_spark_relation(ctx, right).await?;
-            let join_type = match JoinType::try_from(join.join_type)? {
-                JoinType::Inner => plan::JoinType::Inner,
-                JoinType::LeftOuter => plan::JoinType::Left,
-                JoinType::RightOuter => plan::JoinType::Right,
-                JoinType::FullOuter => plan::JoinType::Full,
-                JoinType::LeftSemi => plan::JoinType::LeftSemi,
-                JoinType::LeftAnti => plan::JoinType::LeftAnti,
+            let left = from_spark_relation(ctx, *left).await?;
+            let right = from_spark_relation(ctx, *right).await?;
+            let (join_type, is_cross_join) = match join_type {
+                JoinType::Inner => (plan::JoinType::Inner, false),
+                JoinType::LeftOuter => (plan::JoinType::Left, false),
+                JoinType::RightOuter => (plan::JoinType::Right, false),
+                JoinType::FullOuter => (plan::JoinType::Full, false),
+                JoinType::LeftSemi => (plan::JoinType::LeftSemi, false),
+                JoinType::LeftAnti => (plan::JoinType::LeftAnti, false),
                 // use inner join type to build the schema for cross join
-                JoinType::Cross => plan::JoinType::Inner,
-                JoinType::Unspecified => return Err(SparkError::invalid("join type")),
+                JoinType::Cross => (plan::JoinType::Inner, true),
             };
             let schema = build_join_schema(&left.schema(), &right.schema(), &join_type)?;
-            if join.join_type == JoinType::Cross as i32 {
-                if join.join_condition.is_some() {
+            if is_cross_join {
+                if join_condition.is_some() {
                     return Err(SparkError::invalid("cross join with join condition"));
                 }
-                if join.using_columns.len() > 0 {
+                if using_columns.len() > 0 {
                     return Err(SparkError::invalid("cross join with using columns"));
                 }
-                if join.join_data_type.is_some() {
+                if join_data_type.is_some() {
                     return Err(SparkError::invalid("cross join with join data type"));
                 }
                 return Ok(LogicalPlan::CrossJoin(plan::CrossJoin {
@@ -204,17 +203,14 @@ pub(crate) async fn from_spark_relation(
             // TODO: add more validation logic here and in the plan optimizer
             // See `LogicalPlanBuilder` for details about such logic.
             let (on, filter, join_constraint) =
-                if join.join_condition.is_some() && join.using_columns.is_empty() {
-                    let condition = join
-                        .join_condition
-                        .as_ref()
-                        .map(|c| from_spark_expression(c.clone().try_into()?, &schema))
+                if join_condition.is_some() && using_columns.is_empty() {
+                    let condition = join_condition
+                        .map(|c| from_spark_expression(c, &schema))
                         .transpose()?;
                     (vec![], condition, plan::JoinConstraint::On)
-                } else if join.join_condition.is_none() && !join.using_columns.is_empty() {
-                    let on = join
-                        .using_columns
-                        .iter()
+                } else if join_condition.is_none() && !using_columns.is_empty() {
+                    let on = using_columns
+                        .into_iter()
                         .map(|name| {
                             let column = Expr::Column(Column::new_unqualified(name));
                             (column.clone(), column)
@@ -237,23 +233,22 @@ pub(crate) async fn from_spark_relation(
                 null_equals_null: false,
             }))
         }
-        RelType::SetOp(_) => {
+        PlanNode::SetOperation { .. } => {
             return Err(SparkError::todo("set operation"));
         }
-        RelType::Sort(sort) => {
+        PlanNode::Sort {
+            input,
+            order,
+            is_global: _,
+        } => {
             // TODO: handle sort.is_global
-            let input = sort.input.as_ref().required("sort input")?;
-            let input = from_spark_relation(ctx, input).await?;
+            let input = from_spark_relation(ctx, *input).await?;
             let schema = input.schema();
-            let expr = sort
-                .order
-                .iter()
+            let expr = order
+                .into_iter()
                 .map(|o| {
-                    let o = Box::from(o.clone());
-                    let expr = sc::Expression {
-                        expr_type: Some(sc::expression::ExprType::SortOrder(o)),
-                    };
-                    from_spark_expression(expr.try_into()?, schema)
+                    let expr = spec::Expr::SortOrder(o);
+                    from_spark_expression(expr, schema)
                 })
                 .collect::<SparkResult<_>>()?;
             Ok(LogicalPlan::Sort(plan::Sort {
@@ -262,37 +257,38 @@ pub(crate) async fn from_spark_relation(
                 fetch: None,
             }))
         }
-        RelType::Limit(limit) => {
-            let input = limit.input.as_ref().required("limit input")?;
-            let input = from_spark_relation(ctx, input).await?;
+        PlanNode::Limit { input, limit } => {
+            let input = from_spark_relation(ctx, *input).await?;
             Ok(LogicalPlan::Limit(plan::Limit {
                 skip: 0,
-                fetch: Some(limit.limit as usize),
+                fetch: Some(limit as usize),
                 input: Arc::new(input),
             }))
         }
-        RelType::Aggregate(aggregate) => {
-            use sc::aggregate::GroupType;
+        PlanNode::Aggregate {
+            input,
+            group_type,
+            grouping_expressions,
+            aggregate_expressions,
+            pivot,
+        } => {
+            use spec::GroupType;
 
-            if aggregate.pivot.is_some() {
+            if pivot.is_some() {
                 return Err(SparkError::todo("pivot"));
             }
-            let group_type = GroupType::try_from(aggregate.group_type).required("group type")?;
-            if group_type != GroupType::Unspecified && group_type != GroupType::Groupby {
+            if group_type != GroupType::GroupBy {
                 return Err(SparkError::todo("unsupported aggregate group type"));
             }
-            let input = aggregate.input.as_ref().required("aggregate input")?;
-            let input = from_spark_relation(ctx, input).await?;
+            let input = from_spark_relation(ctx, *input).await?;
             let schema = input.schema();
-            let group_expr = aggregate
-                .grouping_expressions
-                .iter()
-                .map(|e| from_spark_expression(e.clone().try_into()?, schema))
+            let group_expr = grouping_expressions
+                .into_iter()
+                .map(|e| from_spark_expression(e, schema))
                 .collect::<SparkResult<_>>()?;
-            let aggr_expr = aggregate
-                .aggregate_expressions
-                .iter()
-                .map(|e| from_spark_expression(e.clone().try_into()?, schema))
+            let aggr_expr = aggregate_expressions
+                .into_iter()
+                .map(|e| from_spark_expression(e, schema))
                 .collect::<SparkResult<_>>()?;
             Ok(LogicalPlan::Aggregate(Aggregate::try_new(
                 Arc::new(input),
@@ -300,53 +296,42 @@ pub(crate) async fn from_spark_relation(
                 aggr_expr,
             )?))
         }
-        RelType::Sql(sc::Sql {
-            query,
-            args,
-            pos_args,
-        }) => {
-            let query = &query.replace(" database ", " SCHEMA ");
-            let query = &query.replace(" DATABASE ", " SCHEMA ");
-            let statement = Parser::new(&GenericDialect {})
-                .try_with_sql(query)?
-                .parse_statement()?;
-            let plan = state
-                .statement_to_plan(Statement::Statement(Box::new(statement)))
-                .await?;
-            if pos_args.len() == 0 && args.len() == 0 {
-                Ok(plan)
-            } else if pos_args.len() > 0 && args.len() == 0 {
-                let params = pos_args
-                    .iter()
-                    .map(|arg| -> SparkResult<ScalarValue> {
-                        let arg: spec::Literal = arg.clone().try_into()?;
-                        Ok(arg.try_into()?)
-                    })
+        PlanNode::WithParameters {
+            input,
+            positional_arguments,
+            named_arguments,
+        } => {
+            let input = from_spark_relation(ctx, *input).await?;
+            let input = if positional_arguments.len() > 0 {
+                let params = positional_arguments
+                    .into_iter()
+                    .map(|arg| -> SparkResult<ScalarValue> { Ok(arg.try_into()?) })
                     .collect::<SparkResult<_>>()?;
-                Ok(plan.with_param_values(ParamValues::List(params))?)
-            } else if pos_args.len() == 0 && args.len() > 0 {
-                let params = args
-                    .iter()
-                    .map(|(i, arg)| -> SparkResult<(String, ScalarValue)> {
-                        let arg: spec::Literal = arg.clone().try_into()?;
-                        Ok((i.clone(), arg.try_into()?))
-                    })
-                    .collect::<SparkResult<_>>()?;
-                Ok(plan.with_param_values(ParamValues::Map(params))?)
+                input.with_param_values(ParamValues::List(params))?
             } else {
-                Err(SparkError::invalid(
-                    "both positional and named arguments are specified",
-                ))
-            }
+                input
+            };
+            let input = if named_arguments.len() > 0 {
+                let params = named_arguments
+                    .into_iter()
+                    .map(|(name, arg)| -> SparkResult<(String, ScalarValue)> {
+                        Ok((name, arg.try_into()?))
+                    })
+                    .collect::<SparkResult<_>>()?;
+                input.with_param_values(ParamValues::Map(params))?
+            } else {
+                input
+            };
+            Ok(input)
         }
-        RelType::LocalRelation(local) => {
-            let batches = if let Some(data) = &local.data {
-                read_arrow_batches(data.clone())?
+        PlanNode::LocalRelation { data, schema } => {
+            let batches = if let Some(data) = data {
+                read_arrow_batches(data)?
             } else {
                 vec![]
             };
-            let (schema, batches) = if let Some(schema) = local.schema.as_ref() {
-                let schema = parse_spark_schema(schema)?;
+            let (schema, batches) = if let Some(schema) = schema {
+                let schema: adt::SchemaRef = Arc::new(schema.try_into()?);
                 let batches = batches
                     .into_iter()
                     .map(|b| cast_record_batch(b, schema.clone()))
@@ -366,34 +351,34 @@ pub(crate) async fn from_spark_relation(
                 None,
             )?))
         }
-        RelType::Sample(_) => {
+        PlanNode::Sample { .. } => {
             return Err(SparkError::todo("sample"));
         }
-        RelType::Offset(offset) => {
-            let input = offset.input.as_ref().required("offset input")?;
-            let input = from_spark_relation(ctx, input).await?;
+        PlanNode::Offset { input, offset } => {
+            let input = from_spark_relation(ctx, *input).await?;
             Ok(LogicalPlan::Limit(plan::Limit {
-                skip: offset.offset as usize,
+                skip: offset as usize,
                 fetch: None,
                 input: Arc::new(input),
             }))
         }
-        RelType::Deduplicate(dedup) => {
-            let input = dedup.input.as_ref().required("deduplicate input")?;
-            let input = from_spark_relation(ctx, input).await?;
+        PlanNode::Deduplicate {
+            input,
+            column_names,
+            all_columns_as_keys,
+            within_watermark,
+        } => {
+            let input = from_spark_relation(ctx, *input).await?;
             let schema = input.schema();
-            let within_watermark = dedup.within_watermark.unwrap_or(false);
             if within_watermark {
                 return Err(SparkError::todo("deduplicate within watermark"));
             }
-            let column_names = &dedup.column_names;
-            let all_columns_as_keys = dedup.all_columns_as_keys.unwrap_or(false);
             let distinct = if column_names.len() > 0 && !all_columns_as_keys {
                 let on_expr: Vec<Expr> = column_names
-                    .iter()
+                    .into_iter()
                     .map(|name| {
                         // TODO: handle qualified column names
-                        let field = schema.field_with_unqualified_name(name)?;
+                        let field = schema.field_with_unqualified_name(name.as_str())?;
                         Ok(Expr::Column(field.qualified_column()))
                     })
                     .collect::<SparkResult<_>>()?;
@@ -417,12 +402,15 @@ pub(crate) async fn from_spark_relation(
             };
             Ok(LogicalPlan::Distinct(distinct))
         }
-        RelType::Range(range) => {
-            let start = range.start.unwrap_or(0);
-            let end = range.end;
-            let step = range.step;
+        PlanNode::Range {
+            start,
+            end,
+            step,
+            num_partitions,
+        } => {
+            let start = start.unwrap_or(0);
             // TODO: use parallelism in Spark configuration as the default
-            let num_partitions = range.num_partitions.unwrap_or(1);
+            let num_partitions = num_partitions.unwrap_or(1);
             if num_partitions < 1 {
                 return Err(SparkError::invalid(format!(
                     "invalid number of partitions: {}",
@@ -438,46 +426,49 @@ pub(crate) async fn from_spark_relation(
                 )?),
             }))
         }
-        RelType::SubqueryAlias(sub) => {
-            let input = sub.input.as_ref().required("subquery alias input")?;
+        PlanNode::SubqueryAlias {
+            input,
+            mut alias,
+            qualifier,
+        } => {
             // TODO: handle quoted identifiers
-            let mut alias = sub.alias.clone();
-            for q in sub.qualifier.iter().rev() {
+            for q in qualifier.iter().rev() {
                 alias = format!("{}.{}", q, alias);
             }
             Ok(LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
-                Arc::new(from_spark_relation(ctx, input).await?),
+                Arc::new(from_spark_relation(ctx, *input).await?),
                 alias,
             )?))
         }
-        RelType::Repartition(repartition) => {
-            let input = repartition.input.as_ref().required("repartition input")?;
-            let input = from_spark_relation(ctx, input).await?;
+        PlanNode::Repartition {
+            input,
+            num_partitions,
+            shuffle: _,
+        } => {
+            let input = from_spark_relation(ctx, *input).await?;
             // TODO: handle shuffle partition
-            let _ = repartition.shuffle;
             Ok(LogicalPlan::Repartition(plan::Repartition {
                 input: Arc::new(input),
-                partitioning_scheme: plan::Partitioning::RoundRobinBatch(
-                    repartition.num_partitions as usize,
-                ),
+                partitioning_scheme: plan::Partitioning::RoundRobinBatch(num_partitions as usize),
             }))
         }
-        RelType::ToDf(to_df) => {
-            let input = to_df.input.as_ref().required("input relation")?;
-            let names = &to_df.column_names;
-            let input = from_spark_relation(ctx, input).await?;
+        PlanNode::ToDf {
+            input,
+            column_names,
+        } => {
+            let input = from_spark_relation(ctx, *input).await?;
             let schema = input.schema();
-            if names.len() != schema.fields().len() {
+            if column_names.len() != schema.fields().len() {
                 return Err(SparkError::invalid(format!(
                     "number of column names ({}) does not match number of columns ({})",
-                    names.len(),
+                    column_names.len(),
                     schema.fields().len()
                 )));
             }
             let expr: Vec<Expr> = schema
                 .fields()
                 .iter()
-                .zip(names.iter())
+                .zip(column_names.iter())
                 .map(|(field, name)| Expr::Column(field.qualified_column()).alias(name))
                 .collect();
             Ok(LogicalPlan::Projection(plan::Projection::try_new(
@@ -485,10 +476,11 @@ pub(crate) async fn from_spark_relation(
                 Arc::new(input),
             )?))
         }
-        RelType::WithColumnsRenamed(rename) => {
-            let input = rename.input.as_ref().required("input relation")?;
-            let input = from_spark_relation(ctx, input).await?;
-            let rename_map = &rename.rename_columns_map;
+        PlanNode::WithColumnsRenamed {
+            input,
+            rename_columns_map,
+        } => {
+            let input = from_spark_relation(ctx, *input).await?;
             let schema = input.schema();
             let expr: Vec<Expr> = schema
                 .fields()
@@ -496,7 +488,7 @@ pub(crate) async fn from_spark_relation(
                 .map(|field| {
                     let name = field.name();
                     let column = Expr::Column(field.qualified_column());
-                    match rename_map.get(name) {
+                    match rename_columns_map.get(name) {
                         Some(n) => column.alias(n),
                         None => column,
                     }
@@ -507,22 +499,23 @@ pub(crate) async fn from_spark_relation(
                 Arc::new(input),
             )?))
         }
-        RelType::ShowString(_) => {
+        PlanNode::ShowString { .. } => {
             return Err(SparkError::todo("show string"));
         }
-        RelType::Drop(drop) => {
-            let input = drop.input.as_ref().required("input relation")?;
-            let input = from_spark_relation(ctx, input).await?;
+        PlanNode::Drop {
+            input,
+            columns,
+            column_names,
+        } => {
+            let input = from_spark_relation(ctx, *input).await?;
             let schema = input.schema();
-            let columns_to_drop = &drop.columns;
-            if !columns_to_drop.is_empty() {
+            if !columns.is_empty() {
                 return Err(SparkError::todo("drop column expressions"));
             }
-            let names_to_drop = &drop.column_names;
             let expr: Vec<Expr> = schema
                 .fields()
                 .iter()
-                .filter(|field| !names_to_drop.contains(&field.name()))
+                .filter(|field| !column_names.contains(&field.name()))
                 .map(|field| Expr::Column(field.qualified_column()))
                 .collect();
             Ok(LogicalPlan::Projection(plan::Projection::try_new(
@@ -530,24 +523,34 @@ pub(crate) async fn from_spark_relation(
                 Arc::new(input),
             )?))
         }
-        RelType::Tail(_tail) => {
+        PlanNode::Tail { .. } => {
             return Err(SparkError::todo("tail"));
         }
-        RelType::WithColumns(columns) => {
-            let input = columns.input.as_ref().required("input relation")?;
-            let input = from_spark_relation(ctx, input).await?;
+        PlanNode::WithColumns { input, aliases } => {
+            let input = from_spark_relation(ctx, *input).await?;
             let schema = input.schema();
-            let mut aliases: HashMap<String, (Expr, bool)> = columns
-                .aliases
-                .iter()
-                .map(|x| {
-                    // TODO: handle quoted identifiers
-                    let name = x.name.join(".");
-                    let expr = x.expr.as_ref().required("column alias expression")?;
-                    let expr = from_spark_expression((*expr.clone()).try_into()?, schema)?;
-                    // TODO: handle metadata
-                    let _ = x.metadata;
-                    Ok((name.clone(), (expr, false)))
+            let mut aliases: HashMap<String, (Expr, bool)> = aliases
+                .into_iter()
+                .map(|expr| {
+                    let (name, expr) = match expr {
+                        // TODO: handle alias metadata
+                        spec::Expr::Alias {
+                            mut name,
+                            expr,
+                            metadata: _,
+                        } => {
+                            if name.len() == 1 {
+                                (name.pop().unwrap(), *expr)
+                            } else {
+                                return Err(SparkError::invalid("multi-alias for column"));
+                            }
+                        }
+                        _ => {
+                            return Err(SparkError::invalid("alias expression expected for column"))
+                        }
+                    };
+                    let expr = from_spark_expression(expr, schema)?;
+                    Ok((name, (expr, false)))
                 })
                 .collect::<SparkResult<_>>()?;
             let mut expr: Vec<Expr> = schema
@@ -576,13 +579,13 @@ pub(crate) async fn from_spark_relation(
                 Arc::new(input),
             )?))
         }
-        RelType::Hint(_) => {
+        PlanNode::Hint { .. } => {
             return Err(SparkError::todo("hint"));
         }
-        RelType::Unpivot(_) => {
+        PlanNode::Unpivot { .. } => {
             return Err(SparkError::todo("unpivot"));
         }
-        RelType::ToSchema(_to_schema) => {
+        PlanNode::ToSchema { .. } => {
             return Err(SparkError::todo("to schema"));
             // TODO: Close but doesn't quite work.
             // let input = to_schema.input.as_ref().required("input relation")?;
@@ -602,382 +605,360 @@ pub(crate) async fn from_spark_relation(
             //     Arc::new(input),
             // )?))
         }
-        RelType::RepartitionByExpression(repartition) => {
-            let input = repartition.input.as_ref().required("repartition input")?;
-            let input = from_spark_relation(ctx, input).await?;
+        PlanNode::RepartitionByExpression {
+            input,
+            partition_expressions,
+            num_partitions,
+        } => {
+            let input = from_spark_relation(ctx, *input).await?;
             let schema = input.schema();
-            let expr: Vec<Expr> = repartition
-                .partition_exprs
-                .iter()
-                .map(|e| from_spark_expression(e.clone().try_into()?, schema))
+            let expr: Vec<Expr> = partition_expressions
+                .into_iter()
+                .map(|e| from_spark_expression(e, schema))
                 .collect::<SparkResult<_>>()?;
-            let num_partitions = repartition
-                .num_partitions
+            let num_partitions = num_partitions
                 .ok_or_else(|| SparkError::todo("rebalance partitioning by expression"))?;
             Ok(LogicalPlan::Repartition(plan::Repartition {
                 input: Arc::new(input),
                 partitioning_scheme: plan::Partitioning::Hash(expr, num_partitions as usize),
             }))
         }
-        RelType::MapPartitions(_) => {
+        PlanNode::MapPartitions { .. } => {
             return Err(SparkError::todo("map partitions"));
         }
-        RelType::CollectMetrics(_) => {
+        PlanNode::CollectMetrics { .. } => {
             return Err(SparkError::todo("collect metrics"));
         }
-        RelType::Parse(_) => {
+        PlanNode::Parse { .. } => {
             return Err(SparkError::todo("parse"));
         }
-        RelType::GroupMap(_) => {
+        PlanNode::GroupMap { .. } => {
             return Err(SparkError::todo("group map"));
         }
-        RelType::CoGroupMap(_) => {
+        PlanNode::CoGroupMap { .. } => {
             return Err(SparkError::todo("co-group map"));
         }
-        RelType::WithWatermark(_) => {
+        PlanNode::WithWatermark { .. } => {
             return Err(SparkError::todo("with watermark"));
         }
-        RelType::ApplyInPandasWithState(_) => {
+        PlanNode::ApplyInPandasWithState { .. } => {
             return Err(SparkError::todo("apply in pandas with state"));
         }
-        RelType::HtmlString(_) => {
+        PlanNode::HtmlString { .. } => {
             return Err(SparkError::todo("html string"));
         }
-        RelType::CachedLocalRelation(_) => {
+        PlanNode::CachedLocalRelation { .. } => {
             return Err(SparkError::todo("cached local relation"));
         }
-        RelType::CachedRemoteRelation(_) => {
+        PlanNode::CachedRemoteRelation { .. } => {
             return Err(SparkError::todo("cached remote relation"));
         }
-        RelType::CommonInlineUserDefinedTableFunction(_) => {
+        PlanNode::CommonInlineUserDefinedTableFunction { .. } => {
             return Err(SparkError::todo(
                 "common inline user defined table function",
             ));
         }
-        RelType::FillNa(_) => {
+        PlanNode::FillNa { .. } => {
             return Err(SparkError::todo("fill na"));
         }
-        RelType::DropNa(_) => {
+        PlanNode::DropNa { .. } => {
             return Err(SparkError::todo("drop na"));
         }
-        RelType::Replace(_) => {
+        PlanNode::ReplaceNa { .. } => {
             return Err(SparkError::todo("replace"));
         }
-        RelType::Summary(_) => {
+        PlanNode::StatSummary { .. } => {
             return Err(SparkError::todo("summary"));
         }
-        RelType::Crosstab(_) => {
+        PlanNode::StatCrosstab { .. } => {
             return Err(SparkError::todo("crosstab"));
         }
-        RelType::Describe(_) => {
+        PlanNode::StatDescribe { .. } => {
             return Err(SparkError::todo("describe"));
         }
-        RelType::Cov(_) => {
+        PlanNode::StatCov { .. } => {
             return Err(SparkError::todo("cov"));
         }
-        RelType::Corr(_) => {
+        PlanNode::StatCorr { .. } => {
             return Err(SparkError::todo("corr"));
         }
-        RelType::ApproxQuantile(_) => {
+        PlanNode::StatApproxQuantile { .. } => {
             return Err(SparkError::todo("approx quantile"));
         }
-        RelType::FreqItems(_) => {
+        PlanNode::StatFreqItems { .. } => {
             return Err(SparkError::todo("freq items"));
         }
-        RelType::SampleBy(_) => {
+        PlanNode::StatSampleBy { .. } => {
             return Err(SparkError::todo("sample by"));
         }
-        RelType::Catalog(catalog) => {
-            use sc::catalog::CatType;
-            match catalog.cat_type.as_ref().required("catalog type")? {
-                CatType::CurrentDatabase(_current_database) => {
-                    let results: DataFrame = ctx
-                        .sql("SELECT CAST($1 AS STRING)")
-                        .await?
-                        .with_param_values(vec![ScalarValue::Utf8(Some(
-                            state.config().options().catalog.default_schema.to_string(),
-                        ))])?;
-                    Ok(results.into_optimized_plan()?)
-                }
-                CatType::SetCurrentDatabase(set_current_database) => {
-                    let _db_name = set_current_database.db_name.as_str();
-                    // TODO: Uncomment when we upgrade to DataFusion 38.0.0
-                    // ctx.state().config().options_mut().catalog.default_schema = db_name;
-                    Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
-                        produce_one_row: false,
-                        schema: DFSchemaRef::new(DFSchema::empty()),
-                    }))
-                }
-                CatType::ListDatabases(list_databases) => {
-                    let database_pattern: Option<&str> = list_databases.pattern.as_deref();
-                    let catalog_databases: Vec<CatalogDatabase> =
-                        list_catalog_databases(None, database_pattern, &ctx)?;
-                    let provider: MemTable = create_catalog_database_memtable(catalog_databases)?;
-                    Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
-                        UNNAMED_TABLE,
-                        provider_as_source(Arc::new(provider)),
-                        None,
-                        vec![],
-                        None,
-                    )?))
-                }
-                CatType::ListTables(list_tables) => {
-                    let db_name: Option<&str> = list_tables.db_name.as_deref();
-                    let (catalog_name, database_name): (String, String) =
-                        parse_optional_db_name_with_defaults(
-                            db_name,
-                            &state.config().options().catalog.default_catalog,
-                            &state.config().options().catalog.default_schema,
-                        )?;
-                    let table_pattern: Option<&str> = list_tables.pattern.as_deref();
-                    let catalog_tables: Vec<CatalogTable> = list_catalog_tables(
-                        Some(&catalog_name),
-                        Some(&database_name),
-                        table_pattern,
-                        &ctx,
-                    )
+        PlanNode::CurrentDatabase {} => {
+            let results: DataFrame = ctx
+                .sql("SELECT CAST($1 AS STRING)")
+                .await?
+                .with_param_values(vec![ScalarValue::Utf8(Some(
+                    state.config().options().catalog.default_schema.to_string(),
+                ))])?;
+            Ok(results.into_optimized_plan()?)
+        }
+        PlanNode::SetCurrentDatabase { database_name: _ } => {
+            // TODO: Uncomment when we upgrade to DataFusion 38.0.0
+            // ctx.state().config().options_mut().catalog.default_schema = db_name;
+            Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
+                produce_one_row: false,
+                schema: DFSchemaRef::new(DFSchema::empty()),
+            }))
+        }
+        PlanNode::ListDatabases { pattern } => {
+            let databases: Vec<CatalogDatabase> =
+                list_catalog_databases(None, pattern.as_deref(), &ctx)?;
+            let provider: MemTable = create_catalog_database_memtable(databases)?;
+            Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                UNNAMED_TABLE,
+                provider_as_source(Arc::new(provider)),
+                None,
+                vec![],
+                None,
+            )?))
+        }
+        PlanNode::ListTables {
+            database_name,
+            pattern,
+        } => {
+            let (catalog_name, database_name): (String, String) =
+                parse_optional_db_name_with_defaults(
+                    database_name.as_deref(),
+                    &state.config().options().catalog.default_catalog,
+                    &state.config().options().catalog.default_schema,
+                )?;
+            let catalog_tables: Vec<CatalogTable> = list_catalog_tables(
+                Some(&catalog_name),
+                Some(&database_name),
+                pattern.as_deref(),
+                &ctx,
+            )
+            .await?;
+            let provider: MemTable = create_catalog_table_memtable(catalog_tables)?;
+            Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                UNNAMED_TABLE,
+                provider_as_source(Arc::new(provider)),
+                None,
+                vec![],
+                None,
+            )?))
+        }
+        PlanNode::ListFunctions { .. } => Err(SparkError::todo("PlanNode::ListFunctions")),
+        PlanNode::ListColumns {
+            table_name,
+            database_name,
+        } => {
+            let (catalog_name, database_name): (String, String) =
+                parse_optional_db_name_with_defaults(
+                    database_name.as_deref(),
+                    &state.config().options().catalog.default_catalog,
+                    &state.config().options().catalog.default_schema,
+                )?;
+            let columns: Vec<CatalogTableColumn> =
+                list_catalog_table_columns(&catalog_name, &database_name, &table_name, &ctx)
                     .await?;
-                    let provider: MemTable = create_catalog_table_memtable(catalog_tables)?;
-                    Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
-                        UNNAMED_TABLE,
-                        provider_as_source(Arc::new(provider)),
+            let provider: MemTable = create_catalog_column_memtable(columns)?;
+            Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                UNNAMED_TABLE,
+                provider_as_source(Arc::new(provider)),
+                None,
+                vec![],
+                None,
+            )?))
+        }
+        PlanNode::GetDatabase { database_name } => {
+            let databases: Vec<CatalogDatabase> = get_catalog_database(&database_name, &ctx)?;
+            let provider: MemTable = create_catalog_database_memtable(databases)?;
+            Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                UNNAMED_TABLE,
+                provider_as_source(Arc::new(provider)),
+                None,
+                vec![],
+                None,
+            )?))
+        }
+        PlanNode::GetTable {
+            table_name,
+            database_name,
+        } => {
+            let (catalog_name, database_name): (String, String) =
+                parse_optional_db_name_with_defaults(
+                    database_name.as_deref(),
+                    &state.config().options().catalog.default_catalog,
+                    &state.config().options().catalog.default_schema,
+                )?;
+            let tables: Vec<CatalogTable> =
+                get_catalog_table(&table_name, &catalog_name, &database_name, &ctx).await?;
+            let provider: MemTable = create_catalog_table_memtable(tables)?;
+            Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                UNNAMED_TABLE,
+                provider_as_source(Arc::new(provider)),
+                None,
+                vec![],
+                None,
+            )?))
+        }
+        PlanNode::GetFunction { .. } => Err(SparkError::todo("PlanNode::GetFunction")),
+        PlanNode::DatabaseExists { database_name } => {
+            let databases: Vec<CatalogDatabase> = get_catalog_database(&database_name, &ctx)?;
+            let db_exists = !databases.is_empty();
+            let results: DataFrame = ctx
+                .sql("SELECT CAST($1 AS BOOLEAN)")
+                .await?
+                .with_param_values(vec![ScalarValue::Boolean(Some(db_exists))])?;
+            Ok(results.into_optimized_plan()?)
+        }
+        PlanNode::TableExists {
+            table_name,
+            database_name,
+        } => {
+            let (catalog_name, database_name): (String, String) =
+                parse_optional_db_name_with_defaults(
+                    database_name.as_deref(),
+                    &state.config().options().catalog.default_catalog,
+                    &state.config().options().catalog.default_schema,
+                )?;
+            let tables: Vec<CatalogTable> =
+                get_catalog_table(&table_name, &catalog_name, &database_name, &ctx).await?;
+            let table_exists = !tables.is_empty();
+            let results: DataFrame = ctx
+                .sql("SELECT CAST($1 AS BOOLEAN)")
+                .await?
+                .with_param_values(vec![ScalarValue::Boolean(Some(table_exists))])?;
+            Ok(results.into_optimized_plan()?)
+        }
+        PlanNode::FunctionExists { .. } => Err(SparkError::todo("PlanNode::FunctionExists")),
+        PlanNode::CreateTable {
+            table_name,
+            path,
+            source,
+            description,
+            schema,
+            options,
+        } => {
+            let table_ref = TableReference::from(table_name.to_string());
+            let (_table_type, _location): (TableType, Option<&str>) =
+                if let Some(path) = path.as_deref() {
+                    // TODO: Should covert to a "Path" then uri
+                    return Err(SparkError::todo(format!(
+                        "CreateTable (External) with path: {:?}",
+                        path
+                    )));
+                } else {
+                    (
+                        catalog_table_type_to_table_type(CatalogTableType::MANAGED),
                         None,
-                        vec![],
-                        None,
-                    )?))
-                }
-                CatType::ListFunctions(_) => Err(SparkError::todo("CatType::ListFunctions")),
-                CatType::ListColumns(list_columns) => {
-                    let table_name = list_columns.table_name.as_str();
-                    let (catalog_name, database_name): (String, String) =
-                        parse_optional_db_name_with_defaults(
-                            list_columns.db_name.as_deref(),
-                            &state.config().options().catalog.default_catalog,
-                            &state.config().options().catalog.default_schema,
-                        )?;
-                    let catalog_table_columns: Vec<CatalogTableColumn> =
-                        list_catalog_table_columns(
-                            &catalog_name,
-                            &database_name,
-                            &table_name,
-                            &ctx,
-                        )
-                        .await?;
-                    let provider: MemTable = create_catalog_column_memtable(catalog_table_columns)?;
-                    Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
-                        UNNAMED_TABLE,
-                        provider_as_source(Arc::new(provider)),
-                        None,
-                        vec![],
-                        None,
-                    )?))
-                }
-                CatType::GetDatabase(get_database) => {
-                    let db_name = get_database.db_name.as_str();
-                    let catalog_databases: Vec<CatalogDatabase> =
-                        get_catalog_database(&db_name, &ctx)?;
-                    let provider: MemTable = create_catalog_database_memtable(catalog_databases)?;
-                    Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
-                        UNNAMED_TABLE,
-                        provider_as_source(Arc::new(provider)),
-                        None,
-                        vec![],
-                        None,
-                    )?))
-                }
-                CatType::GetTable(get_table) => {
-                    let table_name = get_table.table_name.as_str();
-                    let (catalog_name, database_name): (String, String) =
-                        parse_optional_db_name_with_defaults(
-                            get_table.db_name.as_deref(),
-                            &state.config().options().catalog.default_catalog,
-                            &state.config().options().catalog.default_schema,
-                        )?;
-                    let catalog_tables: Vec<CatalogTable> =
-                        get_catalog_table(&table_name, &catalog_name, &database_name, &ctx).await?;
-                    let provider: MemTable = create_catalog_table_memtable(catalog_tables)?;
-                    Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
-                        UNNAMED_TABLE,
-                        provider_as_source(Arc::new(provider)),
-                        None,
-                        vec![],
-                        None,
-                    )?))
-                }
-                CatType::GetFunction(_) => Err(SparkError::todo("CatType::GetFunction")),
-                CatType::DatabaseExists(database_exists) => {
-                    let db_name = database_exists.db_name.as_str();
-                    let catalog_databases: Vec<CatalogDatabase> =
-                        get_catalog_database(&db_name, &ctx)?;
-                    let db_exists = !catalog_databases.is_empty();
-                    let results: DataFrame = ctx
-                        .sql("SELECT CAST($1 AS BOOLEAN)")
-                        .await?
-                        .with_param_values(vec![ScalarValue::Boolean(Some(db_exists))])?;
-                    Ok(results.into_optimized_plan()?)
-                }
-                CatType::TableExists(table_exists) => {
-                    let table_name = table_exists.table_name.as_str();
-                    let (catalog_name, database_name): (String, String) =
-                        parse_optional_db_name_with_defaults(
-                            table_exists.db_name.as_deref(),
-                            &state.config().options().catalog.default_catalog,
-                            &state.config().options().catalog.default_schema,
-                        )?;
-                    let catalog_tables: Vec<CatalogTable> =
-                        get_catalog_table(&table_name, &catalog_name, &database_name, &ctx).await?;
-                    let table_exists = !catalog_tables.is_empty();
-                    let results: DataFrame = ctx
-                        .sql("SELECT CAST($1 AS BOOLEAN)")
-                        .await?
-                        .with_param_values(vec![ScalarValue::Boolean(Some(table_exists))])?;
-                    Ok(results.into_optimized_plan()?)
-                }
-                CatType::FunctionExists(_) => Err(SparkError::todo("CatType::FunctionExists")),
-                CatType::CreateExternalTable(_create_external_table) => {
-                    // Same as create table essentially.
-                    Err(SparkError::todo("CatType::CreateExternalTable"))
-                }
-                CatType::CreateTable(create_table) => {
-                    let table_name = create_table.table_name.as_str();
-                    let table_ref: TableReference = TableReference::from(table_name.to_string());
-                    let (_table_type, _location): (TableType, Option<&str>) =
-                        if let Some(path) = create_table.path.as_deref() {
-                            // TODO: Should covert to a "Path" then uri
-                            return Err(SparkError::todo(format!(
-                                "CreateTable (External) with path: {:?}",
-                                path
-                            )));
-                        } else {
-                            (
-                                catalog_table_type_to_table_type(CatalogTableType::MANAGED),
-                                None,
-                            )
-                        };
-                    // TODO: use spark.sql.sources.default to get the default source
-                    let _source: &str = create_table.source.as_deref().unwrap_or("parquet");
-                    let description: &str = create_table.description.as_deref().unwrap_or("");
-                    let fields: Fields = match create_table.schema.as_ref() {
-                        Some(schema) => {
-                            let data_type = from_spark_built_in_data_type(schema)?;
-                            match data_type {
-                                DataType::Struct(fields) => fields,
-                                _ => return Err(SparkError::invalid("external table schema")),
-                            }
-                        }
-                        None => Fields::empty(),
-                    };
-                    let _options: CaseInsensitiveHashMap<String> =
-                        CaseInsensitiveHashMap::from(create_table.options.clone());
+                    )
+                };
+            // TODO: use spark.sql.sources.default to get the default source
+            let _source: &str = source.as_deref().unwrap_or("parquet");
+            let description: &str = description.as_deref().unwrap_or("");
+            let _options: CaseInsensitiveHashMap<String> = CaseInsensitiveHashMap::from(options);
 
-                    let mut metadata: HashMap<String, String> = HashMap::new();
-                    metadata.insert("description".to_string(), description.to_string());
-                    let schema = ArrowSchema::new_with_metadata(fields, metadata);
-                    let batch = RecordBatch::new_empty(ArrowSchemaRef::new(schema));
-                    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+            let mut metadata: HashMap<String, String> = HashMap::new();
+            metadata.insert("description".to_string(), description.to_string());
+            let schema: adt::Schema = schema.unwrap_or_default().try_into()?;
+            let schema = adt::SchemaRef::new(schema.with_metadata(metadata));
 
-                    Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
-                        plan::CreateMemoryTable {
-                            name: table_ref,
-                            constraints: Constraints::empty(), // TODO: Check if exists in options
-                            input: Arc::new(LogicalPlan::TableScan(plan::TableScan::try_new(
-                                UNNAMED_TABLE,
-                                provider_as_source(Arc::new(table)),
-                                None,
-                                vec![],
-                                None,
-                            )?)),
-                            if_not_exists: false, // TODO: Check if exists in options
-                            or_replace: false,    // TODO: Check if exists in options
-                            column_defaults: vec![], // TODO: Check if exists in options
-                        },
-                    )))
-                }
-                CatType::DropTempView(drop_temp_view) => {
-                    // TODO: DataFusion returns an empty DataFrame on DropView
-                    //  But Spark expects a Boolean value.
-                    //  We can do this for now instead of having to create a LogicalPlan Extension
-                    let drop_view_plan = LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
-                        name: TableReference::from(drop_temp_view.view_name.to_string()),
-                        if_exists: false,
-                        schema: DFSchemaRef::new(DFSchema::empty()),
-                    }));
-                    let result = match ctx.execute_logical_plan(drop_view_plan).await {
-                        Ok(_) => ScalarValue::Boolean(Some(true)),
-                        Err(_) => ScalarValue::Boolean(Some(false)),
-                    };
-                    let df: DataFrame = ctx
-                        .sql("SELECT CAST($1 AS BOOLEAN)")
-                        .await?
-                        .with_param_values(vec![result])?;
-                    Ok(df.into_optimized_plan()?)
-                }
-                CatType::DropGlobalTempView(drop_global_temp_view) => {
-                    // TODO: DataFusion returns an empty DataFrame on DropView
-                    //  But Spark expects a Boolean value.
-                    //  We can do this for now instead of having to create a LogicalPlan Extension
-                    let drop_view_plan = LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
-                        name: TableReference::from(drop_global_temp_view.view_name.to_string()),
-                        if_exists: false,
-                        schema: DFSchemaRef::new(DFSchema::empty()),
-                    }));
-                    let result = match ctx.execute_logical_plan(drop_view_plan).await {
-                        Ok(_) => ScalarValue::Boolean(Some(true)),
-                        Err(_) => ScalarValue::Boolean(Some(false)),
-                    };
-                    let df: DataFrame = ctx
-                        .sql("SELECT CAST($1 AS BOOLEAN)")
-                        .await?
-                        .with_param_values(vec![result])?;
-                    Ok(df.into_optimized_plan()?)
-                }
-                CatType::RecoverPartitions(_) => {
-                    Err(SparkError::todo("CatType::RecoverPartitions"))
-                }
-                CatType::IsCached(_) => Err(SparkError::todo("CatType::IsCached")),
-                CatType::CacheTable(_) => Err(SparkError::todo("CatType::CacheTable")),
-                CatType::UncacheTable(_) => Err(SparkError::todo("CatType::UncacheTable")),
-                CatType::ClearCache(_) => Err(SparkError::todo("CatType::ClearCache")),
-                CatType::RefreshTable(_) => Err(SparkError::todo("CatType::RefreshTable")),
-                CatType::RefreshByPath(_) => Err(SparkError::todo("CatType::RefreshByPath")),
-                CatType::CurrentCatalog(_) => {
-                    let results: DataFrame = ctx
-                        .sql("SELECT CAST($1 AS STRING)")
-                        .await?
-                        .with_param_values(vec![ScalarValue::Utf8(Some(
-                            state.config().options().catalog.default_catalog.to_string(),
-                        ))])?;
-                    Ok(results.into_optimized_plan()?)
-                }
-                CatType::SetCurrentCatalog(set_current_catalog) => {
-                    let _catalog_name = set_current_catalog.catalog_name.as_str();
-                    // TODO: Uncomment when we upgrade to DataFusion 38.0.0
-                    // ctx.state().config().options_mut().catalog.default_catalog = catalog_name;
-                    Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
-                        produce_one_row: false,
-                        schema: DFSchemaRef::new(DFSchema::empty()),
-                    }))
-                }
-                CatType::ListCatalogs(list_catalogs) => {
-                    let pattern: Option<&str> = list_catalogs.pattern.as_deref();
-                    let catalogs_metadata: Vec<CatalogMetadata> =
-                        list_catalogs_metadata(pattern, &ctx)?;
-                    let provider: MemTable = create_catalog_metadata_memtable(catalogs_metadata)?;
-                    Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+            let batch = RecordBatch::new_empty(schema);
+            let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+
+            Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                plan::CreateMemoryTable {
+                    name: table_ref,
+                    constraints: Constraints::empty(), // TODO: Check if exists in options
+                    input: Arc::new(LogicalPlan::TableScan(plan::TableScan::try_new(
                         UNNAMED_TABLE,
-                        provider_as_source(Arc::new(provider)),
+                        provider_as_source(Arc::new(table)),
                         None,
                         vec![],
                         None,
-                    )?))
-                }
-            }
+                    )?)),
+                    if_not_exists: false,    // TODO: Check if exists in options
+                    or_replace: false,       // TODO: Check if exists in options
+                    column_defaults: vec![], // TODO: Check if exists in options
+                },
+            )))
         }
-        RelType::Extension(_) => {
-            return Err(SparkError::unsupported("Spark relation extension"));
+        PlanNode::DropTemporaryView { view_name } => {
+            // TODO: DataFusion returns an empty DataFrame on DropView
+            //  But Spark expects a Boolean value.
+            //  We can do this for now instead of having to create a LogicalPlan Extension
+            let drop_view_plan = LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
+                name: TableReference::from(view_name),
+                if_exists: false,
+                schema: DFSchemaRef::new(DFSchema::empty()),
+            }));
+            let result = match ctx.execute_logical_plan(drop_view_plan).await {
+                Ok(_) => ScalarValue::Boolean(Some(true)),
+                Err(_) => ScalarValue::Boolean(Some(false)),
+            };
+            let df: DataFrame = ctx
+                .sql("SELECT CAST($1 AS BOOLEAN)")
+                .await?
+                .with_param_values(vec![result])?;
+            Ok(df.into_optimized_plan()?)
         }
-        RelType::Unknown(_) => {
-            return Err(SparkError::unsupported("unknown Spark relation"));
+        PlanNode::DropGlobalTemporaryView { view_name } => {
+            // TODO: DataFusion returns an empty DataFrame on DropView
+            //  But Spark expects a Boolean value.
+            //  We can do this for now instead of having to create a LogicalPlan Extension
+            let drop_view_plan = LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
+                name: TableReference::from(view_name),
+                if_exists: false,
+                schema: DFSchemaRef::new(DFSchema::empty()),
+            }));
+            let result = match ctx.execute_logical_plan(drop_view_plan).await {
+                Ok(_) => ScalarValue::Boolean(Some(true)),
+                Err(_) => ScalarValue::Boolean(Some(false)),
+            };
+            let df: DataFrame = ctx
+                .sql("SELECT CAST($1 AS BOOLEAN)")
+                .await?
+                .with_param_values(vec![result])?;
+            Ok(df.into_optimized_plan()?)
         }
+        PlanNode::RecoverPartitions { .. } => Err(SparkError::todo("PlanNode::RecoverPartitions")),
+        PlanNode::IsCached { .. } => Err(SparkError::todo("PlanNode::IsCached")),
+        PlanNode::CacheTable { .. } => Err(SparkError::todo("PlanNode::CacheTable")),
+        PlanNode::UncacheTable { .. } => Err(SparkError::todo("PlanNode::UncacheTable")),
+        PlanNode::ClearCache {} => Err(SparkError::todo("PlanNode::ClearCache")),
+        PlanNode::RefreshTable { .. } => Err(SparkError::todo("PlanNode::RefreshTable")),
+        PlanNode::RefreshByPath { .. } => Err(SparkError::todo("PlanNode::RefreshByPath")),
+        PlanNode::CurrentCatalog {} => {
+            let results: DataFrame = ctx
+                .sql("SELECT CAST($1 AS STRING)")
+                .await?
+                .with_param_values(vec![ScalarValue::Utf8(Some(
+                    state.config().options().catalog.default_catalog.to_string(),
+                ))])?;
+            Ok(results.into_optimized_plan()?)
+        }
+        PlanNode::SetCurrentCatalog { catalog_name: _ } => {
+            // TODO: Uncomment when we upgrade to DataFusion 38.0.0
+            // ctx.state().config().options_mut().catalog.default_catalog = catalog_name;
+            Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
+                produce_one_row: false,
+                schema: DFSchemaRef::new(DFSchema::empty()),
+            }))
+        }
+        PlanNode::ListCatalogs { pattern } => {
+            let metadata: Vec<CatalogMetadata> = list_catalogs_metadata(pattern.as_deref(), &ctx)?;
+            let provider: MemTable = create_catalog_metadata_memtable(metadata)?;
+            Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                UNNAMED_TABLE,
+                provider_as_source(Arc::new(provider)),
+                None,
+                vec![],
+                None,
+            )?))
+        }
+        PlanNode::RegisterFunction(_) => Err(SparkError::todo("register function")),
+        PlanNode::RegisterTableFunction(_) => Err(SparkError::todo("register table function")),
+        PlanNode::CreateTemporaryView { .. } => Err(SparkError::todo("create temporary view")),
+        PlanNode::Write { .. } => Err(SparkError::todo("write")),
     }
 }

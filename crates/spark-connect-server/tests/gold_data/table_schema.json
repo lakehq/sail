@@ -4,8 +4,7 @@
       "input": "",
       "output": {
         "success": {
-          "fields": [],
-          "metadata": {}
+          "fields": []
         }
       }
     },
@@ -16,14 +15,11 @@
           "fields": [
             {
               "name": "A",
-              "data_type": "Int32",
+              "dataType": "integer",
               "nullable": true,
-              "dict_id": 0,
-              "dict_is_ordered": false,
-              "metadata": {}
+              "metadata": null
             }
-          ],
-          "metadata": {}
+          ]
         }
       }
     },
@@ -34,14 +30,11 @@
           "fields": [
             {
               "name": "!@#$%.^&*()",
-              "data_type": "Utf8",
+              "dataType": "string",
               "nullable": true,
-              "dict_id": 0,
-              "dict_is_ordered": false,
-              "metadata": {}
+              "metadata": null
             }
-          ],
-          "metadata": {}
+          ]
         }
       }
     },
@@ -58,14 +51,11 @@
           "fields": [
             {
               "name": "a",
-              "data_type": "Int32",
+              "dataType": "integer",
               "nullable": true,
-              "dict_id": 0,
-              "dict_is_ordered": false,
-              "metadata": {}
+              "metadata": null
             }
-          ],
-          "metadata": {}
+          ]
         }
       }
     },
@@ -100,38 +90,28 @@
           "fields": [
             {
               "name": "a",
-              "data_type": {
-                "Struct": [
-                  {
-                    "name": "intType",
-                    "data_type": "Int32",
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "ts",
-                    "data_type": {
-                      "Timestamp": [
-                        "Microsecond",
-                        "UTC"
-                      ]
+              "dataType": {
+                "struct": {
+                  "fields": [
+                    {
+                      "name": "intType",
+                      "dataType": "integer",
+                      "nullable": true,
+                      "metadata": null
                     },
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  }
-                ]
+                    {
+                      "name": "ts",
+                      "dataType": "timestamp",
+                      "nullable": true,
+                      "metadata": null
+                    }
+                  ]
+                }
               },
               "nullable": true,
-              "dict_id": 0,
-              "dict_is_ordered": false,
-              "metadata": {}
+              "metadata": null
             }
-          ],
-          "metadata": {}
+          ]
         }
       }
     },
@@ -142,16 +122,13 @@
           "fields": [
             {
               "name": "a",
-              "data_type": "Int32",
+              "dataType": "integer",
               "nullable": true,
-              "dict_id": 0,
-              "dict_is_ordered": false,
               "metadata": {
-                "metadata.comment": "test"
+                "comment": "test"
               }
             }
-          ],
-          "metadata": {}
+          ]
         }
       }
     },
@@ -162,22 +139,17 @@
           "fields": [
             {
               "name": "a",
-              "data_type": "Int32",
+              "dataType": "integer",
               "nullable": true,
-              "dict_id": 0,
-              "dict_is_ordered": false,
-              "metadata": {}
+              "metadata": null
             },
             {
               "name": "b",
-              "data_type": "Int64",
+              "dataType": "long",
               "nullable": true,
-              "dict_id": 0,
-              "dict_is_ordered": false,
-              "metadata": {}
+              "metadata": null
             }
-          ],
-          "metadata": {}
+          ]
         }
       }
     },
@@ -188,132 +160,91 @@
           "fields": [
             {
               "name": "complexStructCol",
-              "data_type": {
-                "Struct": [
-                  {
-                    "name": "struct",
-                    "data_type": {
-                      "Struct": [
-                        {
-                          "name": "deciMal",
-                          "data_type": {
-                            "Decimal128": [
-                              10,
-                              0
-                            ]
-                          },
-                          "nullable": true,
-                          "dict_id": 0,
-                          "dict_is_ordered": false,
-                          "metadata": {}
-                        },
-                        {
-                          "name": "anotherDecimal",
-                          "data_type": {
-                            "Decimal128": [
-                              5,
-                              2
-                            ]
-                          },
-                          "nullable": true,
-                          "dict_id": 0,
-                          "dict_is_ordered": false,
-                          "metadata": {}
-                        }
-                      ]
-                    },
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "MAP",
-                    "data_type": {
-                      "Map": [
-                        {
-                          "name": "entries",
-                          "data_type": {
-                            "Struct": [
-                              {
-                                "name": "key",
-                                "data_type": {
-                                  "Timestamp": [
-                                    "Microsecond",
-                                    "UTC"
-                                  ]
-                                },
-                                "nullable": false,
-                                "dict_id": 0,
-                                "dict_is_ordered": false,
-                                "metadata": {}
+              "dataType": {
+                "struct": {
+                  "fields": [
+                    {
+                      "name": "struct",
+                      "dataType": {
+                        "struct": {
+                          "fields": [
+                            {
+                              "name": "deciMal",
+                              "dataType": {
+                                "decimal": {
+                                  "precision": 10,
+                                  "scale": 0
+                                }
                               },
-                              {
-                                "name": "value",
-                                "data_type": "Utf8",
-                                "nullable": true,
-                                "dict_id": 0,
-                                "dict_is_ordered": false,
-                                "metadata": {}
-                              }
-                            ]
+                              "nullable": true,
+                              "metadata": null
+                            },
+                            {
+                              "name": "anotherDecimal",
+                              "dataType": {
+                                "decimal": {
+                                  "precision": 5,
+                                  "scale": 2
+                                }
+                              },
+                              "nullable": true,
+                              "metadata": null
+                            }
+                          ]
+                        }
+                      },
+                      "nullable": true,
+                      "metadata": null
+                    },
+                    {
+                      "name": "MAP",
+                      "dataType": {
+                        "map": {
+                          "keyType": "timestamp",
+                          "valueType": {
+                            "varChar": {
+                              "length": 10
+                            }
                           },
-                          "nullable": false,
-                          "dict_id": 0,
-                          "dict_is_ordered": false,
-                          "metadata": {}
-                        },
-                        false
-                      ]
+                          "valueContainsNull": true
+                        }
+                      },
+                      "nullable": true,
+                      "metadata": null
                     },
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "arrAy",
-                    "data_type": {
-                      "List": {
-                        "name": "element",
-                        "data_type": "Float64",
-                        "nullable": true,
-                        "dict_id": 0,
-                        "dict_is_ordered": false,
-                        "metadata": {}
-                      }
+                    {
+                      "name": "arrAy",
+                      "dataType": {
+                        "array": {
+                          "elementType": "double",
+                          "containsNull": true
+                        }
+                      },
+                      "nullable": true,
+                      "metadata": null
                     },
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "anotherArray",
-                    "data_type": {
-                      "List": {
-                        "name": "element",
-                        "data_type": "Utf8",
-                        "nullable": true,
-                        "dict_id": 0,
-                        "dict_is_ordered": false,
-                        "metadata": {}
-                      }
-                    },
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  }
-                ]
+                    {
+                      "name": "anotherArray",
+                      "dataType": {
+                        "array": {
+                          "elementType": {
+                            "char": {
+                              "length": 9
+                            }
+                          },
+                          "containsNull": true
+                        }
+                      },
+                      "nullable": true,
+                      "metadata": null
+                    }
+                  ]
+                }
               },
               "nullable": true,
-              "dict_id": 0,
-              "dict_is_ordered": false,
-              "metadata": {}
+              "metadata": null
             }
-          ],
-          "metadata": {}
+          ]
         }
       }
     }
