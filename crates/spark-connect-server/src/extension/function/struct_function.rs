@@ -1,16 +1,12 @@
 use datafusion::arrow::array::{ArrayRef, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, Expr};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
 
-// Not sure why the DataFusion code does not try to extract the field names from the input.
-// So I'm just rewriting the code here.
-
-fn to_array_struct(args: &[ArrayRef], field_names: &[String]) -> Result<ArrayRef> {
-    // do not accept 0 arguments.
+fn to_struct_array(args: &[ArrayRef], field_names: &[String]) -> Result<ArrayRef> {
     if args.is_empty() {
         return exec_err!("struct requires at least one argument");
     }
@@ -33,14 +29,6 @@ fn to_array_struct(args: &[ArrayRef], field_names: &[String]) -> Result<ArrayRef
     Ok(Arc::new(StructArray::from(vec)))
 }
 
-fn to_struct_expr(args: &[ColumnarValue], field_names: &[String]) -> Result<ColumnarValue> {
-    let arrays = ColumnarValue::values_to_arrays(args)?;
-    Ok(ColumnarValue::Array(to_array_struct(
-        arrays.as_slice(),
-        field_names,
-    )?))
-}
-
 #[derive(Debug, Clone)]
 pub struct StructFunction {
     signature: Signature,
@@ -53,6 +41,22 @@ impl StructFunction {
             signature: Signature::variadic_any(Volatility::Immutable),
             field_names,
         }
+    }
+
+    pub fn try_new_from_expressions(expr: Vec<Expr>) -> Result<Self> {
+        let field_names: Vec<String> = expr
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| -> Result<_> {
+                match x {
+                    Expr::Column(column) => Ok(column.name),
+                    Expr::Alias(alias) => Ok(alias.name),
+                    Expr::Wildcard { .. } => exec_err!("wildcard is not yet supported in struct"),
+                    _ => Ok(format!("col{}", i + 1)),
+                }
+            })
+            .collect::<Result<_>>()?;
+        Ok(Self::new(field_names))
     }
 }
 
@@ -70,15 +74,19 @@ impl ScalarUDFImpl for StructFunction {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let return_fields = arg_types
+        let fields = arg_types
             .iter()
             .zip(self.field_names.iter())
             .map(|(dt, field_name)| Ok(Field::new(field_name.clone(), dt.clone(), true)))
             .collect::<Result<Vec<Field>>>()?;
-        Ok(DataType::Struct(Fields::from(return_fields)))
+        Ok(DataType::Struct(Fields::from(fields)))
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        to_struct_expr(args, self.field_names.as_slice())
+        let arrays = ColumnarValue::values_to_arrays(args)?;
+        Ok(ColumnarValue::Array(to_struct_array(
+            arrays.as_slice(),
+            self.field_names.as_slice(),
+        )?))
     }
 }

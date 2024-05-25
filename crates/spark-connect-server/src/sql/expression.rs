@@ -5,7 +5,7 @@ use crate::sql::literal::{parse_date_string, parse_timestamp_string, LiteralValu
 use crate::sql::parser::SparkDialect;
 use framework_common::spec;
 use sqlparser::ast;
-use sqlparser::ast::DataType;
+use sqlparser::keywords::RESERVED_FOR_COLUMN_ALIAS;
 use sqlparser::parser::Parser;
 
 struct Identifier(String);
@@ -180,7 +180,7 @@ fn from_ast_value(value: ast::Value) -> SparkResult<spec::Expr> {
         }
         Value::Boolean(value) => spec::Expr::try_from(LiteralValue(value)),
         Value::Null => Ok(spec::Expr::Literal(spec::Literal::Null)),
-        Value::Placeholder(_) => return Err(SparkError::todo("placeholder value")),
+        Value::Placeholder(placeholder) => Ok(spec::Expr::Placeholder(placeholder)),
         Value::EscapedStringLiteral(_)
         | Value::SingleQuotedByteStringLiteral(_)
         | Value::DoubleQuotedByteStringLiteral(_)
@@ -511,8 +511,8 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<spec::Expr> {
             ref value,
         } => {
             let literal = match data_type {
-                DataType::Date => parse_date_string(value.as_str()),
-                DataType::Timestamp(_, _) => parse_timestamp_string(value.as_str()),
+                ast::DataType::Date => parse_date_string(value.as_str()),
+                ast::DataType::Timestamp(_, _) => parse_timestamp_string(value.as_str()),
                 _ => Err(SparkError::unsupported(format!(
                     "typed string expression: {:?}",
                     expr
@@ -703,6 +703,11 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<spec::Expr> {
             name: "<=>".to_string(),
             args: vec![from_ast_expression(*a)?, from_ast_expression(*b)?],
         })),
+        Expr::Named { expr, name } => Ok(spec::Expr::Alias {
+            expr: Box::new(from_ast_expression(*expr)?),
+            name: vec![name.to_string()],
+            metadata: None,
+        }),
         Expr::JsonAccess { .. }
         | Expr::IsUnknown(_)
         | Expr::IsNotUnknown(_)
@@ -727,7 +732,6 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<spec::Expr> {
         | Expr::Array(_)
         | Expr::MatchAgainst { .. }
         | Expr::Struct { .. }
-        | Expr::Named { .. }
         | Expr::Dictionary(_)
         | Expr::OuterJoin(_)
         | Expr::Prior(_) => Err(SparkError::unsupported(format!("expression: {:?}", expr))),
@@ -737,8 +741,19 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<spec::Expr> {
 pub(crate) fn parse_spark_expression(sql: &str) -> SparkResult<spec::Expr> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
     let expr = parser.parse_wildcard_expr()?;
+    let expr = match expr {
+        x @ ast::Expr::Wildcard | x @ ast::Expr::QualifiedWildcard(_) => from_ast_expression(x)?,
+        x => match parser.parse_optional_alias(RESERVED_FOR_COLUMN_ALIAS)? {
+            Some(alias) => spec::Expr::Alias {
+                expr: Box::new(from_ast_expression(x)?),
+                name: vec![alias.to_string()],
+                metadata: None,
+            },
+            None => from_ast_expression(x)?,
+        },
+    };
     fail_on_extra_token(&mut parser, "expression")?;
-    from_ast_expression(expr)
+    Ok(expr)
 }
 
 pub(crate) fn parse_spark_qualified_wildcard(sql: &str) -> SparkResult<String> {

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::error::{SparkError, SparkResult};
 use crate::extension::function::alias::MultiAlias;
 use crate::extension::function::contains::Contains;
+use crate::extension::function::map_function::MapFunction;
 use crate::extension::function::struct_function::StructFunction;
 use crate::sql::expression::parse_spark_qualified_wildcard;
 use datafusion::arrow::datatypes::DataType;
@@ -387,6 +388,10 @@ pub(crate) fn from_spark_expression(
             }))
         }
         Expr::CallFunction { .. } => Err(SparkError::todo("call function")),
+        Expr::Placeholder(placeholder) => Ok(expr::Expr::Placeholder(expr::Placeholder::new(
+            placeholder,
+            None,
+        ))),
     }
 }
 
@@ -602,22 +607,16 @@ pub(crate) fn get_scalar_function(
         }
         "timestamp" | "to_timestamp" => Ok(functions::expr_fn::to_timestamp_micros(args)),
         "unix_timestamp" | "to_unixtime" => Ok(functions::expr_fn::to_unixtime(args)),
-        "struct" => {
-            let field_names: Vec<String> = args.iter().map(|x| {
-                match x {
-                    expr::Expr::Column(column) => Ok(column.name.to_string()),
-                    _ => {
-                        Err(SparkError::invalid("get_scalar_function: struct function should have expr::Expr::Column as arguments"))
-                    }
-                }
-            }).collect::<SparkResult<Vec<String>>>()?;
-            Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
-                    StructFunction::new(field_names),
-                ))),
-                args,
-            }))
-        }
+        "struct" => Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+            func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
+                StructFunction::try_new_from_expressions(args.clone())?,
+            ))),
+            args,
+        })),
+        "map" => Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+            func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(MapFunction::new()))),
+            args,
+        })),
         _ => Err(SparkError::invalid(format!("unknown function: {}", name))),
     }
 }

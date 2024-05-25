@@ -318,13 +318,51 @@
     {
       "input": "SELECT :param_1",
       "output": {
-        "failure": "not implemented: placeholder value"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "placeholder": ":param_1"
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT ?",
       "output": {
-        "failure": "not implemented: placeholder value"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "placeholder": "?"
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -718,7 +756,35 @@
     {
       "input": "SELECT abs(?)",
       "output": {
-        "failure": "not implemented: placeholder value"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "abs",
+                    "arguments": [
+                      {
+                        "placeholder": "?"
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
