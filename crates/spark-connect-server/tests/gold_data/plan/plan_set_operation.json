@@ -269,13 +269,211 @@
     {
       "input": "select  id\nfrom (((select id from t0)\n       union all\n       (select  id from t0))\n      union all\n      (select id from t0)) as u_1\n      ",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "setOperation": {
+                      "left": {
+                        "setOperation": {
+                          "left": {
+                            "project": {
+                              "input": {
+                                "read": {
+                                  "namedTable": {
+                                    "unparsedIdentifier": "t0",
+                                    "options": {}
+                                  },
+                                  "isStreaming": false
+                                },
+                                "planId": null,
+                                "sourceInfo": null
+                              },
+                              "expressions": [
+                                {
+                                  "unresolvedAttribute": {
+                                    "unparsedIdentifier": "id",
+                                    "planId": null
+                                  }
+                                }
+                              ]
+                            },
+                            "planId": null,
+                            "sourceInfo": null
+                          },
+                          "right": {
+                            "project": {
+                              "input": {
+                                "read": {
+                                  "namedTable": {
+                                    "unparsedIdentifier": "t0",
+                                    "options": {}
+                                  },
+                                  "isStreaming": false
+                                },
+                                "planId": null,
+                                "sourceInfo": null
+                              },
+                              "expressions": [
+                                {
+                                  "unresolvedAttribute": {
+                                    "unparsedIdentifier": "id",
+                                    "planId": null
+                                  }
+                                }
+                              ]
+                            },
+                            "planId": null,
+                            "sourceInfo": null
+                          },
+                          "setOpType": "union",
+                          "isAll": true,
+                          "byName": false,
+                          "allowMissingColumns": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "right": {
+                        "project": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "unparsedIdentifier": "t0",
+                                "options": {}
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null,
+                            "sourceInfo": null
+                          },
+                          "expressions": [
+                            {
+                              "unresolvedAttribute": {
+                                "unparsedIdentifier": "id",
+                                "planId": null
+                              }
+                            }
+                          ]
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "setOpType": "union",
+                      "isAll": true,
+                      "byName": false,
+                      "allowMissingColumns": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "name": "u_1",
+                  "columns": []
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "id",
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from ((select * from t1) union (select * from t2)) t",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "setOperation": {
+                      "left": {
+                        "project": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "unparsedIdentifier": "t1",
+                                "options": {}
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null,
+                            "sourceInfo": null
+                          },
+                          "expressions": [
+                            {
+                              "unresolvedStar": {
+                                "unparsedTarget": null
+                              }
+                            }
+                          ]
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "right": {
+                        "project": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "unparsedIdentifier": "t2",
+                                "options": {}
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null,
+                            "sourceInfo": null
+                          },
+                          "expressions": [
+                            {
+                              "unresolvedStar": {
+                                "unparsedTarget": null
+                              }
+                            }
+                          ]
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "setOpType": "union",
+                      "isAll": false,
+                      "byName": false,
+                      "allowMissingColumns": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "name": "t",
+                  "columns": []
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

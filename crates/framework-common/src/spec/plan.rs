@@ -414,6 +414,12 @@ pub enum PlanNode {
         positional_arguments: Vec<Literal>,
         named_arguments: HashMap<String, Literal>,
     },
+    Values(Vec<Vec<Expr>>),
+    TableAlias {
+        input: Box<Plan>,
+        name: String,
+        columns: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -138,43 +138,43 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SparkResult<spec::Plan> {
     if for_clause.is_some() {
         return Err(SparkError::unsupported("FOR clause"));
     }
-    let relation = from_ast_set_expr(*body)?;
+    let plan = from_ast_set_expr(*body)?;
 
-    let relation = if !order_by.is_empty() {
+    let plan = if !order_by.is_empty() {
         let order_by = order_by
             .into_iter()
             .map(from_ast_order_by)
             .collect::<SparkResult<_>>()?;
         spec::Plan::new(spec::PlanNode::Sort {
-            input: Box::new(relation),
+            input: Box::new(plan),
             order: order_by,
             is_global: true,
         })
     } else {
-        relation
+        plan
     };
 
-    let relation = if let Some(ast::Offset { value, rows: _ }) = offset {
+    let plan = if let Some(ast::Offset { value, rows: _ }) = offset {
         let offset = LiteralValue::<i32>::try_from(value)?.0;
         spec::Plan::new(spec::PlanNode::Offset {
-            input: Box::new(relation),
+            input: Box::new(plan),
             offset,
         })
     } else {
-        relation
+        plan
     };
 
-    let relation = if let Some(limit) = limit {
+    let plan = if let Some(limit) = limit {
         let limit = LiteralValue::<i32>::try_from(limit)?.0;
         spec::Plan::new(spec::PlanNode::Limit {
-            input: Box::new(relation),
+            input: Box::new(plan),
             limit,
         })
     } else {
-        relation
+        plan
     };
 
-    Ok(relation)
+    Ok(plan)
 }
 
 fn from_ast_select(select: ast::Select) -> SparkResult<spec::Plan> {
@@ -227,7 +227,7 @@ fn from_ast_select(select: ast::Select) -> SparkResult<spec::Plan> {
         return Err(SparkError::unsupported("CONNECT BY clause in SELECT"));
     }
 
-    let relation = from
+    let plan = from
         .into_iter()
         .try_fold(
             None,
@@ -252,17 +252,17 @@ fn from_ast_select(select: ast::Select) -> SparkResult<spec::Plan> {
             })
         });
 
-    let relation = if let Some(selection) = selection {
+    let plan = if let Some(selection) = selection {
         let selection = from_ast_expression(selection)?;
         spec::Plan::new(spec::PlanNode::Filter {
-            input: Box::new(relation),
+            input: Box::new(plan),
             condition: selection,
         })
     } else {
-        relation
+        plan
     };
 
-    let relation = match group_by {
+    let plan = match group_by {
         GroupByExpr::All => return Err(SparkError::unsupported("GROUP BY ALL")),
         GroupByExpr::Expressions(group_by) => {
             let projection = projection
@@ -290,7 +290,7 @@ fn from_ast_select(select: ast::Select) -> SparkResult<spec::Plan> {
                     return Err(SparkError::unsupported("HAVING without GROUP BY"));
                 }
                 spec::Plan::new(spec::PlanNode::Project {
-                    input: Some(Box::new(relation)),
+                    input: Some(Box::new(plan)),
                     expressions: projection,
                 })
             } else {
@@ -299,7 +299,7 @@ fn from_ast_select(select: ast::Select) -> SparkResult<spec::Plan> {
                     .map(from_ast_expression)
                     .collect::<SparkResult<_>>()?;
                 let aggregate = spec::Plan::new(spec::PlanNode::Aggregate {
-                    input: Box::new(relation),
+                    input: Box::new(plan),
                     group_type: spec::GroupType::GroupBy,
                     grouping_expressions: group_by,
                     aggregate_expressions: projection,
@@ -318,7 +318,7 @@ fn from_ast_select(select: ast::Select) -> SparkResult<spec::Plan> {
         }
     };
 
-    let relation = if !sort_by.is_empty() {
+    let plan = if !sort_by.is_empty() {
         let sort_by = sort_by
             .into_iter()
             .map(|expr| {
@@ -331,18 +331,18 @@ fn from_ast_select(select: ast::Select) -> SparkResult<spec::Plan> {
             })
             .collect::<SparkResult<_>>()?;
         spec::Plan::new(spec::PlanNode::Sort {
-            input: Box::new(relation),
+            input: Box::new(plan),
             order: sort_by,
             is_global: false,
         })
     } else {
-        relation
+        plan
     };
 
-    let relation = match distinct {
-        None => relation,
+    let plan = match distinct {
+        None => plan,
         Some(Distinct::Distinct) => spec::Plan::new(spec::PlanNode::Deduplicate {
-            input: Box::new(relation),
+            input: Box::new(plan),
             column_names: vec![],
             all_columns_as_keys: true,
             within_watermark: false,
@@ -350,7 +350,7 @@ fn from_ast_select(select: ast::Select) -> SparkResult<spec::Plan> {
         Some(Distinct::On(_)) => return Err(SparkError::unsupported("DISTINCT ON")),
     };
 
-    Ok(relation)
+    Ok(plan)
 }
 
 fn from_ast_set_expr(set_expr: ast::SetExpr) -> SparkResult<spec::Plan> {
@@ -387,7 +387,21 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SparkResult<spec::Plan> {
                 allow_missing_columns: false,
             }))
         }
-        SetExpr::Values(_) => Err(SparkError::unsupported("VALUES clause in set expression")),
+        SetExpr::Values(values) => {
+            let ast::Values {
+                explicit_row: _,
+                rows,
+            } = values;
+            let rows = rows
+                .into_iter()
+                .map(|row| {
+                    row.into_iter()
+                        .map(|v| from_ast_expression(v))
+                        .collect::<SparkResult<Vec<_>>>()
+                })
+                .collect::<SparkResult<Vec<_>>>()?;
+            Ok(spec::Plan::new(spec::PlanNode::Values(rows)))
+        }
         SetExpr::Insert(_) => Err(SparkError::unsupported(
             "INSERT statement in set expression",
         )),
@@ -421,10 +435,10 @@ fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SparkResult<spec::Pl
     use sqlparser::ast::{JoinConstraint, JoinOperator};
 
     let ast::TableWithJoins { relation, joins } = table;
-    let relation = from_ast_table_factor(relation)?;
-    let relation = joins
+    let plan = from_ast_table_factor(relation)?;
+    let plan = joins
         .into_iter()
-        .try_fold(relation, |left, join| -> SparkResult<_> {
+        .try_fold(plan, |left, join| -> SparkResult<_> {
             let ast::Join {
                 relation: right,
                 join_operator,
@@ -477,7 +491,7 @@ fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SparkResult<spec::Pl
                 join_data_type: None,
             }))
         })?;
-    Ok(relation)
+    Ok(plan)
 }
 
 fn from_ast_table_factor(table: ast::TableFactor) -> SparkResult<spec::Plan> {
@@ -492,9 +506,6 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SparkResult<spec::Plan> {
             version,
             partitions,
         } => {
-            if alias.is_some() {
-                return Err(SparkError::todo("table alias"));
-            }
             if args.is_some() {
                 return Err(SparkError::unsupported("table args"));
             }
@@ -507,13 +518,15 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SparkResult<spec::Plan> {
             if !partitions.is_empty() {
                 return Err(SparkError::unsupported("table partitions"));
             }
-            Ok(spec::Plan::new(spec::PlanNode::Read {
+            let plan = spec::Plan::new(spec::PlanNode::Read {
                 is_streaming: false,
                 read_type: spec::ReadType::NamedTable {
                     unparsed_identifier: name.to_string(),
                     options: Default::default(),
                 },
-            }))
+            });
+            let plan = with_ast_table_alias(plan, alias)?;
+            Ok(plan)
         }
         TableFactor::Derived {
             lateral,
@@ -523,10 +536,9 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SparkResult<spec::Plan> {
             if lateral {
                 return Err(SparkError::unsupported("LATERAL in derived table factor"));
             }
-            if alias.is_some() {
-                return Err(SparkError::todo("table alias"));
-            }
-            from_ast_query(*subquery)
+            let plan = from_ast_query(*subquery)?;
+            let plan = with_ast_table_alias(plan, alias)?;
+            Ok(plan)
         }
         TableFactor::TableFunction { .. } => {
             Err(SparkError::todo("table function in table factor"))
@@ -538,6 +550,22 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SparkResult<spec::Plan> {
         TableFactor::Pivot { .. } => Err(SparkError::todo("PIVOT")),
         TableFactor::Unpivot { .. } => Err(SparkError::todo("UNPIVOT")),
         TableFactor::MatchRecognize { .. } => Err(SparkError::todo("MATCH_RECOGNIZE")),
+    }
+}
+
+fn with_ast_table_alias(
+    plan: spec::Plan,
+    alias: Option<ast::TableAlias>,
+) -> SparkResult<spec::Plan> {
+    match alias {
+        None => Ok(plan),
+        Some(ast::TableAlias { name, columns }) => {
+            Ok(spec::Plan::new(spec::PlanNode::TableAlias {
+                input: Box::new(plan),
+                name: name.to_string(),
+                columns: columns.into_iter().map(|c| c.to_string()).collect(),
+            }))
+        }
     }
 }
 

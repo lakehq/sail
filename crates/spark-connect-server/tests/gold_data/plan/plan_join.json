@@ -115,13 +115,152 @@
     {
       "input": "select * from t anti join u as uu on a = b",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "anti",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "u",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "a",
+                            "planId": null
+                          }
+                        },
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "b",
+                            "planId": null
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  },
+                  "joinType": "inner",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t anti join u using(a, b)",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "anti",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "inner",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -133,67 +272,661 @@
     {
       "input": "select * from t as tt cross join u",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "cross",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t as tt full join u",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "fullOuter",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t as tt full outer join u",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "fullOuter",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t as tt inner join u",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "inner",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t as tt join u",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "inner",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t as tt left anti join u",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "leftAnti",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t as tt left join u",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "leftOuter",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t as tt left outer join u",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "leftOuter",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t as tt left semi join u",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "leftSemi",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t as tt right join u",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "rightOuter",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t as tt right outer join u",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "rightOuter",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -211,7 +944,81 @@
     {
       "input": "select * from t full join u as uu on a = b",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "u",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "a",
+                            "planId": null
+                          }
+                        },
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "b",
+                            "planId": null
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  },
+                  "joinType": "fullOuter",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -272,7 +1079,81 @@
     {
       "input": "select * from t full outer join u as uu on a = b",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "u",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "a",
+                            "planId": null
+                          }
+                        },
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "b",
+                            "planId": null
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  },
+                  "joinType": "fullOuter",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -339,7 +1220,81 @@
     {
       "input": "select * from t inner join u as uu on a = b",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "u",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "a",
+                            "planId": null
+                          }
+                        },
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "b",
+                            "planId": null
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  },
+                  "joinType": "inner",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -412,7 +1367,81 @@
     {
       "input": "select * from t join u as uu on a = b",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "u",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "a",
+                            "planId": null
+                          }
+                        },
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "b",
+                            "planId": null
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  },
+                  "joinType": "inner",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -473,7 +1502,81 @@
     {
       "input": "select * from t left anti join u as uu on a = b",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "u",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "a",
+                            "planId": null
+                          }
+                        },
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "b",
+                            "planId": null
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  },
+                  "joinType": "leftAnti",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -540,7 +1643,81 @@
     {
       "input": "select * from t left join u as uu on a = b",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "u",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "a",
+                            "planId": null
+                          }
+                        },
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "b",
+                            "planId": null
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  },
+                  "joinType": "leftOuter",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -607,7 +1784,81 @@
     {
       "input": "select * from t left outer join u as uu on a = b",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "u",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "a",
+                            "planId": null
+                          }
+                        },
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "b",
+                            "planId": null
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  },
+                  "joinType": "leftOuter",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -668,7 +1919,81 @@
     {
       "input": "select * from t left semi join u as uu on a = b",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "u",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "a",
+                            "planId": null
+                          }
+                        },
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "b",
+                            "planId": null
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  },
+                  "joinType": "leftSemi",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -729,7 +2054,81 @@
     {
       "input": "select * from t right join u as uu on a = b",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "u",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "a",
+                            "planId": null
+                          }
+                        },
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "b",
+                            "planId": null
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  },
+                  "joinType": "rightOuter",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -790,7 +2189,81 @@
     {
       "input": "select * from t right outer join u as uu on a = b",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "t",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "u",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "a",
+                            "planId": null
+                          }
+                        },
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "b",
+                            "planId": null
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  },
+                  "joinType": "rightOuter",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -851,61 +2324,200 @@
     {
       "input": "select * from t semi join u as uu on a = b",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "semi",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "u",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "a",
+                            "planId": null
+                          }
+                        },
+                        {
+                          "unresolvedAttribute": {
+                            "unparsedIdentifier": "b",
+                            "planId": null
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  },
+                  "joinType": "inner",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t semi join u using(a, b)",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "semi",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "inner",
+                  "usingColumns": [
+                    "a",
+                    "b"
+                  ],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t tt natural full join u as uu",
       "output": {
-        "failure": "not implemented: table alias"
+        "failure": "not supported: natural join"
       }
     },
     {
       "input": "select * from t tt natural full outer join u as uu",
       "output": {
-        "failure": "not implemented: table alias"
+        "failure": "not supported: natural join"
       }
     },
     {
       "input": "select * from t tt natural inner join u as uu",
       "output": {
-        "failure": "not implemented: table alias"
+        "failure": "not supported: natural join"
       }
     },
     {
       "input": "select * from t tt natural join u as uu",
       "output": {
-        "failure": "not implemented: table alias"
+        "failure": "not supported: natural join"
       }
     },
     {
       "input": "select * from t tt natural left join u as uu",
       "output": {
-        "failure": "not implemented: table alias"
+        "failure": "not supported: natural join"
       }
     },
     {
       "input": "select * from t tt natural left outer join u as uu",
       "output": {
-        "failure": "not implemented: table alias"
+        "failure": "not supported: natural join"
       }
     },
     {
       "input": "select * from t tt natural right join u as uu",
       "output": {
-        "failure": "not implemented: table alias"
+        "failure": "not supported: natural join"
       }
     },
     {
       "input": "select * from t tt natural right outer join u as uu",
       "output": {
-        "failure": "not implemented: table alias"
+        "failure": "not supported: natural join"
       }
     },
     {
