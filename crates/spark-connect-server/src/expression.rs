@@ -13,9 +13,9 @@ use datafusion::sql::planner::ContextProvider;
 use datafusion::{functions, functions_array};
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
-    expr, window_frame, AggregateFunction, AggregateUDF, BuiltInWindowFunction,
-    BuiltinScalarFunction, ExprSchemable, GetFieldAccess, GetIndexedField, Operator,
-    ScalarFunctionDefinition, ScalarUDF, TableSource, WindowUDF,
+    expr, window_frame, AggregateFunction, AggregateUDF, BuiltInWindowFunction, ExprSchemable,
+    GetFieldAccess, GetIndexedField, Operator, ScalarFunctionDefinition, ScalarUDF, TableSource,
+    WindowUDF,
 };
 use framework_common::spec;
 use framework_python::partial_python_udf::PartialPythonUDF;
@@ -443,81 +443,77 @@ pub(crate) fn get_scalar_function(
     match name {
         "isnull" => {
             let expr = get_one_argument(args)?;
-            return Ok(expr::Expr::IsNull(expr));
+            Ok(expr::Expr::IsNull(expr))
         }
         "isnotnull" => {
             let expr = get_one_argument(args)?;
-            return Ok(expr::Expr::IsNotNull(expr));
+            Ok(expr::Expr::IsNotNull(expr))
         }
         "negative" => {
             let expr = get_one_argument(args)?;
-            return Ok(expr::Expr::Negative(expr));
+            Ok(expr::Expr::Negative(expr))
         }
         "not" => {
             let expr = get_one_argument(args)?;
-            return Ok(expr::Expr::Not(expr));
+            Ok(expr::Expr::Not(expr))
         }
         "like" => {
             let (expr, pattern) = get_two_arguments(args)?;
-            return Ok(expr::Expr::Like(expr::Like {
+            Ok(expr::Expr::Like(expr::Like {
                 negated: false,
                 expr,
                 pattern,
                 case_insensitive: false,
                 escape_char: None,
-            }));
+            }))
         }
         "ilike" => {
             let (expr, pattern) = get_two_arguments(args)?;
-            return Ok(expr::Expr::Like(expr::Like {
+            Ok(expr::Expr::Like(expr::Like {
                 negated: false,
                 expr,
                 pattern,
                 case_insensitive: true,
                 escape_char: None,
-            }));
+            }))
         }
         "rlike" => {
             let (expr, pattern) = get_two_arguments(args)?;
-            return Ok(expr::Expr::SimilarTo(expr::Like {
+            Ok(expr::Expr::SimilarTo(expr::Like {
                 negated: false,
                 expr,
                 pattern,
                 case_insensitive: false,
                 escape_char: None,
-            }));
+            }))
         }
         "contains" => {
             // TODO: Validate that this works
-            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+            Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                 func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(Contains::new()))),
                 args: args,
-            }));
+            }))
         }
         "startswith" => {
             let (left, right) = get_two_arguments(args)?;
-            return Ok(functions::expr_fn::starts_with(*left, *right));
+            Ok(functions::expr_fn::starts_with(*left, *right))
         }
         "endswith" => {
-            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::EndsWith),
-                args,
-            }));
+            let (left, right) = get_two_arguments(args)?;
+            Ok(functions::expr_fn::ends_with(*left, *right))
         }
-        "array" => {
-            return Ok(functions_array::expr_fn::make_array(args));
-        }
+        "array" => Ok(functions_array::expr_fn::make_array(args)),
         "array_has" | "array_contains" => {
             let (left, right) = get_two_arguments(args)?;
-            return Ok(functions_array::expr_fn::array_has(*left, *right));
+            Ok(functions_array::expr_fn::array_has(*left, *right))
         }
         "array_has_all" | "array_contains_all" => {
             let (left, right) = get_two_arguments(args)?;
-            return Ok(functions_array::expr_fn::array_has_all(*left, *right));
+            Ok(functions_array::expr_fn::array_has_all(*left, *right))
         }
         "array_has_any" | "array_contains_any" => {
             let (left, right) = get_two_arguments(args)?;
-            return Ok(functions_array::expr_fn::array_has_any(*left, *right));
+            Ok(functions_array::expr_fn::array_has_any(*left, *right))
         }
         "array_repeat" => {
             let (element, count) = get_two_arguments(args)?;
@@ -525,79 +521,69 @@ pub(crate) fn get_scalar_function(
                 expr: count,
                 data_type: DataType::Int64,
             });
-            return Ok(functions_array::expr_fn::array_repeat(*element, count));
+            Ok(functions_array::expr_fn::array_repeat(*element, count))
         }
-        "avg" => {
-            return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
-                func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Avg),
-                args,
-                distinct: false,
-                filter: None,
-                order_by: None,
-                null_treatment: None,
-            }));
-        }
-        "sum" => {
-            return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
-                func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Sum),
-                args,
-                distinct: false,
-                filter: None,
-                order_by: None,
-                null_treatment: None,
-            }));
-        }
-        "count" => {
-            return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
-                func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Count),
-                args,
-                distinct: false,
-                filter: None,
-                order_by: None,
-                null_treatment: None,
-            }));
-        }
-        "max" => {
-            return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
-                func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Max),
-                args,
-                distinct: false,
-                filter: None,
-                order_by: None,
-                null_treatment: None,
-            }));
-        }
-        "min" => {
-            return Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
-                func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Min),
-                args,
-                distinct: false,
-                filter: None,
-                order_by: None,
-                null_treatment: None,
-            }));
-        }
+        "avg" => Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
+            func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Avg),
+            args,
+            distinct: false,
+            filter: None,
+            order_by: None,
+            null_treatment: None,
+        })),
+        "sum" => Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
+            func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Sum),
+            args,
+            distinct: false,
+            filter: None,
+            order_by: None,
+            null_treatment: None,
+        })),
+        "count" => Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
+            func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Count),
+            args,
+            distinct: false,
+            filter: None,
+            order_by: None,
+            null_treatment: None,
+        })),
+        "max" => Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
+            func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Max),
+            args,
+            distinct: false,
+            filter: None,
+            order_by: None,
+            null_treatment: None,
+        })),
+        "min" => Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
+            func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Min),
+            args,
+            distinct: false,
+            filter: None,
+            order_by: None,
+            null_treatment: None,
+        })),
         "in" => {
             if args.is_empty() {
                 return Err(SparkError::invalid("in requires at least 1 argument"));
             }
             let expr = args.remove(0);
-            return Ok(expr::Expr::InList(expr::InList {
+            Ok(expr::Expr::InList(expr::InList {
                 expr: Box::new(expr),
                 list: args,
                 negated: false,
-            }));
+            }))
         }
         "abs" => {
             let expr = get_one_argument(args)?;
-            return Ok(functions::expr_fn::abs(*expr));
+            Ok(functions::expr_fn::abs(*expr))
         }
         name @ ("explode" | "explode_outer" | "posexplode" | "posexplode_outer") => {
             let udf = ScalarUDF::from(Explode::new(name));
-            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+            Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                 func_def: ScalarFunctionDefinition::UDF(Arc::new(udf)),
                 args,
-            }));
+            }))
         }
         "regexp_replace" => {
             if args.len() != 3 {
@@ -607,19 +593,15 @@ pub(crate) fn get_scalar_function(
             args.push(expr::Expr::Literal(ScalarValue::Utf8(Some(
                 "g".to_string(),
             ))));
-            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+            Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                 func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
                     functions::regex::regexpreplace::RegexpReplaceFunc::new(),
                 ))),
-                args: args,
-            }));
+                args,
+            }))
         }
-        "timestamp" | "to_timestamp" => {
-            return Ok(functions::expr_fn::to_timestamp_micros(args));
-        }
-        "unix_timestamp" | "to_unixtime" => {
-            return Ok(functions::expr_fn::to_unixtime(args));
-        }
+        "timestamp" | "to_timestamp" => Ok(functions::expr_fn::to_timestamp_micros(args)),
+        "unix_timestamp" | "to_unixtime" => Ok(functions::expr_fn::to_unixtime(args)),
         "struct" => {
             let field_names: Vec<String> = args.iter().map(|x| {
                 match x {
@@ -629,20 +611,15 @@ pub(crate) fn get_scalar_function(
                     }
                 }
             }).collect::<SparkResult<Vec<String>>>()?;
-            return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+            Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                 func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
                     StructFunction::new(field_names),
                 ))),
-                args: args,
-            }));
+                args,
+            }))
         }
-        _ => {}
+        _ => Err(SparkError::invalid(format!("unknown function: {}", name))),
     }
-
-    Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-        func_def: ScalarFunctionDefinition::BuiltIn(name.parse()?),
-        args,
-    }))
 }
 
 pub(crate) fn get_window_function(name: &str) -> SparkResult<expr::WindowFunctionDefinition> {

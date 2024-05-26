@@ -376,17 +376,18 @@ pub(crate) async fn from_spark_relation(
             }
             let distinct = if column_names.len() > 0 && !all_columns_as_keys {
                 let on_expr: Vec<Expr> = column_names
-                    .into_iter()
-                    .map(|name| {
-                        // TODO: handle qualified column names
-                        let field = schema.field_with_unqualified_name(name.as_str())?;
-                        Ok(Expr::Column(field.qualified_column()))
-                    })
-                    .collect::<SparkResult<_>>()?;
-                let select_expr: Vec<Expr> = schema
-                    .fields()
                     .iter()
-                    .map(|field| Expr::Column(field.qualified_column()))
+                    .flat_map(|name| {
+                        schema
+                            .columns_with_unqualified_name(name.as_str())
+                            .into_iter()
+                    })
+                    .map(|x| Expr::Column(x.clone()))
+                    .collect();
+                let select_expr: Vec<Expr> = schema
+                    .columns()
+                    .iter()
+                    .map(|x| Expr::Column(x.clone()))
                     .collect();
                 plan::Distinct::On(plan::DistinctOn::try_new(
                     on_expr,
@@ -467,10 +468,10 @@ pub(crate) async fn from_spark_relation(
                 )));
             }
             let expr: Vec<Expr> = schema
-                .fields()
+                .columns()
                 .iter()
                 .zip(column_names.iter())
-                .map(|(field, name)| Expr::Column(field.qualified_column()).alias(name))
+                .map(|(col, name)| Expr::Column(col.clone()).alias(name))
                 .collect();
             Ok(LogicalPlan::Projection(plan::Projection::try_new(
                 expr,
@@ -484,14 +485,14 @@ pub(crate) async fn from_spark_relation(
             let input = from_spark_relation(ctx, *input).await?;
             let schema = input.schema();
             let expr: Vec<Expr> = schema
-                .fields()
+                .columns()
                 .iter()
-                .map(|field| {
-                    let name = field.name();
-                    let column = Expr::Column(field.qualified_column());
+                .map(|column| {
+                    let name = &column.name;
+                    let expr = Expr::Column(column.clone());
                     match rename_columns_map.get(name) {
-                        Some(n) => column.alias(n),
-                        None => column,
+                        Some(n) => expr.alias(n),
+                        None => expr,
                     }
                 })
                 .collect();
@@ -514,10 +515,10 @@ pub(crate) async fn from_spark_relation(
                 return Err(SparkError::todo("drop column expressions"));
             }
             let expr: Vec<Expr> = schema
-                .fields()
+                .columns()
                 .iter()
-                .filter(|field| !column_names.contains(&field.name()))
-                .map(|field| Expr::Column(field.qualified_column()))
+                .filter(|column| !column_names.contains(&column.name))
+                .map(|column| Expr::Column(column.clone()))
                 .collect();
             Ok(LogicalPlan::Projection(plan::Projection::try_new(
                 expr,
@@ -555,16 +556,16 @@ pub(crate) async fn from_spark_relation(
                 })
                 .collect::<SparkResult<_>>()?;
             let mut expr: Vec<Expr> = schema
-                .fields()
+                .columns()
                 .iter()
-                .map(|field| {
-                    let name = field.name();
+                .map(|column| {
+                    let name = &column.name;
                     match aliases.get_mut(name) {
                         Some((e, exists)) => {
                             *exists = true;
                             e.clone().alias(name)
                         }
-                        None => Expr::Column(field.qualified_column()),
+                        None => Expr::Column(column.clone()),
                     }
                 })
                 .collect();
@@ -701,9 +702,15 @@ pub(crate) async fn from_spark_relation(
                 ))])?;
             Ok(results.into_optimized_plan()?)
         }
-        PlanNode::SetCurrentDatabase { database_name: _ } => {
-            // TODO: Uncomment when we upgrade to DataFusion 38.0.0
-            // ctx.state().config().options_mut().catalog.default_schema = db_name;
+        PlanNode::SetCurrentDatabase { database_name } => {
+            ctx.state_weak_ref()
+                .upgrade()
+                .ok_or_else(|| SparkError::internal("invalid session context"))?
+                .write()
+                .config_mut()
+                .options_mut()
+                .catalog
+                .default_schema = database_name;
             Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
                 produce_one_row: false,
                 schema: DFSchemaRef::new(DFSchema::empty()),
@@ -938,9 +945,15 @@ pub(crate) async fn from_spark_relation(
                 ))])?;
             Ok(results.into_optimized_plan()?)
         }
-        PlanNode::SetCurrentCatalog { catalog_name: _ } => {
-            // TODO: Uncomment when we upgrade to DataFusion 38.0.0
-            // ctx.state().config().options_mut().catalog.default_catalog = catalog_name;
+        PlanNode::SetCurrentCatalog { catalog_name } => {
+            ctx.state_weak_ref()
+                .upgrade()
+                .ok_or_else(|| SparkError::internal("invalid session context"))?
+                .write()
+                .config_mut()
+                .options_mut()
+                .catalog
+                .default_catalog = catalog_name;
             Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
                 produce_one_row: false,
                 schema: DFSchemaRef::new(DFSchema::empty()),

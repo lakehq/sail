@@ -47,19 +47,17 @@ chrono-tz = "0.9"
 #
 # The versions of the following dependencies are managed manually.
 #
-datafusion = { version = "37.1.0", features = ["serde"] }
-datafusion-common = { version = "37.1.0", features = ["object_store"] }
-datafusion-expr = "37.1.0"
-datafusion-functions-array = "37.1.0"
+datafusion = { version = "38.0.0", features = ["serde"] }
+datafusion-common = { version = "38.0.0", features = ["object_store"] }
+datafusion-expr = "38.0.0"
+datafusion-functions-array = "38.0.0"
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 # 0.21 breaks when datafusion has pyarrow enabled
 pyo3 = { version = "0.21.2", features = ["auto-initialize", "serde"] }
 # Should be the equivalent of enabling the pyarrow feature in datafusion since we already have pyo3 in the workspace
 arrow = { version = "51.0.0", features = ["ffi"] }
 arrow-cast = { version = "51.0.0" }
-# 0.44.0 is the version that DataFusion 37.1.0 uses (DataFusion does not have serde enabled)
-# It will co-exist with our patched newer version of sqlparser,
-# until we stop relying on `SqlToRel` in DataFusion.
+# We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.
 sqlparser = { version = "0.46.0", features = ["serde", "visitor"] }
 polars = { version = "0.39.2", features = ["serde", "polars-io", "dtype-struct"] }
 polars-arrow = { version = "0.39.2", features = ["serde", "arrow_rs"] }

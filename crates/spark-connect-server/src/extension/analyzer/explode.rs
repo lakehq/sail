@@ -147,9 +147,9 @@ impl ExplodeRewriter {
         let mut projections = self
             .plan
             .schema()
-            .fields()
+            .columns()
             .iter()
-            .map(|f| Expr::Column(f.qualified_column()))
+            .map(|x| Expr::Column(x.clone()))
             .collect::<Vec<Expr>>();
         projections.push(arg.clone().alias(&column.name));
 
@@ -158,7 +158,7 @@ impl ExplodeRewriter {
                 projections,
                 Arc::new(self.plan.clone()),
             )?),
-            column,
+            vec![column],
             UnnestOptions { preserve_nulls },
         )?;
         Ok(out)

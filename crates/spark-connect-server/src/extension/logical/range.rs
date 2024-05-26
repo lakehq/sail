@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
-use datafusion::common::{DFField, DFSchema, DFSchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::common::{DFSchema, DFSchemaRef};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 
 use crate::error::{SparkError, SparkResult};
@@ -92,8 +92,9 @@ impl RangeNode {
                 "the number of partitions must be greater than 0",
             ));
         }
-        let schema = Arc::new(DFSchema::new_with_metadata(
-            vec![DFField::new_unqualified("id", DataType::Int64, false)],
+        let field = Field::new("id", DataType::Int64, false);
+        let schema = Arc::new(DFSchema::from_unqualifed_fields(
+            vec![field].into(),
             HashMap::new(),
         )?);
         Ok(Self {
