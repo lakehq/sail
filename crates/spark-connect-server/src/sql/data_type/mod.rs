@@ -229,12 +229,9 @@ pub(crate) fn from_ast_data_type(sql_type: &ast::DataType) -> SparkResult<spec::
                         None => return Err(SparkError::invalid("missing field name")),
                     };
                     let data_type = from_ast_data_type(&f.field_type)?;
-                    let metadata = if let Some(comment) = &f.comment {
-                        let mut metadata = HashMap::new();
+                    let mut metadata = HashMap::new();
+                    if let Some(comment) = &f.comment {
                         metadata.insert("comment".to_string(), comment.clone());
-                        Some(metadata)
-                    } else {
-                        None
                     };
                     Ok(spec::Field {
                         name,

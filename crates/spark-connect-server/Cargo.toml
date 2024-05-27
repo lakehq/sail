@@ -48,6 +48,7 @@ arrow-cast = { workspace = true }
 sqlparser = { workspace = true }
 polars = { workspace = true }
 polars-arrow = { workspace = true }
+serde_arrow = { workspace = true }
 
 [build-dependencies]
 tonic-build = { workspace = true }

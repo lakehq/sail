@@ -1530,6 +1530,7 @@ version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dd08c532ae367adf81c312a4580bc67f1d0fe8bc9c460520283f4c0ff277888"
 dependencies = [
+ "bytemuck",
  "cfg-if",
  "crunchy",
  "num-traits",
@@ -3445,6 +3446,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_arrow"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42134606eddcd2475fb1d5ecdba0d7dda5ef287b6cf1c44949e09849b2cdb27f"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "bytemuck",
+ "chrono",
+ "half",
+ "serde",
+]
+
+[[package]]
 name = "serde_bytes"
 version = "0.11.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3617,6 +3634,7 @@ dependencies = [
  "pyo3",
  "regex",
  "serde",
+ "serde_arrow",
  "serde_json",
  "sqlparser 0.46.0",
  "thiserror",

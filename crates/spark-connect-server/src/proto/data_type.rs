@@ -18,9 +18,10 @@ impl TryFrom<sdt::StructField> for spec::Field {
         } = field;
         let data_type = data_type.required("data type")?;
         let data_type = spec::DataType::try_from(data_type)?;
-        let metadata: Option<HashMap<String, String>> = metadata
+        let metadata: HashMap<String, String> = metadata
             .map(|m| -> SparkResult<_> { Ok(serde_json::from_str(m.as_str())?) })
-            .transpose()?;
+            .transpose()?
+            .unwrap_or_default();
         Ok(spec::Field {
             name,
             data_type,
@@ -193,14 +194,12 @@ impl TryFrom<spec::Field> for sdt::StructField {
             metadata,
         } = field;
         let data_type = data_type.try_into()?;
-        let metadata: Option<String> = metadata
-            .map(|m| -> SparkResult<_> { Ok(serde_json::to_string(&m)?) })
-            .transpose()?;
+        let metadata = serde_json::to_string(&metadata)?;
         Ok(sdt::StructField {
             name,
             data_type: Some(data_type),
             nullable,
-            metadata,
+            metadata: Some(metadata),
         })
     }
 }
