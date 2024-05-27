@@ -1,4 +1,3 @@
-use arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -8,6 +7,7 @@ use crate::sql::session_catalog::database::DatabaseMetadata;
 use crate::sql::session_catalog::function::FunctionMetadata;
 use crate::sql::session_catalog::table::TableMetadata;
 use crate::sql::session_catalog::{EmptyMetadata, SessionCatalogContext, SingleValueMetadata};
+use arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use datafusion::common::{DFSchemaRef, Result};
 use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
@@ -188,12 +188,11 @@ impl CatalogCommand {
                 to_record_batch(fields, &rows)
             }
             CatalogCommand::DatabaseExists { database_name } => {
-                let value = ctx
-                    .list_databases(
-                        Some(ctx.default_catalog()?.as_str()),
-                        Some(database_name.as_str()),
-                    )?
-                    .is_empty();
+                let databases = ctx.list_databases(
+                    Some(ctx.default_catalog()?.as_str()),
+                    Some(database_name.as_str()),
+                )?;
+                let value = !databases.is_empty();
                 let rows = vec![SingleValueMetadata { value }];
                 to_record_batch(fields, &rows)
             }
@@ -219,14 +218,14 @@ impl CatalogCommand {
                 table_name,
                 database_name,
             } => {
-                let value = ctx
+                let tables = ctx
                     .list_tables(
                         Some(ctx.default_catalog()?.as_str()),
                         Some(ctx.infer_database(database_name)?.as_str()),
                         Some(table_name.as_str()),
                     )
-                    .await?
-                    .is_empty();
+                    .await?;
+                let value = !tables.is_empty();
                 let rows = vec![SingleValueMetadata { value }];
                 to_record_batch(fields, &rows)
             }
