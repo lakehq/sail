@@ -741,12 +741,13 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<spec::Expr> {
 
 pub(crate) fn parse_object_name(s: &str) -> SparkResult<spec::ObjectName> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(s)?;
-    let idents = parser.parse_multipart_identifier()?;
-    Ok(idents
+    let names: Vec<String> = parser
+        .parse_multipart_identifier()?
         .into_iter()
         .map(|x| x.value)
-        .collect::<Vec<_>>()
-        .into())
+        .collect();
+    fail_on_extra_token(&mut parser, "object name")?;
+    Ok(names.into())
 }
 
 pub(crate) fn parse_expression(sql: &str) -> SparkResult<spec::Expr> {
@@ -777,16 +778,16 @@ pub(crate) fn parse_wildcard_expression(sql: &str) -> SparkResult<spec::Expr> {
 pub(crate) fn parse_qualified_wildcard(sql: &str) -> SparkResult<spec::ObjectName> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
     let expr = parser.parse_wildcard_expr()?;
-    match expr {
-        ast::Expr::QualifiedWildcard(name) => {
-            let name: Vec<String> = name.0.into_iter().map(|x| x.value).collect();
-            Ok(name.into())
+    let name: Vec<String> = match expr {
+        ast::Expr::QualifiedWildcard(name) => name.0.into_iter().map(|x| x.value).collect(),
+        _ => {
+            return Err(SparkError::invalid(format!(
+                "invalid qualified wildcard: {sql}",
+            )))
         }
-        _ => Err(SparkError::invalid(format!(
-            "invalid qualified wildcard target: {:?}",
-            expr
-        ))),
-    }
+    };
+    fail_on_extra_token(&mut parser, "qualified wildcard")?;
+    Ok(name.into())
 }
 
 #[cfg(test)]
