@@ -115,9 +115,9 @@ impl ObjectName {
         Self(vec![name])
     }
 
-    pub fn child(self, name: String) -> Self {
+    pub fn child(self, name: Identifier) -> Self {
         let mut names = self.0;
-        names.push(Identifier::from(name));
+        names.push(name);
         Self(names)
     }
 }

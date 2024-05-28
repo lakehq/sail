@@ -774,6 +774,21 @@ pub(crate) fn parse_wildcard_expression(sql: &str) -> SparkResult<spec::Expr> {
     Ok(expr)
 }
 
+pub(crate) fn parse_qualified_wildcard(sql: &str) -> SparkResult<spec::ObjectName> {
+    let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
+    let expr = parser.parse_wildcard_expr()?;
+    match expr {
+        ast::Expr::QualifiedWildcard(name) => {
+            let name: Vec<String> = name.0.into_iter().map(|x| x.value).collect();
+            Ok(name.into())
+        }
+        _ => Err(SparkError::invalid(format!(
+            "invalid qualified wildcard target: {:?}",
+            expr
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_wildcard_expression;

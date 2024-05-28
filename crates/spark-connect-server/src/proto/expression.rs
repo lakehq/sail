@@ -16,7 +16,9 @@ use crate::spark::connect::{
     Expression, JavaUdf, PythonUdf, PythonUdtf, ScalarScalaUdf,
 };
 use crate::sql::data_type::parse_spark_data_type;
-use crate::sql::expression::{parse_object_name, parse_wildcard_expression};
+use crate::sql::expression::{
+    parse_object_name, parse_qualified_wildcard, parse_wildcard_expression,
+};
 use framework_common::spec;
 
 impl TryFrom<Expression> for spec::Expr {
@@ -53,7 +55,7 @@ impl TryFrom<Expression> for spec::Expr {
             }
             ExprType::UnresolvedStar(UnresolvedStar { unparsed_target }) => {
                 let target = unparsed_target
-                    .map(|x| parse_object_name(x.as_str()))
+                    .map(|x| parse_qualified_wildcard(x.as_str()))
                     .transpose()?;
                 Ok(spec::Expr::UnresolvedStar { target })
             }

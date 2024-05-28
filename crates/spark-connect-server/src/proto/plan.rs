@@ -950,7 +950,7 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     db_name,
                 } = x;
                 let table = match db_name {
-                    Some(x) => parse_object_name(x.as_str())?.child(table_name),
+                    Some(x) => parse_object_name(x.as_str())?.child(table_name.into()),
                     None => spec::ObjectName::new_unqualified(table_name.into()),
                 };
                 Ok(spec::PlanNode::ListColumns { table })
@@ -967,7 +967,7 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     db_name,
                 } = x;
                 let table = match db_name {
-                    Some(x) => parse_object_name(x.as_str())?.child(table_name),
+                    Some(x) => parse_object_name(x.as_str())?.child(table_name.into()),
                     None => spec::ObjectName::new_unqualified(table_name.into()),
                 };
                 Ok(spec::PlanNode::GetTable { table })
@@ -978,7 +978,7 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     db_name,
                 } = x;
                 let function = match db_name {
-                    Some(x) => parse_object_name(x.as_str())?.child(function_name),
+                    Some(x) => parse_object_name(x.as_str())?.child(function_name.into()),
                     None => spec::ObjectName::new_unqualified(function_name.into()),
                 };
                 Ok(spec::PlanNode::GetFunction { function })
@@ -995,7 +995,7 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     db_name,
                 } = x;
                 let table = match db_name {
-                    Some(x) => parse_object_name(x.as_str())?.child(table_name),
+                    Some(x) => parse_object_name(x.as_str())?.child(table_name.into()),
                     None => spec::ObjectName::new_unqualified(table_name.into()),
                 };
                 Ok(spec::PlanNode::TableExists { table })
@@ -1006,7 +1006,7 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     db_name,
                 } = x;
                 let function = match db_name {
-                    Some(x) => parse_object_name(x.as_str())?.child(function_name),
+                    Some(x) => parse_object_name(x.as_str())?.child(function_name.into()),
                     None => spec::ObjectName::new_unqualified(function_name.into()),
                 };
                 Ok(spec::PlanNode::FunctionExists { function })
