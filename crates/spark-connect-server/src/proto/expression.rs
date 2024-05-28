@@ -33,7 +33,8 @@ impl TryFrom<Expression> for spec::Expr {
                 unparsed_identifier,
                 plan_id,
             }) => Ok(spec::Expr::UnresolvedAttribute {
-                identifier: parse_object_name(unparsed_identifier.as_str())?,
+                // FIXME: how should the identifier be parsed?
+                identifier: spec::ObjectName::new_unqualified(unparsed_identifier.into()),
                 plan_id,
             }),
             ExprType::UnresolvedFunction(UnresolvedFunction {
