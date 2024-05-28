@@ -1,3 +1,4 @@
+use arrow::array::{RecordBatch, RecordBatchOptions};
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -12,10 +13,11 @@ use datafusion::common::{DFSchemaRef, Result};
 use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion::prelude::SessionContext;
-use datafusion_common::{exec_err, not_impl_err, DFSchema};
+use datafusion_common::{exec_err, not_impl_err, DFSchema, SchemaReference, TableReference};
 use datafusion_expr::{TableScan, UNNAMED_TABLE};
+use serde::Serialize;
 use serde_arrow::schema::{SchemaLike, TracingOptions};
-use serde_arrow::to_record_batch;
+use serde_arrow::to_arrow;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct CatalogCommandNode {
@@ -42,59 +44,93 @@ pub(crate) enum CatalogCommand {
         catalog_name: String,
     },
     ListCatalogs {
-        pattern: Option<String>,
+        catalog_pattern: Option<String>,
     },
     CurrentDatabase,
     SetCurrentDatabase {
         database_name: String,
     },
+    CreateDatabase {
+        database: SchemaReference,
+        if_not_exists: bool,
+        comment: Option<String>,
+        location: Option<String>,
+        properties: Vec<(String, String)>,
+    },
     DatabaseExists {
-        database_name: String,
+        database: SchemaReference,
     },
     GetDatabase {
-        database_name: String,
+        database: SchemaReference,
     },
     ListDatabases {
-        pattern: Option<String>,
+        catalog: Option<String>,
+        database_pattern: Option<String>,
+    },
+    DropDatabase {
+        database: SchemaReference,
+        if_exists: bool,
+        cascade: bool,
     },
     CreateTable {
-        table_name: String,
+        table: TableReference,
         plan: Arc<LogicalPlan>,
     },
     TableExists {
-        table_name: String,
-        database_name: Option<String>,
+        table: TableReference,
     },
     GetTable {
-        table_name: String,
-        database_name: Option<String>,
+        table: TableReference,
     },
     ListTables {
-        database_name: Option<String>,
-        pattern: Option<String>,
+        database: Option<SchemaReference>,
+        table_pattern: Option<String>,
+    },
+    DropTable {
+        table: TableReference,
+        if_exists: bool,
+        purge: bool,
     },
     ListColumns {
-        table_name: String,
-        database_name: Option<String>,
+        table: TableReference,
     },
     FunctionExists {
-        function_name: String,
-        database_name: Option<String>,
+        function: TableReference,
     },
     GetFunction {
-        function_name: String,
-        database_name: Option<String>,
+        function: TableReference,
     },
     ListFunctions {
-        database_name: Option<String>,
-        pattern: Option<String>,
+        database: Option<SchemaReference>,
+        function_pattern: Option<String>,
+    },
+    DropFunction {
+        function: TableReference,
+        if_exists: bool,
+        is_temporary: bool,
     },
     DropTemporaryView {
-        view_name: String,
+        view: TableReference,
+        is_global: bool,
+        if_exists: bool,
     },
-    DropGlobalTemporaryView {
-        view_name: String,
+    DropView {
+        view: TableReference,
+        if_exists: bool,
     },
+}
+
+fn build_record_batch<T: Serialize>(schema: SchemaRef, items: &[T]) -> Result<RecordBatch> {
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect::<Vec<_>>();
+    let arrays =
+        to_arrow(&fields, items).or_else(|e| exec_err!("failed to create record batch: {}", e))?;
+    // We must specify the row count if the schema has no fields.
+    let options = RecordBatchOptions::new().with_row_count(Some(items.len()));
+    Ok(RecordBatch::try_new_with_options(schema, arrays, &options)?)
 }
 
 impl CatalogCommand {
@@ -105,19 +141,23 @@ impl CatalogCommand {
             CatalogCommand::ListCatalogs { .. } => "ListCatalogs",
             CatalogCommand::CurrentDatabase => "CurrentDatabase",
             CatalogCommand::SetCurrentDatabase { .. } => "SetCurrentDatabase",
+            CatalogCommand::CreateDatabase { .. } => "CreateDatabase",
             CatalogCommand::DatabaseExists { .. } => "DatabaseExists",
             CatalogCommand::GetDatabase { .. } => "GetDatabase",
             CatalogCommand::ListDatabases { .. } => "ListDatabases",
+            CatalogCommand::DropDatabase { .. } => "DropDatabase",
             CatalogCommand::CreateTable { .. } => "CreateTable",
             CatalogCommand::TableExists { .. } => "TableExists",
             CatalogCommand::GetTable { .. } => "GetTable",
             CatalogCommand::ListTables { .. } => "ListTables",
+            CatalogCommand::DropTable { .. } => "DropTable",
             CatalogCommand::ListColumns { .. } => "ListColumns",
             CatalogCommand::FunctionExists { .. } => "FunctionExists",
             CatalogCommand::GetFunction { .. } => "GetFunction",
             CatalogCommand::ListFunctions { .. } => "ListFunctions",
+            CatalogCommand::DropFunction { .. } => "DropFunction",
             CatalogCommand::DropTemporaryView { .. } => "DropTemporaryView",
-            CatalogCommand::DropGlobalTemporaryView { .. } => "DropGlobalTemporaryView",
+            CatalogCommand::DropView { .. } => "DropView",
         }
     }
 
@@ -140,6 +180,7 @@ impl CatalogCommand {
             }
             CatalogCommand::SetCurrentCatalog { .. }
             | CatalogCommand::SetCurrentDatabase { .. }
+            | CatalogCommand::CreateDatabase { .. }
             | CatalogCommand::CreateTable { .. } => {
                 Vec::<FieldRef>::from_type::<EmptyMetadata>(TracingOptions::default())
             }
@@ -149,8 +190,11 @@ impl CatalogCommand {
             CatalogCommand::DatabaseExists { .. }
             | CatalogCommand::TableExists { .. }
             | CatalogCommand::FunctionExists { .. }
+            | CatalogCommand::DropDatabase { .. }
+            | CatalogCommand::DropTable { .. }
+            | CatalogCommand::DropFunction { .. }
             | CatalogCommand::DropTemporaryView { .. }
-            | CatalogCommand::DropGlobalTemporaryView { .. } => {
+            | CatalogCommand::DropView { .. } => {
                 Vec::<FieldRef>::from_type::<SingleValueMetadata<bool>>(TracingOptions::default())
             }
         }
@@ -160,131 +204,136 @@ impl CatalogCommand {
 
     pub(crate) async fn execute(self, ctx: &SessionContext) -> Result<LogicalPlan> {
         let schema = self.schema()?;
-        let fields = schema.fields().as_ref();
         let ctx = SessionCatalogContext::new(ctx);
         let batch = match self {
             CatalogCommand::CurrentCatalog => {
                 let value = ctx.default_catalog()?;
                 let rows = vec![SingleValueMetadata { value }];
-                to_record_batch(fields, &rows)
+                build_record_batch(schema, &rows)?
             }
             CatalogCommand::SetCurrentCatalog { catalog_name } => {
                 ctx.set_default_catalog(catalog_name)?;
                 let rows: Vec<EmptyMetadata> = vec![];
-                to_record_batch(fields, &rows)
+                build_record_batch(schema, &rows)?
             }
-            CatalogCommand::ListCatalogs { pattern } => {
-                let rows = ctx.list_catalogs(pattern.as_deref())?;
-                to_record_batch(fields, &rows)
+            CatalogCommand::ListCatalogs { catalog_pattern } => {
+                let rows = ctx.list_catalogs(catalog_pattern.as_deref())?;
+                build_record_batch(schema, &rows)?
             }
             CatalogCommand::CurrentDatabase => {
                 let value = ctx.default_database()?;
                 let rows = vec![SingleValueMetadata { value }];
-                to_record_batch(fields, &rows)
+                build_record_batch(schema, &rows)?
             }
             CatalogCommand::SetCurrentDatabase { database_name } => {
                 ctx.set_default_database(database_name)?;
                 let rows: Vec<EmptyMetadata> = vec![];
-                to_record_batch(fields, &rows)
+                build_record_batch(schema, &rows)?
             }
-            CatalogCommand::DatabaseExists { database_name } => {
-                let databases = ctx.list_databases(
-                    Some(ctx.default_catalog()?.as_str()),
-                    Some(database_name.as_str()),
-                )?;
-                let value = !databases.is_empty();
+            CatalogCommand::CreateDatabase {
+                database,
+                if_not_exists,
+                comment,
+                location,
+                properties,
+            } => {
+                let value = ctx
+                    .create_database(database, if_not_exists, comment, location, properties)
+                    .await
+                    .is_ok();
                 let rows = vec![SingleValueMetadata { value }];
-                to_record_batch(fields, &rows)
+                build_record_batch(schema, &rows)?
             }
-            CatalogCommand::GetDatabase { database_name } => {
-                let rows = ctx.list_databases(
-                    Some(ctx.default_catalog()?.as_str()),
-                    Some(database_name.as_str()),
-                )?;
-                to_record_batch(fields, &rows)
+            CatalogCommand::DatabaseExists { database } => {
+                let value = ctx.get_database(database)?.is_some();
+                let rows = vec![SingleValueMetadata { value }];
+                build_record_batch(schema, &rows)?
             }
-            CatalogCommand::ListDatabases { pattern } => {
-                let rows =
-                    ctx.list_databases(Some(ctx.default_catalog()?.as_str()), pattern.as_deref())?;
-                to_record_batch(fields, &rows)
+            CatalogCommand::GetDatabase { database } => {
+                let rows = match ctx.get_database(database)? {
+                    Some(x) => vec![x],
+                    None => vec![],
+                };
+                build_record_batch(schema, &rows)?
             }
-            CatalogCommand::CreateTable { table_name, plan } => {
+            CatalogCommand::ListDatabases {
+                catalog,
+                database_pattern,
+            } => {
+                let rows = ctx.list_databases(catalog, database_pattern.as_deref())?;
+                build_record_batch(schema, &rows)?
+            }
+            CatalogCommand::DropDatabase {
+                database,
+                if_exists,
+                cascade,
+            } => {
+                let value = ctx
+                    .drop_database(database, if_exists, cascade)
+                    .await
+                    .is_ok();
+                let rows = vec![SingleValueMetadata { value }];
+                build_record_batch(schema, &rows)?
+            }
+            CatalogCommand::CreateTable { table, plan } => {
                 // TODO: we should probably create external table here
-                ctx.create_memory_table(table_name.as_str(), plan).await?;
+                ctx.create_memory_table(table, plan).await?;
                 let rows: Vec<EmptyMetadata> = vec![];
-                to_record_batch(fields, &rows)
+                build_record_batch(schema, &rows)?
             }
-            CatalogCommand::TableExists {
-                table_name,
-                database_name,
-            } => {
-                let tables = ctx
-                    .list_tables(
-                        Some(ctx.default_catalog()?.as_str()),
-                        Some(ctx.infer_database(database_name)?.as_str()),
-                        Some(table_name.as_str()),
-                    )
-                    .await?;
-                let value = !tables.is_empty();
+            CatalogCommand::TableExists { table } => {
+                let value = ctx.get_table(table).await?.is_some();
                 let rows = vec![SingleValueMetadata { value }];
-                to_record_batch(fields, &rows)
+                build_record_batch(schema, &rows)?
             }
-            CatalogCommand::GetTable {
-                table_name,
-                database_name,
-            } => {
-                let rows = ctx
-                    .list_tables(
-                        Some(ctx.default_catalog()?.as_str()),
-                        database_name.as_deref(),
-                        Some(table_name.as_str()),
-                    )
-                    .await?;
-                to_record_batch(fields, &rows)
+            CatalogCommand::GetTable { table } => {
+                let rows = match ctx.get_table(table).await? {
+                    Some(x) => vec![x],
+                    None => vec![],
+                };
+                build_record_batch(schema, &rows)?
             }
             CatalogCommand::ListTables {
-                database_name,
-                pattern,
+                database,
+                table_pattern,
             } => {
-                let rows = ctx
-                    .list_tables(
-                        Some(ctx.default_catalog()?.as_str()),
-                        Some(ctx.infer_database(database_name)?.as_str()),
-                        pattern.as_deref(),
-                    )
-                    .await?;
-                to_record_batch(fields, &rows)
+                let rows = ctx.list_tables(database, table_pattern.as_deref()).await?;
+                build_record_batch(schema, &rows)?
             }
-            CatalogCommand::ListColumns {
-                table_name,
-                database_name,
+            CatalogCommand::DropTable {
+                table,
+                if_exists,
+                purge,
             } => {
-                let rows = ctx
-                    .list_table_columns(
-                        Some(ctx.default_catalog()?.as_str()),
-                        Some(ctx.infer_database(database_name)?.as_str()),
-                        table_name.as_str(),
-                    )
-                    .await?;
-                to_record_batch(fields, &rows)
+                let value = ctx.drop_table(table, if_exists, purge).await.is_ok();
+                let rows = vec![SingleValueMetadata { value }];
+                build_record_batch(schema, &rows)?
+            }
+            CatalogCommand::ListColumns { table } => {
+                let rows = ctx.list_table_columns(table).await?;
+                build_record_batch(schema, &rows)?
             }
             CatalogCommand::FunctionExists { .. } => return not_impl_err!("function exists"),
             CatalogCommand::GetFunction { .. } => return not_impl_err!("get function"),
             CatalogCommand::ListFunctions { .. } => return not_impl_err!("list functions"),
-            CatalogCommand::DropTemporaryView { view_name } => {
-                let value = ctx.drop_temporary_view(&view_name).await.is_ok();
+            CatalogCommand::DropFunction { .. } => return not_impl_err!("drop function"),
+            CatalogCommand::DropTemporaryView {
+                view,
+                is_global: _,
+                if_exists,
+            } => {
+                // TODO: use the correct catalog and database for global temporary views
+                let value = ctx.drop_view(view, if_exists).await.is_ok();
                 let rows = vec![SingleValueMetadata { value }];
-                to_record_batch(fields, &rows)
+                build_record_batch(schema, &rows)?
             }
-            CatalogCommand::DropGlobalTemporaryView { view_name } => {
-                // TODO: use the correct catalog and database
-                let value = ctx.drop_temporary_view(&view_name).await.is_ok();
+            CatalogCommand::DropView { view, if_exists } => {
+                let value = ctx.drop_view(view, if_exists).await.is_ok();
                 let rows = vec![SingleValueMetadata { value }];
-                to_record_batch(fields, &rows)
+                build_record_batch(schema, &rows)?
             }
-        }
-        .or_else(|e| exec_err!("failed to execute catalog command: {}", e))?;
-        let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+        };
+        let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
         Ok(LogicalPlan::TableScan(TableScan::try_new(
             UNNAMED_TABLE,
             provider_as_source(Arc::new(provider)),

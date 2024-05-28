@@ -9,7 +9,9 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -31,13 +33,17 @@
                 "arguments": [
                   {
                     "unresolvedAttribute": {
-                      "unparsedIdentifier": "a",
+                      "identifier": [
+                        "a"
+                      ],
                       "planId": null
                     }
                   },
                   {
                     "unresolvedAttribute": {
-                      "unparsedIdentifier": "b",
+                      "identifier": [
+                        "b"
+                      ],
                       "planId": null
                     }
                   }
@@ -48,7 +54,9 @@
             },
             "extraction": {
               "unresolvedAttribute": {
-                "unparsedIdentifier": "b",
+                "identifier": [
+                  "b"
+                ],
                 "planId": null
               }
             }
@@ -67,7 +75,9 @@
       "output": {
         "success": {
           "unresolvedAttribute": {
-            "unparsedIdentifier": "a",
+            "identifier": [
+              "a"
+            ],
             "planId": null
           }
         }
@@ -120,13 +130,17 @@
                 "arguments": [
                   {
                     "unresolvedAttribute": {
-                      "unparsedIdentifier": "x",
+                      "identifier": [
+                        "x"
+                      ],
                       "planId": null
                     }
                   },
                   {
                     "unresolvedAttribute": {
-                      "unparsedIdentifier": "y",
+                      "identifier": [
+                        "y"
+                      ],
                       "planId": null
                     }
                   }
@@ -137,12 +151,12 @@
             },
             "arguments": [
               {
-                "nameParts": [
+                "name": [
                   "x"
                 ]
               },
               {
-                "nameParts": [
+                "name": [
                   "y"
                 ]
               }
@@ -173,7 +187,10 @@
                   },
                   {
                     "unresolvedAttribute": {
-                      "unparsedIdentifier": "r.r",
+                      "identifier": [
+                        "r",
+                        "r"
+                      ],
                       "planId": null
                     }
                   }
@@ -217,7 +234,9 @@
                         "arguments": [
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "bar",
+                              "identifier": [
+                                "bar"
+                              ],
                               "planId": null
                             }
                           }
@@ -241,7 +260,7 @@
     {
       "input": "1 - f('o', o(bar)) hello * world",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: *"
+        "failure": "invalid argument: extra tokens after wildcard expression: *"
       }
     },
     {
@@ -285,12 +304,14 @@
           "alias": {
             "expr": {
               "unresolvedAttribute": {
-                "unparsedIdentifier": "GEO",
+                "identifier": [
+                  "GEO"
+                ],
                 "planId": null
               }
             },
             "name": [
-              "'(10,-6)'"
+              "(10,-6)"
             ],
             "metadata": null
           }
@@ -308,7 +329,10 @@
       "output": {
         "success": {
           "unresolvedAttribute": {
-            "unparsedIdentifier": "```fo``o`.```ba``r`",
+            "identifier": [
+              "`fo`o",
+              "`ba`r"
+            ],
             "planId": null
           }
         }
@@ -321,13 +345,18 @@
           "unresolvedExtractValue": {
             "child": {
               "unresolvedAttribute": {
-                "unparsedIdentifier": "`c`.a",
+                "identifier": [
+                  "c",
+                  "a"
+                ],
                 "planId": null
               }
             },
             "extraction": {
               "unresolvedAttribute": {
-                "unparsedIdentifier": "b",
+                "identifier": [
+                  "b"
+                ],
                 "planId": null
               }
             }
@@ -340,7 +369,10 @@
       "output": {
         "success": {
           "unresolvedAttribute": {
-            "unparsedIdentifier": "`fo``o`.`ba``r`",
+            "identifier": [
+              "fo``o",
+              "ba``r"
+            ],
             "planId": null
           }
         }
@@ -349,7 +381,7 @@
     {
       "input": "`fo`o.`ba`r",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: ."
+        "failure": "invalid argument: extra tokens after wildcard expression: ."
       }
     },
     {
@@ -357,7 +389,9 @@
       "output": {
         "success": {
           "unresolvedAttribute": {
-            "unparsedIdentifier": "select",
+            "identifier": [
+              "select"
+            ],
             "planId": null
           }
         }
@@ -372,13 +406,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -394,7 +432,10 @@
       "output": {
         "success": {
           "unresolvedAttribute": {
-            "unparsedIdentifier": "`select`.b",
+            "identifier": [
+              "select",
+              "b"
+            ],
             "planId": null
           }
         }
@@ -405,7 +446,9 @@
       "output": {
         "success": {
           "unresolvedAttribute": {
-            "unparsedIdentifier": "a",
+            "identifier": [
+              "a"
+            ],
             "planId": null
           }
         }
@@ -426,13 +469,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -458,13 +505,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -484,13 +535,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -510,13 +565,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -540,13 +599,17 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a",
+                        "identifier": [
+                          "a"
+                        ],
                         "planId": null
                       }
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "t",
+                        "identifier": [
+                          "t"
+                        ],
                         "planId": null
                       }
                     }
@@ -561,7 +624,9 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "b",
+                        "identifier": [
+                          "b"
+                        ],
                         "planId": null
                       }
                     },
@@ -571,7 +636,9 @@
                         "arguments": [
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "c",
+                              "identifier": [
+                                "c"
+                              ],
                               "planId": null
                             }
                           },
@@ -585,13 +652,17 @@
                                     "arguments": [
                                       {
                                         "unresolvedAttribute": {
-                                          "unparsedIdentifier": "d",
+                                          "identifier": [
+                                            "d"
+                                          ],
                                           "planId": null
                                         }
                                       },
                                       {
                                         "unresolvedAttribute": {
-                                          "unparsedIdentifier": "e",
+                                          "identifier": [
+                                            "e"
+                                          ],
                                           "planId": null
                                         }
                                       }
@@ -610,13 +681,17 @@
                                           "arguments": [
                                             {
                                               "unresolvedAttribute": {
-                                                "unparsedIdentifier": "f",
+                                                "identifier": [
+                                                  "f"
+                                                ],
                                                 "planId": null
                                               }
                                             },
                                             {
                                               "unresolvedAttribute": {
-                                                "unparsedIdentifier": "g",
+                                                "identifier": [
+                                                  "g"
+                                                ],
                                                 "planId": null
                                               }
                                             }
@@ -635,13 +710,17 @@
                                                 "arguments": [
                                                   {
                                                     "unresolvedAttribute": {
-                                                      "unparsedIdentifier": "h",
+                                                      "identifier": [
+                                                        "h"
+                                                      ],
                                                       "planId": null
                                                     }
                                                   },
                                                   {
                                                     "unresolvedAttribute": {
-                                                      "unparsedIdentifier": "i",
+                                                      "identifier": [
+                                                        "i"
+                                                      ],
                                                       "planId": null
                                                     }
                                                   }
@@ -652,7 +731,9 @@
                                             },
                                             {
                                               "unresolvedAttribute": {
-                                                "unparsedIdentifier": "k",
+                                                "identifier": [
+                                                  "k"
+                                                ],
                                                 "planId": null
                                               }
                                             }
@@ -697,13 +778,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -723,13 +808,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -749,13 +838,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -775,13 +868,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -801,13 +898,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -827,13 +928,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -853,13 +958,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -885,13 +994,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -915,13 +1028,17 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a",
+                        "identifier": [
+                          "a"
+                        ],
                         "planId": null
                       }
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "b",
+                        "identifier": [
+                          "b"
+                        ],
                         "planId": null
                       }
                     }
@@ -950,13 +1067,17 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a",
+                        "identifier": [
+                          "a"
+                        ],
                         "planId": null
                       }
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "b",
+                        "identifier": [
+                          "b"
+                        ],
                         "planId": null
                       }
                     }
@@ -981,13 +1102,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -1007,13 +1132,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -1033,13 +1162,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -1059,13 +1192,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -1085,13 +1222,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -1111,13 +1252,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -1153,13 +1298,17 @@
                                     "arguments": [
                                       {
                                         "unresolvedAttribute": {
-                                          "unparsedIdentifier": "a",
+                                          "identifier": [
+                                            "a"
+                                          ],
                                           "planId": null
                                         }
                                       },
                                       {
                                         "unresolvedAttribute": {
-                                          "unparsedIdentifier": "b",
+                                          "identifier": [
+                                            "b"
+                                          ],
                                           "planId": null
                                         }
                                       }
@@ -1170,7 +1319,9 @@
                                 },
                                 {
                                   "unresolvedAttribute": {
-                                    "unparsedIdentifier": "c",
+                                    "identifier": [
+                                      "c"
+                                    ],
                                     "planId": null
                                   }
                                 }
@@ -1181,7 +1332,9 @@
                           },
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "d",
+                              "identifier": [
+                                "d"
+                              ],
                               "planId": null
                             }
                           }
@@ -1192,7 +1345,9 @@
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "e",
+                        "identifier": [
+                          "e"
+                        ],
                         "planId": null
                       }
                     }
@@ -1203,7 +1358,9 @@
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "f",
+                  "identifier": [
+                    "f"
+                  ],
                   "planId": null
                 }
               }
@@ -1227,13 +1384,17 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a",
+                        "identifier": [
+                          "a"
+                        ],
                         "planId": null
                       }
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "b",
+                        "identifier": [
+                          "b"
+                        ],
                         "planId": null
                       }
                     }
@@ -1248,13 +1409,17 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "c",
+                        "identifier": [
+                          "c"
+                        ],
                         "planId": null
                       }
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "d",
+                        "identifier": [
+                          "d"
+                        ],
                         "planId": null
                       }
                     }
@@ -1283,7 +1448,9 @@
           "alias": {
             "expr": {
               "unresolvedAttribute": {
-                "unparsedIdentifier": "a",
+                "identifier": [
+                  "a"
+                ],
                 "planId": null
               }
             },
@@ -1302,7 +1469,9 @@
           "alias": {
             "expr": {
               "unresolvedAttribute": {
-                "unparsedIdentifier": "a",
+                "identifier": [
+                  "a"
+                ],
                 "planId": null
               }
             },
@@ -1327,13 +1496,17 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a",
+                        "identifier": [
+                          "a"
+                        ],
                         "planId": null
                       }
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "b",
+                        "identifier": [
+                          "b"
+                        ],
                         "planId": null
                       }
                     }
@@ -1348,13 +1521,17 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a",
+                        "identifier": [
+                          "a"
+                        ],
                         "planId": null
                       }
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "c",
+                        "identifier": [
+                          "c"
+                        ],
                         "planId": null
                       }
                     }
@@ -1383,19 +1560,25 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "b",
+                        "identifier": [
+                          "b"
+                        ],
                         "planId": null
                       }
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "c",
+                        "identifier": [
+                          "c"
+                        ],
                         "planId": null
                       }
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "d",
+                        "identifier": [
+                          "d"
+                        ],
                         "planId": null
                       }
                     }
@@ -1406,7 +1589,9 @@
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1436,13 +1621,17 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a",
+                        "identifier": [
+                          "a"
+                        ],
                         "planId": null
                       }
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "b",
+                        "identifier": [
+                          "b"
+                        ],
                         "planId": null
                       }
                     }
@@ -1467,13 +1656,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -1493,7 +1686,9 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1513,7 +1708,9 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1541,13 +1738,17 @@
                         "arguments": [
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "a",
+                              "identifier": [
+                                "a"
+                              ],
                               "planId": null
                             }
                           },
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "b",
+                              "identifier": [
+                                "b"
+                              ],
                               "planId": null
                             }
                           }
@@ -1562,13 +1763,17 @@
                         "arguments": [
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "a",
+                              "identifier": [
+                                "a"
+                              ],
                               "planId": null
                             }
                           },
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "c",
+                              "identifier": [
+                                "c"
+                              ],
                               "planId": null
                             }
                           }
@@ -1606,19 +1811,25 @@
                         "arguments": [
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "b",
+                              "identifier": [
+                                "b"
+                              ],
                               "planId": null
                             }
                           },
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "c",
+                              "identifier": [
+                                "c"
+                              ],
                               "planId": null
                             }
                           },
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "d",
+                              "identifier": [
+                                "d"
+                              ],
                               "planId": null
                             }
                           }
@@ -1629,7 +1840,9 @@
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a",
+                        "identifier": [
+                          "a"
+                        ],
                         "planId": null
                       }
                     }
@@ -1658,7 +1871,9 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a",
+                        "identifier": [
+                          "a"
+                        ],
                         "planId": null
                       }
                     },
@@ -1688,13 +1903,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -1718,13 +1937,17 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a",
+                        "identifier": [
+                          "a"
+                        ],
                         "planId": null
                       }
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "b",
+                        "identifier": [
+                          "b"
+                        ],
                         "planId": null
                       }
                     }
@@ -1739,13 +1962,17 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "c",
+                        "identifier": [
+                          "c"
+                        ],
                         "planId": null
                       }
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "d",
+                        "identifier": [
+                          "d"
+                        ],
                         "planId": null
                       }
                     }
@@ -1786,13 +2013,17 @@
                                     "arguments": [
                                       {
                                         "unresolvedAttribute": {
-                                          "unparsedIdentifier": "a",
+                                          "identifier": [
+                                            "a"
+                                          ],
                                           "planId": null
                                         }
                                       },
                                       {
                                         "unresolvedAttribute": {
-                                          "unparsedIdentifier": "b",
+                                          "identifier": [
+                                            "b"
+                                          ],
                                           "planId": null
                                         }
                                       }
@@ -1803,7 +2034,9 @@
                                 },
                                 {
                                   "unresolvedAttribute": {
-                                    "unparsedIdentifier": "c",
+                                    "identifier": [
+                                      "c"
+                                    ],
                                     "planId": null
                                   }
                                 }
@@ -1814,7 +2047,9 @@
                           },
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "d",
+                              "identifier": [
+                                "d"
+                              ],
                               "planId": null
                             }
                           }
@@ -1825,7 +2060,9 @@
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "e",
+                        "identifier": [
+                          "e"
+                        ],
                         "planId": null
                       }
                     }
@@ -1836,7 +2073,9 @@
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "f",
+                  "identifier": [
+                    "f"
+                  ],
                   "planId": null
                 }
               }
@@ -1856,7 +2095,9 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
@@ -1881,13 +2122,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -1901,37 +2146,37 @@
     {
       "input": "a() (b, c)",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: ("
+        "failure": "invalid argument: extra tokens after wildcard expression: ("
       }
     },
     {
       "input": "a.* b",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: b"
+        "failure": "invalid argument: extra tokens after wildcard expression: b"
       }
     },
     {
       "input": "a.123A",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: .123A"
+        "failure": "invalid argument: extra tokens after wildcard expression: .123A"
       }
     },
     {
       "input": "a.123BD_column",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: .123BD"
+        "failure": "invalid argument: extra tokens after wildcard expression: .123BD"
       }
     },
     {
       "input": "a.123D_column",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: .123D"
+        "failure": "invalid argument: extra tokens after wildcard expression: .123D"
       }
     },
     {
       "input": "a.123E3_column",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: .123E3"
+        "failure": "invalid argument: extra tokens after wildcard expression: .123E3"
       }
     },
     {
@@ -1939,7 +2184,10 @@
       "output": {
         "success": {
           "unresolvedAttribute": {
-            "unparsedIdentifier": "a.b",
+            "identifier": [
+              "a",
+              "b"
+            ],
             "planId": null
           }
         }
@@ -1950,7 +2198,10 @@
       "output": {
         "success": {
           "unresolvedStar": {
-            "unparsedTarget": "a.b.*"
+            "target": [
+              "a",
+              "b"
+            ]
           }
         }
       }
@@ -1962,7 +2213,9 @@
           "unresolvedExtractValue": {
             "child": {
               "unresolvedAttribute": {
-                "unparsedIdentifier": "a",
+                "identifier": [
+                  "a"
+                ],
                 "planId": null
               }
             },
@@ -1996,13 +2249,17 @@
           "unresolvedExtractValue": {
             "child": {
               "unresolvedAttribute": {
-                "unparsedIdentifier": "a",
+                "identifier": [
+                  "a"
+                ],
                 "planId": null
               }
             },
             "extraction": {
               "unresolvedAttribute": {
-                "unparsedIdentifier": "b",
+                "identifier": [
+                  "b"
+                ],
                 "planId": null
               }
             }
@@ -2015,7 +2272,9 @@
       "output": {
         "success": {
           "unresolvedAttribute": {
-            "unparsedIdentifier": "columns",
+            "identifier": [
+              "columns"
+            ],
             "planId": null
           }
         }
@@ -2030,7 +2289,7 @@
             "arguments": [
               {
                 "unresolvedStar": {
-                  "unparsedTarget": null
+                  "target": null
                 }
               }
             ],
@@ -2091,7 +2350,9 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2124,7 +2385,7 @@
             "arguments": [
               {
                 "unresolvedStar": {
-                  "unparsedTarget": null
+                  "target": null
                 }
               }
             ],
@@ -2149,13 +2410,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -2175,13 +2440,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -2201,13 +2470,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -2240,13 +2513,17 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -2272,7 +2549,9 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2292,7 +2571,9 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2353,7 +2634,9 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "r",
+                  "identifier": [
+                    "r"
+                  ],
                   "planId": null
                 }
               },
@@ -2363,13 +2646,17 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a",
+                        "identifier": [
+                          "a"
+                        ],
                         "planId": null
                       }
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "b",
+                        "identifier": [
+                          "b"
+                        ],
                         "planId": null
                       }
                     }
@@ -2388,7 +2675,7 @@
     {
       "input": "struct(a, b).b",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: ."
+        "failure": "invalid argument: extra tokens after wildcard expression: ."
       }
     },
     {
@@ -2412,7 +2699,9 @@
                 "arguments": [
                   {
                     "unresolvedAttribute": {
-                      "unparsedIdentifier": "x",
+                      "identifier": [
+                        "x"
+                      ],
                       "planId": null
                     }
                   },
@@ -2428,7 +2717,7 @@
             },
             "arguments": [
               {
-                "nameParts": [
+                "name": [
                   "x"
                 ]
               }

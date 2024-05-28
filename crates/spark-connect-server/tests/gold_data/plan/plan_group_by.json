@@ -15,7 +15,9 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "d",
+                    "identifier": [
+                      "d"
+                    ],
                     "options": {}
                   },
                   "isStreaming": false
@@ -27,13 +29,17 @@
               "groupingExpressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "planId": null
                   }
                 },
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 }
@@ -41,13 +47,17 @@
               "aggregateExpressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "planId": null
                   }
                 },
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -59,7 +69,9 @@
                         "arguments": [
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "c",
+                              "identifier": [
+                                "c"
+                              ],
                               "planId": null
                             }
                           }

@@ -9,7 +9,9 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "options": {}
                   },
                   "isStreaming": false
@@ -20,7 +22,7 @@
               "expressions": [
                 {
                   "unresolvedStar": {
-                    "unparsedTarget": null
+                    "target": null
                   }
                 }
               ]
@@ -40,7 +42,9 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "options": {}
                   },
                   "isStreaming": false
@@ -51,7 +55,7 @@
               "expressions": [
                 {
                   "unresolvedStar": {
-                    "unparsedTarget": null
+                    "target": null
                   }
                 }
               ]
@@ -71,7 +75,9 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "options": {}
                   },
                   "isStreaming": false
@@ -82,7 +88,7 @@
               "expressions": [
                 {
                   "unresolvedStar": {
-                    "unparsedTarget": null
+                    "target": null
                   }
                 }
               ]
@@ -102,7 +108,9 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "options": {}
                   },
                   "isStreaming": false
@@ -113,7 +121,7 @@
               "expressions": [
                 {
                   "unresolvedStar": {
-                    "unparsedTarget": null
+                    "target": null
                   }
                 }
               ]
@@ -188,7 +196,9 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "unparsedIdentifier": "t1",
+                        "identifier": [
+                          "t1"
+                        ],
                         "options": {}
                       },
                       "isStreaming": false
@@ -199,7 +209,7 @@
                   "expressions": [
                     {
                       "unresolvedStar": {
-                        "unparsedTarget": null
+                        "target": null
                       }
                     }
                   ]
@@ -212,7 +222,9 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "unparsedIdentifier": "t2",
+                        "identifier": [
+                          "t2"
+                        ],
                         "options": {}
                       },
                       "isStreaming": false
@@ -223,7 +235,7 @@
                   "expressions": [
                     {
                       "unresolvedStar": {
-                        "unparsedTarget": null
+                        "target": null
                       }
                     }
                   ]

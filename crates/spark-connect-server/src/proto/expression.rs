@@ -16,7 +16,7 @@ use crate::spark::connect::{
     Expression, JavaUdf, PythonUdf, PythonUdtf, ScalarScalaUdf,
 };
 use crate::sql::data_type::parse_spark_data_type;
-use crate::sql::expression::parse_spark_expression;
+use crate::sql::expression::{parse_object_name, parse_wildcard_expression};
 use framework_common::spec;
 
 impl TryFrom<Expression> for spec::Expr {
@@ -31,7 +31,7 @@ impl TryFrom<Expression> for spec::Expr {
                 unparsed_identifier,
                 plan_id,
             }) => Ok(spec::Expr::UnresolvedAttribute {
-                unparsed_identifier,
+                identifier: parse_object_name(unparsed_identifier.as_str())?,
                 plan_id,
             }),
             ExprType::UnresolvedFunction(UnresolvedFunction {
@@ -49,10 +49,13 @@ impl TryFrom<Expression> for spec::Expr {
                 is_user_defined_function,
             }),
             ExprType::ExpressionString(ExpressionString { expression }) => {
-                parse_spark_expression(expression.as_str())
+                parse_wildcard_expression(expression.as_str())
             }
             ExprType::UnresolvedStar(UnresolvedStar { unparsed_target }) => {
-                Ok(spec::Expr::UnresolvedStar { unparsed_target })
+                let target = unparsed_target
+                    .map(|x| parse_object_name(x.as_str()))
+                    .transpose()?;
+                Ok(spec::Expr::UnresolvedStar { target })
             }
             ExprType::Alias(alias) => {
                 let Alias {
@@ -64,6 +67,7 @@ impl TryFrom<Expression> for spec::Expr {
                 let metadata = metadata
                     .map(|x| serde_json::from_str(&x).map_err(SparkError::from))
                     .transpose()?;
+                let name: Vec<spec::Identifier> = name.into_iter().map(|x| x.into()).collect();
                 Ok(spec::Expr::Alias {
                     expr: Box::new((*expr).try_into()?),
                     name,
@@ -140,7 +144,7 @@ impl TryFrom<Expression> for spec::Expr {
                 let struct_expression = struct_expression.required("struct expression")?;
                 Ok(spec::Expr::UpdateFields {
                     struct_expression: Box::new((*struct_expression).try_into()?),
-                    field_name,
+                    field_name: parse_object_name(field_name.as_str())?,
                     value_expression: value_expression
                         .map(|x| -> SparkResult<_> { Ok(Box::new((*x).try_into()?)) })
                         .transpose()?,
@@ -292,10 +296,10 @@ impl TryFrom<CommonInlineUserDefinedFunction> for spec::CommonInlineUserDefinedF
     }
 }
 
-impl TryFrom<udf::Function> for spec::FunctionType {
+impl TryFrom<udf::Function> for spec::FunctionDefinition {
     type Error = SparkError;
 
-    fn try_from(function: udf::Function) -> SparkResult<spec::FunctionType> {
+    fn try_from(function: udf::Function) -> SparkResult<spec::FunctionDefinition> {
         use udf::Function;
 
         match function {
@@ -306,7 +310,7 @@ impl TryFrom<udf::Function> for spec::FunctionType {
                 python_ver,
             }) => {
                 let output_type = output_type.required("Python UDF output type")?;
-                Ok(spec::FunctionType::PythonUdf {
+                Ok(spec::FunctionDefinition::PythonUdf {
                     output_type: output_type.try_into()?,
                     eval_type,
                     command,
@@ -320,7 +324,7 @@ impl TryFrom<udf::Function> for spec::FunctionType {
                 nullable,
             }) => {
                 let output_type = output_type.required("Scalar Scala UDF output type")?;
-                Ok(spec::FunctionType::ScalarScalaUdf {
+                Ok(spec::FunctionDefinition::ScalarScalaUdf {
                     payload,
                     input_types: input_types
                         .into_iter()
@@ -334,7 +338,7 @@ impl TryFrom<udf::Function> for spec::FunctionType {
                 class_name,
                 output_type,
                 aggregate,
-            }) => Ok(spec::FunctionType::JavaUdf {
+            }) => Ok(spec::FunctionDefinition::JavaUdf {
                 class_name,
                 output_type: output_type.map(|x| x.try_into()).transpose()?,
                 aggregate,
@@ -368,10 +372,10 @@ impl TryFrom<CommonInlineUserDefinedTableFunction> for spec::CommonInlineUserDef
     }
 }
 
-impl TryFrom<udtf::Function> for spec::TableFunctionType {
+impl TryFrom<udtf::Function> for spec::TableFunctionDefinition {
     type Error = SparkError;
 
-    fn try_from(function: udtf::Function) -> SparkResult<spec::TableFunctionType> {
+    fn try_from(function: udtf::Function) -> SparkResult<spec::TableFunctionDefinition> {
         use udtf::Function;
 
         match function {
@@ -380,7 +384,7 @@ impl TryFrom<udtf::Function> for spec::TableFunctionType {
                 eval_type,
                 command,
                 python_ver,
-            }) => Ok(spec::TableFunctionType::PythonUdtf {
+            }) => Ok(spec::TableFunctionDefinition::PythonUdtf {
                 return_type: return_type.map(|x| x.try_into()).transpose()?,
                 eval_type,
                 command,
@@ -397,6 +401,8 @@ impl TryFrom<UnresolvedNamedLambdaVariable> for spec::UnresolvedNamedLambdaVaria
         variable: UnresolvedNamedLambdaVariable,
     ) -> SparkResult<spec::UnresolvedNamedLambdaVariable> {
         let UnresolvedNamedLambdaVariable { name_parts } = variable;
-        Ok(spec::UnresolvedNamedLambdaVariable { name_parts })
+        Ok(spec::UnresolvedNamedLambdaVariable {
+            name: name_parts.into(),
+        })
     }
 }

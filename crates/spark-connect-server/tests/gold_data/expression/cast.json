@@ -7,7 +7,9 @@
           "cast": {
             "expr": {
               "unresolvedAttribute": {
-                "unparsedIdentifier": "a",
+                "identifier": [
+                  "a"
+                ],
                 "planId": null
               }
             },
@@ -28,7 +30,9 @@
           "cast": {
             "expr": {
               "unresolvedAttribute": {
-                "unparsedIdentifier": "a",
+                "identifier": [
+                  "a"
+                ],
                 "planId": null
               }
             },
@@ -44,7 +48,9 @@
           "cast": {
             "expr": {
               "unresolvedAttribute": {
-                "unparsedIdentifier": "a",
+                "identifier": [
+                  "a"
+                ],
                 "planId": null
               }
             },
@@ -62,7 +68,9 @@
               "cast": {
                 "expr": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "planId": null
                   }
                 },
