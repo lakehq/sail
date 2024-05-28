@@ -59,6 +59,8 @@ pub enum Expr {
         function_name: String,
         arguments: Vec<Expr>,
     },
+    // extensions
+    Placeholder(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

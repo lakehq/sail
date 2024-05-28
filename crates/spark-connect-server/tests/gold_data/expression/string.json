@@ -13,7 +13,19 @@
     {
       "input": "\"hello\" 'world'",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: 'world'"
+        "success": {
+          "alias": {
+            "expr": {
+              "literal": {
+                "string": "hello"
+              }
+            },
+            "name": [
+              "'world'"
+            ],
+            "metadata": null
+          }
+        }
       }
     },
     {
@@ -131,7 +143,7 @@
     {
       "input": "'hello' \" \" 'world'",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: \" \""
+        "failure": "invalid argument: extra tokens after expression: 'world'"
       }
     },
     {

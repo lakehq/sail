@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::error::{SparkError, SparkResult};
 use crate::extension::function::alias::MultiAlias;
 use crate::extension::function::contains::Contains;
+use crate::extension::function::map_function::MapFunction;
 use crate::extension::function::struct_function::StructFunction;
 use crate::sql::expression::parse_spark_qualified_wildcard;
 use datafusion::arrow::datatypes::DataType;
@@ -387,6 +388,10 @@ pub(crate) fn from_spark_expression(
             }))
         }
         Expr::CallFunction { .. } => Err(SparkError::todo("call function")),
+        Expr::Placeholder(placeholder) => Ok(expr::Expr::Placeholder(expr::Placeholder::new(
+            placeholder,
+            None,
+        ))),
     }
 }
 
@@ -412,13 +417,27 @@ pub(crate) fn get_scalar_function(
 ) -> SparkResult<expr::Expr> {
     use crate::extension::function::explode::Explode;
 
-    let op = match name {
+    let name = name.to_lowercase();
+
+    match name.as_str() {
+        "+" if args.len() <= 1 => {
+            let arg = get_one_argument(args)?;
+            return Ok(*arg);
+        }
+        "-" if args.len() <= 1 => {
+            let arg = get_one_argument(args)?;
+            return Ok(expr::Expr::Negative(arg));
+        }
+        _ => {}
+    };
+
+    let op = match name.as_str() {
         ">" => Some(Operator::Gt),
         ">=" => Some(Operator::GtEq),
         "<" => Some(Operator::Lt),
         "<=" => Some(Operator::LtEq),
-        "+" => Some(Operator::Plus),
-        "-" => Some(Operator::Minus),
+        "+" if args.len() > 1 => Some(Operator::Plus),
+        "-" if args.len() > 1 => Some(Operator::Minus),
         "*" => Some(Operator::Multiply),
         "/" => Some(Operator::Divide),
         "%" => Some(Operator::Modulo),
@@ -440,7 +459,7 @@ pub(crate) fn get_scalar_function(
     }
 
     // TODO: Add all functions::expr_fn and all functions_array::expr_fn
-    match name {
+    match name.as_str() {
         "isnull" => {
             let expr = get_one_argument(args)?;
             Ok(expr::Expr::IsNull(expr))
@@ -600,22 +619,87 @@ pub(crate) fn get_scalar_function(
                 args,
             }))
         }
+        "date" => Ok(functions::expr_fn::to_date(args)),
         "timestamp" | "to_timestamp" => Ok(functions::expr_fn::to_timestamp_micros(args)),
         "unix_timestamp" | "to_unixtime" => Ok(functions::expr_fn::to_unixtime(args)),
-        "struct" => {
-            let field_names: Vec<String> = args.iter().map(|x| {
-                match x {
-                    expr::Expr::Column(column) => Ok(column.name.to_string()),
-                    _ => {
-                        Err(SparkError::invalid("get_scalar_function: struct function should have expr::Expr::Column as arguments"))
-                    }
-                }
-            }).collect::<SparkResult<Vec<String>>>()?;
-            Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
-                    StructFunction::new(field_names),
-                ))),
-                args,
+        "struct" => Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+            func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
+                StructFunction::try_new_from_expressions(args.clone())?,
+            ))),
+            args,
+        })),
+        "map" => Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+            func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(MapFunction::new()))),
+            args,
+        })),
+        "bigint" => {
+            let expr = get_one_argument(args)?;
+            Ok(expr::Expr::Cast(expr::Cast {
+                expr,
+                data_type: DataType::Int64,
+            }))
+        }
+        "binary" => {
+            let expr = get_one_argument(args)?;
+            Ok(expr::Expr::Cast(expr::Cast {
+                expr,
+                data_type: DataType::Binary,
+            }))
+        }
+        "boolean" => {
+            let expr = get_one_argument(args)?;
+            Ok(expr::Expr::Cast(expr::Cast {
+                expr,
+                data_type: DataType::Boolean,
+            }))
+        }
+        "decimal" => {
+            let expr = get_one_argument(args)?;
+            Ok(expr::Expr::Cast(expr::Cast {
+                expr,
+                data_type: DataType::Decimal128(10, 0),
+            }))
+        }
+        "double" => {
+            let expr = get_one_argument(args)?;
+            Ok(expr::Expr::Cast(expr::Cast {
+                expr,
+                data_type: DataType::Float64,
+            }))
+        }
+        "float" => {
+            let expr = get_one_argument(args)?;
+            Ok(expr::Expr::Cast(expr::Cast {
+                expr,
+                data_type: DataType::Float32,
+            }))
+        }
+        "int" => {
+            let expr = get_one_argument(args)?;
+            Ok(expr::Expr::Cast(expr::Cast {
+                expr,
+                data_type: DataType::Int32,
+            }))
+        }
+        "smallint" => {
+            let expr = get_one_argument(args)?;
+            Ok(expr::Expr::Cast(expr::Cast {
+                expr,
+                data_type: DataType::Int16,
+            }))
+        }
+        "string" => {
+            let expr = get_one_argument(args)?;
+            Ok(expr::Expr::Cast(expr::Cast {
+                expr,
+                data_type: DataType::Utf8,
+            }))
+        }
+        "tinyint" => {
+            let expr = get_one_argument(args)?;
+            Ok(expr::Expr::Cast(expr::Cast {
+                expr,
+                data_type: DataType::Int8,
             }))
         }
         _ => Err(SparkError::invalid(format!("unknown function: {}", name))),

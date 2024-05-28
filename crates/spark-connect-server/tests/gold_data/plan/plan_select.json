@@ -64,7 +64,79 @@
     {
       "input": "SELECT * FROM (SELECT a AS x, b AS y FROM t) t(col1, col2)",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expressions": [
+                        {
+                          "alias": {
+                            "expr": {
+                              "unresolvedAttribute": {
+                                "unparsedIdentifier": "a",
+                                "planId": null
+                              }
+                            },
+                            "name": [
+                              "x"
+                            ],
+                            "metadata": null
+                          }
+                        },
+                        {
+                          "alias": {
+                            "expr": {
+                              "unresolvedAttribute": {
+                                "unparsedIdentifier": "b",
+                                "planId": null
+                              }
+                            },
+                            "name": [
+                              "y"
+                            ],
+                            "metadata": null
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "name": "t",
+                  "columns": [
+                    "col1",
+                    "col2"
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -257,19 +329,55 @@
     {
       "input": "SELECT * FROM range(10) AS t",
       "output": {
-        "failure": "not implemented: table alias"
+        "failure": "not supported: table args"
       }
     },
     {
       "input": "SELECT * FROM range(7) AS t(a)",
       "output": {
-        "failure": "not implemented: table alias"
+        "failure": "not supported: table args"
       }
     },
     {
       "input": "SELECT * FROM testData AS t(col1, col2)",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "testData",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "name": "t",
+                  "columns": [
+                    "col1",
+                    "col2"
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -318,13 +426,51 @@
     {
       "input": "SELECT :param_1",
       "output": {
-        "failure": "not implemented: placeholder value"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "placeholder": ":param_1"
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT ?",
       "output": {
-        "failure": "not implemented: placeholder value"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "placeholder": "?"
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -718,7 +864,35 @@
     {
       "input": "SELECT abs(?)",
       "output": {
-        "failure": "not implemented: placeholder value"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "abs",
+                    "arguments": [
+                      {
+                        "placeholder": "?"
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -730,7 +904,86 @@
     {
       "input": "SELECT t.col1, t.col2 FROM (SELECT a AS x, b AS y FROM t) t(col1, col2)",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expressions": [
+                        {
+                          "alias": {
+                            "expr": {
+                              "unresolvedAttribute": {
+                                "unparsedIdentifier": "a",
+                                "planId": null
+                              }
+                            },
+                            "name": [
+                              "x"
+                            ],
+                            "metadata": null
+                          }
+                        },
+                        {
+                          "alias": {
+                            "expr": {
+                              "unresolvedAttribute": {
+                                "unparsedIdentifier": "b",
+                                "planId": null
+                              }
+                            },
+                            "name": [
+                              "y"
+                            ],
+                            "metadata": null
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "name": "t",
+                  "columns": [
+                    "col1",
+                    "col2"
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "t.col1",
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "unparsedIdentifier": "t.col2",
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -949,7 +1202,61 @@
     {
       "input": "select * from t as tt , u",
       "output": {
-        "failure": "not implemented: table alias"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "unparsedIdentifier": "t",
+                            "options": {}
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "unparsedIdentifier": "u",
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "cross",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "unparsedTarget": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

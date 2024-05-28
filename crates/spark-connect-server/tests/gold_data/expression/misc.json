@@ -160,7 +160,34 @@
     {
       "input": "1 + r.r As q",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: As"
+        "success": {
+          "alias": {
+            "expr": {
+              "unresolvedFunction": {
+                "functionName": "+",
+                "arguments": [
+                  {
+                    "literal": {
+                      "integer": 1
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "unparsedIdentifier": "r.r",
+                      "planId": null
+                    }
+                  }
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
+              }
+            },
+            "name": [
+              "q"
+            ],
+            "metadata": null
+          }
+        }
       }
     },
     {
@@ -214,19 +241,31 @@
     {
       "input": "1 - f('o', o(bar)) hello * world",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: hello"
+        "failure": "invalid argument: extra tokens after expression: *"
       }
     },
     {
       "input": "123_",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: _"
+        "success": {
+          "alias": {
+            "expr": {
+              "literal": {
+                "integer": 123
+              }
+            },
+            "name": [
+              "_"
+            ],
+            "metadata": null
+          }
+        }
       }
     },
     {
       "input": "1a.123_",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: .123"
+        "failure": "invalid argument: number postfix: \"1\"Some(\"a\")"
       }
     },
     {
@@ -242,7 +281,20 @@
     {
       "input": "GEO '(10,-6)'",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: '(10,-6)'"
+        "success": {
+          "alias": {
+            "expr": {
+              "unresolvedAttribute": {
+                "unparsedIdentifier": "GEO",
+                "planId": null
+              }
+            },
+            "name": [
+              "'(10,-6)'"
+            ],
+            "metadata": null
+          }
+        }
       }
     },
     {
@@ -297,7 +349,7 @@
     {
       "input": "`fo`o.`ba`r",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: o"
+        "failure": "invalid argument: extra tokens after expression: ."
       }
     },
     {
@@ -1221,19 +1273,45 @@
     {
       "input": "a as (b, c)",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: as"
+        "failure": "invalid argument: sql parser error: Expected an identifier after AS, found: ( at Line: 1, Column 6"
       }
     },
     {
       "input": "a as b",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: as"
+        "success": {
+          "alias": {
+            "expr": {
+              "unresolvedAttribute": {
+                "unparsedIdentifier": "a",
+                "planId": null
+              }
+            },
+            "name": [
+              "b"
+            ],
+            "metadata": null
+          }
+        }
       }
     },
     {
       "input": "a b",
       "output": {
-        "failure": "invalid argument: extra tokens after expression: b"
+        "success": {
+          "alias": {
+            "expr": {
+              "unresolvedAttribute": {
+                "unparsedIdentifier": "a",
+                "planId": null
+              }
+            },
+            "name": [
+              "b"
+            ],
+            "metadata": null
+          }
+        }
       }
     },
     {

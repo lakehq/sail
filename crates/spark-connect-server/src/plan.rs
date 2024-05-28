@@ -19,7 +19,7 @@ use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
 use datafusion_common::{Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference};
-use datafusion_expr::build_join_schema;
+use datafusion_expr::{build_join_schema, LogicalPlanBuilder};
 use framework_common::spec;
 
 use crate::error::{SparkError, SparkResult};
@@ -40,6 +40,21 @@ pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, Spar
         batches.push(batch?);
     }
     Ok(batches)
+}
+
+fn from_qualified_alias(alias: String, qualifier: Vec<String>) -> SparkResult<TableReference> {
+    match qualifier.as_slice() {
+        [] => Ok(TableReference::bare(alias)),
+        [a] => Ok(TableReference::partial(Arc::from(a.as_str()), alias)),
+        [a, b] => Ok(TableReference::full(
+            Arc::from(a.as_str()),
+            Arc::from(b.as_str()),
+            alias,
+        )),
+        _ => Err(SparkError::invalid(
+            "alias qualifier with more than two parts",
+        )),
+    }
 }
 
 pub(crate) async fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
@@ -129,7 +144,6 @@ pub(crate) async fn from_spark_relation(
                 .into_iter()
                 .map(|e| from_spark_expression(e, schema))
                 .collect::<SparkResult<_>>()?;
-            // TODO: handle rewrites in SQL parsing
             let expr = rewrite_multi_alias(expr)?;
             let (input, expr) = rewrite_wildcard(input, expr)?;
             let (input, expr) = rewrite_explode(input, expr)?;
@@ -409,18 +423,12 @@ pub(crate) async fn from_spark_relation(
         }
         PlanNode::SubqueryAlias {
             input,
-            mut alias,
+            alias,
             qualifier,
-        } => {
-            // TODO: handle quoted identifiers
-            for q in qualifier.iter().rev() {
-                alias = format!("{}.{}", q, alias);
-            }
-            Ok(LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
-                Arc::new(from_spark_relation(ctx, *input).await?),
-                alias,
-            )?))
-        }
+        } => Ok(LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
+            Arc::new(from_spark_relation(ctx, *input).await?),
+            from_qualified_alias(alias, qualifier)?,
+        )?)),
         PlanNode::Repartition {
             input,
             num_partitions,
@@ -830,6 +838,48 @@ pub(crate) async fn from_spark_relation(
                 produce_one_row,
                 schema: DFSchemaRef::new(DFSchema::empty()),
             }))
+        }
+        PlanNode::Values(values) => {
+            let schema = DFSchema::empty();
+            let values = values
+                .into_iter()
+                .map(|row| {
+                    row.into_iter()
+                        .map(|value| from_spark_expression(value, &schema))
+                        .collect::<SparkResult<Vec<_>>>()
+                })
+                .collect::<SparkResult<Vec<_>>>()?;
+            Ok(LogicalPlanBuilder::values(values)?.build()?)
+        }
+        PlanNode::TableAlias {
+            input,
+            name,
+            columns,
+        } => {
+            let input = from_spark_relation(ctx, *input).await?;
+            let schema = input.schema();
+            let input = if columns.is_empty() {
+                input
+            } else {
+                if columns.len() != schema.fields().len() {
+                    return Err(SparkError::invalid(format!(
+                        "number of column names ({}) does not match number of columns ({})",
+                        columns.len(),
+                        schema.fields().len()
+                    )));
+                }
+                let expr: Vec<Expr> = schema
+                    .columns()
+                    .iter()
+                    .zip(columns.iter())
+                    .map(|(col, name)| Expr::Column(col.clone()).alias(name))
+                    .collect();
+                LogicalPlan::Projection(plan::Projection::try_new(expr, Arc::new(input))?)
+            };
+            Ok(LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
+                Arc::new(input),
+                from_qualified_alias(name, vec![])?,
+            )?))
         }
     }
 }
