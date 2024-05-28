@@ -1,6 +1,5 @@
-use crate::error::{SparkError, SparkResult};
+use crate::error::SparkResult;
 use crate::sql::parser::SparkDialect;
-use datafusion_common::SchemaReference;
 use regex::Regex;
 use sqlparser::ast::Ident;
 use sqlparser::parser::Parser;
@@ -37,23 +36,13 @@ pub(crate) fn filter_pattern(names: Vec<&str>, pattern: Option<&str>) -> Vec<Str
     func_names
 }
 
+pub(crate) fn match_pattern(name: &str, pattern: Option<&str>) -> bool {
+    !filter_pattern(vec![name], pattern).is_empty()
+}
+
+#[allow(dead_code)]
 pub(crate) fn parse_identifiers(s: &str) -> SparkResult<Vec<Ident>> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(s)?;
     let idents = parser.parse_multipart_identifier()?;
     Ok(idents)
-}
-
-pub(crate) fn build_schema_reference(schema_name: &str) -> SparkResult<SchemaReference> {
-    let mut idents = parse_identifiers(schema_name)?;
-    let schema_reference = match idents.len() {
-        1 => Ok(SchemaReference::Bare {
-            schema: idents.remove(0).value.into(),
-        }),
-        2 => Ok(SchemaReference::Full {
-            catalog: idents.remove(0).value.into(),
-            schema: idents.remove(0).value.into(),
-        }),
-        _ => Err(SparkError::invalid("user-defined type")),
-    };
-    schema_reference
 }

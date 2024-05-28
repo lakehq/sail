@@ -7,6 +7,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::SessionContext;
+use datafusion_expr::Extension;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -14,6 +15,7 @@ use tonic::codegen::tokio_stream::StreamExt;
 use uuid::Uuid;
 
 use crate::error::{SparkError, SparkResult};
+use crate::extension::logical::CatalogCommandNode;
 use crate::plan::to_arrow_batch;
 use crate::schema::to_spark_schema;
 use crate::spark::connect::execute_plan_response::{ArrowBatch, Metrics, ObservedMetrics};
@@ -226,8 +228,18 @@ impl Drop for Executor {
 
 pub(crate) async fn execute_plan(
     ctx: &SessionContext,
-    plan: &LogicalPlan,
+    plan: LogicalPlan,
 ) -> SparkResult<SendableRecordBatchStream> {
+    let plan = match plan {
+        LogicalPlan::Extension(Extension { node }) => {
+            if let Some(n) = node.as_any().downcast_ref::<CatalogCommandNode>() {
+                n.execute(ctx).await?
+            } else {
+                LogicalPlan::Extension(Extension { node })
+            }
+        }
+        x => x,
+    };
     let df = ctx.execute_logical_plan(plan.clone()).await?;
     let plan = df.create_physical_plan().await?;
     Ok(execute_stream(plan, Arc::new(TaskContext::default()))?)

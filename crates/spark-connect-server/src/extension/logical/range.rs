@@ -115,7 +115,7 @@ impl RangeNode {
 
 impl UserDefinedLogicalNodeCore for RangeNode {
     fn name(&self) -> &str {
-        "range"
+        "Range"
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {

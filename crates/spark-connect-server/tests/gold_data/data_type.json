@@ -20,7 +20,7 @@
                           }
                         },
                         "nullable": true,
-                        "metadata": null
+                        "metadata": {}
                       },
                       {
                         "name": "anotherDecimal",
@@ -31,13 +31,13 @@
                           }
                         },
                         "nullable": true,
-                        "metadata": null
+                        "metadata": {}
                       }
                     ]
                   }
                 },
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               },
               {
                 "name": "MAP",
@@ -53,7 +53,7 @@
                   }
                 },
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               },
               {
                 "name": "arrAy",
@@ -64,7 +64,7 @@
                   }
                 },
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               },
               {
                 "name": "anotherArray",
@@ -79,7 +79,7 @@
                   }
                 },
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               }
             ]
           }
@@ -200,7 +200,7 @@
                     "name": "varchar",
                     "dataType": "string",
                     "nullable": true,
-                    "metadata": null
+                    "metadata": {}
                   }
                 ]
               }
@@ -237,13 +237,13 @@
                 "name": "TABLE",
                 "dataType": "string",
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               },
               {
                 "name": "DATE",
                 "dataType": "boolean",
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               }
             ]
           }
@@ -260,13 +260,13 @@
                 "name": "int",
                 "dataType": "integer",
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               },
               {
                 "name": "timestamp",
                 "dataType": "timestamp",
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               }
             ]
           }
@@ -283,7 +283,7 @@
                 "name": "x",
                 "dataType": "integer",
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               },
               {
                 "name": "y",
@@ -321,7 +321,7 @@
                     "name": "tinYint",
                     "dataType": "byte",
                     "nullable": true,
-                    "metadata": null
+                    "metadata": {}
                   }
                 ]
               }
@@ -453,13 +453,13 @@
                 "name": "x+y",
                 "dataType": "integer",
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               },
               {
                 "name": "!@#$%^&*()",
                 "dataType": "string",
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               },
               {
                 "name": "1_2.345<>:\"",
@@ -469,7 +469,7 @@
                   }
                 },
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               }
             ]
           }
@@ -486,19 +486,19 @@
                 "name": "end",
                 "dataType": "long",
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               },
               {
                 "name": "select",
                 "dataType": "integer",
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               },
               {
                 "name": "from",
                 "dataType": "string",
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               }
             ]
           }
@@ -515,13 +515,13 @@
                 "name": "intType",
                 "dataType": "integer",
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               },
               {
                 "name": "ts",
                 "dataType": "timestamp",
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               }
             ]
           }
@@ -538,13 +538,13 @@
                 "name": "x",
                 "dataType": "integer",
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               },
               {
                 "name": "y",
                 "dataType": "string",
                 "nullable": true,
-                "metadata": null
+                "metadata": {}
               }
             ]
           }

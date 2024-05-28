@@ -11,7 +11,6 @@ mod session;
 mod sql;
 #[cfg(test)]
 mod tests;
-mod utils;
 
 const SPARK_VERSION: &str = "3.5.1";
 

@@ -68,7 +68,7 @@ impl DataType {
                 name: default_field_name.to_string(),
                 data_type: x,
                 nullable,
-                metadata: None,
+                metadata: HashMap::new(),
             }]),
         };
         Schema { fields }
@@ -81,7 +81,7 @@ pub struct Field {
     pub name: String,
     pub data_type: DataType,
     pub nullable: bool,
-    pub metadata: Option<HashMap<String, String>>,
+    pub metadata: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -174,13 +174,10 @@ impl TryFrom<Field> for adt::Field {
             nullable,
             metadata,
         } = field;
-        let mut metadata = match metadata {
-            Some(m) => m
-                .into_iter()
-                .map(|(k, v)| (format!("metadata.{}", k), v))
-                .collect(),
-            None => HashMap::new(),
-        };
+        let mut metadata: HashMap<_, _> = metadata
+            .into_iter()
+            .map(|(k, v)| (format!("metadata.{}", k), v))
+            .collect();
         let data_type = match data_type {
             DataType::UserDefined {
                 jvm_class,
@@ -237,7 +234,7 @@ impl TryFrom<adt::FieldRef> for Field {
             name: name.clone(),
             data_type,
             nullable: field.is_nullable(),
-            metadata: Some(metadata),
+            metadata,
         })
     }
 }
@@ -293,7 +290,7 @@ impl TryFrom<DataType> for adt::DataType {
                     name: "element".to_string(),
                     data_type: *element_type,
                     nullable: contains_null,
-                    metadata: None,
+                    metadata: HashMap::new(),
                 };
                 Ok(adt::DataType::List(Arc::new(field.try_into()?)))
             }
@@ -334,13 +331,13 @@ impl TryFrom<DataType> for adt::DataType {
                         name: "key".to_string(),
                         data_type: *key_type,
                         nullable: false,
-                        metadata: None,
+                        metadata: HashMap::new(),
                     },
                     Field {
                         name: "value".to_string(),
                         data_type: *value_type,
                         nullable: value_contains_null,
-                        metadata: None,
+                        metadata: HashMap::new(),
                     },
                 ];
                 Ok(adt::DataType::Map(
