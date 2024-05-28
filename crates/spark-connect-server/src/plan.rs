@@ -18,10 +18,8 @@ use datafusion::execution::context::{DataFilePaths, SessionContext};
 use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
-use datafusion_common::{
-    Column, Constraints, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference,
-};
-use datafusion_expr::{build_join_schema, DdlStatement, LogicalPlanBuilder, TableType};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference};
+use datafusion_expr::{build_join_schema, LogicalPlanBuilder};
 use framework_common::spec;
 
 use crate::error::{SparkError, SparkResult};
@@ -30,23 +28,9 @@ use crate::extension::analyzer::alias::rewrite_multi_alias;
 use crate::extension::analyzer::explode::rewrite_explode;
 use crate::extension::analyzer::wildcard::rewrite_wildcard;
 use crate::extension::analyzer::window::rewrite_window;
+use crate::extension::logical::{CatalogCommand, CatalogCommandNode, RangeNode};
 use crate::schema::cast_record_batch;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
-use crate::sql::session_catalog::catalog::list_catalogs_metadata;
-use crate::sql::session_catalog::column::{list_catalog_table_columns, CatalogTableColumn};
-use crate::sql::session_catalog::database::{
-    get_catalog_database, list_catalog_databases, parse_optional_db_name_with_defaults,
-};
-use crate::sql::session_catalog::table::{
-    catalog_table_type_to_table_type, get_catalog_table, list_catalog_tables, CatalogTableType,
-};
-use crate::sql::session_catalog::{
-    catalog::{create_catalog_metadata_memtable, CatalogMetadata},
-    column::create_catalog_column_memtable,
-    database::{create_catalog_database_memtable, CatalogDatabase},
-    table::{create_catalog_table_memtable, CatalogTable},
-};
-use crate::utils::CaseInsensitiveHashMap;
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
     let cursor = Cursor::new(data);
@@ -434,12 +418,7 @@ pub(crate) async fn from_spark_relation(
                 )));
             }
             Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(crate::extension::logical::RangeNode::try_new(
-                    start,
-                    end,
-                    step,
-                    num_partitions as u32,
-                )?),
+                node: Arc::new(RangeNode::try_new(start, end, step, num_partitions as u32)?),
             }))
         }
         PlanNode::SubqueryAlias {
@@ -701,242 +680,135 @@ pub(crate) async fn from_spark_relation(
         PlanNode::StatSampleBy { .. } => {
             return Err(SparkError::todo("sample by"));
         }
-        PlanNode::CurrentDatabase {} => {
-            let results: DataFrame = ctx
-                .sql("SELECT CAST($1 AS STRING)")
-                .await?
-                .with_param_values(vec![ScalarValue::Utf8(Some(
-                    state.config().options().catalog.default_schema.to_string(),
-                ))])?;
-            Ok(results.into_optimized_plan()?)
-        }
-        PlanNode::SetCurrentDatabase { database_name } => {
-            ctx.state_weak_ref()
-                .upgrade()
-                .ok_or_else(|| SparkError::internal("invalid session context"))?
-                .write()
-                .config_mut()
-                .options_mut()
-                .catalog
-                .default_schema = database_name;
-            Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
-                produce_one_row: false,
-                schema: DFSchemaRef::new(DFSchema::empty()),
-            }))
-        }
-        PlanNode::ListDatabases { pattern } => {
-            let databases: Vec<CatalogDatabase> =
-                list_catalog_databases(None, pattern.as_deref(), &ctx)?;
-            let provider: MemTable = create_catalog_database_memtable(databases)?;
-            Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
-                UNNAMED_TABLE,
-                provider_as_source(Arc::new(provider)),
-                None,
-                vec![],
-                None,
-            )?))
-        }
+        PlanNode::CurrentDatabase {} => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(
+                CatalogCommand::CurrentDatabase,
+            )?),
+        })),
+        PlanNode::SetCurrentDatabase { database_name } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(
+                CatalogCommand::SetCurrentDatabase { database_name },
+            )?),
+        })),
+        PlanNode::ListDatabases { pattern } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(
+                CatalogCommand::ListDatabases { pattern },
+            )?),
+        })),
         PlanNode::ListTables {
             database_name,
             pattern,
-        } => {
-            let (catalog_name, database_name): (String, String) =
-                parse_optional_db_name_with_defaults(
-                    database_name.as_deref(),
-                    &state.config().options().catalog.default_catalog,
-                    &state.config().options().catalog.default_schema,
-                )?;
-            let catalog_tables: Vec<CatalogTable> = list_catalog_tables(
-                Some(&catalog_name),
-                Some(&database_name),
-                pattern.as_deref(),
-                &ctx,
-            )
-            .await?;
-            let provider: MemTable = create_catalog_table_memtable(catalog_tables)?;
-            Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
-                UNNAMED_TABLE,
-                provider_as_source(Arc::new(provider)),
-                None,
-                vec![],
-                None,
-            )?))
-        }
-        PlanNode::ListFunctions { .. } => Err(SparkError::todo("PlanNode::ListFunctions")),
+        } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::ListTables {
+                database_name,
+                pattern,
+            })?),
+        })),
+        PlanNode::ListFunctions {
+            database_name,
+            pattern,
+        } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(
+                CatalogCommand::ListFunctions {
+                    database_name,
+                    pattern,
+                },
+            )?),
+        })),
         PlanNode::ListColumns {
             table_name,
             database_name,
-        } => {
-            let (catalog_name, database_name): (String, String) =
-                parse_optional_db_name_with_defaults(
-                    database_name.as_deref(),
-                    &state.config().options().catalog.default_catalog,
-                    &state.config().options().catalog.default_schema,
-                )?;
-            let columns: Vec<CatalogTableColumn> =
-                list_catalog_table_columns(&catalog_name, &database_name, &table_name, &ctx)
-                    .await?;
-            let provider: MemTable = create_catalog_column_memtable(columns)?;
-            Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
-                UNNAMED_TABLE,
-                provider_as_source(Arc::new(provider)),
-                None,
-                vec![],
-                None,
-            )?))
-        }
-        PlanNode::GetDatabase { database_name } => {
-            let databases: Vec<CatalogDatabase> = get_catalog_database(&database_name, &ctx)?;
-            let provider: MemTable = create_catalog_database_memtable(databases)?;
-            Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
-                UNNAMED_TABLE,
-                provider_as_source(Arc::new(provider)),
-                None,
-                vec![],
-                None,
-            )?))
-        }
+        } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::ListColumns {
+                table_name,
+                database_name,
+            })?),
+        })),
+        PlanNode::GetDatabase { database_name } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::GetDatabase {
+                database_name,
+            })?),
+        })),
         PlanNode::GetTable {
             table_name,
             database_name,
-        } => {
-            let (catalog_name, database_name): (String, String) =
-                parse_optional_db_name_with_defaults(
-                    database_name.as_deref(),
-                    &state.config().options().catalog.default_catalog,
-                    &state.config().options().catalog.default_schema,
-                )?;
-            let tables: Vec<CatalogTable> =
-                get_catalog_table(&table_name, &catalog_name, &database_name, &ctx).await?;
-            let provider: MemTable = create_catalog_table_memtable(tables)?;
-            Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
-                UNNAMED_TABLE,
-                provider_as_source(Arc::new(provider)),
-                None,
-                vec![],
-                None,
-            )?))
-        }
-        PlanNode::GetFunction { .. } => Err(SparkError::todo("PlanNode::GetFunction")),
-        PlanNode::DatabaseExists { database_name } => {
-            let databases: Vec<CatalogDatabase> = get_catalog_database(&database_name, &ctx)?;
-            let db_exists = !databases.is_empty();
-            let results: DataFrame = ctx
-                .sql("SELECT CAST($1 AS BOOLEAN)")
-                .await?
-                .with_param_values(vec![ScalarValue::Boolean(Some(db_exists))])?;
-            Ok(results.into_optimized_plan()?)
-        }
+        } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::GetTable {
+                table_name,
+                database_name,
+            })?),
+        })),
+        PlanNode::GetFunction {
+            function_name,
+            database_name,
+        } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::GetFunction {
+                function_name,
+                database_name,
+            })?),
+        })),
+        PlanNode::DatabaseExists { database_name } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(
+                CatalogCommand::DatabaseExists { database_name },
+            )?),
+        })),
         PlanNode::TableExists {
             table_name,
             database_name,
-        } => {
-            let (catalog_name, database_name): (String, String) =
-                parse_optional_db_name_with_defaults(
-                    database_name.as_deref(),
-                    &state.config().options().catalog.default_catalog,
-                    &state.config().options().catalog.default_schema,
-                )?;
-            let tables: Vec<CatalogTable> =
-                get_catalog_table(&table_name, &catalog_name, &database_name, &ctx).await?;
-            let table_exists = !tables.is_empty();
-            let results: DataFrame = ctx
-                .sql("SELECT CAST($1 AS BOOLEAN)")
-                .await?
-                .with_param_values(vec![ScalarValue::Boolean(Some(table_exists))])?;
-            Ok(results.into_optimized_plan()?)
-        }
-        PlanNode::FunctionExists { .. } => Err(SparkError::todo("PlanNode::FunctionExists")),
+        } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::TableExists {
+                table_name,
+                database_name,
+            })?),
+        })),
+        PlanNode::FunctionExists {
+            function_name,
+            database_name,
+        } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(
+                CatalogCommand::FunctionExists {
+                    function_name,
+                    database_name,
+                },
+            )?),
+        })),
         PlanNode::CreateTable {
             table_name,
             path,
             source,
-            description,
+            description: _,
             schema,
             options,
         } => {
-            let table_ref = TableReference::from(table_name.to_string());
-            let (_table_type, _location): (TableType, Option<&str>) =
-                if let Some(path) = path.as_deref() {
-                    // TODO: Should covert to a "Path" then uri
-                    return Err(SparkError::todo(format!(
-                        "CreateTable (External) with path: {:?}",
-                        path
-                    )));
-                } else {
-                    (
-                        catalog_table_type_to_table_type(CatalogTableType::MANAGED),
-                        None,
-                    )
-                };
             // TODO: use spark.sql.sources.default to get the default source
-            let _source: &str = source.as_deref().unwrap_or("parquet");
-            let description: &str = description.as_deref().unwrap_or("");
-            let _options: CaseInsensitiveHashMap<String> = CaseInsensitiveHashMap::from(options);
-
-            let mut metadata: HashMap<String, String> = HashMap::new();
-            metadata.insert("description".to_string(), description.to_string());
-            let schema: adt::Schema = schema.unwrap_or_default().try_into()?;
-            let schema = adt::SchemaRef::new(schema.with_metadata(metadata));
-
-            let batch = RecordBatch::new_empty(schema);
-            let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-
-            Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
-                plan::CreateMemoryTable {
-                    name: table_ref,
-                    constraints: Constraints::empty(), // TODO: Check if exists in options
-                    input: Arc::new(LogicalPlan::TableScan(plan::TableScan::try_new(
-                        UNNAMED_TABLE,
-                        provider_as_source(Arc::new(table)),
-                        None,
-                        vec![],
-                        None,
-                    )?)),
-                    if_not_exists: false,    // TODO: Check if exists in options
-                    or_replace: false,       // TODO: Check if exists in options
-                    column_defaults: vec![], // TODO: Check if exists in options
+            let read = spec::Plan::new(spec::PlanNode::Read {
+                read_type: spec::ReadType::DataSource {
+                    // TODO: is `source` and `format` equivalent?
+                    format: source,
+                    schema,
+                    options,
+                    paths: path.map(|x| vec![x]).unwrap_or_default(),
+                    predicates: vec![],
                 },
-            )))
+                is_streaming: false,
+            });
+            Ok(LogicalPlan::Extension(Extension {
+                node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::CreateTable {
+                    table_name,
+                    plan: Arc::new(from_spark_relation(ctx, read).await?),
+                })?),
+            }))
         }
-        PlanNode::DropTemporaryView { view_name } => {
-            // TODO: DataFusion returns an empty DataFrame on DropView
-            //  But Spark expects a Boolean value.
-            //  We can do this for now instead of having to create a LogicalPlan Extension
-            let drop_view_plan = LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
-                name: TableReference::from(view_name),
-                if_exists: false,
-                schema: DFSchemaRef::new(DFSchema::empty()),
-            }));
-            let result = match ctx.execute_logical_plan(drop_view_plan).await {
-                Ok(_) => ScalarValue::Boolean(Some(true)),
-                Err(_) => ScalarValue::Boolean(Some(false)),
-            };
-            let df: DataFrame = ctx
-                .sql("SELECT CAST($1 AS BOOLEAN)")
-                .await?
-                .with_param_values(vec![result])?;
-            Ok(df.into_optimized_plan()?)
-        }
-        PlanNode::DropGlobalTemporaryView { view_name } => {
-            // TODO: DataFusion returns an empty DataFrame on DropView
-            //  But Spark expects a Boolean value.
-            //  We can do this for now instead of having to create a LogicalPlan Extension
-            let drop_view_plan = LogicalPlan::Ddl(DdlStatement::DropView(plan::DropView {
-                name: TableReference::from(view_name),
-                if_exists: false,
-                schema: DFSchemaRef::new(DFSchema::empty()),
-            }));
-            let result = match ctx.execute_logical_plan(drop_view_plan).await {
-                Ok(_) => ScalarValue::Boolean(Some(true)),
-                Err(_) => ScalarValue::Boolean(Some(false)),
-            };
-            let df: DataFrame = ctx
-                .sql("SELECT CAST($1 AS BOOLEAN)")
-                .await?
-                .with_param_values(vec![result])?;
-            Ok(df.into_optimized_plan()?)
-        }
+        PlanNode::DropTemporaryView { view_name } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(
+                CatalogCommand::DropTemporaryView { view_name },
+            )?),
+        })),
+        PlanNode::DropGlobalTemporaryView { view_name } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(
+                CatalogCommand::DropGlobalTemporaryView { view_name },
+            )?),
+        })),
         PlanNode::RecoverPartitions { .. } => Err(SparkError::todo("PlanNode::RecoverPartitions")),
         PlanNode::IsCached { .. } => Err(SparkError::todo("PlanNode::IsCached")),
         PlanNode::CacheTable { .. } => Err(SparkError::todo("PlanNode::CacheTable")),
@@ -944,40 +816,19 @@ pub(crate) async fn from_spark_relation(
         PlanNode::ClearCache {} => Err(SparkError::todo("PlanNode::ClearCache")),
         PlanNode::RefreshTable { .. } => Err(SparkError::todo("PlanNode::RefreshTable")),
         PlanNode::RefreshByPath { .. } => Err(SparkError::todo("PlanNode::RefreshByPath")),
-        PlanNode::CurrentCatalog {} => {
-            let results: DataFrame = ctx
-                .sql("SELECT CAST($1 AS STRING)")
-                .await?
-                .with_param_values(vec![ScalarValue::Utf8(Some(
-                    state.config().options().catalog.default_catalog.to_string(),
-                ))])?;
-            Ok(results.into_optimized_plan()?)
-        }
-        PlanNode::SetCurrentCatalog { catalog_name } => {
-            ctx.state_weak_ref()
-                .upgrade()
-                .ok_or_else(|| SparkError::internal("invalid session context"))?
-                .write()
-                .config_mut()
-                .options_mut()
-                .catalog
-                .default_catalog = catalog_name;
-            Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
-                produce_one_row: false,
-                schema: DFSchemaRef::new(DFSchema::empty()),
-            }))
-        }
-        PlanNode::ListCatalogs { pattern } => {
-            let metadata: Vec<CatalogMetadata> = list_catalogs_metadata(pattern.as_deref(), &ctx)?;
-            let provider: MemTable = create_catalog_metadata_memtable(metadata)?;
-            Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
-                UNNAMED_TABLE,
-                provider_as_source(Arc::new(provider)),
-                None,
-                vec![],
-                None,
-            )?))
-        }
+        PlanNode::CurrentCatalog => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::CurrentCatalog)?),
+        })),
+        PlanNode::SetCurrentCatalog { catalog_name } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(
+                CatalogCommand::SetCurrentCatalog { catalog_name },
+            )?),
+        })),
+        PlanNode::ListCatalogs { pattern } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::ListCatalogs {
+                pattern,
+            })?),
+        })),
         PlanNode::RegisterFunction(_) => Err(SparkError::todo("register function")),
         PlanNode::RegisterTableFunction(_) => Err(SparkError::todo("register table function")),
         PlanNode::CreateTemporaryView { .. } => Err(SparkError::todo("create temporary view")),

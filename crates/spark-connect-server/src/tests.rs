@@ -152,7 +152,7 @@ pub(crate) async fn execute_query(
         )),
     };
     let plan = from_spark_relation(&ctx, relation.try_into()?).await?;
-    let mut stream = execute_plan(&ctx, &plan).await?;
+    let mut stream = execute_plan(&ctx, plan).await?;
     let mut output = vec![];
     while let Some(batch) = stream.next().await {
         let batch = batch?;

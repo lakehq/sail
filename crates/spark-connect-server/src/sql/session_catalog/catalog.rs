@@ -1,86 +1,47 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::error::SparkResult;
-use crate::sql::utils::filter_pattern;
-use datafusion::arrow::array::{RecordBatch, StringArray};
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::catalog::{CatalogProvider, CatalogProviderList};
-use datafusion::datasource::MemTable;
-use datafusion::prelude::SessionContext;
+use crate::sql::session_catalog::{SessionCatalogContext, SessionContextExt};
+use crate::sql::utils::match_pattern;
+use datafusion::catalog::CatalogProviderList;
+use datafusion_common::Result;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct CatalogMetadata {
     pub(crate) name: String,
     pub(crate) description: Option<String>,
 }
 
-impl CatalogMetadata {
-    pub fn schema() -> SchemaRef {
-        SchemaRef::new(Schema::new(vec![
-            Field::new("name", DataType::Utf8, false),
-            Field::new("description", DataType::Utf8, true),
-        ]))
-    }
-}
-
-pub(crate) fn create_catalog_metadata_memtable(
-    catalogs: Vec<CatalogMetadata>,
-) -> SparkResult<MemTable> {
-    let schema_ref = CatalogMetadata::schema();
-
-    let mut names: Vec<String> = Vec::with_capacity(catalogs.len());
-    let mut descriptions: Vec<Option<String>> = Vec::with_capacity(catalogs.len());
-
-    for catalog in catalogs {
-        names.push(catalog.name);
-        descriptions.push(catalog.description);
+impl SessionCatalogContext<'_> {
+    pub(crate) fn default_catalog(&self) -> Result<String> {
+        Ok(self
+            .ctx
+            .read_state(|state| Ok(state.config().options().catalog.default_catalog.clone()))?)
     }
 
-    let record_batch = RecordBatch::try_new(
-        schema_ref.clone(),
-        vec![
-            Arc::new(StringArray::from(names)),
-            Arc::new(StringArray::from(descriptions)),
-        ],
-    )?;
+    pub(crate) fn set_default_catalog(&self, catalog_name: String) -> Result<()> {
+        self.ctx.write_state(move |state| {
+            state.config_mut().options_mut().catalog.default_catalog = catalog_name;
+            Ok(())
+        })
+    }
 
-    Ok(MemTable::try_new(schema_ref, vec![vec![record_batch]])?)
-}
-
-pub(crate) fn list_catalogs(
-    pattern: Option<&str>,
-    ctx: &SessionContext,
-) -> SparkResult<HashMap<String, Arc<dyn CatalogProvider>>> {
-    let catalog_list: &Arc<dyn CatalogProviderList> = &ctx.state().catalog_list();
-    let catalogs: HashMap<String, Arc<dyn CatalogProvider>> = catalog_list
-        .catalog_names()
-        .iter()
-        .filter_map(|catalog_name| {
-            catalog_list.catalog(catalog_name).and_then(|catalog| {
-                let filtered_names = filter_pattern(vec![&catalog_name], pattern);
-                if filtered_names.is_empty() {
-                    None
-                } else {
-                    Some((catalog_name.to_string(), catalog))
-                }
+    pub(crate) fn list_catalogs(
+        &self,
+        catalog_pattern: Option<&str>,
+    ) -> Result<Vec<CatalogMetadata>> {
+        let catalog_list: Arc<dyn CatalogProviderList> =
+            self.ctx.read_state(|state| Ok(state.catalog_list()))?;
+        let mut catalogs: Vec<CatalogMetadata> = Vec::new();
+        for catalog_name in catalog_list.catalog_names() {
+            if !match_pattern(&catalog_name, catalog_pattern) {
+                continue;
+            }
+            catalogs.push(CatalogMetadata {
+                name: catalog_name,
+                description: None, // Spark code sets all descriptions to None
             })
-        })
-        .collect();
-    Ok(catalogs)
-}
-
-pub(crate) fn list_catalogs_metadata(
-    pattern: Option<&str>,
-    ctx: &SessionContext,
-) -> SparkResult<Vec<CatalogMetadata>> {
-    let catalogs: HashMap<String, Arc<dyn CatalogProvider>> = list_catalogs(pattern, &ctx)?;
-    let catalogs_metadata: Vec<CatalogMetadata> = catalogs
-        .iter()
-        .map(|(catalog_name, _catalog)| CatalogMetadata {
-            name: catalog_name.clone(),
-            description: None, // Spark code sets all descriptions to None
-        })
-        .collect();
-    Ok(catalogs_metadata)
+        }
+        Ok(catalogs)
+    }
 }

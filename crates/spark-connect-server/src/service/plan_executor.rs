@@ -97,7 +97,7 @@ async fn handle_execute_plan(
 ) -> SparkResult<ExecutePlanResponseStream> {
     let ctx = session.context();
     let operation_id = metadata.operation_id.clone();
-    let stream = execute_plan(&ctx, &plan).await?;
+    let stream = execute_plan(&ctx, plan).await?;
     let mut executor = Executor::new(metadata, ExecutorTaskContext::new(stream));
     let rx = executor.start().await?;
     session.lock()?.add_executor(executor);
