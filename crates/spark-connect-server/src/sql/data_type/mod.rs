@@ -22,6 +22,7 @@ pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_PRECISION: u8 = 38;
 pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_SCALE: i8 = 18;
 
 pub(crate) fn parse_spark_schema(schema: &str) -> SparkResult<spec::Schema> {
+    // TODO: Replicate parseDatatypeString functionality exactly
     let data_type: spec::DataType = if let Ok(dt) = parse_spark_data_type(schema) {
         dt
     } else if let Ok(dt) = parse_spark_data_type(format!("struct<{schema}>").as_str()) {

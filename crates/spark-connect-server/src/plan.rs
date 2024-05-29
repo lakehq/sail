@@ -12,6 +12,7 @@ use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::function::TableFunction;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::execution::context::{DataFilePaths, SessionContext};
@@ -19,9 +20,10 @@ use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
+    Column, DFSchema, DFSchemaRef, DataFusionError, ParamValues, ScalarValue, SchemaReference,
+    TableReference,
 };
-use datafusion_expr::{build_join_schema, LogicalPlanBuilder};
+use datafusion_expr::{build_join_schema, ExprSchemable, LogicalPlanBuilder};
 use framework_common::spec;
 
 use crate::error::{SparkError, SparkResult};
@@ -670,10 +672,89 @@ pub(crate) async fn from_spark_relation(
         PlanNode::CachedRemoteRelation { .. } => {
             return Err(SparkError::todo("cached remote relation"));
         }
-        PlanNode::CommonInlineUserDefinedTableFunction { .. } => {
-            return Err(SparkError::todo(
-                "common inline user defined table function",
-            ));
+        PlanNode::CommonInlineUserDefinedTableFunction(udtf) => {
+            use framework_python::partial_python_udf::{
+                deserialize_partial_python_udf, PartialPythonUDF,
+            };
+            use framework_python::udtf::{PythonUDT, PythonUDTF};
+            use pyo3::prelude::*;
+            use spec::CommonInlineUserDefinedTableFunction::Function::PythonUdtf;
+
+            let spec::CommonInlineUserDefinedTableFunction {
+                function_name,
+                deterministic,
+                arguments,
+                function,
+            } = udtf;
+
+            let schema = DFSchema::empty(); // UDTF only has schema for return type
+            let arguments: Vec<Expr> = arguments
+                .iter()
+                .map(|x| from_spark_expression(x.clone().try_into()?, &schema))
+                .collect::<SparkResult<Vec<Expr>>>()?;
+            let input_types: Vec<adt::DataType> = arguments
+                .iter()
+                .map(|arg| arg.get_type(&schema))
+                .collect::<datafusion_common::Result<Vec<adt::DataType>, DataFusionError>>()?;
+
+            let (return_type, eval_type, command, python_version) = match function {
+                spec::TableFunctionDefinition::PythonUdtf {
+                    return_type,
+                    eval_type,
+                    command,
+                    python_version,
+                } => (return_type, eval_type, command, python_version),
+                _ => {
+                    return Err(SparkError::invalid("UDF function type must be Python UDF"));
+                }
+            };
+
+            let return_type: spec::Fields = match return_type {
+                spec::DataType::Struct(fields) => {
+                    fields
+                }
+                _ => {
+                    return Err(SparkError::invalid(format!(
+                        "Invalid Python user-defined table function return type. Expect a struct type, but got {:?}",
+                        return_type
+                    )))
+                }
+            };
+
+            let pyo3_python_version: String = Python::with_gil(|py| py.version().to_string());
+            if !pyo3_python_version.starts_with(python_version.as_str()) {
+                return Err(SparkError::invalid(format!(
+                    "Python version mismatch. Version used to compile the UDF must match the version used to run the UDF. Version used to compile the UDF: {:?}. Version used to run the UDF: {:?}",
+                    python_version,
+                    pyo3_python_version,
+                )));
+            }
+
+            let python_function: PartialPythonUDF = deserialize_partial_python_udf(&command)
+                .map_err(|e| {
+                    SparkError::invalid(format!("Python UDF deserialization error: {:?}", e))
+                })?;
+
+            let output_schema = adt::SchemaRef::new(spec::Schema::try_from(return_type)?.into());
+            // let udtf = PythonUDTF::new(
+            //     function_name.to_string(),
+            //     input_types,
+            //     output_schema,
+            //     python_function,
+            //     deterministic,
+            //     eval_type,
+            // );
+
+            // let table_function =
+            //     TableFunction::new(function_name.to_owned(), Arc::new(udtf.clone()));
+            // let table_provider = table_function.create_table_provider(arguments.as_slice())?;
+            // match table_provider.get_logical_plan() {
+            //     Some(plan) => Ok(plan.to_owned()),
+            //     None => Err(SparkError::invalid("UDTF logical plan is not available")),
+            // }
+
+            // ctx.register_udtf(function_name, Arc::new(udtf));
+            return Err(SparkError::todo("CommonInlineUserDefinedTableFunction"));
         }
         PlanNode::FillNa { .. } => {
             return Err(SparkError::todo("fill na"));

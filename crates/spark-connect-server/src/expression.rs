@@ -18,7 +18,6 @@ use datafusion_expr::{
     WindowUDF,
 };
 use framework_common::spec;
-use framework_python::partial_python_udf::PartialPythonUDF;
 
 #[derive(Default)]
 pub(crate) struct EmptyContextProvider {
@@ -328,7 +327,10 @@ pub(crate) fn from_spark_expression(
             Err(SparkError::todo("unresolved named lambda variable"))
         }
         Expr::CommonInlineUserDefinedFunction(function) => {
-            use framework_python::partial_python_udf::deserialize_partial_python_udf;
+            // TODO: UDAF
+            use framework_python::partial_python_udf::{
+                deserialize_partial_python_udf, PartialPythonUDF,
+            };
             use framework_python::udf::PythonUDF;
             use pyo3::prelude::*;
 

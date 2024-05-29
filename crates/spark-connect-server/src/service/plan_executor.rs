@@ -2,6 +2,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::common::{FileType, TableReference};
 use datafusion::dataframe::DataFrame;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
@@ -129,7 +130,7 @@ pub(crate) async fn handle_execute_write_operation(
 ) -> SparkResult<ExecutePlanResponseStream> {
     let relation = write.input.required("input")?;
     let ctx = session.context();
-    let _save_mode = SaveMode::try_from(write.mode).required("save mode")?;
+    let save_mode = SaveMode::try_from(write.mode).required("save mode")?;
     if !write.sort_column_names.is_empty() {
         return Err(SparkError::unsupported("sort column names"));
     }
@@ -189,28 +190,27 @@ pub(crate) async fn handle_execute_write_operation(
             .or_else(|e| Err(SparkError::from(e)))?
         }
         SaveType::Table(save) => {
-            let table_name: &String = &save.table_name;
-            let table_ref = TableReference::from(table_name);
+            let table_name = save.table_name.as_str();
+            let table_ref = TableReference::from(table_name.to_string());
             let save_method =
                 TableSaveMethod::try_from(save.save_method).required("save method")?;
+            let df = DataFrame::new(ctx.state(), plan.clone());
 
             match save_method {
                 TableSaveMethod::SaveAsTable => {
-                    let df = DataFrame::new(ctx.state(), plan.clone());
                     ctx.register_table(table_ref, df.into_view())?;
                     plan
                 }
                 TableSaveMethod::InsertInto => {
-                    return Err(SparkError::todo("insert into"));
-                    // LogicalPlanBuilder::insert_into(
-                    //     plan,
-                    //     table_ref,
-                    //     df.schema(),
-                    //     true, // TODO: use _save_mode
-                    // )
-                    //     .or_else(|e| Err(SparkError::from(e)))?
-                    //     .build()
-                    //     .or_else(|e| Err(SparkError::from(e)))?
+                    let arrow_schema = ArrowSchema::from(df.schema());
+                    let overwrite = match save_mode {
+                        SaveMode::Overwrite => true,
+                        _ => false,
+                    };
+                    LogicalPlanBuilder::insert_into(plan, table_ref, &arrow_schema, overwrite)
+                        .or_else(|e| Err(SparkError::from(e)))?
+                        .build()
+                        .or_else(|e| Err(SparkError::from(e)))?
                 }
                 _ => {
                     return Err(SparkError::invalid(format!(

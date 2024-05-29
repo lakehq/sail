@@ -1,7 +1,7 @@
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::spark::connect::{data_type as sdt, DataType};
 use crate::sql::data_type::{
-    SPARK_DECIMAL_USER_DEFAULT_PRECISION, SPARK_DECIMAL_USER_DEFAULT_SCALE,
+    parse_spark_schema, SPARK_DECIMAL_USER_DEFAULT_PRECISION, SPARK_DECIMAL_USER_DEFAULT_SCALE,
 };
 use framework_common::spec;
 use std::collections::HashMap;
@@ -177,7 +177,7 @@ impl TryFrom<DataType> for spec::DataType {
                 })
             }
             Kind::Unparsed(sdt::Unparsed { data_type_string }) => {
-                Ok(spec::DataType::Unparsed(data_type_string))
+                Ok(parse_spark_schema(data_type_string.as_str())?.fields())
             }
         }
     }

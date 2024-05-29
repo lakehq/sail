@@ -1342,6 +1342,7 @@ name = "framework-python"
 version = "0.1.0"
 dependencies = [
  "arrow",
+ "async-trait",
  "bincode",
  "datafusion",
  "datafusion-common",
@@ -1354,6 +1355,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "sqlparser 0.46.0",
+ "thiserror",
 ]
 
 [[package]]
