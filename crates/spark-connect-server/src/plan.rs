@@ -35,6 +35,7 @@ use crate::extension::analyzer::window::rewrite_window;
 use crate::extension::logical::{CatalogCommand, CatalogCommandNode, RangeNode};
 use crate::schema::cast_record_batch;
 use crate::spark::connect::execute_plan_response::ArrowBatch;
+use crate::sql::data_type::parse_spark_schema;
 
 pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, SparkError> {
     let cursor = Cursor::new(data);
@@ -709,9 +710,13 @@ pub(crate) async fn from_spark_relation(
             };
 
             let return_type: spec::Fields = match return_type {
-                spec::DataType::unparsed(fields) => {
+                spec::DataType::Unparsed(data_type_string) => {
+                    let schema: spec::Schema = parse_spark_schema(data_type_string.as_str())?;
+                    schema.fields
+                },
+                spec::DataType::Struct { fields } => {
                     fields
-                }
+                },
                 _ => {
                     return Err(SparkError::invalid(format!(
                         "Invalid Python user-defined table function return type. Expect a struct type, but got {:?}",
@@ -734,7 +739,12 @@ pub(crate) async fn from_spark_relation(
                     SparkError::invalid(format!("Python UDF deserialization error: {:?}", e))
                 })?;
 
-            let output_schema = adt::SchemaRef::new(spec::Schema::try_from(return_type)?.into());
+            let output_schema = adt::SchemaRef::new(
+                spec::Schema {
+                    fields: return_type,
+                }
+                .try_into()?,
+            );
             // let udtf = PythonUDTF::new(
             //     function_name.to_string(),
             //     input_types,
