@@ -177,7 +177,7 @@ impl TryFrom<DataType> for spec::DataType {
                 })
             }
             Kind::Unparsed(sdt::Unparsed { data_type_string }) => {
-                Ok(parse_spark_schema(data_type_string.as_str())?.fields())
+                Ok(spec::DataType::Unparsed(data_type_string))
             }
         }
     }

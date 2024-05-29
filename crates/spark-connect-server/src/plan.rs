@@ -678,7 +678,6 @@ pub(crate) async fn from_spark_relation(
             };
             use framework_python::udtf::{PythonUDT, PythonUDTF};
             use pyo3::prelude::*;
-            use spec::CommonInlineUserDefinedTableFunction::Function::PythonUdtf;
 
             let spec::CommonInlineUserDefinedTableFunction {
                 function_name,
@@ -710,7 +709,7 @@ pub(crate) async fn from_spark_relation(
             };
 
             let return_type: spec::Fields = match return_type {
-                spec::DataType::Struct(fields) => {
+                spec::DataType::unparsed(fields) => {
                     fields
                 }
                 _ => {
