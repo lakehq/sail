@@ -1,8 +1,10 @@
 use crate::spec::data_type::Schema;
 use crate::spec::expression::{
-    CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction, Expr, SortOrder,
+    CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction, Expr, ObjectName,
+    SortOrder,
 };
 use crate::spec::literal::Literal;
+use crate::spec::Identifier;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -64,7 +66,7 @@ pub enum PlanNode {
         right: Box<Plan>,
         join_condition: Option<Expr>,
         join_type: JoinType,
-        using_columns: Vec<String>,
+        using_columns: Vec<Identifier>,
         join_data_type: Option<JoinDataType>,
     },
     SetOperation {
@@ -109,7 +111,7 @@ pub enum PlanNode {
     },
     Deduplicate {
         input: Box<Plan>,
-        column_names: Vec<String>,
+        column_names: Vec<Identifier>,
         all_columns_as_keys: bool,
         within_watermark: bool,
     },
@@ -121,8 +123,8 @@ pub enum PlanNode {
     },
     SubqueryAlias {
         input: Box<Plan>,
-        alias: String,
-        qualifier: Vec<String>,
+        alias: Identifier,
+        qualifier: Vec<Identifier>,
     },
     Repartition {
         input: Box<Plan>,
@@ -131,11 +133,11 @@ pub enum PlanNode {
     },
     ToDf {
         input: Box<Plan>,
-        column_names: Vec<String>,
+        column_names: Vec<Identifier>,
     },
     WithColumnsRenamed {
         input: Box<Plan>,
-        rename_columns_map: HashMap<String, String>,
+        rename_columns_map: HashMap<Identifier, Identifier>,
     },
     ShowString {
         input: Box<Plan>,
@@ -146,7 +148,7 @@ pub enum PlanNode {
     Drop {
         input: Box<Plan>,
         columns: Vec<Expr>,
-        column_names: Vec<String>,
+        column_names: Vec<Identifier>,
     },
     Tail {
         input: Box<Plan>,
@@ -165,8 +167,8 @@ pub enum PlanNode {
         input: Box<Plan>,
         ids: Vec<Expr>,
         values: Vec<Expr>,
-        variable_column_name: String,
-        value_column_name: String,
+        variable_column_name: Identifier,
+        value_column_name: Identifier,
     },
     ToSchema {
         input: Box<Plan>,
@@ -244,17 +246,17 @@ pub enum PlanNode {
     // NA operations
     FillNa {
         input: Box<Plan>,
-        columns: Vec<String>,
+        columns: Vec<Identifier>,
         values: Vec<Expr>,
     },
     DropNa {
         input: Box<Plan>,
-        columns: Vec<String>,
+        columns: Vec<Identifier>,
         min_non_nulls: Option<i32>,
     },
     ReplaceNa {
         input: Box<Plan>,
-        columns: Vec<String>,
+        columns: Vec<Identifier>,
         replacements: Vec<Replacement>,
     },
     // stat operations
@@ -264,33 +266,33 @@ pub enum PlanNode {
     },
     StatDescribe {
         input: Box<Plan>,
-        columns: Vec<String>,
+        columns: Vec<Identifier>,
     },
     StatCrosstab {
         input: Box<Plan>,
-        left_column: String,
-        right_column: String,
+        left_column: Identifier,
+        right_column: Identifier,
     },
     StatCov {
         input: Box<Plan>,
-        left_column: String,
-        right_column: String,
+        left_column: Identifier,
+        right_column: Identifier,
     },
     StatCorr {
         input: Box<Plan>,
-        left_column: String,
-        right_column: String,
+        left_column: Identifier,
+        right_column: Identifier,
         method: String,
     },
     StatApproxQuantile {
         input: Box<Plan>,
-        columns: Vec<String>,
+        columns: Vec<Identifier>,
         probabilities: Vec<f64>,
         relative_error: f64,
     },
     StatFreqItems {
         input: Box<Plan>,
-        columns: Vec<String>,
+        columns: Vec<Identifier>,
         support: Option<f64>,
     },
     StatSampleBy {
@@ -302,47 +304,43 @@ pub enum PlanNode {
     // catalog operations
     CurrentDatabase,
     SetCurrentDatabase {
-        database_name: String,
+        database_name: Identifier,
     },
     ListDatabases {
-        pattern: Option<String>,
+        catalog: Option<Identifier>,
+        database_pattern: Option<String>,
     },
     ListTables {
-        database_name: Option<String>,
-        pattern: Option<String>,
+        database: Option<ObjectName>,
+        table_pattern: Option<String>,
     },
     ListFunctions {
-        database_name: Option<String>,
-        pattern: Option<String>,
+        database: Option<ObjectName>,
+        function_pattern: Option<String>,
     },
     ListColumns {
-        table_name: String,
-        database_name: Option<String>,
+        table: ObjectName,
     },
     GetDatabase {
-        database_name: String,
+        database: ObjectName,
     },
     GetTable {
-        table_name: String,
-        database_name: Option<String>,
+        table: ObjectName,
     },
     GetFunction {
-        function_name: String,
-        database_name: Option<String>,
+        function: ObjectName,
     },
     DatabaseExists {
-        database_name: String,
+        database: ObjectName,
     },
     TableExists {
-        table_name: String,
-        database_name: Option<String>,
+        table: ObjectName,
     },
     FunctionExists {
-        function_name: String,
-        database_name: Option<String>,
+        function: ObjectName,
     },
     CreateTable {
-        table_name: String,
+        table: ObjectName,
         path: Option<String>,
         source: Option<String>,
         description: Option<String>,
@@ -350,54 +348,79 @@ pub enum PlanNode {
         options: HashMap<String, String>,
     },
     DropTemporaryView {
-        view_name: String,
-    },
-    DropGlobalTemporaryView {
-        view_name: String,
+        view: ObjectName,
+        is_global: bool,
+        if_exists: bool,
     },
     RecoverPartitions {
-        table_name: String,
+        table: ObjectName,
     },
     IsCached {
-        table_name: String,
+        table: ObjectName,
     },
     CacheTable {
-        table_name: String,
+        table: ObjectName,
         storage_level: Option<StorageLevel>,
     },
     UncacheTable {
-        table_name: String,
+        table: ObjectName,
     },
     ClearCache,
     RefreshTable {
-        table_name: String,
+        table: ObjectName,
     },
     RefreshByPath {
         path: String,
     },
     CurrentCatalog,
     SetCurrentCatalog {
-        catalog_name: String,
+        catalog_name: Identifier,
     },
     ListCatalogs {
-        pattern: Option<String>,
+        catalog_pattern: Option<String>,
     },
     // commands
+    CreateDatabase {
+        database: ObjectName,
+        if_not_exists: bool,
+        comment: Option<String>,
+        location: Option<String>,
+        properties: HashMap<String, String>,
+    },
+    DropDatabase {
+        database: ObjectName,
+        if_exists: bool,
+        cascade: bool,
+    },
     RegisterFunction(CommonInlineUserDefinedFunction),
     RegisterTableFunction(CommonInlineUserDefinedTableFunction),
+    DropFunction {
+        function: ObjectName,
+        if_exists: bool,
+        is_temporary: bool,
+    },
+    DropTable {
+        table: ObjectName,
+        if_exists: bool,
+        purge: bool,
+    },
     CreateTemporaryView {
+        view: ObjectName,
         input: Box<Plan>,
-        name: String,
         is_global: bool,
         replace: bool,
+    },
+    DropView {
+        view: ObjectName,
+        if_exists: bool,
     },
     Write {
         input: Box<Plan>,
         source: Option<String>, // TODO: is this the same as "provider" in `WriteOperationV2`?
         save_type: SaveType,
         mode: SaveMode,
-        sort_columns: Vec<String>,
-        partitioning_columns: Vec<String>,
+        sort_columns: Vec<Identifier>,
+        partitioning_columns: Vec<Identifier>,
         bucket_by: Option<SaveBucketBy>,
         options: HashMap<String, String>,
         table_properties: HashMap<String, String>,
@@ -417,8 +440,8 @@ pub enum PlanNode {
     Values(Vec<Vec<Expr>>),
     TableAlias {
         input: Box<Plan>,
-        name: String,
-        columns: Vec<String>,
+        name: Identifier,
+        columns: Vec<Identifier>,
     },
 }
 
@@ -426,7 +449,7 @@ pub enum PlanNode {
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ReadType {
     NamedTable {
-        unparsed_identifier: String,
+        identifier: ObjectName,
         options: HashMap<String, String>,
     },
     DataSource {
@@ -434,7 +457,7 @@ pub enum ReadType {
         schema: Option<Schema>,
         options: HashMap<String, String>,
         paths: Vec<String>,
-        predicates: Vec<String>,
+        predicates: Vec<Expr>,
     },
 }
 
@@ -443,7 +466,7 @@ pub enum ReadType {
 pub enum SaveType {
     Path(String),
     Table {
-        table_name: String,
+        table: ObjectName,
         save_method: TableSaveMethod,
     },
 }
@@ -458,7 +481,7 @@ pub enum TableSaveMethod {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveBucketBy {
-    pub bucket_column_names: Vec<String>,
+    pub bucket_column_names: Vec<Identifier>,
     pub num_buckets: i32,
 }
 

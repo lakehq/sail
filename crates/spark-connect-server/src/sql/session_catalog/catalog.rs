@@ -12,6 +12,15 @@ pub(crate) struct CatalogMetadata {
     pub(crate) description: Option<String>,
 }
 
+impl CatalogMetadata {
+    pub(crate) fn new(name: String) -> Self {
+        Self {
+            name,
+            description: None, // Spark code sets all descriptions to None
+        }
+    }
+}
+
 impl SessionCatalogContext<'_> {
     pub(crate) fn default_catalog(&self) -> Result<String> {
         Ok(self
@@ -32,16 +41,11 @@ impl SessionCatalogContext<'_> {
     ) -> Result<Vec<CatalogMetadata>> {
         let catalog_list: Arc<dyn CatalogProviderList> =
             self.ctx.read_state(|state| Ok(state.catalog_list()))?;
-        let mut catalogs: Vec<CatalogMetadata> = Vec::new();
-        for catalog_name in catalog_list.catalog_names() {
-            if !match_pattern(&catalog_name, catalog_pattern) {
-                continue;
-            }
-            catalogs.push(CatalogMetadata {
-                name: catalog_name,
-                description: None, // Spark code sets all descriptions to None
-            })
-        }
-        Ok(catalogs)
+        Ok(catalog_list
+            .catalog_names()
+            .into_iter()
+            .filter(|name| match_pattern(name.as_str(), catalog_pattern))
+            .map(|name| CatalogMetadata::new(name))
+            .collect::<Vec<_>>())
     }
 }

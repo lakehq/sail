@@ -8,7 +8,7 @@ use std::collections::HashMap;
 pub enum Expr {
     Literal(Literal),
     UnresolvedAttribute {
-        unparsed_identifier: String,
+        identifier: ObjectName,
         plan_id: Option<i64>,
     },
     UnresolvedFunction {
@@ -18,11 +18,12 @@ pub enum Expr {
         is_user_defined_function: bool,
     },
     UnresolvedStar {
-        unparsed_target: Option<String>,
+        target: Option<ObjectName>,
     },
     Alias {
         expr: Box<Expr>,
-        name: Vec<String>,
+        /// A single identifier, or multiple identifiers for multi-alias.
+        name: Vec<Identifier>,
         metadata: Option<HashMap<String, String>>,
     },
     Cast {
@@ -30,6 +31,7 @@ pub enum Expr {
         cast_to_type: DataType,
     },
     UnresolvedRegex {
+        /// The regular expression to match column names.
         col_name: String,
         plan_id: Option<i64>,
     },
@@ -50,7 +52,7 @@ pub enum Expr {
     },
     UpdateFields {
         struct_expression: Box<Expr>,
-        field_name: String,
+        field_name: ObjectName,
         value_expression: Option<Box<Expr>>,
     },
     UnresolvedNamedLambdaVariable(UnresolvedNamedLambdaVariable),
@@ -61,6 +63,63 @@ pub enum Expr {
     },
     // extensions
     Placeholder(String),
+}
+
+/// An identifier with only one part.
+/// It is the raw value without quotes or escape characters.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Identifier(String);
+
+impl From<String> for Identifier {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<Identifier> for String {
+    fn from(id: Identifier) -> Self {
+        id.0
+    }
+}
+
+impl<'a> From<&'a Identifier> for &'a str {
+    fn from(id: &'a Identifier) -> Self {
+        id.0.as_str()
+    }
+}
+
+/// An object name with potentially multiple parts.
+/// Each part is a raw value without quotes or escape characters.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ObjectName(Vec<Identifier>);
+
+impl From<Vec<String>> for ObjectName {
+    fn from(name: Vec<String>) -> Self {
+        Self(name.into_iter().map(Identifier::from).collect())
+    }
+}
+
+impl From<ObjectName> for Vec<String> {
+    fn from(name: ObjectName) -> Self {
+        name.0.into_iter().map(String::from).collect()
+    }
+}
+
+impl ObjectName {
+    pub fn new_qualified(name: Identifier, mut qualifier: Vec<Identifier>) -> Self {
+        qualifier.push(name);
+        Self(qualifier)
+    }
+
+    pub fn new_unqualified(name: Identifier) -> Self {
+        Self(vec![name])
+    }
+
+    pub fn child(self, name: Identifier) -> Self {
+        let mut names = self.0;
+        names.push(name);
+        Self(names)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -118,12 +177,12 @@ pub struct CommonInlineUserDefinedFunction {
     pub deterministic: bool,
     pub arguments: Vec<Expr>,
     #[serde(flatten)]
-    pub function: FunctionType,
+    pub function: FunctionDefinition,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
-pub enum FunctionType {
+pub enum FunctionDefinition {
     PythonUdf {
         output_type: DataType,
         eval_type: i32,
@@ -150,12 +209,12 @@ pub struct CommonInlineUserDefinedTableFunction {
     pub deterministic: bool,
     pub arguments: Vec<Expr>,
     #[serde(flatten)]
-    pub function: TableFunctionType,
+    pub function: TableFunctionDefinition,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
-pub enum TableFunctionType {
+pub enum TableFunctionDefinition {
     PythonUdtf {
         return_type: Option<DataType>,
         eval_type: i32,
@@ -167,5 +226,5 @@ pub enum TableFunctionType {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnresolvedNamedLambdaVariable {
-    pub name_parts: Vec<String>,
+    pub name: ObjectName,
 }

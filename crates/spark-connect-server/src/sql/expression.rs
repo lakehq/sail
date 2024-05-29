@@ -8,17 +8,6 @@ use sqlparser::ast;
 use sqlparser::keywords::RESERVED_FOR_COLUMN_ALIAS;
 use sqlparser::parser::Parser;
 
-struct Identifier(String);
-
-impl From<Identifier> for spec::Expr {
-    fn from(identifier: Identifier) -> spec::Expr {
-        spec::Expr::UnresolvedAttribute {
-            unparsed_identifier: identifier.0,
-            plan_id: None,
-        }
-    }
-}
-
 struct Function {
     name: String,
     args: Vec<spec::Expr>,
@@ -44,6 +33,15 @@ fn negate_expression(expr: spec::Expr, negated: bool) -> spec::Expr {
     } else {
         expr
     }
+}
+
+pub(crate) fn from_ast_object_name(name: ast::ObjectName) -> SparkResult<spec::ObjectName> {
+    Ok(name
+        .0
+        .into_iter()
+        .map(|i| i.value)
+        .collect::<Vec<_>>()
+        .into())
 }
 
 fn from_ast_unary_operator(op: ast::UnaryOperator) -> SparkResult<String> {
@@ -211,11 +209,9 @@ fn from_ast_function_arg(arg: ast::FunctionArg) -> SparkResult<spec::Expr> {
             let arg = match arg {
                 FunctionArgExpr::Expr(e) => from_ast_expression(e)?,
                 FunctionArgExpr::QualifiedWildcard(name) => spec::Expr::UnresolvedStar {
-                    unparsed_target: Some(name.to_string()),
+                    target: Some(from_ast_object_name(name)?),
                 },
-                FunctionArgExpr::Wildcard => spec::Expr::UnresolvedStar {
-                    unparsed_target: None,
-                },
+                FunctionArgExpr::Wildcard => spec::Expr::UnresolvedStar { target: None },
             };
             Ok(arg)
         }
@@ -291,10 +287,14 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<spec::Expr> {
         Expr::Identifier(ast::Ident {
             value,
             quote_style: _,
-        }) => Ok(spec::Expr::from(Identifier(value))),
-        Expr::CompoundIdentifier(x) => {
-            Ok(spec::Expr::from(Identifier(ast::ObjectName(x).to_string())))
-        }
+        }) => Ok(spec::Expr::UnresolvedAttribute {
+            identifier: spec::ObjectName::new_unqualified(value.into()),
+            plan_id: None,
+        }),
+        Expr::CompoundIdentifier(x) => Ok(spec::Expr::UnresolvedAttribute {
+            identifier: from_ast_object_name(ast::ObjectName(x))?,
+            plan_id: None,
+        }),
         Expr::IsFalse(e) => Ok(spec::Expr::from(Function {
             name: "<=>".to_string(),
             args: vec![from_ast_expression(*e)?, LiteralValue(false).try_into()?],
@@ -640,11 +640,9 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<spec::Expr> {
             }))
         }
         Expr::Interval(interval) => from_ast_interval(interval),
-        Expr::Wildcard => Ok(spec::Expr::UnresolvedStar {
-            unparsed_target: None,
-        }),
+        Expr::Wildcard => Ok(spec::Expr::UnresolvedStar { target: None }),
         Expr::QualifiedWildcard(name) => Ok(spec::Expr::UnresolvedStar {
-            unparsed_target: Some(format!("{name}.*")),
+            target: Some(from_ast_object_name(name)?),
         }),
         Expr::Lambda(ast::LambdaFunction { params, body }) => {
             use ast::OneOrManyWithParens;
@@ -657,7 +655,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<spec::Expr> {
             let args = args
                 .into_iter()
                 .map(|arg| spec::UnresolvedNamedLambdaVariable {
-                    name_parts: vec![arg.value],
+                    name: spec::ObjectName::new_unqualified(arg.value.into()),
                 })
                 .collect();
             Ok(spec::Expr::LambdaFunction {
@@ -680,7 +678,10 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<spec::Expr> {
             key: ast::Ident { value, .. },
         } => Ok(spec::Expr::UnresolvedExtractValue {
             child: Box::new(from_ast_expression(*expr)?),
-            extraction: Box::new(spec::Expr::from(Identifier(value))),
+            extraction: Box::new(spec::Expr::UnresolvedAttribute {
+                identifier: spec::ObjectName::new_unqualified(value.into()),
+                plan_id: None,
+            }),
         }),
         Expr::ArrayIndex { obj, indexes } => {
             let mut obj = from_ast_expression(*obj)?;
@@ -705,7 +706,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<spec::Expr> {
         })),
         Expr::Named { expr, name } => Ok(spec::Expr::Alias {
             expr: Box::new(from_ast_expression(*expr)?),
-            name: vec![name.to_string()],
+            name: vec![name.value.into()],
             metadata: None,
         }),
         Expr::JsonAccess { .. }
@@ -738,39 +739,60 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SparkResult<spec::Expr> {
     }
 }
 
-pub(crate) fn parse_spark_expression(sql: &str) -> SparkResult<spec::Expr> {
+pub(crate) fn parse_object_name(s: &str) -> SparkResult<spec::ObjectName> {
+    let mut parser = Parser::new(&SparkDialect {}).try_with_sql(s)?;
+    let names: Vec<String> = parser
+        .parse_multipart_identifier()?
+        .into_iter()
+        .map(|x| x.value)
+        .collect();
+    fail_on_extra_token(&mut parser, "object name")?;
+    Ok(names.into())
+}
+
+pub(crate) fn parse_expression(sql: &str) -> SparkResult<spec::Expr> {
+    let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
+    let expr = parser.parse_expr()?;
+    fail_on_extra_token(&mut parser, "expression")?;
+    Ok(from_ast_expression(expr)?)
+}
+
+pub(crate) fn parse_wildcard_expression(sql: &str) -> SparkResult<spec::Expr> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
     let expr = parser.parse_wildcard_expr()?;
     let expr = match expr {
         x @ ast::Expr::Wildcard | x @ ast::Expr::QualifiedWildcard(_) => from_ast_expression(x)?,
         x => match parser.parse_optional_alias(RESERVED_FOR_COLUMN_ALIAS)? {
-            Some(alias) => spec::Expr::Alias {
+            Some(ast::Ident { value, .. }) => spec::Expr::Alias {
                 expr: Box::new(from_ast_expression(x)?),
-                name: vec![alias.to_string()],
+                name: vec![value.into()],
                 metadata: None,
             },
             None => from_ast_expression(x)?,
         },
     };
-    fail_on_extra_token(&mut parser, "expression")?;
+    fail_on_extra_token(&mut parser, "wildcard expression")?;
     Ok(expr)
 }
 
-pub(crate) fn parse_spark_qualified_wildcard(sql: &str) -> SparkResult<String> {
+pub(crate) fn parse_qualified_wildcard(sql: &str) -> SparkResult<spec::ObjectName> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
     let expr = parser.parse_wildcard_expr()?;
-    match expr {
-        ast::Expr::QualifiedWildcard(name) => Ok(name.to_string()),
-        _ => Err(SparkError::invalid(format!(
-            "invalid qualified wildcard target: {:?}",
-            expr
-        ))),
-    }
+    let name: Vec<String> = match expr {
+        ast::Expr::QualifiedWildcard(name) => name.0.into_iter().map(|x| x.value).collect(),
+        _ => {
+            return Err(SparkError::invalid(format!(
+                "invalid qualified wildcard: {sql}",
+            )))
+        }
+    };
+    fail_on_extra_token(&mut parser, "qualified wildcard")?;
+    Ok(name.into())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_spark_expression;
+    use super::parse_wildcard_expression;
     use crate::error::SparkError;
     use crate::tests::test_gold_set;
     use std::thread;
@@ -782,7 +804,7 @@ mod tests {
         let builder = thread::Builder::new().stack_size(96 * 1024 * 1024);
         let handler = builder.spawn(|| {
             test_gold_set("tests/gold_data/expression/*.json", |sql: String| {
-                let expr = parse_spark_expression(&sql)?;
+                let expr = parse_wildcard_expression(&sql)?;
                 if sql.len() > 128 {
                     Err(SparkError::internal("result omitted for long expression"))
                 } else {

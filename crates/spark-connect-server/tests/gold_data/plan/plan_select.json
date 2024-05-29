@@ -9,7 +9,9 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "options": {}
                   },
                   "isStreaming": false
@@ -20,7 +22,7 @@
               "expressions": [
                 {
                   "unresolvedStar": {
-                    "unparsedTarget": null
+                    "target": null
                   }
                 }
               ]
@@ -74,7 +76,9 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "unparsedIdentifier": "t",
+                            "identifier": [
+                              "t"
+                            ],
                             "options": {}
                           },
                           "isStreaming": false
@@ -87,7 +91,9 @@
                           "alias": {
                             "expr": {
                               "unresolvedAttribute": {
-                                "unparsedIdentifier": "a",
+                                "identifier": [
+                                  "a"
+                                ],
                                 "planId": null
                               }
                             },
@@ -101,7 +107,9 @@
                           "alias": {
                             "expr": {
                               "unresolvedAttribute": {
-                                "unparsedIdentifier": "b",
+                                "identifier": [
+                                  "b"
+                                ],
                                 "planId": null
                               }
                             },
@@ -128,7 +136,7 @@
               "expressions": [
                 {
                   "unresolvedStar": {
-                    "unparsedTarget": null
+                    "target": null
                   }
                 }
               ]
@@ -154,7 +162,9 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "options": {}
                   },
                   "isStreaming": false
@@ -165,7 +175,7 @@
               "expressions": [
                 {
                   "unresolvedStar": {
-                    "unparsedTarget": null
+                    "target": null
                   }
                 }
               ]
@@ -349,7 +359,9 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "unparsedIdentifier": "testData",
+                        "identifier": [
+                          "testData"
+                        ],
                         "options": {}
                       },
                       "isStreaming": false
@@ -369,7 +381,7 @@
               "expressions": [
                 {
                   "unresolvedStar": {
-                    "unparsedTarget": null
+                    "target": null
                   }
                 }
               ]
@@ -389,7 +401,11 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "testcat.db.tab",
+                    "identifier": [
+                      "testcat",
+                      "db",
+                      "tab"
+                    ],
                     "options": {}
                   },
                   "isStreaming": false
@@ -400,7 +416,7 @@
               "expressions": [
                 {
                   "unresolvedStar": {
-                    "unparsedTarget": null
+                    "target": null
                   }
                 }
               ]
@@ -914,7 +930,9 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "unparsedIdentifier": "t",
+                            "identifier": [
+                              "t"
+                            ],
                             "options": {}
                           },
                           "isStreaming": false
@@ -927,7 +945,9 @@
                           "alias": {
                             "expr": {
                               "unresolvedAttribute": {
-                                "unparsedIdentifier": "a",
+                                "identifier": [
+                                  "a"
+                                ],
                                 "planId": null
                               }
                             },
@@ -941,7 +961,9 @@
                           "alias": {
                             "expr": {
                               "unresolvedAttribute": {
-                                "unparsedIdentifier": "b",
+                                "identifier": [
+                                  "b"
+                                ],
                                 "planId": null
                               }
                             },
@@ -968,13 +990,19 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "t.col1",
+                    "identifier": [
+                      "t",
+                      "col1"
+                    ],
                     "planId": null
                   }
                 },
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "t.col2",
+                    "identifier": [
+                      "t",
+                      "col2"
+                    ],
                     "planId": null
                   }
                 }
@@ -995,7 +1023,9 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "options": {}
                   },
                   "isStreaming": false
@@ -1006,7 +1036,7 @@
               "expressions": [
                 {
                   "unresolvedStar": {
-                    "unparsedTarget": null
+                    "target": null
                   }
                 }
               ]
@@ -1056,7 +1086,9 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "options": {}
                   },
                   "isStreaming": false
@@ -1067,7 +1099,7 @@
               "expressions": [
                 {
                   "unresolvedStar": {
-                    "unparsedTarget": null
+                    "target": null
                   }
                 }
               ]
@@ -1171,7 +1203,9 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t",
+                    "identifier": [
+                      "t"
+                    ],
                     "options": {}
                   },
                   "isStreaming": false
@@ -1182,7 +1216,7 @@
               "expressions": [
                 {
                   "unresolvedStar": {
-                    "unparsedTarget": null
+                    "target": null
                   }
                 }
               ]
@@ -1212,7 +1246,9 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "unparsedIdentifier": "t",
+                            "identifier": [
+                              "t"
+                            ],
                             "options": {}
                           },
                           "isStreaming": false
@@ -1229,7 +1265,9 @@
                   "right": {
                     "read": {
                       "namedTable": {
-                        "unparsedIdentifier": "u",
+                        "identifier": [
+                          "u"
+                        ],
                         "options": {}
                       },
                       "isStreaming": false
@@ -1248,7 +1286,7 @@
               "expressions": [
                 {
                   "unresolvedStar": {
-                    "unparsedTarget": null
+                    "target": null
                   }
                 }
               ]
@@ -1288,7 +1326,9 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "unparsedIdentifier": "t",
+                        "identifier": [
+                          "t"
+                        ],
                         "options": {}
                       },
                       "isStreaming": false
@@ -1299,7 +1339,7 @@
                   "expressions": [
                     {
                       "unresolvedStar": {
-                        "unparsedTarget": null
+                        "target": null
                       }
                     }
                   ]
@@ -1445,13 +1485,17 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "planId": null
                   }
                 },
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 }
@@ -1472,7 +1516,10 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "db.c",
+                    "identifier": [
+                      "db",
+                      "c"
+                    ],
                     "options": {}
                   },
                   "isStreaming": false
@@ -1483,13 +1530,17 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "planId": null
                   }
                 },
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 }
@@ -1530,7 +1581,10 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "unparsedIdentifier": "db.c",
+                        "identifier": [
+                          "db",
+                          "c"
+                        ],
                         "options": {}
                       },
                       "isStreaming": false
@@ -1544,7 +1598,9 @@
                       "arguments": [
                         {
                           "unresolvedAttribute": {
-                            "unparsedIdentifier": "x",
+                            "identifier": [
+                              "x"
+                            ],
                             "planId": null
                           }
                         },
@@ -1565,13 +1621,17 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "planId": null
                   }
                 },
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 }
@@ -1592,7 +1652,10 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "db.c",
+                    "identifier": [
+                      "db",
+                      "c"
+                    ],
                     "options": {}
                   },
                   "isStreaming": false
@@ -1603,13 +1666,17 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "planId": null
                   }
                 },
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 }
@@ -1630,7 +1697,10 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "db.c",
+                    "identifier": [
+                      "db",
+                      "c"
+                    ],
                     "options": {}
                   },
                   "isStreaming": false
@@ -1641,13 +1711,17 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "planId": null
                   }
                 },
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 }
@@ -1675,13 +1749,17 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "planId": null
                   }
                 },
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 }
@@ -1702,7 +1780,10 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "db.c",
+                    "identifier": [
+                      "db",
+                      "c"
+                    ],
                     "options": {}
                   },
                   "isStreaming": false
@@ -1713,13 +1794,17 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "planId": null
                   }
                 },
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 }
@@ -1742,7 +1827,10 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "unparsedIdentifier": "db.c",
+                        "identifier": [
+                          "db",
+                          "c"
+                        ],
                         "options": {}
                       },
                       "isStreaming": false
@@ -1753,13 +1841,17 @@
                   "expressions": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a",
+                        "identifier": [
+                          "a"
+                        ],
                         "planId": null
                       }
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "b",
+                        "identifier": [
+                          "b"
+                        ],
                         "planId": null
                       }
                     }
@@ -1796,7 +1888,9 @@
                   "alias": {
                     "expr": {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "from",
+                        "identifier": [
+                          "from"
+                        ],
                         "planId": null
                       }
                     },
@@ -1823,7 +1917,9 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t0",
+                    "identifier": [
+                      "t0"
+                    ],
                     "options": {}
                   },
                   "isStreaming": false
@@ -1834,7 +1930,9 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "id",
+                    "identifier": [
+                      "id"
+                    ],
                     "planId": null
                   }
                 }
@@ -1855,7 +1953,9 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "unparsedIdentifier": "t0",
+                    "identifier": [
+                      "t0"
+                    ],
                     "options": {}
                   },
                   "isStreaming": false
@@ -1866,7 +1966,9 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "id",
+                    "identifier": [
+                      "id"
+                    ],
                     "planId": null
                   }
                 }

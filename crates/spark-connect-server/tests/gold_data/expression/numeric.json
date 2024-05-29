@@ -9,7 +9,9 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -81,7 +83,9 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }

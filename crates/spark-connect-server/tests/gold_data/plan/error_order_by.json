@@ -25,7 +25,9 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "unparsedIdentifier": "t",
+                            "identifier": [
+                              "t"
+                            ],
                             "options": {}
                           },
                           "isStreaming": false
@@ -43,13 +45,17 @@
                                 "arguments": [
                                   {
                                     "unresolvedAttribute": {
-                                      "unparsedIdentifier": "a",
+                                      "identifier": [
+                                        "a"
+                                      ],
                                       "planId": null
                                     }
                                   },
                                   {
                                     "unresolvedAttribute": {
-                                      "unparsedIdentifier": "b",
+                                      "identifier": [
+                                        "b"
+                                      ],
                                       "planId": null
                                     }
                                   }
@@ -80,13 +86,17 @@
                         "arguments": [
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "fake",
+                              "identifier": [
+                                "fake"
+                              ],
                               "planId": null
                             }
                           },
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "breaker",
+                              "identifier": [
+                                "breaker"
+                              ],
                               "planId": null
                             }
                           }
@@ -99,13 +109,17 @@
                   "aggregateExpressions": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "a",
+                        "identifier": [
+                          "a"
+                        ],
                         "planId": null
                       }
                     },
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "b",
+                        "identifier": [
+                          "b"
+                        ],
                         "planId": null
                       }
                     }
@@ -119,7 +133,9 @@
                 {
                   "child": {
                     "unresolvedAttribute": {
-                      "unparsedIdentifier": "c",
+                      "identifier": [
+                        "c"
+                      ],
                       "planId": null
                     }
                   },

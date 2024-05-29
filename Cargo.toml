@@ -67,4 +67,4 @@ serde_arrow = { version = "0.11", features = ["arrow-51"] }
 # Override dependencies to use our forked versions.
 # You can use `path = "..."` to temporarily point to your local copy of the crates
 # to speed up local development.
-sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "107e025" }
+sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "d83219d" }

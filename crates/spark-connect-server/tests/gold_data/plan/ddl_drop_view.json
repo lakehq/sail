@@ -3,31 +3,90 @@
     {
       "input": "DROP VIEW IF EXISTS db.view",
       "output": {
-        "failure": "not implemented: SQL drop"
+        "success": {
+          "root": {
+            "dropView": {
+              "view": [
+                "db",
+                "view"
+              ],
+              "ifExists": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "DROP VIEW IF EXISTS view",
       "output": {
-        "failure": "not implemented: SQL drop"
+        "success": {
+          "root": {
+            "dropView": {
+              "view": [
+                "view"
+              ],
+              "ifExists": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "DROP VIEW db.view",
       "output": {
-        "failure": "not implemented: SQL drop"
+        "success": {
+          "root": {
+            "dropView": {
+              "view": [
+                "db",
+                "view"
+              ],
+              "ifExists": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "DROP VIEW testcat.db.view",
       "output": {
-        "failure": "not implemented: SQL drop"
+        "success": {
+          "root": {
+            "dropView": {
+              "view": [
+                "testcat",
+                "db",
+                "view"
+              ],
+              "ifExists": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "DROP VIEW view",
       "output": {
-        "failure": "not implemented: SQL drop"
+        "success": {
+          "root": {
+            "dropView": {
+              "view": [
+                "view"
+              ],
+              "ifExists": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     }
   ]

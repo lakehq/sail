@@ -11,7 +11,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -37,7 +37,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -48,13 +48,17 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -76,7 +80,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -87,13 +91,17 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -102,7 +110,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "c",
+                    "identifier": [
+                      "c"
+                    ],
                     "planId": null
                   }
                 },
@@ -126,7 +136,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -137,13 +147,17 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -165,7 +179,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -178,7 +192,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "planId": null
                   }
                 },
@@ -188,7 +204,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -212,7 +230,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -223,7 +241,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -232,7 +252,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -266,7 +288,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -277,7 +299,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -286,7 +310,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -320,7 +346,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -331,7 +357,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -340,7 +368,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -374,7 +404,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -385,7 +415,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -394,7 +426,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -428,7 +462,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -439,7 +473,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -448,7 +484,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -482,7 +520,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -493,7 +531,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -502,7 +542,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -536,7 +578,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -547,7 +589,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -556,7 +600,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -604,7 +650,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -615,7 +661,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -624,7 +672,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -672,7 +722,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -683,7 +733,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -692,7 +744,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -726,7 +780,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -737,7 +791,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -746,7 +802,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -780,7 +838,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -791,7 +849,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -800,7 +860,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -840,7 +902,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -851,7 +913,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -860,7 +924,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -894,7 +960,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -905,7 +971,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -914,7 +982,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -948,7 +1018,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -959,7 +1029,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -968,7 +1040,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1002,7 +1076,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1013,7 +1087,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1022,7 +1098,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1056,7 +1134,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1067,7 +1145,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1076,7 +1156,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1124,7 +1206,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1135,7 +1217,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1144,7 +1228,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1192,7 +1278,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1203,7 +1289,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1212,7 +1300,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1246,7 +1336,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1257,7 +1347,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1266,7 +1358,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1300,7 +1394,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1311,7 +1405,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1320,7 +1416,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1368,7 +1466,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1379,7 +1477,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1388,7 +1488,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1422,7 +1524,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1433,7 +1535,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1442,7 +1546,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1470,7 +1576,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1481,7 +1587,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1490,7 +1598,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1518,7 +1628,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1529,7 +1639,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1538,7 +1650,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1572,7 +1686,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1583,7 +1697,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1592,7 +1708,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1640,7 +1758,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1651,7 +1769,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1660,7 +1780,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1694,7 +1816,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1705,7 +1827,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1714,7 +1838,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1742,7 +1868,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1753,7 +1879,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1762,7 +1890,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1790,7 +1920,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1801,7 +1931,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1810,7 +1942,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1838,7 +1972,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1849,7 +1983,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1858,7 +1994,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1886,7 +2024,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1897,7 +2035,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1906,7 +2046,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1934,7 +2076,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1945,7 +2087,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -1954,7 +2098,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -1988,7 +2134,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -1999,7 +2145,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2008,7 +2156,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -2042,7 +2192,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -2053,7 +2203,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2062,7 +2214,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -2096,7 +2250,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -2107,7 +2261,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2116,7 +2272,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -2150,7 +2308,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -2161,7 +2319,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2170,7 +2330,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -2204,7 +2366,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -2215,7 +2377,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2224,7 +2388,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -2258,7 +2424,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -2269,7 +2435,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2278,7 +2446,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -2326,7 +2496,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -2337,7 +2507,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2346,7 +2518,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -2394,7 +2568,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -2405,7 +2579,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2414,7 +2590,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -2448,7 +2626,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -2459,7 +2637,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2468,7 +2648,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -2502,7 +2684,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -2513,7 +2695,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2522,7 +2706,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -2562,7 +2748,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -2573,7 +2759,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2582,7 +2770,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -2616,7 +2806,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -2627,7 +2817,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2636,7 +2828,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -2670,7 +2864,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -2681,7 +2875,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2690,7 +2886,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -2724,7 +2922,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -2735,7 +2933,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2744,7 +2944,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -2778,7 +2980,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -2789,7 +2991,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2798,7 +3002,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -2846,7 +3052,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -2857,7 +3063,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2866,7 +3074,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -2914,7 +3124,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -2925,7 +3135,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2934,7 +3146,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -2968,7 +3182,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -2979,7 +3193,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -2988,7 +3204,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -3022,7 +3240,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -3033,7 +3251,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -3042,7 +3262,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -3090,7 +3312,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -3101,7 +3323,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -3110,7 +3334,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -3144,7 +3370,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -3155,7 +3381,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -3164,7 +3392,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -3192,7 +3422,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -3203,7 +3433,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -3212,7 +3444,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -3240,7 +3474,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -3251,7 +3485,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -3260,7 +3496,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -3294,7 +3532,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -3305,7 +3543,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -3314,7 +3554,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -3362,7 +3604,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -3373,7 +3615,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -3382,7 +3626,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -3416,7 +3662,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -3427,7 +3673,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -3436,7 +3684,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -3464,7 +3714,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -3475,7 +3725,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -3484,7 +3736,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -3512,7 +3766,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -3523,7 +3777,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -3532,7 +3788,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -3560,7 +3818,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -3571,7 +3829,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -3580,7 +3840,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -3597,7 +3859,9 @@
                     "arguments": [
                       {
                         "unresolvedAttribute": {
-                          "unparsedIdentifier": "b",
+                          "identifier": [
+                            "b"
+                          ],
                           "planId": null
                         }
                       }
@@ -3624,7 +3888,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -3635,7 +3899,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -3644,7 +3910,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -3672,7 +3940,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -3683,7 +3951,9 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               }
@@ -3692,7 +3962,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -3720,7 +3992,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -3731,13 +4003,17 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -3746,7 +4022,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "c",
+                    "identifier": [
+                      "c"
+                    ],
                     "planId": null
                   }
                 },
@@ -3770,7 +4048,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -3781,13 +4059,17 @@
             "partitionSpec": [
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "a",
+                  "identifier": [
+                    "a"
+                  ],
                   "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
-                  "unparsedIdentifier": "b",
+                  "identifier": [
+                    "b"
+                  ],
                   "planId": null
                 }
               }
@@ -3809,7 +4091,7 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "unparsedTarget": null
+                      "target": null
                     }
                   }
                 ],
@@ -3822,7 +4104,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "a",
+                    "identifier": [
+                      "a"
+                    ],
                     "planId": null
                   }
                 },
@@ -3832,7 +4116,9 @@
               {
                 "child": {
                   "unresolvedAttribute": {
-                    "unparsedIdentifier": "b",
+                    "identifier": [
+                      "b"
+                    ],
                     "planId": null
                   }
                 },
@@ -3866,7 +4152,9 @@
                       "arguments": [
                         {
                           "unresolvedAttribute": {
-                            "unparsedIdentifier": "product",
+                            "identifier": [
+                              "product"
+                            ],
                             "planId": null
                           }
                         },
@@ -3896,7 +4184,9 @@
                         "arguments": [
                           {
                             "unresolvedAttribute": {
-                              "unparsedIdentifier": "product",
+                              "identifier": [
+                                "product"
+                              ],
                               "planId": null
                             }
                           },
@@ -3952,7 +4242,9 @@
                       "arguments": [
                         {
                           "unresolvedAttribute": {
-                            "unparsedIdentifier": "product",
+                            "identifier": [
+                              "product"
+                            ],
                             "planId": null
                           }
                         },
@@ -3978,7 +4270,9 @@
                   "arguments": [
                     {
                       "unresolvedAttribute": {
-                        "unparsedIdentifier": "product",
+                        "identifier": [
+                          "product"
+                        ],
                         "planId": null
                       }
                     },

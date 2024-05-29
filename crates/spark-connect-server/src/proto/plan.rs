@@ -4,6 +4,7 @@ use crate::spark::connect::catalog::CatType;
 use crate::spark::connect::relation::RelType;
 use crate::spark::connect::{Catalog, Relation};
 use crate::sql::data_type::parse_spark_schema;
+use crate::sql::expression::{parse_expression, parse_object_name};
 use crate::sql::plan::parse_sql_statement;
 use framework_common::spec;
 use std::collections::HashMap;
@@ -50,7 +51,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                             options,
                         } = x;
                         spec::ReadType::NamedTable {
-                            unparsed_identifier,
+                            identifier: parse_object_name(unparsed_identifier.as_str())?,
                             options,
                         }
                     }
@@ -62,9 +63,14 @@ impl TryFrom<RelType> for spec::PlanNode {
                             paths,
                             predicates,
                         } = x;
+                        let schema = schema.map(|s| parse_spark_schema(s.as_str())).transpose()?;
+                        let predicates = predicates
+                            .into_iter()
+                            .map(|x| parse_expression(x.as_str()))
+                            .collect::<SparkResult<Vec<_>>>()?;
                         spec::ReadType::DataSource {
                             format,
-                            schema: schema.map(|s| parse_spark_schema(s.as_str())).transpose()?,
+                            schema,
                             options,
                             paths,
                             predicates,
@@ -132,6 +138,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                         is_right_struct,
                     }
                 });
+                let using_columns = using_columns.into_iter().map(|x| x.into()).collect();
                 Ok(spec::PlanNode::Join {
                     left: Box::new((*left).try_into()?),
                     right: Box::new((*right).try_into()?),
@@ -252,9 +259,6 @@ impl TryFrom<RelType> for spec::PlanNode {
                     args,
                     pos_args,
                 } = sql;
-                // FIXME
-                let query = query.replace(" database ", " SCHEMA ");
-                let query = query.replace(" DATABASE ", " SCHEMA ");
                 let input = Box::new(parse_sql_statement(query.as_str())?);
                 let positional_arguments = pos_args
                     .into_iter()
@@ -310,6 +314,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                     within_watermark,
                 } = *deduplicate;
                 let input = input.required("deduplicate input")?;
+                let column_names = column_names.into_iter().map(|x| x.into()).collect();
                 Ok(spec::PlanNode::Deduplicate {
                     input: Box::new((*input).try_into()?),
                     column_names,
@@ -338,9 +343,10 @@ impl TryFrom<RelType> for spec::PlanNode {
                     qualifier,
                 } = *subquery_alias;
                 let input = input.required("subquery alias input")?;
+                let qualifier = qualifier.into_iter().map(|x| x.into()).collect();
                 Ok(spec::PlanNode::SubqueryAlias {
                     input: Box::new((*input).try_into()?),
-                    alias,
+                    alias: alias.into(),
                     qualifier,
                 })
             }
@@ -363,6 +369,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                     column_names,
                 } = *to_df;
                 let input = input.required("to dataframe input")?;
+                let column_names = column_names.into_iter().map(|x| x.into()).collect();
                 Ok(spec::PlanNode::ToDf {
                     input: Box::new((*input).try_into()?),
                     column_names,
@@ -374,6 +381,10 @@ impl TryFrom<RelType> for spec::PlanNode {
                     rename_columns_map,
                 } = *with_columns_renamed;
                 let input = input.required("with columns renamed input")?;
+                let rename_columns_map = rename_columns_map
+                    .into_iter()
+                    .map(|(k, v)| (k.into(), v.into()))
+                    .collect();
                 Ok(spec::PlanNode::WithColumnsRenamed {
                     input: Box::new((*input).try_into()?),
                     rename_columns_map,
@@ -405,6 +416,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                     .into_iter()
                     .map(|x| x.try_into())
                     .collect::<SparkResult<Vec<_>>>()?;
+                let column_names = column_names.into_iter().map(|x| x.into()).collect();
                 Ok(spec::PlanNode::Drop {
                     input: Box::new((*input).try_into()?),
                     columns,
@@ -480,8 +492,8 @@ impl TryFrom<RelType> for spec::PlanNode {
                     input: Box::new((*input).try_into()?),
                     ids,
                     values,
-                    variable_column_name,
-                    value_column_name,
+                    variable_column_name: variable_column_name.into(),
+                    value_column_name: value_column_name.into(),
                 })
             }
             RelType::ToSchema(to_schema) => {
@@ -730,9 +742,10 @@ impl TryFrom<RelType> for spec::PlanNode {
                     .into_iter()
                     .map(|x| Ok(spec::Expr::Literal(x.try_into()?)))
                     .collect::<SparkResult<Vec<_>>>()?;
+                let columns = cols.into_iter().map(|x| x.into()).collect();
                 Ok(spec::PlanNode::FillNa {
                     input: Box::new((*input).try_into()?),
-                    columns: cols,
+                    columns,
                     values,
                 })
             }
@@ -743,9 +756,10 @@ impl TryFrom<RelType> for spec::PlanNode {
                     min_non_nulls,
                 } = *drop_na;
                 let input = input.required("drop na input")?;
+                let columns = cols.into_iter().map(|x| x.into()).collect();
                 Ok(spec::PlanNode::DropNa {
                     input: Box::new((*input).try_into()?),
-                    columns: cols,
+                    columns,
                     min_non_nulls,
                 })
             }
@@ -756,6 +770,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                     replacements,
                 } = *replace;
                 let input = input.required("replace input")?;
+                let columns = cols.into_iter().map(|x| x.into()).collect();
                 let replacements = replacements
                     .into_iter()
                     .map(|x| {
@@ -773,7 +788,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                     .collect::<SparkResult<Vec<_>>>()?;
                 Ok(spec::PlanNode::ReplaceNa {
                     input: Box::new((*input).try_into()?),
-                    columns: cols,
+                    columns,
                     replacements,
                 })
             }
@@ -790,16 +805,17 @@ impl TryFrom<RelType> for spec::PlanNode {
                 let input = input.required("crosstab input")?;
                 Ok(spec::PlanNode::StatCrosstab {
                     input: Box::new((*input).try_into()?),
-                    left_column: col1,
-                    right_column: col2,
+                    left_column: col1.into(),
+                    right_column: col2.into(),
                 })
             }
             RelType::Describe(describe) => {
                 let sc::StatDescribe { input, cols } = *describe;
                 let input = input.required("describe input")?;
+                let columns = cols.into_iter().map(|x| x.into()).collect();
                 Ok(spec::PlanNode::StatDescribe {
                     input: Box::new((*input).try_into()?),
-                    columns: cols,
+                    columns,
                 })
             }
             RelType::Cov(cov) => {
@@ -807,8 +823,8 @@ impl TryFrom<RelType> for spec::PlanNode {
                 let input = input.required("cov input")?;
                 Ok(spec::PlanNode::StatCov {
                     input: Box::new((*input).try_into()?),
-                    left_column: col1,
-                    right_column: col2,
+                    left_column: col1.into(),
+                    right_column: col2.into(),
                 })
             }
             RelType::Corr(corr) => {
@@ -821,8 +837,8 @@ impl TryFrom<RelType> for spec::PlanNode {
                 let input = input.required("corr input")?;
                 Ok(spec::PlanNode::StatCorr {
                     input: Box::new((*input).try_into()?),
-                    left_column: col1,
-                    right_column: col2,
+                    left_column: col1.into(),
+                    right_column: col2.into(),
                     method: method.unwrap_or_else(|| "pearson".to_string()),
                 })
             }
@@ -834,9 +850,10 @@ impl TryFrom<RelType> for spec::PlanNode {
                     relative_error,
                 } = *approx_quantile;
                 let input = input.required("approx quantile input")?;
+                let columns = cols.into_iter().map(|x| x.into()).collect();
                 Ok(spec::PlanNode::StatApproxQuantile {
                     input: Box::new((*input).try_into()?),
-                    columns: cols,
+                    columns,
                     probabilities,
                     relative_error,
                 })
@@ -848,9 +865,10 @@ impl TryFrom<RelType> for spec::PlanNode {
                     support,
                 } = *freq_items;
                 let input = input.required("freq items input")?;
+                let columns = cols.into_iter().map(|x| x.into()).collect();
                 Ok(spec::PlanNode::StatFreqItems {
                     input: Box::new((*input).try_into()?),
-                    columns: cols,
+                    columns,
                     support,
                 })
             }
@@ -902,25 +920,28 @@ impl TryFrom<Catalog> for spec::PlanNode {
             CatType::SetCurrentDatabase(x) => {
                 let sc::SetCurrentDatabase { db_name } = x;
                 Ok(spec::PlanNode::SetCurrentDatabase {
-                    database_name: db_name,
+                    database_name: db_name.into(),
                 })
             }
             CatType::ListDatabases(x) => {
                 let sc::ListDatabases { pattern } = x;
-                Ok(spec::PlanNode::ListDatabases { pattern })
+                Ok(spec::PlanNode::ListDatabases {
+                    catalog: None,
+                    database_pattern: pattern,
+                })
             }
             CatType::ListTables(x) => {
                 let sc::ListTables { db_name, pattern } = x;
                 Ok(spec::PlanNode::ListTables {
-                    database_name: db_name,
-                    pattern,
+                    database: db_name.map(|x| parse_object_name(x.as_str())).transpose()?,
+                    table_pattern: pattern,
                 })
             }
             CatType::ListFunctions(x) => {
                 let sc::ListFunctions { db_name, pattern } = x;
                 Ok(spec::PlanNode::ListFunctions {
-                    database_name: db_name,
-                    pattern,
+                    database: db_name.map(|x| parse_object_name(x.as_str())).transpose()?,
+                    function_pattern: pattern,
                 })
             }
             CatType::ListColumns(x) => {
@@ -928,15 +949,16 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     table_name,
                     db_name,
                 } = x;
-                Ok(spec::PlanNode::ListColumns {
-                    table_name,
-                    database_name: db_name,
-                })
+                let table = match db_name {
+                    Some(x) => parse_object_name(x.as_str())?.child(table_name.into()),
+                    None => spec::ObjectName::new_unqualified(table_name.into()),
+                };
+                Ok(spec::PlanNode::ListColumns { table })
             }
             CatType::GetDatabase(x) => {
                 let sc::GetDatabase { db_name } = x;
                 Ok(spec::PlanNode::GetDatabase {
-                    database_name: db_name,
+                    database: parse_object_name(db_name.as_str())?,
                 })
             }
             CatType::GetTable(x) => {
@@ -944,25 +966,27 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     table_name,
                     db_name,
                 } = x;
-                Ok(spec::PlanNode::GetTable {
-                    table_name,
-                    database_name: db_name,
-                })
+                let table = match db_name {
+                    Some(x) => parse_object_name(x.as_str())?.child(table_name.into()),
+                    None => spec::ObjectName::new_unqualified(table_name.into()),
+                };
+                Ok(spec::PlanNode::GetTable { table })
             }
             CatType::GetFunction(x) => {
                 let sc::GetFunction {
                     function_name,
                     db_name,
                 } = x;
-                Ok(spec::PlanNode::GetFunction {
-                    function_name,
-                    database_name: db_name,
-                })
+                let function = match db_name {
+                    Some(x) => parse_object_name(x.as_str())?.child(function_name.into()),
+                    None => spec::ObjectName::new_unqualified(function_name.into()),
+                };
+                Ok(spec::PlanNode::GetFunction { function })
             }
             CatType::DatabaseExists(x) => {
                 let sc::DatabaseExists { db_name } = x;
                 Ok(spec::PlanNode::DatabaseExists {
-                    database_name: db_name,
+                    database: parse_object_name(db_name.as_str())?,
                 })
             }
             CatType::TableExists(x) => {
@@ -970,20 +994,22 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     table_name,
                     db_name,
                 } = x;
-                Ok(spec::PlanNode::TableExists {
-                    table_name,
-                    database_name: db_name,
-                })
+                let table = match db_name {
+                    Some(x) => parse_object_name(x.as_str())?.child(table_name.into()),
+                    None => spec::ObjectName::new_unqualified(table_name.into()),
+                };
+                Ok(spec::PlanNode::TableExists { table })
             }
             CatType::FunctionExists(x) => {
                 let sc::FunctionExists {
                     function_name,
                     db_name,
                 } = x;
-                Ok(spec::PlanNode::FunctionExists {
-                    function_name,
-                    database_name: db_name,
-                })
+                let function = match db_name {
+                    Some(x) => parse_object_name(x.as_str())?.child(function_name.into()),
+                    None => spec::ObjectName::new_unqualified(function_name.into()),
+                };
+                Ok(spec::PlanNode::FunctionExists { function })
             }
             CatType::CreateExternalTable(x) => {
                 let sc::CreateExternalTable {
@@ -997,7 +1023,7 @@ impl TryFrom<Catalog> for spec::PlanNode {
                 let schema = schema.map(|s| s.into_schema("value", true));
                 // "CreateExternalTable" is deprecated, so we use "CreateTable" instead.
                 Ok(spec::PlanNode::CreateTable {
-                    table_name,
+                    table: parse_object_name(table_name.as_str())?,
                     path,
                     source,
                     description: None,
@@ -1017,7 +1043,7 @@ impl TryFrom<Catalog> for spec::PlanNode {
                 let schema: Option<spec::DataType> = schema.map(|s| s.try_into()).transpose()?;
                 let schema = schema.map(|s| s.into_schema("value", true));
                 Ok(spec::PlanNode::CreateTable {
-                    table_name,
+                    table: parse_object_name(table_name.as_str())?,
                     path,
                     source,
                     description,
@@ -1027,19 +1053,31 @@ impl TryFrom<Catalog> for spec::PlanNode {
             }
             CatType::DropTempView(x) => {
                 let sc::DropTempView { view_name } = x;
-                Ok(spec::PlanNode::DropTemporaryView { view_name })
+                Ok(spec::PlanNode::DropTemporaryView {
+                    view: parse_object_name(view_name.as_str())?,
+                    is_global: false,
+                    if_exists: false,
+                })
             }
             CatType::DropGlobalTempView(x) => {
                 let sc::DropGlobalTempView { view_name } = x;
-                Ok(spec::PlanNode::DropGlobalTemporaryView { view_name })
+                Ok(spec::PlanNode::DropTemporaryView {
+                    view: parse_object_name(view_name.as_str())?,
+                    is_global: true,
+                    if_exists: false,
+                })
             }
             CatType::RecoverPartitions(x) => {
                 let sc::RecoverPartitions { table_name } = x;
-                Ok(spec::PlanNode::RecoverPartitions { table_name })
+                Ok(spec::PlanNode::RecoverPartitions {
+                    table: parse_object_name(table_name.as_str())?,
+                })
             }
             CatType::IsCached(x) => {
                 let sc::IsCached { table_name } = x;
-                Ok(spec::PlanNode::IsCached { table_name })
+                Ok(spec::PlanNode::IsCached {
+                    table: parse_object_name(table_name.as_str())?,
+                })
             }
             CatType::CacheTable(x) => {
                 let sc::CacheTable {
@@ -1049,13 +1087,15 @@ impl TryFrom<Catalog> for spec::PlanNode {
                 let storage_level: Option<spec::StorageLevel> =
                     storage_level.map(|s| s.try_into()).transpose()?;
                 Ok(spec::PlanNode::CacheTable {
-                    table_name,
+                    table: parse_object_name(table_name.as_str())?,
                     storage_level,
                 })
             }
             CatType::UncacheTable(x) => {
                 let sc::UncacheTable { table_name } = x;
-                Ok(spec::PlanNode::UncacheTable { table_name })
+                Ok(spec::PlanNode::UncacheTable {
+                    table: parse_object_name(table_name.as_str())?,
+                })
             }
             CatType::ClearCache(x) => {
                 let sc::ClearCache {} = x;
@@ -1063,7 +1103,9 @@ impl TryFrom<Catalog> for spec::PlanNode {
             }
             CatType::RefreshTable(x) => {
                 let sc::RefreshTable { table_name } = x;
-                Ok(spec::PlanNode::RefreshTable { table_name })
+                Ok(spec::PlanNode::RefreshTable {
+                    table: parse_object_name(table_name.as_str())?,
+                })
             }
             CatType::RefreshByPath(x) => {
                 let sc::RefreshByPath { path } = x;
@@ -1075,11 +1117,15 @@ impl TryFrom<Catalog> for spec::PlanNode {
             }
             CatType::SetCurrentCatalog(x) => {
                 let sc::SetCurrentCatalog { catalog_name } = x;
-                Ok(spec::PlanNode::SetCurrentCatalog { catalog_name })
+                Ok(spec::PlanNode::SetCurrentCatalog {
+                    catalog_name: catalog_name.into(),
+                })
             }
             CatType::ListCatalogs(x) => {
                 let sc::ListCatalogs { pattern } = x;
-                Ok(spec::PlanNode::ListCatalogs { pattern })
+                Ok(spec::PlanNode::ListCatalogs {
+                    catalog_pattern: pattern,
+                })
             }
         }
     }

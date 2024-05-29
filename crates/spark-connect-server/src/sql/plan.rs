@@ -1,5 +1,5 @@
 use crate::error::{SparkError, SparkResult};
-use crate::sql::expression::{from_ast_expression, from_ast_order_by};
+use crate::sql::expression::{from_ast_expression, from_ast_object_name, from_ast_order_by};
 use crate::sql::fail_on_extra_token;
 use crate::sql::literal::LiteralValue;
 use crate::sql::parser::SparkDialect;
@@ -33,14 +33,82 @@ fn from_ast_statement(statement: ast::Statement) -> SparkResult<spec::Plan> {
         Statement::AlterTable { .. } => Err(SparkError::todo("SQL alter table")),
         Statement::AlterView { .. } => Err(SparkError::todo("SQL alter view")),
         Statement::Analyze { .. } => Err(SparkError::todo("SQL analyze")),
-        Statement::CreateDatabase { .. } => Err(SparkError::todo("SQL create database")),
+        Statement::CreateDatabase {
+            db_name,
+            if_not_exists,
+            location,
+            managed_location,
+        } => {
+            if managed_location.is_some() {
+                return Err(SparkError::unsupported(
+                    "SQL create database with managed location",
+                ));
+            }
+            let node = spec::PlanNode::CreateDatabase {
+                database: from_ast_object_name(db_name)?,
+                if_not_exists,
+                comment: None, // TODO: support comment
+                location,
+                properties: Default::default(), // TODO: support properties
+            };
+            Ok(spec::Plan::new(node))
+        }
         Statement::CreateFunction { .. } => Err(SparkError::todo("SQL create function")),
         Statement::CreateIndex { .. } => Err(SparkError::todo("SQL create index")),
         Statement::CreateSchema { .. } => Err(SparkError::todo("SQL create schema")),
         Statement::CreateTable { .. } => Err(SparkError::todo("SQL create table")),
         Statement::CreateView { .. } => Err(SparkError::todo("SQL create view")),
         Statement::Delete(_) => Err(SparkError::todo("SQL delete")),
-        Statement::Drop { .. } => Err(SparkError::todo("SQL drop")),
+        Statement::Drop {
+            object_type,
+            if_exists,
+            mut names,
+            cascade,
+            restrict: _,
+            purge,
+            temporary,
+        } => {
+            use ast::ObjectType;
+
+            if names.len() != 1 {
+                return Err(SparkError::invalid("expecting one name in drop statement"));
+            }
+            let name = from_ast_object_name(names.pop().unwrap())?;
+            let node = match (object_type, temporary) {
+                (ObjectType::Table, _) => spec::PlanNode::DropTable {
+                    table: name,
+                    if_exists,
+                    purge,
+                },
+                (ObjectType::View, true) => spec::PlanNode::DropTemporaryView {
+                    view: name,
+                    // TODO: support global temporary views
+                    is_global: false,
+                    if_exists,
+                },
+                (ObjectType::View, false) => spec::PlanNode::DropView {
+                    view: name,
+                    if_exists,
+                },
+                (ObjectType::Schema, false) | (ObjectType::Database, false) => {
+                    spec::PlanNode::DropDatabase {
+                        database: name,
+                        if_exists,
+                        cascade,
+                    }
+                }
+                (ObjectType::Schema, true) | (ObjectType::Database, true) => {
+                    return Err(SparkError::unsupported("SQL drop temporary database"))
+                }
+                (ObjectType::Index, _) => return Err(SparkError::unsupported("SQL drop index")),
+                (ObjectType::Role, _) => return Err(SparkError::unsupported("SQL drop role")),
+                (ObjectType::Sequence, _) => {
+                    return Err(SparkError::unsupported("SQL drop sequence"))
+                }
+                (ObjectType::Stage, _) => return Err(SparkError::unsupported("SQL drop stage")),
+            };
+            Ok(spec::Plan::new(node))
+        }
         Statement::DropFunction { .. } => Err(SparkError::todo("SQL drop function")),
         Statement::ExplainTable { .. } => Err(SparkError::todo("SQL explain table")),
         Statement::Merge { .. } => Err(SparkError::todo("SQL merge")),
@@ -269,20 +337,21 @@ fn from_ast_select(select: ast::Select) -> SparkResult<spec::Plan> {
                 .into_iter()
                 .map(|p| match p {
                     SelectItem::UnnamedExpr(expr) => from_ast_expression(expr),
-                    SelectItem::ExprWithAlias { expr, alias } => {
+                    SelectItem::ExprWithAlias {
+                        expr,
+                        alias: ast::Ident { value, .. },
+                    } => {
                         let expr = from_ast_expression(expr)?;
                         Ok(spec::Expr::Alias {
                             expr: Box::new(expr),
-                            name: vec![alias.to_string()],
+                            name: vec![value.into()],
                             metadata: None,
                         })
                     }
                     SelectItem::QualifiedWildcard(name, _) => Ok(spec::Expr::UnresolvedStar {
-                        unparsed_target: Some(name.to_string()),
+                        target: Some(from_ast_object_name(name)?),
                     }),
-                    SelectItem::Wildcard(_) => Ok(spec::Expr::UnresolvedStar {
-                        unparsed_target: None,
-                    }),
+                    SelectItem::Wildcard(_) => Ok(spec::Expr::UnresolvedStar { target: None }),
                 })
                 .collect::<SparkResult<_>>()?;
             if group_by.is_empty() {
@@ -423,7 +492,7 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SparkResult<spec::Plan> {
             Ok(spec::Plan::new(spec::PlanNode::Read {
                 is_streaming: false,
                 read_type: spec::ReadType::NamedTable {
-                    unparsed_identifier: ast::ObjectName(names).to_string(),
+                    identifier: from_ast_object_name(ast::ObjectName(names))?,
                     options: Default::default(),
                 },
             }))
@@ -487,7 +556,7 @@ fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SparkResult<spec::Pl
                 right: Box::new(right),
                 join_condition,
                 join_type,
-                using_columns,
+                using_columns: using_columns.into_iter().map(|c| c.into()).collect(),
                 join_data_type: None,
             }))
         })?;
@@ -521,7 +590,7 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SparkResult<spec::Plan> {
             let plan = spec::Plan::new(spec::PlanNode::Read {
                 is_streaming: false,
                 read_type: spec::ReadType::NamedTable {
-                    unparsed_identifier: name.to_string(),
+                    identifier: from_ast_object_name(name)?,
                     options: Default::default(),
                 },
             });
@@ -562,8 +631,8 @@ fn with_ast_table_alias(
         Some(ast::TableAlias { name, columns }) => {
             Ok(spec::Plan::new(spec::PlanNode::TableAlias {
                 input: Box::new(plan),
-                name: name.to_string(),
-                columns: columns.into_iter().map(|c| c.to_string()).collect(),
+                name: name.value.into(),
+                columns: columns.into_iter().map(|c| c.value.into()).collect(),
             }))
         }
     }

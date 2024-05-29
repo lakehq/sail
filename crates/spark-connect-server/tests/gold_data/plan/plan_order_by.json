@@ -71,7 +71,9 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "unparsedIdentifier": "t",
+                        "identifier": [
+                          "t"
+                        ],
                         "options": {}
                       },
                       "isStreaming": false
@@ -82,7 +84,7 @@
                   "expressions": [
                     {
                       "unresolvedStar": {
-                        "unparsedTarget": null
+                        "target": null
                       }
                     }
                   ]
@@ -94,7 +96,9 @@
                 {
                   "child": {
                     "unresolvedAttribute": {
-                      "unparsedIdentifier": "a",
+                      "identifier": [
+                        "a"
+                      ],
                       "planId": null
                     }
                   },
@@ -104,7 +108,9 @@
                 {
                   "child": {
                     "unresolvedAttribute": {
-                      "unparsedIdentifier": "b",
+                      "identifier": [
+                        "b"
+                      ],
                       "planId": null
                     }
                   },
@@ -133,7 +139,9 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "unparsedIdentifier": "t",
+                            "identifier": [
+                              "t"
+                            ],
                             "options": {}
                           },
                           "isStreaming": false
@@ -144,7 +152,7 @@
                       "expressions": [
                         {
                           "unresolvedStar": {
-                            "unparsedTarget": null
+                            "target": null
                           }
                         }
                       ]
@@ -156,7 +164,9 @@
                     {
                       "child": {
                         "unresolvedAttribute": {
-                          "unparsedIdentifier": "a",
+                          "identifier": [
+                            "a"
+                          ],
                           "planId": null
                         }
                       },
@@ -166,7 +176,9 @@
                     {
                       "child": {
                         "unresolvedAttribute": {
-                          "unparsedIdentifier": "b",
+                          "identifier": [
+                            "b"
+                          ],
                           "planId": null
                         }
                       },

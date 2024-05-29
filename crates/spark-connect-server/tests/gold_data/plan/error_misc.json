@@ -27,7 +27,7 @@
     {
       "input": "DROP DATABASE my-database",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected TABLE, VIEW, INDEX, ROLE, SCHEMA, FUNCTION, STAGE or SEQUENCE after DROP, found: DATABASE at Line: 1, Column 6"
+        "failure": "invalid argument: extra tokens after statement: -"
       }
     },
     {

@@ -5,14 +5,13 @@ use crate::extension::function::alias::MultiAlias;
 use crate::extension::function::contains::Contains;
 use crate::extension::function::map_function::MapFunction;
 use crate::extension::function::struct_function::StructFunction;
-use crate::sql::expression::parse_spark_qualified_wildcard;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::TableReference;
-use datafusion::common::{Column, DFSchema, Result, ScalarValue};
+use datafusion::common::{DFSchema, Result, ScalarValue};
 use datafusion::config::ConfigOptions;
 use datafusion::sql::planner::ContextProvider;
 use datafusion::{functions, functions_array};
-use datafusion_common::DataFusionError;
+use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::{
     expr, window_frame, AggregateFunction, AggregateUDF, BuiltInWindowFunction, ExprSchemable,
     GetFieldAccess, GetIndexedField, Operator, ScalarFunctionDefinition, ScalarUDF, TableSource,
@@ -157,11 +156,14 @@ pub(crate) fn from_spark_expression(
     match expr {
         Expr::Literal(literal) => Ok(expr::Expr::Literal(literal.try_into()?)),
         Expr::UnresolvedAttribute {
-            unparsed_identifier,
+            identifier,
             plan_id: _,
         } => {
-            let col = Column::new_unqualified(unparsed_identifier);
-            Ok(expr::Expr::Column(col))
+            // FIXME: resolve identifier using schema
+            let column: Vec<String> = identifier.into();
+            Ok(expr::Expr::Column(Column::new_unqualified(
+                column.join("."),
+            )))
         }
         Expr::UnresolvedFunction {
             function_name,
@@ -182,12 +184,12 @@ pub(crate) fn from_spark_expression(
                 .collect::<SparkResult<Vec<_>>>()?;
             Ok(get_scalar_function(function_name.as_str(), args)?)
         }
-        Expr::UnresolvedStar { unparsed_target } => {
+        Expr::UnresolvedStar { target } => {
             // FIXME: column reference is parsed as qualifier
-            if let Some(target) = unparsed_target {
-                let target = parse_spark_qualified_wildcard(target.as_str())?;
+            if let Some(target) = target {
+                let target: Vec<String> = target.into();
                 Ok(expr::Expr::Wildcard {
-                    qualifier: Some(target),
+                    qualifier: Some(target.join(".")),
                 })
             } else {
                 Ok(expr::Expr::Wildcard { qualifier: None })
@@ -206,12 +208,13 @@ pub(crate) fn from_spark_expression(
                 Ok(expr::Expr::Alias(expr::Alias {
                     expr: Box::new(expr),
                     relation: None,
-                    name: name.to_string(),
+                    name: name.clone().into(),
                 }))
             } else {
+                let name: Vec<String> = name.into_iter().map(|x| x.into()).collect();
                 Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                     func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
-                        MultiAlias::new(name.clone()),
+                        MultiAlias::new(name),
                     ))),
                     args: vec![expr],
                 }))
@@ -347,7 +350,7 @@ pub(crate) fn from_spark_expression(
                 .collect::<Result<Vec<DataType>, DataFusionError>>()?;
 
             let (output_type, eval_type, command, python_version) = match function {
-                spec::FunctionType::PythonUdf {
+                spec::FunctionDefinition::PythonUdf {
                     output_type,
                     eval_type,
                     command,

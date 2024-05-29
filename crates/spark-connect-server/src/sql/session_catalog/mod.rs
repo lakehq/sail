@@ -1,8 +1,9 @@
 use datafusion::execution::context::SessionState;
 use datafusion::prelude::SessionContext;
-use datafusion_common::exec_datafusion_err;
 use datafusion_common::Result;
+use datafusion_common::{exec_datafusion_err, SchemaReference, TableReference};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 pub(crate) mod catalog;
 pub(crate) mod column;
@@ -62,5 +63,47 @@ pub(crate) struct SessionCatalogContext<'a> {
 impl SessionCatalogContext<'_> {
     pub(crate) fn new(ctx: &SessionContext) -> SessionCatalogContext {
         SessionCatalogContext { ctx }
+    }
+
+    pub(crate) fn resolve_catalog_reference(&self, reference: Option<String>) -> Result<Arc<str>> {
+        match reference {
+            Some(catalog) => Ok(catalog.into()),
+            None => Ok(self.default_catalog()?.into()),
+        }
+    }
+
+    pub(crate) fn resolve_database_reference(
+        &self,
+        reference: Option<SchemaReference>,
+    ) -> Result<(Arc<str>, Arc<str>)> {
+        match reference {
+            Some(SchemaReference::Bare { schema }) => Ok((self.default_catalog()?.into(), schema)),
+            Some(SchemaReference::Full { catalog, schema }) => Ok((catalog, schema)),
+            None => Ok((
+                self.default_catalog()?.into(),
+                self.default_database()?.into(),
+            )),
+        }
+    }
+
+    pub(crate) fn resolve_table_reference(
+        &self,
+        reference: TableReference,
+    ) -> Result<(Arc<str>, Arc<str>, Arc<str>)> {
+        match reference {
+            TableReference::Bare { table } => Ok((
+                self.default_catalog()?.into(),
+                self.default_database()?.into(),
+                table,
+            )),
+            TableReference::Partial { schema, table } => {
+                Ok((self.default_catalog()?.into(), schema, table))
+            }
+            TableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => Ok((catalog, schema, table)),
+        }
     }
 }

@@ -18,7 +18,9 @@ use datafusion::execution::context::{DataFilePaths, SessionContext};
 use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
-use datafusion_common::{Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference};
+use datafusion_common::{
+    Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
+};
 use datafusion_expr::{build_join_schema, LogicalPlanBuilder};
 use framework_common::spec;
 
@@ -42,18 +44,39 @@ pub(crate) fn read_arrow_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>, Spar
     Ok(batches)
 }
 
-fn from_qualified_alias(alias: String, qualifier: Vec<String>) -> SparkResult<TableReference> {
-    match qualifier.as_slice() {
-        [] => Ok(TableReference::bare(alias)),
-        [a] => Ok(TableReference::partial(Arc::from(a.as_str()), alias)),
-        [a, b] => Ok(TableReference::full(
-            Arc::from(a.as_str()),
-            Arc::from(b.as_str()),
-            alias,
-        )),
-        _ => Err(SparkError::invalid(
-            "alias qualifier with more than two parts",
-        )),
+fn build_schema_reference(name: spec::ObjectName) -> SparkResult<SchemaReference> {
+    let names: Vec<String> = name.into();
+    match names.as_slice() {
+        [a] => Ok(SchemaReference::Bare {
+            schema: Arc::from(a.as_str()),
+        }),
+        [a, b] => Ok(SchemaReference::Full {
+            catalog: Arc::from(a.as_str()),
+            schema: Arc::from(b.as_str()),
+        }),
+        _ => Err(SparkError::invalid(format!(
+            "schema reference: {:?}",
+            names
+        ))),
+    }
+}
+
+fn build_table_reference(name: spec::ObjectName) -> SparkResult<TableReference> {
+    let names: Vec<String> = name.into();
+    match names.as_slice() {
+        [a] => Ok(TableReference::Bare {
+            table: Arc::from(a.as_str()),
+        }),
+        [a, b] => Ok(TableReference::Partial {
+            schema: Arc::from(a.as_str()),
+            table: Arc::from(b.as_str()),
+        }),
+        [a, b, c] => Ok(TableReference::Full {
+            catalog: Arc::from(a.as_str()),
+            schema: Arc::from(b.as_str()),
+            table: Arc::from(c.as_str()),
+        }),
+        _ => Err(SparkError::invalid(format!("table reference: {:?}", names))),
     }
 }
 
@@ -86,13 +109,13 @@ pub(crate) async fn from_spark_relation(
 
             match read_type {
                 ReadType::NamedTable {
-                    unparsed_identifier,
+                    identifier,
                     options,
                 } => {
                     if !options.is_empty() {
                         return Err(SparkError::todo("table options"));
                     }
-                    let table_reference = TableReference::from(unparsed_identifier);
+                    let table_reference = build_table_reference(identifier)?;
                     let df: DataFrame = ctx.table(table_reference).await?;
                     Ok(df.into_optimized_plan()?)
                 }
@@ -377,7 +400,7 @@ pub(crate) async fn from_spark_relation(
                     .iter()
                     .flat_map(|name| {
                         schema
-                            .columns_with_unqualified_name(name.as_str())
+                            .columns_with_unqualified_name(name.into())
                             .into_iter()
                     })
                     .map(|x| Expr::Column(x.clone()))
@@ -427,7 +450,7 @@ pub(crate) async fn from_spark_relation(
             qualifier,
         } => Ok(LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
             Arc::new(from_spark_relation(ctx, *input).await?),
-            from_qualified_alias(alias, qualifier)?,
+            build_table_reference(spec::ObjectName::new_qualified(alias, qualifier))?,
         )?)),
         PlanNode::Repartition {
             input,
@@ -458,7 +481,7 @@ pub(crate) async fn from_spark_relation(
                 .columns()
                 .iter()
                 .zip(column_names.iter())
-                .map(|(col, name)| Expr::Column(col.clone()).alias(name))
+                .map(|(col, name)| Expr::Column(col.clone()).alias(name.clone()))
                 .collect();
             Ok(LogicalPlan::Projection(plan::Projection::try_new(
                 expr,
@@ -470,6 +493,10 @@ pub(crate) async fn from_spark_relation(
             rename_columns_map,
         } => {
             let input = from_spark_relation(ctx, *input).await?;
+            let rename_columns_map: HashMap<String, String> = rename_columns_map
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect();
             let schema = input.schema();
             let expr: Vec<Expr> = schema
                 .columns()
@@ -501,6 +528,7 @@ pub(crate) async fn from_spark_relation(
             if !columns.is_empty() {
                 return Err(SparkError::todo("drop column expressions"));
             }
+            let column_names: Vec<String> = column_names.into_iter().map(|x| x.into()).collect();
             let expr: Vec<Expr> = schema
                 .columns()
                 .iter()
@@ -539,7 +567,7 @@ pub(crate) async fn from_spark_relation(
                         }
                     };
                     let expr = from_spark_expression(expr, schema)?;
-                    Ok((name, (expr, false)))
+                    Ok((name.into(), (expr, false)))
                 })
                 .collect::<SparkResult<_>>()?;
             let mut expr: Vec<Expr> = schema
@@ -687,93 +715,83 @@ pub(crate) async fn from_spark_relation(
         })),
         PlanNode::SetCurrentDatabase { database_name } => Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(CatalogCommandNode::try_new(
-                CatalogCommand::SetCurrentDatabase { database_name },
-            )?),
-        })),
-        PlanNode::ListDatabases { pattern } => Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(CatalogCommandNode::try_new(
-                CatalogCommand::ListDatabases { pattern },
-            )?),
-        })),
-        PlanNode::ListTables {
-            database_name,
-            pattern,
-        } => Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::ListTables {
-                database_name,
-                pattern,
-            })?),
-        })),
-        PlanNode::ListFunctions {
-            database_name,
-            pattern,
-        } => Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(CatalogCommandNode::try_new(
-                CatalogCommand::ListFunctions {
-                    database_name,
-                    pattern,
+                CatalogCommand::SetCurrentDatabase {
+                    database_name: database_name.into(),
                 },
             )?),
         })),
-        PlanNode::ListColumns {
-            table_name,
-            database_name,
+        PlanNode::ListDatabases {
+            catalog,
+            database_pattern,
         } => Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::ListColumns {
-                table_name,
-                database_name,
-            })?),
-        })),
-        PlanNode::GetDatabase { database_name } => Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::GetDatabase {
-                database_name,
-            })?),
-        })),
-        PlanNode::GetTable {
-            table_name,
-            database_name,
-        } => Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::GetTable {
-                table_name,
-                database_name,
-            })?),
-        })),
-        PlanNode::GetFunction {
-            function_name,
-            database_name,
-        } => Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::GetFunction {
-                function_name,
-                database_name,
-            })?),
-        })),
-        PlanNode::DatabaseExists { database_name } => Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(CatalogCommandNode::try_new(
-                CatalogCommand::DatabaseExists { database_name },
+                CatalogCommand::ListDatabases {
+                    catalog: catalog.map(|x| x.into()),
+                    database_pattern,
+                },
             )?),
         })),
-        PlanNode::TableExists {
-            table_name,
-            database_name,
+        PlanNode::ListTables {
+            database,
+            table_pattern,
         } => Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::TableExists {
-                table_name,
-                database_name,
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::ListTables {
+                database: database.map(|x| build_schema_reference(x)).transpose()?,
+                table_pattern,
             })?),
         })),
-        PlanNode::FunctionExists {
-            function_name,
-            database_name,
+        PlanNode::ListFunctions {
+            database,
+            function_pattern,
         } => Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(CatalogCommandNode::try_new(
+                CatalogCommand::ListFunctions {
+                    database: database.map(|x| build_schema_reference(x)).transpose()?,
+                    function_pattern,
+                },
+            )?),
+        })),
+        PlanNode::ListColumns { table } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::ListColumns {
+                table: build_table_reference(table)?,
+            })?),
+        })),
+        PlanNode::GetDatabase { database } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::GetDatabase {
+                database: build_schema_reference(database)?,
+            })?),
+        })),
+        PlanNode::GetTable { table } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::GetTable {
+                table: build_table_reference(table)?,
+            })?),
+        })),
+        PlanNode::GetFunction { function } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::GetFunction {
+                function: build_table_reference(function)?,
+            })?),
+        })),
+        PlanNode::DatabaseExists { database } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(
+                CatalogCommand::DatabaseExists {
+                    database: build_schema_reference(database)?,
+                },
+            )?),
+        })),
+        PlanNode::TableExists { table } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::TableExists {
+                table: build_table_reference(table)?,
+            })?),
+        })),
+        PlanNode::FunctionExists { function } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(
                 CatalogCommand::FunctionExists {
-                    function_name,
-                    database_name,
+                    function: build_table_reference(function)?,
                 },
             )?),
         })),
         PlanNode::CreateTable {
-            table_name,
+            table,
             path,
             source,
             description: _,
@@ -794,20 +812,62 @@ pub(crate) async fn from_spark_relation(
             });
             Ok(LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::CreateTable {
-                    table_name,
+                    table: build_table_reference(table)?,
                     plan: Arc::new(from_spark_relation(ctx, read).await?),
                 })?),
             }))
         }
-        PlanNode::DropTemporaryView { view_name } => Ok(LogicalPlan::Extension(Extension {
+        PlanNode::DropTemporaryView {
+            view,
+            is_global,
+            if_exists,
+        } => Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(CatalogCommandNode::try_new(
-                CatalogCommand::DropTemporaryView { view_name },
+                CatalogCommand::DropTemporaryView {
+                    view: build_table_reference(view)?,
+                    is_global,
+                    if_exists,
+                },
             )?),
         })),
-        PlanNode::DropGlobalTemporaryView { view_name } => Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(CatalogCommandNode::try_new(
-                CatalogCommand::DropGlobalTemporaryView { view_name },
-            )?),
+        PlanNode::DropDatabase {
+            database,
+            if_exists,
+            cascade,
+        } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::DropDatabase {
+                database: build_schema_reference(database)?,
+                if_exists,
+                cascade,
+            })?),
+        })),
+        PlanNode::DropFunction {
+            function,
+            if_exists,
+            is_temporary,
+        } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::DropFunction {
+                function: build_table_reference(function)?,
+                if_exists,
+                is_temporary,
+            })?),
+        })),
+        PlanNode::DropTable {
+            table,
+            if_exists,
+            purge,
+        } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::DropTable {
+                table: build_table_reference(table)?,
+                if_exists,
+                purge,
+            })?),
+        })),
+        PlanNode::DropView { view, if_exists } => Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::DropView {
+                view: build_table_reference(view)?,
+                if_exists,
+            })?),
         })),
         PlanNode::RecoverPartitions { .. } => Err(SparkError::todo("PlanNode::RecoverPartitions")),
         PlanNode::IsCached { .. } => Err(SparkError::todo("PlanNode::IsCached")),
@@ -821,14 +881,39 @@ pub(crate) async fn from_spark_relation(
         })),
         PlanNode::SetCurrentCatalog { catalog_name } => Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(CatalogCommandNode::try_new(
-                CatalogCommand::SetCurrentCatalog { catalog_name },
+                CatalogCommand::SetCurrentCatalog {
+                    catalog_name: catalog_name.into(),
+                },
             )?),
         })),
-        PlanNode::ListCatalogs { pattern } => Ok(LogicalPlan::Extension(Extension {
+        PlanNode::ListCatalogs { catalog_pattern } => Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::ListCatalogs {
-                pattern,
+                catalog_pattern,
             })?),
         })),
+        PlanNode::CreateDatabase {
+            database,
+            if_not_exists,
+            comment,
+            location,
+            properties,
+        } => {
+            let properties = properties
+                .into_iter()
+                .map(|(k, v)| (k, v))
+                .collect::<Vec<_>>();
+            Ok(LogicalPlan::Extension(Extension {
+                node: Arc::new(CatalogCommandNode::try_new(
+                    CatalogCommand::CreateDatabase {
+                        database: build_schema_reference(database)?,
+                        if_not_exists,
+                        comment,
+                        location,
+                        properties,
+                    },
+                )?),
+            }))
+        }
         PlanNode::RegisterFunction(_) => Err(SparkError::todo("register function")),
         PlanNode::RegisterTableFunction(_) => Err(SparkError::todo("register table function")),
         PlanNode::CreateTemporaryView { .. } => Err(SparkError::todo("create temporary view")),
@@ -872,13 +957,13 @@ pub(crate) async fn from_spark_relation(
                     .columns()
                     .iter()
                     .zip(columns.iter())
-                    .map(|(col, name)| Expr::Column(col.clone()).alias(name))
+                    .map(|(col, name)| Expr::Column(col.clone()).alias(name.clone()))
                     .collect();
                 LogicalPlan::Projection(plan::Projection::try_new(expr, Arc::new(input))?)
             };
             Ok(LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
                 Arc::new(input),
-                from_qualified_alias(name, vec![])?,
+                build_table_reference(spec::ObjectName::new_unqualified(name))?,
             )?))
         }
     }
