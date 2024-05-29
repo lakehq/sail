@@ -690,7 +690,7 @@ pub(crate) async fn from_spark_relation(
             let schema = DFSchema::empty(); // UDTF only has schema for return type
             let arguments: Vec<Expr> = arguments
                 .iter()
-                .map(|x| from_spark_expression(x.clone().try_into()?, &schema))
+                .map(|x| from_spark_expression(x.clone(), &schema))
                 .collect::<SparkResult<Vec<Expr>>>()?;
             let input_types: Vec<adt::DataType> = arguments
                 .iter()

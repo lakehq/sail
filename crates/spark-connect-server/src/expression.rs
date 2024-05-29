@@ -146,6 +146,7 @@ fn from_spark_window_boundary_value(value: spec::Expr) -> SparkResult<ScalarValu
     }
 }
 
+// TODO: Rename to from_spec_expression and move to different crate.
 pub(crate) fn from_spark_expression(
     expr: spec::Expr,
     schema: &DFSchema,
