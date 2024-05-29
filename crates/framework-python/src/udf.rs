@@ -12,8 +12,6 @@ use pyo3::{
 
 use crate::pyarrow::{FromPyArrow, ToPyArrow};
 
-use crate::utils::array_ref_to_columnar_value;
-
 #[derive(Debug, Clone)]
 pub struct PythonUDF {
     signature: Signature,
@@ -142,10 +140,6 @@ impl ScalarUDFImpl for PythonUDF {
             Ok(array)
         });
 
-        Ok(array_ref_to_columnar_value(
-            processed_array?,
-            &self.output_type,
-            is_scalar,
-        )?)
+        Ok(ColumnarValue::Array(processed_array?))
     }
 }

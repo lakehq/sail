@@ -328,7 +328,8 @@ pub(crate) fn from_spark_expression(
             Err(SparkError::todo("unresolved named lambda variable"))
         }
         Expr::CommonInlineUserDefinedFunction(function) => {
-            // TODO: UDAF
+            // TODO: eval_type For UDF type and multiple args.
+            //  Checkout worker.py and PythonRunner.Scala in Spark codebase
             use framework_python::partial_python_udf::{
                 deserialize_partial_python_udf, PartialPythonUDF,
             };
