@@ -1,0 +1,58 @@
+[package]
+name = "framework-spark-connect"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+framework-common = { path = "../framework-common" }
+framework-planner = { path = "../framework-planner" }
+framework-python = { path = "../framework-python" }
+framework-sql = { path = "../framework-sql" }
+framework-telemetry = { path = "../framework-telemetry" }
+
+tracing = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+tracing-subscriber = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-semantic-conventions = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry-proto = { workspace = true }
+opentelemetry-stdout = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tonic-reflection = { workspace = true }
+tonic-health = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+pbjson = { workspace = true }
+pbjson-types = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+uuid = { workspace = true }
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-functions-array = { workspace = true }
+async-recursion = { workspace = true }
+async-stream = { workspace = true }
+lazy_static = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+monostate = { workspace = true }
+regex = { workspace = true }
+glob = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
+pyo3 = { workspace = true }
+arrow = { workspace = true }
+arrow-cast = { workspace = true }
+sqlparser = { workspace = true }
+polars = { workspace = true }
+polars-arrow = { workspace = true }
+serde_arrow = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }
+pbjson-build = { workspace = true }

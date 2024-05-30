@@ -1332,9 +1332,36 @@ dependencies = [
 name = "framework-common"
 version = "0.1.0"
 dependencies = [
+ "arrow",
  "datafusion",
+ "glob",
  "serde",
+ "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "framework-planner"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "arrow-cast",
+ "async-recursion",
+ "async-trait",
+ "datafusion",
+ "datafusion-common",
+ "datafusion-expr",
+ "datafusion-functions-array",
+ "framework-common",
+ "framework-python",
+ "framework-sql",
+ "pyo3",
+ "regex",
+ "serde",
+ "serde_arrow",
+ "serde_json",
+ "thiserror",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -1354,6 +1381,77 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "sqlparser 0.46.0",
+]
+
+[[package]]
+name = "framework-spark-connect"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "arrow-cast",
+ "async-recursion",
+ "async-stream",
+ "chrono",
+ "chrono-tz 0.9.0",
+ "datafusion",
+ "datafusion-common",
+ "datafusion-expr",
+ "datafusion-functions-array",
+ "framework-common",
+ "framework-planner",
+ "framework-python",
+ "framework-sql",
+ "framework-telemetry",
+ "glob",
+ "lazy_static",
+ "monostate",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry-proto",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry-stdout",
+ "opentelemetry_sdk",
+ "pbjson",
+ "pbjson-build",
+ "pbjson-types",
+ "polars",
+ "polars-arrow",
+ "prost",
+ "prost-types",
+ "pyo3",
+ "regex",
+ "serde",
+ "serde_arrow",
+ "serde_json",
+ "sqlparser 0.46.0",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "tonic-build",
+ "tonic-health",
+ "tonic-reflection",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "framework-sql"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "chrono-tz 0.9.0",
+ "datafusion",
+ "framework-common",
+ "lazy_static",
+ "regex",
+ "serde",
+ "serde_json",
+ "sqlparser 0.46.0",
+ "thiserror",
 ]
 
 [[package]]
@@ -1574,36 +1672,6 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
-
-[[package]]
-name = "hello"
-version = "0.1.0"
-dependencies = [
- "async-recursion",
- "async-stream",
- "datafusion",
- "framework-telemetry",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry-proto",
- "opentelemetry-semantic-conventions",
- "opentelemetry-stdout",
- "opentelemetry_sdk",
- "prost",
- "prost-types",
- "thiserror",
- "tokio",
- "tonic",
- "tonic-build",
- "tonic-health",
- "tonic-reflection",
- "tower",
- "tower-http",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "uuid",
-]
 
 [[package]]
 name = "hermit-abi"
@@ -3596,59 +3664,6 @@ checksum = "ce305eb0b4296696835b71df73eb912e0f1ffd2556a501fcede6e0c50349191c"
 dependencies = [
  "libc",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "spark-connect-server"
-version = "0.1.0"
-dependencies = [
- "arrow",
- "arrow-cast",
- "async-recursion",
- "async-stream",
- "chrono",
- "chrono-tz 0.9.0",
- "datafusion",
- "datafusion-common",
- "datafusion-expr",
- "datafusion-functions-array",
- "framework-common",
- "framework-python",
- "framework-telemetry",
- "glob",
- "lazy_static",
- "monostate",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry-proto",
- "opentelemetry-semantic-conventions",
- "opentelemetry-stdout",
- "opentelemetry_sdk",
- "pbjson",
- "pbjson-build",
- "pbjson-types",
- "polars",
- "polars-arrow",
- "prost",
- "prost-types",
- "pyo3",
- "regex",
- "serde",
- "serde_arrow",
- "serde_json",
- "sqlparser 0.46.0",
- "thiserror",
- "tokio",
- "tonic",
- "tonic-build",
- "tonic-health",
- "tonic-reflection",
- "tower",
- "tower-http",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
