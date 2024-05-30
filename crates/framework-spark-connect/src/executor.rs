@@ -19,7 +19,7 @@ use crate::error::{SparkError, SparkResult};
 use crate::schema::to_spark_schema;
 use crate::spark::connect::execute_plan_response::{ArrowBatch, Metrics, ObservedMetrics};
 use crate::spark::connect::DataType;
-use framework_planner::execute_logical_plan;
+use framework_plan::execute_logical_plan;
 
 #[derive(Clone, Debug)]
 pub(crate) enum ExecutorBatch {
@@ -252,7 +252,7 @@ pub(crate) async fn execute_query(
     ctx: &SessionContext,
     query: &str,
 ) -> SparkResult<Vec<RecordBatch>> {
-    use framework_planner::resolver::plan::from_spark_relation;
+    use framework_plan::resolver::plan::from_spark_relation;
     use std::collections::HashMap;
 
     let relation = crate::spark::connect::Relation {

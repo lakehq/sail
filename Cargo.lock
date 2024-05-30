@@ -1341,7 +1341,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "framework-planner"
+name = "framework-plan"
 version = "0.1.0"
 dependencies = [
  "arrow",
@@ -1398,7 +1398,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-functions-array",
  "framework-common",
- "framework-planner",
+ "framework-plan",
  "framework-python",
  "framework-sql",
  "framework-telemetry",

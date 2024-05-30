@@ -26,7 +26,7 @@ use crate::spark::connect::{
     StreamingQueryCommand, StreamingQueryManagerCommand, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart,
 };
-use framework_planner::resolver::plan::from_spark_relation;
+use framework_plan::resolver::plan::from_spark_relation;
 
 pub struct ExecutePlanResponseStream {
     session_id: String,

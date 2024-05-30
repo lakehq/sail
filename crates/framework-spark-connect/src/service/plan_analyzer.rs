@@ -26,7 +26,7 @@ use crate::spark::connect::analyze_plan_response::{
 use crate::spark::connect::plan;
 use crate::spark::connect::StorageLevel;
 use crate::SPARK_VERSION;
-use framework_planner::resolver::plan::from_spark_relation;
+use framework_plan::resolver::plan::from_spark_relation;
 
 pub(crate) async fn handle_analyze_schema(
     session: Arc<Session>,

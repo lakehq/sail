@@ -10,7 +10,7 @@ use lazy_static::lazy_static;
 
 use crate::error::SparkResult;
 use crate::executor::Executor;
-use framework_planner::new_query_planner;
+use framework_plan::new_query_planner;
 
 const DEFAULT_SPARK_SCHEMA: &str = "default";
 const DEFAULT_SPARK_CATALOG: &str = "spark_catalog";
