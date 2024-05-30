@@ -17,12 +17,6 @@ black = "^23.12.1"
 flake8 = "^7.0.0"
 pytest = "^8.2.0"
 
-
-[[tool.poetry.source]]
-name = "mirror"
-url = "https://mirrors.aliyun.com/pypi/simple"
-priority = "primary"
-
 [tool.black]
 line-length = 100
 
