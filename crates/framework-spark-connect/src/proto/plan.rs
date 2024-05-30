@@ -1133,11 +1133,11 @@ impl TryFrom<Catalog> for spec::PlanNode {
 
 #[cfg(test)]
 mod tests {
+    use crate::error::{SparkError, SparkResult};
     use framework_common::spec;
     use framework_common::tests::test_gold_set;
     use framework_sql::plan::parse_sql_statement;
     use serde::{Deserialize, Serialize};
-    use crate::error::{SparkError, SparkResult};
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     struct RootPlan {

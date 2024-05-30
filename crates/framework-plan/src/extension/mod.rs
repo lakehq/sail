@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use datafusion::execution::context::{QueryPlanner, SessionState};
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
-use async_trait::async_trait;
 
 pub(crate) mod analyzer;
 pub(crate) mod function;

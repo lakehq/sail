@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use datafusion::arrow::array::Int64Array;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
@@ -13,7 +14,6 @@ use datafusion::physical_plan::{
     DisplayAs, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
 };
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use async_trait::async_trait;
 use tokio_stream;
 
 use crate::extension::logical::{Range, RangeNode};

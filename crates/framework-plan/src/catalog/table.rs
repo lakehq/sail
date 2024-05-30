@@ -8,8 +8,8 @@ use datafusion_common::{
 use datafusion_expr::{CreateMemoryTable, DdlStatement, DropTable, LogicalPlan, TableType};
 use framework_common::unwrap_or;
 
-use crate::catalog::CatalogContext;
 use crate::catalog::utils::match_pattern;
+use crate::catalog::CatalogContext;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

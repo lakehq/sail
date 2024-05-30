@@ -29,7 +29,7 @@ impl CommonError {
     pub fn unsupported(message: impl Into<String>) -> Self {
         CommonError::NotSupported(message.into())
     }
-    
+
     pub fn internal(message: impl Into<String>) -> Self {
         CommonError::InternalError(message.into())
     }

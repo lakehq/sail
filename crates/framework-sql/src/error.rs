@@ -1,6 +1,6 @@
 use datafusion::common::DataFusionError;
-use thiserror::Error;
 use framework_common::error::CommonError;
+use thiserror::Error;
 
 pub type SqlResult<T> = Result<T, SqlError>;
 
@@ -51,4 +51,3 @@ impl From<CommonError> for SqlError {
         }
     }
 }
-

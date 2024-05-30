@@ -10,8 +10,8 @@ pub(crate) mod column;
 pub(crate) mod database;
 pub(crate) mod function;
 pub(crate) mod table;
-pub(crate) mod view;
 pub(crate) mod utils;
+pub(crate) mod view;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct EmptyMetadata {}

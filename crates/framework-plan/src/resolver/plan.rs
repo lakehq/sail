@@ -61,7 +61,10 @@ fn build_table_reference(name: spec::ObjectName) -> PlannerResult<TableReference
             schema: Arc::from(b.as_str()),
             table: Arc::from(c.as_str()),
         }),
-        _ => Err(PlannerError::invalid(format!("table reference: {:?}", names))),
+        _ => Err(PlannerError::invalid(format!(
+            "table reference: {:?}",
+            names
+        ))),
     }
 }
 
@@ -107,7 +110,9 @@ pub async fn from_spark_relation(
                         Some("json") => (Arc::new(JsonFormat::default()), ".json"),
                         Some("csv") => (Arc::new(CsvFormat::default()), ".csv"),
                         Some("parquet") => (Arc::new(ParquetFormat::new()), ".parquet"),
-                        _ => return Err(PlannerError::unsupported("unsupported data source format")),
+                        _ => {
+                            return Err(PlannerError::unsupported("unsupported data source format"))
+                        }
                     };
                     let options = ListingOptions::new(format).with_file_extension(extension);
                     // TODO: use provided schema if available
@@ -536,7 +541,9 @@ pub async fn from_spark_relation(
                             }
                         }
                         _ => {
-                            return Err(PlannerError::invalid("alias expression expected for column"))
+                            return Err(PlannerError::invalid(
+                                "alias expression expected for column",
+                            ))
                         }
                     };
                     let expr = from_spark_expression(expr, schema)?;
@@ -842,7 +849,9 @@ pub async fn from_spark_relation(
                 if_exists,
             })?),
         })),
-        PlanNode::RecoverPartitions { .. } => Err(PlannerError::todo("PlanNode::RecoverPartitions")),
+        PlanNode::RecoverPartitions { .. } => {
+            Err(PlannerError::todo("PlanNode::RecoverPartitions"))
+        }
         PlanNode::IsCached { .. } => Err(PlannerError::todo("PlanNode::IsCached")),
         PlanNode::CacheTable { .. } => Err(PlannerError::todo("PlanNode::CacheTable")),
         PlanNode::UncacheTable { .. } => Err(PlannerError::todo("PlanNode::UncacheTable")),

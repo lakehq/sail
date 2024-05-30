@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::catalog::{CatalogContext, SessionContextExt};
 use crate::catalog::utils::match_pattern;
+use crate::catalog::{CatalogContext, SessionContextExt};
 use datafusion::catalog::CatalogProviderList;
 use datafusion_common::Result;
 use serde::{Deserialize, Serialize};

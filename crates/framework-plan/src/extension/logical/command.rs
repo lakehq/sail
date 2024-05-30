@@ -7,7 +7,7 @@ use crate::catalog::column::TableColumnMetadata;
 use crate::catalog::database::DatabaseMetadata;
 use crate::catalog::function::FunctionMetadata;
 use crate::catalog::table::TableMetadata;
-use crate::catalog::{EmptyMetadata, CatalogContext, SingleValueMetadata};
+use crate::catalog::{CatalogContext, EmptyMetadata, SingleValueMetadata};
 use arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use datafusion::common::{DFSchemaRef, Result};
 use datafusion::datasource::{provider_as_source, MemTable};

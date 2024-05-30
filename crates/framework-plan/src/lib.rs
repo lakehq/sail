@@ -1,9 +1,9 @@
-use std::sync::Arc;
 use datafusion::dataframe::DataFrame;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use datafusion_expr::{Extension, LogicalPlan};
+use std::sync::Arc;
 
 mod catalog;
 pub mod error;
@@ -32,6 +32,6 @@ pub async fn execute_logical_plan(ctx: &SessionContext, plan: LogicalPlan) -> Re
 
 pub fn new_query_planner() -> Arc<dyn QueryPlanner + Send + Sync> {
     use crate::extension::ExtensionQueryPlanner;
-    
+
     Arc::new(ExtensionQueryPlanner {})
 }

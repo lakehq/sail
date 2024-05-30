@@ -1,6 +1,6 @@
-use crate::error::{SqlError, SqlResult};
 use crate::data_type::{SQL_DECIMAL_MAX_PRECISION, SQL_DECIMAL_MAX_SCALE};
-use crate::parser::{SparkDialect, fail_on_extra_token};
+use crate::error::{SqlError, SqlResult};
+use crate::parser::{fail_on_extra_token, SparkDialect};
 use chrono;
 use chrono_tz;
 use framework_common::spec;

@@ -2,12 +2,12 @@ use std::sync::PoisonError;
 
 use datafusion::common::DataFusionError;
 use framework_common::error::CommonError;
+use framework_plan::error::PlannerError;
+use framework_sql::error::SqlError;
 use prost::DecodeError;
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
 use tokio::task::JoinError;
-use framework_plan::error::PlannerError;
-use framework_sql::error::SqlError;
 
 pub type SparkResult<T> = Result<T, SparkError>;
 

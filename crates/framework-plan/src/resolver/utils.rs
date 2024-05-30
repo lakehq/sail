@@ -1,14 +1,11 @@
-use std::io::Cursor;
-use arrow::datatypes as adt;
 use arrow::array::RecordBatch;
+use arrow::datatypes as adt;
 use arrow::ipc::reader::StreamReader;
 use arrow_cast::cast;
 use datafusion_common::Result;
+use std::io::Cursor;
 
-pub(crate) fn cast_record_batch(
-    batch: RecordBatch,
-    schema: adt::SchemaRef,
-) -> Result<RecordBatch> {
+pub(crate) fn cast_record_batch(batch: RecordBatch, schema: adt::SchemaRef) -> Result<RecordBatch> {
     let fields = schema.fields();
     let columns = batch.columns();
     let columns = fields
@@ -32,4 +29,3 @@ pub(crate) fn read_record_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>> {
     }
     Ok(batches)
 }
-

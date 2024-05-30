@@ -15,11 +15,11 @@ use crate::spark::connect::{
     CallFunction, CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
     Expression, JavaUdf, PythonUdf, PythonUdtf, ScalarScalaUdf,
 };
+use framework_common::spec;
 use framework_sql::data_type::parse_spark_data_type;
 use framework_sql::expression::{
     parse_object_name, parse_qualified_wildcard, parse_wildcard_expression,
 };
-use framework_common::spec;
 
 impl TryFrom<Expression> for spec::Expr {
     type Error = SparkError;

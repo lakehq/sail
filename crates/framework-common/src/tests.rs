@@ -95,8 +95,7 @@ where
     let paths = glob::glob(path).map_err(|e| error(e.to_string()))?;
     for entry in paths {
         let path = entry.map_err(|e| error(e.to_string()))?;
-        let content =
-            fs::read_to_string(path.clone()).map_err(|e| error(e.to_string()))?;
+        let content = fs::read_to_string(path.clone()).map_err(|e| error(e.to_string()))?;
         if std::env::var(UPDATE_GOLD_DATA_ENV_VAR).is_ok_and(|v| !v.is_empty()) {
             let expected: InputOnlyTestData<S> = serde_json::from_str(&content).map_err(|e| {
                 error(format!(

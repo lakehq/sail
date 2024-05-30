@@ -1,5 +1,5 @@
-use crate::catalog::{CatalogContext, SessionContextExt};
 use crate::catalog::utils::match_pattern;
+use crate::catalog::{CatalogContext, SessionContextExt};
 use datafusion_common::{exec_err, DFSchema, DFSchemaRef, Result, SchemaReference};
 use datafusion_expr::{CreateCatalogSchema, DdlStatement, DropCatalogSchema, LogicalPlan};
 use framework_common::unwrap_or;

@@ -1,7 +1,7 @@
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{from_ast_expression, from_ast_object_name, from_ast_order_by};
 use crate::literal::LiteralValue;
-use crate::parser::{SparkDialect, fail_on_extra_token};
+use crate::parser::{fail_on_extra_token, SparkDialect};
 use framework_common::spec;
 use sqlparser::ast;
 use sqlparser::parser::Parser;
@@ -469,12 +469,8 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::Plan> {
                 .collect::<SqlResult<Vec<_>>>()?;
             Ok(spec::Plan::new(spec::PlanNode::Values(rows)))
         }
-        SetExpr::Insert(_) => Err(SqlError::unsupported(
-            "INSERT statement in set expression",
-        )),
-        SetExpr::Update(_) => Err(SqlError::unsupported(
-            "UPDATE statement in set expression",
-        )),
+        SetExpr::Insert(_) => Err(SqlError::unsupported("INSERT statement in set expression")),
+        SetExpr::Update(_) => Err(SqlError::unsupported("UPDATE statement in set expression")),
         SetExpr::Table(table) => {
             let ast::Table {
                 table_name,
@@ -483,9 +479,7 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::Plan> {
             let names: Vec<ast::Ident> = match (schema_name, table_name) {
                 (Some(s), Some(t)) => vec![s.as_str().into(), t.as_str().into()],
                 (None, Some(t)) => vec![t.as_str().into()],
-                (_, None) => {
-                    return Err(SqlError::invalid("missing table name in set expression"))
-                }
+                (_, None) => return Err(SqlError::invalid("missing table name in set expression")),
             };
             Ok(spec::Plan::new(spec::PlanNode::Read {
                 is_streaming: false,
@@ -524,13 +518,9 @@ fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::Plan
                 }
                 JoinOperator::CrossJoin => (spec::JoinType::Cross, None),
                 JoinOperator::LeftSemi(constraint) => (spec::JoinType::LeftSemi, Some(constraint)),
-                JoinOperator::RightSemi(_) => {
-                    return Err(SqlError::unsupported("RIGHT SEMI join"))
-                }
+                JoinOperator::RightSemi(_) => return Err(SqlError::unsupported("RIGHT SEMI join")),
                 JoinOperator::LeftAnti(constraint) => (spec::JoinType::LeftAnti, Some(constraint)),
-                JoinOperator::RightAnti(_) => {
-                    return Err(SqlError::unsupported("RIGHT ANTI join"))
-                }
+                JoinOperator::RightAnti(_) => return Err(SqlError::unsupported("RIGHT ANTI join")),
                 JoinOperator::CrossApply | JoinOperator::OuterApply => {
                     return Err(SqlError::unsupported("APPLY join"))
                 }
@@ -544,9 +534,7 @@ fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::Plan
                     let columns = columns.into_iter().map(|c| c.to_string()).collect();
                     (None, columns)
                 }
-                Some(JoinConstraint::Natural) => {
-                    return Err(SqlError::unsupported("natural join"))
-                }
+                Some(JoinConstraint::Natural) => return Err(SqlError::unsupported("natural join")),
                 Some(JoinConstraint::None) | None => (None, vec![]),
             };
             Ok(spec::Plan::new(spec::PlanNode::Join {
@@ -607,9 +595,7 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::Plan> {
             let plan = with_ast_table_alias(plan, alias)?;
             Ok(plan)
         }
-        TableFactor::TableFunction { .. } => {
-            Err(SqlError::todo("table function in table factor"))
-        }
+        TableFactor::TableFunction { .. } => Err(SqlError::todo("table function in table factor")),
         TableFactor::Function { .. } => Err(SqlError::todo("function in table factor")),
         TableFactor::UNNEST { .. } => Err(SqlError::todo("UNNEST")),
         TableFactor::JsonTable { .. } => Err(SqlError::todo("JSON_TABLE")),
@@ -620,10 +606,7 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::Plan> {
     }
 }
 
-fn with_ast_table_alias(
-    plan: spec::Plan,
-    alias: Option<ast::TableAlias>,
-) -> SqlResult<spec::Plan> {
+fn with_ast_table_alias(plan: spec::Plan, alias: Option<ast::TableAlias>) -> SqlResult<spec::Plan> {
     match alias {
         None => Ok(plan),
         Some(ast::TableAlias { name, columns }) => {
@@ -635,4 +618,3 @@ fn with_ast_table_alias(
         }
     }
 }
-

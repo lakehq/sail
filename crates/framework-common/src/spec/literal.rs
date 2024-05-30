@@ -131,8 +131,7 @@ impl TryFrom<Literal> for ScalarValue {
                 element_type,
                 elements,
             } => {
-                let element_type: arrow::datatypes::DataType =
-                    element_type.try_into()?;
+                let element_type: arrow::datatypes::DataType = element_type.try_into()?;
                 let scalars: Vec<ScalarValue> = elements
                     .into_iter()
                     .map(|literal| literal.try_into())

@@ -1,3 +1,4 @@
+use crate::error::{SqlError, SqlResult};
 use sqlparser::ast::{
     BinaryOperator, Expr, Function, FunctionArg, FunctionArgExpr, FunctionArgumentList,
     FunctionArguments, Ident, SelectItem,
@@ -8,7 +9,6 @@ use sqlparser::keywords::Keyword;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::Token;
 use std::any::TypeId;
-use crate::error::{SqlError, SqlResult};
 
 #[derive(Debug)]
 pub struct SparkDialect {}

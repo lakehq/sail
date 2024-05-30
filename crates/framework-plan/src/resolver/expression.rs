@@ -357,7 +357,9 @@ pub(crate) fn from_spark_expression(
                     python_version,
                 } => (output_type, eval_type, command, python_version),
                 _ => {
-                    return Err(PlannerError::invalid("UDF function type must be Python UDF"));
+                    return Err(PlannerError::invalid(
+                        "UDF function type must be Python UDF",
+                    ));
                 }
             };
             let output_type: DataType = output_type.try_into()?;
@@ -405,9 +407,13 @@ fn get_one_argument(mut args: Vec<expr::Expr>) -> PlannerResult<Box<expr::Expr>>
     Ok(Box::new(args.pop().unwrap()))
 }
 
-fn get_two_arguments(mut args: Vec<expr::Expr>) -> PlannerResult<(Box<expr::Expr>, Box<expr::Expr>)> {
+fn get_two_arguments(
+    mut args: Vec<expr::Expr>,
+) -> PlannerResult<(Box<expr::Expr>, Box<expr::Expr>)> {
     if args.len() != 2 {
-        return Err(PlannerError::invalid("binary operator requires 2 arguments"));
+        return Err(PlannerError::invalid(
+            "binary operator requires 2 arguments",
+        ));
     }
     let right = Box::new(args.pop().unwrap());
     let left = Box::new(args.pop().unwrap());
