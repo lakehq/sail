@@ -2,10 +2,10 @@ use datafusion::common::DataFusionError;
 use framework_common::error::CommonError;
 use thiserror::Error;
 
-pub type PlannerResult<T> = Result<T, PlannerError>;
+pub type PlanResult<T> = Result<T, PlanError>;
 
 #[derive(Debug, Error)]
-pub enum PlannerError {
+pub enum PlanError {
     #[error("error in DataFusion: {0}")]
     DataFusionError(#[from] DataFusionError),
     #[error("missing argument: {0}")]
@@ -20,32 +20,32 @@ pub enum PlannerError {
     InternalError(String),
 }
 
-impl PlannerError {
+impl PlanError {
     pub fn todo(message: impl Into<String>) -> Self {
-        PlannerError::NotImplemented(message.into())
+        PlanError::NotImplemented(message.into())
     }
 
     pub fn unsupported(message: impl Into<String>) -> Self {
-        PlannerError::NotSupported(message.into())
+        PlanError::NotSupported(message.into())
     }
 
     pub fn missing(message: impl Into<String>) -> Self {
-        PlannerError::MissingArgument(message.into())
+        PlanError::MissingArgument(message.into())
     }
 
     pub fn invalid(message: impl Into<String>) -> Self {
-        PlannerError::InvalidArgument(message.into())
+        PlanError::InvalidArgument(message.into())
     }
 }
 
-impl From<CommonError> for PlannerError {
+impl From<CommonError> for PlanError {
     fn from(error: CommonError) -> Self {
         match error {
-            CommonError::DataFusionError(e) => PlannerError::DataFusionError(e),
-            CommonError::MissingArgument(message) => PlannerError::MissingArgument(message),
-            CommonError::InvalidArgument(message) => PlannerError::InvalidArgument(message),
-            CommonError::NotSupported(message) => PlannerError::NotSupported(message),
-            CommonError::InternalError(message) => PlannerError::InternalError(message),
+            CommonError::DataFusionError(e) => PlanError::DataFusionError(e),
+            CommonError::MissingArgument(message) => PlanError::MissingArgument(message),
+            CommonError::InvalidArgument(message) => PlanError::InvalidArgument(message),
+            CommonError::NotSupported(message) => PlanError::NotSupported(message),
+            CommonError::InternalError(message) => PlanError::InternalError(message),
         }
     }
 }

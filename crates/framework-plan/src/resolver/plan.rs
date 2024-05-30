@@ -20,7 +20,7 @@ use datafusion_common::{
 use datafusion_expr::{build_join_schema, LogicalPlanBuilder};
 use framework_common::spec;
 
-use crate::error::{PlannerError, PlannerResult};
+use crate::error::{PlanError, PlanResult};
 use crate::extension::analyzer::alias::rewrite_multi_alias;
 use crate::extension::analyzer::explode::rewrite_explode;
 use crate::extension::analyzer::wildcard::rewrite_wildcard;
@@ -29,7 +29,7 @@ use crate::extension::logical::{CatalogCommand, CatalogCommandNode, RangeNode};
 use crate::resolver::expression::from_spark_expression;
 use crate::resolver::utils::{cast_record_batch, read_record_batches};
 
-fn build_schema_reference(name: spec::ObjectName) -> PlannerResult<SchemaReference> {
+fn build_schema_reference(name: spec::ObjectName) -> PlanResult<SchemaReference> {
     let names: Vec<String> = name.into();
     match names.as_slice() {
         [a] => Ok(SchemaReference::Bare {
@@ -39,14 +39,11 @@ fn build_schema_reference(name: spec::ObjectName) -> PlannerResult<SchemaReferen
             catalog: Arc::from(a.as_str()),
             schema: Arc::from(b.as_str()),
         }),
-        _ => Err(PlannerError::invalid(format!(
-            "schema reference: {:?}",
-            names
-        ))),
+        _ => Err(PlanError::invalid(format!("schema reference: {:?}", names))),
     }
 }
 
-fn build_table_reference(name: spec::ObjectName) -> PlannerResult<TableReference> {
+fn build_table_reference(name: spec::ObjectName) -> PlanResult<TableReference> {
     let names: Vec<String> = name.into();
     match names.as_slice() {
         [a] => Ok(TableReference::Bare {
@@ -61,10 +58,7 @@ fn build_table_reference(name: spec::ObjectName) -> PlannerResult<TableReference
             schema: Arc::from(b.as_str()),
             table: Arc::from(c.as_str()),
         }),
-        _ => Err(PlannerError::invalid(format!(
-            "table reference: {:?}",
-            names
-        ))),
+        _ => Err(PlanError::invalid(format!("table reference: {:?}", names))),
     }
 }
 
@@ -72,7 +66,7 @@ fn build_table_reference(name: spec::ObjectName) -> PlannerResult<TableReference
 pub async fn from_spark_relation(
     ctx: &SessionContext,
     plan: spec::Plan,
-) -> PlannerResult<LogicalPlan> {
+) -> PlanResult<LogicalPlan> {
     use spec::PlanNode;
 
     let state = ctx.state();
@@ -89,7 +83,7 @@ pub async fn from_spark_relation(
                     options,
                 } => {
                     if !options.is_empty() {
-                        return Err(PlannerError::todo("table options"));
+                        return Err(PlanError::todo("table options"));
                     }
                     let table_reference = build_table_reference(identifier)?;
                     let df: DataFrame = ctx.table(table_reference).await?;
@@ -104,15 +98,13 @@ pub async fn from_spark_relation(
                 } => {
                     let urls = paths.to_urls()?;
                     if urls.is_empty() {
-                        return Err(PlannerError::invalid("empty data source paths"));
+                        return Err(PlanError::invalid("empty data source paths"));
                     }
                     let (format, extension): (Arc<dyn FileFormat>, _) = match format.as_deref() {
                         Some("json") => (Arc::new(JsonFormat::default()), ".json"),
                         Some("csv") => (Arc::new(CsvFormat::default()), ".csv"),
                         Some("parquet") => (Arc::new(ParquetFormat::new()), ".parquet"),
-                        _ => {
-                            return Err(PlannerError::unsupported("unsupported data source format"))
-                        }
+                        _ => return Err(PlanError::unsupported("unsupported data source format")),
                     };
                     let options = ListingOptions::new(format).with_file_extension(extension);
                     // TODO: use provided schema if available
@@ -144,7 +136,7 @@ pub async fn from_spark_relation(
             let expr: Vec<Expr> = expressions
                 .into_iter()
                 .map(|e| from_spark_expression(e, schema))
-                .collect::<PlannerResult<_>>()?;
+                .collect::<PlanResult<_>>()?;
             let expr = rewrite_multi_alias(expr)?;
             let (input, expr) = rewrite_wildcard(input, expr)?;
             let (input, expr) = rewrite_explode(input, expr)?;
@@ -186,13 +178,13 @@ pub async fn from_spark_relation(
             let schema = build_join_schema(&left.schema(), &right.schema(), &join_type)?;
             if is_cross_join {
                 if join_condition.is_some() {
-                    return Err(PlannerError::invalid("cross join with join condition"));
+                    return Err(PlanError::invalid("cross join with join condition"));
                 }
                 if using_columns.len() > 0 {
-                    return Err(PlannerError::invalid("cross join with using columns"));
+                    return Err(PlanError::invalid("cross join with using columns"));
                 }
                 if join_data_type.is_some() {
-                    return Err(PlannerError::invalid("cross join with join data type"));
+                    return Err(PlanError::invalid("cross join with join data type"));
                 }
                 return Ok(LogicalPlan::CrossJoin(plan::CrossJoin {
                     left: Arc::new(left),
@@ -218,7 +210,7 @@ pub async fn from_spark_relation(
                         .collect();
                     (on, None, plan::JoinConstraint::Using)
                 } else {
-                    return Err(PlannerError::invalid(
+                    return Err(PlanError::invalid(
                         "expecting either join condition or using columns",
                     ));
                 };
@@ -234,7 +226,7 @@ pub async fn from_spark_relation(
             }))
         }
         PlanNode::SetOperation { .. } => {
-            return Err(PlannerError::todo("set operation"));
+            return Err(PlanError::todo("set operation"));
         }
         PlanNode::Sort {
             input,
@@ -250,7 +242,7 @@ pub async fn from_spark_relation(
                     let expr = spec::Expr::SortOrder(o);
                     from_spark_expression(expr, schema)
                 })
-                .collect::<PlannerResult<_>>()?;
+                .collect::<PlanResult<_>>()?;
             Ok(LogicalPlan::Sort(plan::Sort {
                 expr,
                 input: Arc::new(input),
@@ -275,21 +267,21 @@ pub async fn from_spark_relation(
             use spec::GroupType;
 
             if pivot.is_some() {
-                return Err(PlannerError::todo("pivot"));
+                return Err(PlanError::todo("pivot"));
             }
             if group_type != GroupType::GroupBy {
-                return Err(PlannerError::todo("unsupported aggregate group type"));
+                return Err(PlanError::todo("unsupported aggregate group type"));
             }
             let input = from_spark_relation(ctx, *input).await?;
             let schema = input.schema();
             let group_expr = grouping_expressions
                 .into_iter()
                 .map(|e| from_spark_expression(e, schema))
-                .collect::<PlannerResult<_>>()?;
+                .collect::<PlanResult<_>>()?;
             let aggr_expr = aggregate_expressions
                 .into_iter()
                 .map(|e| from_spark_expression(e, schema))
-                .collect::<PlannerResult<_>>()?;
+                .collect::<PlanResult<_>>()?;
             Ok(LogicalPlan::Aggregate(Aggregate::try_new(
                 Arc::new(input),
                 group_expr,
@@ -305,8 +297,8 @@ pub async fn from_spark_relation(
             let input = if positional_arguments.len() > 0 {
                 let params = positional_arguments
                     .into_iter()
-                    .map(|arg| -> PlannerResult<ScalarValue> { Ok(arg.try_into()?) })
-                    .collect::<PlannerResult<_>>()?;
+                    .map(|arg| -> PlanResult<ScalarValue> { Ok(arg.try_into()?) })
+                    .collect::<PlanResult<_>>()?;
                 input.with_param_values(ParamValues::List(params))?
             } else {
                 input
@@ -314,10 +306,10 @@ pub async fn from_spark_relation(
             let input = if named_arguments.len() > 0 {
                 let params = named_arguments
                     .into_iter()
-                    .map(|(name, arg)| -> PlannerResult<(String, ScalarValue)> {
+                    .map(|(name, arg)| -> PlanResult<(String, ScalarValue)> {
                         Ok((name, arg.try_into()?))
                     })
-                    .collect::<PlannerResult<_>>()?;
+                    .collect::<PlanResult<_>>()?;
                 input.with_param_values(ParamValues::Map(params))?
             } else {
                 input
@@ -335,12 +327,12 @@ pub async fn from_spark_relation(
                 let batches = batches
                     .into_iter()
                     .map(|b| Ok(cast_record_batch(b, schema.clone())?))
-                    .collect::<PlannerResult<_>>()?;
+                    .collect::<PlanResult<_>>()?;
                 (schema, batches)
             } else if let [batch, ..] = batches.as_slice() {
                 (batch.schema(), batches)
             } else {
-                return Err(PlannerError::invalid("missing schema for local relation"));
+                return Err(PlanError::invalid("missing schema for local relation"));
             };
             let provider = MemTable::try_new(schema, vec![batches])?;
             Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
@@ -352,7 +344,7 @@ pub async fn from_spark_relation(
             )?))
         }
         PlanNode::Sample { .. } => {
-            return Err(PlannerError::todo("sample"));
+            return Err(PlanError::todo("sample"));
         }
         PlanNode::Offset { input, offset } => {
             let input = from_spark_relation(ctx, *input).await?;
@@ -371,7 +363,7 @@ pub async fn from_spark_relation(
             let input = from_spark_relation(ctx, *input).await?;
             let schema = input.schema();
             if within_watermark {
-                return Err(PlannerError::todo("deduplicate within watermark"));
+                return Err(PlanError::todo("deduplicate within watermark"));
             }
             let distinct = if column_names.len() > 0 && !all_columns_as_keys {
                 let on_expr: Vec<Expr> = column_names
@@ -397,7 +389,7 @@ pub async fn from_spark_relation(
             } else if column_names.len() == 0 && all_columns_as_keys {
                 plan::Distinct::All(Arc::new(input))
             } else {
-                return Err(PlannerError::invalid(
+                return Err(PlanError::invalid(
                     "must either specify deduplicate column names or use all columns as keys",
                 ));
             };
@@ -413,7 +405,7 @@ pub async fn from_spark_relation(
             // TODO: use parallelism in Spark configuration as the default
             let num_partitions = num_partitions.unwrap_or(1);
             if num_partitions < 1 {
-                return Err(PlannerError::invalid(format!(
+                return Err(PlanError::invalid(format!(
                     "invalid number of partitions: {}",
                     num_partitions
                 )));
@@ -449,7 +441,7 @@ pub async fn from_spark_relation(
             let input = from_spark_relation(ctx, *input).await?;
             let schema = input.schema();
             if column_names.len() != schema.fields().len() {
-                return Err(PlannerError::invalid(format!(
+                return Err(PlanError::invalid(format!(
                     "number of column names ({}) does not match number of columns ({})",
                     column_names.len(),
                     schema.fields().len()
@@ -494,7 +486,7 @@ pub async fn from_spark_relation(
             )?))
         }
         PlanNode::ShowString { .. } => {
-            return Err(PlannerError::todo("show string"));
+            return Err(PlanError::todo("show string"));
         }
         PlanNode::Drop {
             input,
@@ -504,7 +496,7 @@ pub async fn from_spark_relation(
             let input = from_spark_relation(ctx, *input).await?;
             let schema = input.schema();
             if !columns.is_empty() {
-                return Err(PlannerError::todo("drop column expressions"));
+                return Err(PlanError::todo("drop column expressions"));
             }
             let column_names: Vec<String> = column_names.into_iter().map(|x| x.into()).collect();
             let expr: Vec<Expr> = schema
@@ -519,7 +511,7 @@ pub async fn from_spark_relation(
             )?))
         }
         PlanNode::Tail { .. } => {
-            return Err(PlannerError::todo("tail"));
+            return Err(PlanError::todo("tail"));
         }
         PlanNode::WithColumns { input, aliases } => {
             let input = from_spark_relation(ctx, *input).await?;
@@ -537,19 +529,17 @@ pub async fn from_spark_relation(
                             if name.len() == 1 {
                                 (name.pop().unwrap(), *expr)
                             } else {
-                                return Err(PlannerError::invalid("multi-alias for column"));
+                                return Err(PlanError::invalid("multi-alias for column"));
                             }
                         }
                         _ => {
-                            return Err(PlannerError::invalid(
-                                "alias expression expected for column",
-                            ))
+                            return Err(PlanError::invalid("alias expression expected for column"))
                         }
                     };
                     let expr = from_spark_expression(expr, schema)?;
                     Ok((name.into(), (expr, false)))
                 })
-                .collect::<PlannerResult<_>>()?;
+                .collect::<PlanResult<_>>()?;
             let mut expr: Vec<Expr> = schema
                 .columns()
                 .iter()
@@ -577,13 +567,13 @@ pub async fn from_spark_relation(
             )?))
         }
         PlanNode::Hint { .. } => {
-            return Err(PlannerError::todo("hint"));
+            return Err(PlanError::todo("hint"));
         }
         PlanNode::Unpivot { .. } => {
-            return Err(PlannerError::todo("unpivot"));
+            return Err(PlanError::todo("unpivot"));
         }
         PlanNode::ToSchema { .. } => {
-            return Err(PlannerError::todo("to schema"));
+            return Err(PlanError::todo("to schema"));
             // TODO: Close but doesn't quite work.
             // let input = to_schema.input.as_ref().required("input relation")?;
             // let input = from_spark_relation(ctx, input).await?;
@@ -612,81 +602,79 @@ pub async fn from_spark_relation(
             let expr: Vec<Expr> = partition_expressions
                 .into_iter()
                 .map(|e| from_spark_expression(e, schema))
-                .collect::<PlannerResult<_>>()?;
+                .collect::<PlanResult<_>>()?;
             let num_partitions = num_partitions
-                .ok_or_else(|| PlannerError::todo("rebalance partitioning by expression"))?;
+                .ok_or_else(|| PlanError::todo("rebalance partitioning by expression"))?;
             Ok(LogicalPlan::Repartition(plan::Repartition {
                 input: Arc::new(input),
                 partitioning_scheme: plan::Partitioning::Hash(expr, num_partitions as usize),
             }))
         }
         PlanNode::MapPartitions { .. } => {
-            return Err(PlannerError::todo("map partitions"));
+            return Err(PlanError::todo("map partitions"));
         }
         PlanNode::CollectMetrics { .. } => {
-            return Err(PlannerError::todo("collect metrics"));
+            return Err(PlanError::todo("collect metrics"));
         }
         PlanNode::Parse { .. } => {
-            return Err(PlannerError::todo("parse"));
+            return Err(PlanError::todo("parse"));
         }
         PlanNode::GroupMap { .. } => {
-            return Err(PlannerError::todo("group map"));
+            return Err(PlanError::todo("group map"));
         }
         PlanNode::CoGroupMap { .. } => {
-            return Err(PlannerError::todo("co-group map"));
+            return Err(PlanError::todo("co-group map"));
         }
         PlanNode::WithWatermark { .. } => {
-            return Err(PlannerError::todo("with watermark"));
+            return Err(PlanError::todo("with watermark"));
         }
         PlanNode::ApplyInPandasWithState { .. } => {
-            return Err(PlannerError::todo("apply in pandas with state"));
+            return Err(PlanError::todo("apply in pandas with state"));
         }
         PlanNode::HtmlString { .. } => {
-            return Err(PlannerError::todo("html string"));
+            return Err(PlanError::todo("html string"));
         }
         PlanNode::CachedLocalRelation { .. } => {
-            return Err(PlannerError::todo("cached local relation"));
+            return Err(PlanError::todo("cached local relation"));
         }
         PlanNode::CachedRemoteRelation { .. } => {
-            return Err(PlannerError::todo("cached remote relation"));
+            return Err(PlanError::todo("cached remote relation"));
         }
         PlanNode::CommonInlineUserDefinedTableFunction { .. } => {
-            return Err(PlannerError::todo(
-                "common inline user defined table function",
-            ));
+            return Err(PlanError::todo("common inline user defined table function"));
         }
         PlanNode::FillNa { .. } => {
-            return Err(PlannerError::todo("fill na"));
+            return Err(PlanError::todo("fill na"));
         }
         PlanNode::DropNa { .. } => {
-            return Err(PlannerError::todo("drop na"));
+            return Err(PlanError::todo("drop na"));
         }
         PlanNode::ReplaceNa { .. } => {
-            return Err(PlannerError::todo("replace"));
+            return Err(PlanError::todo("replace"));
         }
         PlanNode::StatSummary { .. } => {
-            return Err(PlannerError::todo("summary"));
+            return Err(PlanError::todo("summary"));
         }
         PlanNode::StatCrosstab { .. } => {
-            return Err(PlannerError::todo("crosstab"));
+            return Err(PlanError::todo("crosstab"));
         }
         PlanNode::StatDescribe { .. } => {
-            return Err(PlannerError::todo("describe"));
+            return Err(PlanError::todo("describe"));
         }
         PlanNode::StatCov { .. } => {
-            return Err(PlannerError::todo("cov"));
+            return Err(PlanError::todo("cov"));
         }
         PlanNode::StatCorr { .. } => {
-            return Err(PlannerError::todo("corr"));
+            return Err(PlanError::todo("corr"));
         }
         PlanNode::StatApproxQuantile { .. } => {
-            return Err(PlannerError::todo("approx quantile"));
+            return Err(PlanError::todo("approx quantile"));
         }
         PlanNode::StatFreqItems { .. } => {
-            return Err(PlannerError::todo("freq items"));
+            return Err(PlanError::todo("freq items"));
         }
         PlanNode::StatSampleBy { .. } => {
-            return Err(PlannerError::todo("sample by"));
+            return Err(PlanError::todo("sample by"));
         }
         PlanNode::CurrentDatabase {} => Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(CatalogCommandNode::try_new(
@@ -849,15 +837,13 @@ pub async fn from_spark_relation(
                 if_exists,
             })?),
         })),
-        PlanNode::RecoverPartitions { .. } => {
-            Err(PlannerError::todo("PlanNode::RecoverPartitions"))
-        }
-        PlanNode::IsCached { .. } => Err(PlannerError::todo("PlanNode::IsCached")),
-        PlanNode::CacheTable { .. } => Err(PlannerError::todo("PlanNode::CacheTable")),
-        PlanNode::UncacheTable { .. } => Err(PlannerError::todo("PlanNode::UncacheTable")),
-        PlanNode::ClearCache {} => Err(PlannerError::todo("PlanNode::ClearCache")),
-        PlanNode::RefreshTable { .. } => Err(PlannerError::todo("PlanNode::RefreshTable")),
-        PlanNode::RefreshByPath { .. } => Err(PlannerError::todo("PlanNode::RefreshByPath")),
+        PlanNode::RecoverPartitions { .. } => Err(PlanError::todo("PlanNode::RecoverPartitions")),
+        PlanNode::IsCached { .. } => Err(PlanError::todo("PlanNode::IsCached")),
+        PlanNode::CacheTable { .. } => Err(PlanError::todo("PlanNode::CacheTable")),
+        PlanNode::UncacheTable { .. } => Err(PlanError::todo("PlanNode::UncacheTable")),
+        PlanNode::ClearCache {} => Err(PlanError::todo("PlanNode::ClearCache")),
+        PlanNode::RefreshTable { .. } => Err(PlanError::todo("PlanNode::RefreshTable")),
+        PlanNode::RefreshByPath { .. } => Err(PlanError::todo("PlanNode::RefreshByPath")),
         PlanNode::CurrentCatalog => Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::CurrentCatalog)?),
         })),
@@ -896,10 +882,10 @@ pub async fn from_spark_relation(
                 )?),
             }))
         }
-        PlanNode::RegisterFunction(_) => Err(PlannerError::todo("register function")),
-        PlanNode::RegisterTableFunction(_) => Err(PlannerError::todo("register table function")),
-        PlanNode::CreateTemporaryView { .. } => Err(PlannerError::todo("create temporary view")),
-        PlanNode::Write { .. } => Err(PlannerError::todo("write")),
+        PlanNode::RegisterFunction(_) => Err(PlanError::todo("register function")),
+        PlanNode::RegisterTableFunction(_) => Err(PlanError::todo("register table function")),
+        PlanNode::CreateTemporaryView { .. } => Err(PlanError::todo("create temporary view")),
+        PlanNode::Write { .. } => Err(PlanError::todo("write")),
         PlanNode::Empty { produce_one_row } => {
             Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
                 produce_one_row,
@@ -913,9 +899,9 @@ pub async fn from_spark_relation(
                 .map(|row| {
                     row.into_iter()
                         .map(|value| from_spark_expression(value, &schema))
-                        .collect::<PlannerResult<Vec<_>>>()
+                        .collect::<PlanResult<Vec<_>>>()
                 })
-                .collect::<PlannerResult<Vec<_>>>()?;
+                .collect::<PlanResult<Vec<_>>>()?;
             Ok(LogicalPlanBuilder::values(values)?.build()?)
         }
         PlanNode::TableAlias {
@@ -929,7 +915,7 @@ pub async fn from_spark_relation(
                 input
             } else {
                 if columns.len() != schema.fields().len() {
-                    return Err(PlannerError::invalid(format!(
+                    return Err(PlanError::invalid(format!(
                         "number of column names ({}) does not match number of columns ({})",
                         columns.len(),
                         schema.fields().len()

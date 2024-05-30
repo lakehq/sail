@@ -2,7 +2,7 @@ use std::sync::PoisonError;
 
 use datafusion::common::DataFusionError;
 use framework_common::error::CommonError;
-use framework_plan::error::PlannerError;
+use framework_plan::error::PlanError;
 use framework_sql::error::SqlError;
 use prost::DecodeError;
 use thiserror::Error;
@@ -87,15 +87,15 @@ impl From<SqlError> for SparkError {
     }
 }
 
-impl From<PlannerError> for SparkError {
-    fn from(error: PlannerError) -> Self {
+impl From<PlanError> for SparkError {
+    fn from(error: PlanError) -> Self {
         match error {
-            PlannerError::DataFusionError(e) => SparkError::DataFusionError(e),
-            PlannerError::MissingArgument(message) => SparkError::MissingArgument(message),
-            PlannerError::InvalidArgument(message) => SparkError::InvalidArgument(message),
-            PlannerError::NotSupported(message) => SparkError::NotSupported(message),
-            PlannerError::InternalError(message) => SparkError::InternalError(message),
-            PlannerError::NotImplemented(message) => SparkError::NotImplemented(message),
+            PlanError::DataFusionError(e) => SparkError::DataFusionError(e),
+            PlanError::MissingArgument(message) => SparkError::MissingArgument(message),
+            PlanError::InvalidArgument(message) => SparkError::InvalidArgument(message),
+            PlanError::NotSupported(message) => SparkError::NotSupported(message),
+            PlanError::InternalError(message) => SparkError::InternalError(message),
+            PlanError::NotImplemented(message) => SparkError::NotImplemented(message),
         }
     }
 }

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::error::{PlannerError, PlannerResult};
+use crate::error::{PlanError, PlanResult};
 use crate::extension::function::alias::MultiAlias;
 use crate::extension::function::contains::Contains;
 use crate::extension::function::map_function::MapFunction;
@@ -69,7 +69,7 @@ impl ContextProvider for EmptyContextProvider {
 pub(crate) fn from_spark_sort_order(
     sort: spec::SortOrder,
     schema: &DFSchema,
-) -> PlannerResult<expr::Expr> {
+) -> PlanResult<expr::Expr> {
     use spec::{NullOrdering, SortDirection};
 
     let spec::SortOrder {
@@ -96,7 +96,7 @@ pub(crate) fn from_spark_sort_order(
 
 pub(crate) fn from_spark_window_frame(
     frame: spec::WindowFrame,
-) -> PlannerResult<window_frame::WindowFrame> {
+) -> PlanResult<window_frame::WindowFrame> {
     use spec::{WindowFrameBoundary, WindowFrameType};
 
     let spec::WindowFrame {
@@ -106,7 +106,7 @@ pub(crate) fn from_spark_window_frame(
     } = frame;
 
     let units = match frame_type {
-        WindowFrameType::Undefined => return Err(PlannerError::invalid("undefined frame type")),
+        WindowFrameType::Undefined => return Err(PlanError::invalid("undefined frame type")),
         WindowFrameType::Row => window_frame::WindowFrameUnits::Rows,
         WindowFrameType::Range => window_frame::WindowFrameUnits::Range,
     };
@@ -131,7 +131,7 @@ pub(crate) fn from_spark_window_frame(
     Ok(window_frame::WindowFrame::new_bounds(units, start, end))
 }
 
-fn from_spark_window_boundary_value(value: spec::Expr) -> PlannerResult<ScalarValue> {
+fn from_spark_window_boundary_value(value: spec::Expr) -> PlanResult<ScalarValue> {
     let value = from_spark_expression(value, &DFSchema::empty())?;
     match value {
         expr::Expr::Literal(
@@ -140,17 +140,14 @@ fn from_spark_window_boundary_value(value: spec::Expr) -> PlannerResult<ScalarVa
             | ScalarValue::UInt64(_)
             | ScalarValue::Int64(_)),
         ) => Ok(v),
-        _ => Err(PlannerError::invalid(format!(
+        _ => Err(PlanError::invalid(format!(
             "invalid boundary value: {:?}",
             value
         ))),
     }
 }
 
-pub(crate) fn from_spark_expression(
-    expr: spec::Expr,
-    schema: &DFSchema,
-) -> PlannerResult<expr::Expr> {
+pub(crate) fn from_spark_expression(expr: spec::Expr, schema: &DFSchema) -> PlanResult<expr::Expr> {
     use spec::Expr;
 
     match expr {
@@ -172,16 +169,16 @@ pub(crate) fn from_spark_expression(
             is_user_defined_function,
         } => {
             if is_user_defined_function {
-                return Err(PlannerError::unsupported("user defined function"));
+                return Err(PlanError::unsupported("user defined function"));
             }
             if is_distinct {
-                return Err(PlannerError::unsupported("distinct function"));
+                return Err(PlanError::unsupported("distinct function"));
             }
 
             let args = arguments
                 .into_iter()
                 .map(|x| from_spark_expression(x, schema))
-                .collect::<PlannerResult<Vec<_>>>()?;
+                .collect::<PlanResult<Vec<_>>>()?;
             Ok(get_scalar_function(function_name.as_str(), args)?)
         }
         Expr::UnresolvedStar { target } => {
@@ -201,7 +198,7 @@ pub(crate) fn from_spark_expression(
             metadata,
         } => {
             if metadata.is_some() {
-                return Err(PlannerError::unsupported("alias metadata"));
+                return Err(PlanError::unsupported("alias metadata"));
             }
             let expr = from_spark_expression(*expr, schema)?;
             if let [name] = name.as_slice() {
@@ -227,9 +224,9 @@ pub(crate) fn from_spark_expression(
                 data_type,
             }))
         }
-        Expr::UnresolvedRegex { .. } => Err(PlannerError::todo("unresolved regex")),
+        Expr::UnresolvedRegex { .. } => Err(PlanError::todo("unresolved regex")),
         Expr::SortOrder(sort) => from_spark_sort_order(sort, schema),
-        Expr::LambdaFunction { .. } => Err(PlannerError::todo("lambda function")),
+        Expr::LambdaFunction { .. } => Err(PlanError::todo("lambda function")),
         Expr::Window {
             window_function,
             partition_spec,
@@ -244,24 +241,24 @@ pub(crate) fn from_spark_expression(
                     is_distinct,
                 } => {
                     if is_user_defined_function {
-                        return Err(PlannerError::unsupported("user defined window function"));
+                        return Err(PlanError::unsupported("user defined window function"));
                     }
                     if is_distinct {
-                        return Err(PlannerError::unsupported("distinct window function"));
+                        return Err(PlanError::unsupported("distinct window function"));
                     }
                     let args = arguments
                         .into_iter()
                         .map(|x| from_spark_expression(x, schema))
-                        .collect::<PlannerResult<Vec<_>>>()?;
+                        .collect::<PlanResult<Vec<_>>>()?;
                     (function_name, args)
                 }
                 Expr::CommonInlineUserDefinedFunction(_) => {
-                    return Err(PlannerError::unsupported(
+                    return Err(PlanError::unsupported(
                         "inline user defined window function",
                     ));
                 }
                 _ => {
-                    return Err(PlannerError::invalid(format!(
+                    return Err(PlanError::invalid(format!(
                         "invalid window function expression: {:?}",
                         window_function
                     )));
@@ -270,11 +267,11 @@ pub(crate) fn from_spark_expression(
             let partition_by = partition_spec
                 .into_iter()
                 .map(|x| from_spark_expression(x, schema))
-                .collect::<PlannerResult<Vec<_>>>()?;
+                .collect::<PlanResult<Vec<_>>>()?;
             let order_by = order_spec
                 .into_iter()
                 .map(|x| from_spark_sort_order(x, schema))
-                .collect::<PlannerResult<Vec<_>>>()?;
+                .collect::<PlanResult<Vec<_>>>()?;
             let window_frame = if let Some(frame) = frame_spec {
                 from_spark_window_frame(frame)?
             } else {
@@ -295,7 +292,7 @@ pub(crate) fn from_spark_expression(
             let literal = match *extraction {
                 Expr::Literal(literal) => literal,
                 _ => {
-                    return Err(PlannerError::invalid("extraction must be a literal"));
+                    return Err(PlanError::invalid("extraction must be a literal"));
                 }
             };
             let field = match literal {
@@ -315,7 +312,7 @@ pub(crate) fn from_spark_expression(
                     name: ScalarValue::Utf8(Some(s.clone())),
                 },
                 _ => {
-                    return Err(PlannerError::invalid("invalid extraction value"));
+                    return Err(PlanError::invalid("invalid extraction value"));
                 }
             };
             Ok(expr::Expr::GetIndexedField(GetIndexedField {
@@ -323,9 +320,9 @@ pub(crate) fn from_spark_expression(
                 field,
             }))
         }
-        Expr::UpdateFields { .. } => Err(PlannerError::todo("update fields")),
+        Expr::UpdateFields { .. } => Err(PlanError::todo("update fields")),
         Expr::UnresolvedNamedLambdaVariable(_) => {
-            Err(PlannerError::todo("unresolved named lambda variable"))
+            Err(PlanError::todo("unresolved named lambda variable"))
         }
         Expr::CommonInlineUserDefinedFunction(function) => {
             use framework_python::partial_python_udf::deserialize_partial_python_udf;
@@ -343,7 +340,7 @@ pub(crate) fn from_spark_expression(
             let arguments: Vec<expr::Expr> = arguments
                 .into_iter()
                 .map(|x| from_spark_expression(x, schema))
-                .collect::<PlannerResult<Vec<expr::Expr>>>()?;
+                .collect::<PlanResult<Vec<expr::Expr>>>()?;
             let input_types: Vec<DataType> = arguments
                 .iter()
                 .map(|arg| arg.get_type(schema))
@@ -357,16 +354,14 @@ pub(crate) fn from_spark_expression(
                     python_version,
                 } => (output_type, eval_type, command, python_version),
                 _ => {
-                    return Err(PlannerError::invalid(
-                        "UDF function type must be Python UDF",
-                    ));
+                    return Err(PlanError::invalid("UDF function type must be Python UDF"));
                 }
             };
             let output_type: DataType = output_type.try_into()?;
 
             let pyo3_python_version: String = Python::with_gil(|py| py.version().to_string());
             if !pyo3_python_version.starts_with(python_version.as_str()) {
-                return Err(PlannerError::invalid(format!(
+                return Err(PlanError::invalid(format!(
                     "Python version mismatch. Version used to compile the UDF must match the version used to run the UDF. Version used to compile the UDF: {:?}. Version used to run the UDF: {:?}",
                     python_version,
                     pyo3_python_version,
@@ -375,7 +370,7 @@ pub(crate) fn from_spark_expression(
 
             let python_function: PartialPythonUDF = deserialize_partial_python_udf(&command)
                 .map_err(|e| {
-                    PlannerError::invalid(format!("Python UDF deserialization error: {:?}", e))
+                    PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
                 })?;
 
             let python_udf: PythonUDF = PythonUDF::new(
@@ -392,7 +387,7 @@ pub(crate) fn from_spark_expression(
                 args: arguments,
             }))
         }
-        Expr::CallFunction { .. } => Err(PlannerError::todo("call function")),
+        Expr::CallFunction { .. } => Err(PlanError::todo("call function")),
         Expr::Placeholder(placeholder) => Ok(expr::Expr::Placeholder(expr::Placeholder::new(
             placeholder,
             None,
@@ -400,30 +395,23 @@ pub(crate) fn from_spark_expression(
     }
 }
 
-fn get_one_argument(mut args: Vec<expr::Expr>) -> PlannerResult<Box<expr::Expr>> {
+fn get_one_argument(mut args: Vec<expr::Expr>) -> PlanResult<Box<expr::Expr>> {
     if args.len() != 1 {
-        return Err(PlannerError::invalid("unary operator requires 1 argument"));
+        return Err(PlanError::invalid("unary operator requires 1 argument"));
     }
     Ok(Box::new(args.pop().unwrap()))
 }
 
-fn get_two_arguments(
-    mut args: Vec<expr::Expr>,
-) -> PlannerResult<(Box<expr::Expr>, Box<expr::Expr>)> {
+fn get_two_arguments(mut args: Vec<expr::Expr>) -> PlanResult<(Box<expr::Expr>, Box<expr::Expr>)> {
     if args.len() != 2 {
-        return Err(PlannerError::invalid(
-            "binary operator requires 2 arguments",
-        ));
+        return Err(PlanError::invalid("binary operator requires 2 arguments"));
     }
     let right = Box::new(args.pop().unwrap());
     let left = Box::new(args.pop().unwrap());
     Ok((left, right))
 }
 
-pub(crate) fn get_scalar_function(
-    name: &str,
-    mut args: Vec<expr::Expr>,
-) -> PlannerResult<expr::Expr> {
+pub(crate) fn get_scalar_function(name: &str, mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     use crate::extension::function::explode::Explode;
 
     let name = name.to_lowercase();
@@ -593,7 +581,7 @@ pub(crate) fn get_scalar_function(
         })),
         "in" => {
             if args.is_empty() {
-                return Err(PlannerError::invalid("in requires at least 1 argument"));
+                return Err(PlanError::invalid("in requires at least 1 argument"));
             }
             let expr = args.remove(0);
             Ok(expr::Expr::InList(expr::InList {
@@ -615,7 +603,7 @@ pub(crate) fn get_scalar_function(
         }
         "regexp_replace" => {
             if args.len() != 3 {
-                return Err(PlannerError::invalid("regexp_replace requires 3 arguments"));
+                return Err(PlanError::invalid("regexp_replace requires 3 arguments"));
             }
             // Planner replaces all occurrences of the pattern.
             args.push(expr::Expr::Literal(ScalarValue::Utf8(Some(
@@ -711,11 +699,11 @@ pub(crate) fn get_scalar_function(
                 data_type: DataType::Int8,
             }))
         }
-        _ => Err(PlannerError::invalid(format!("unknown function: {}", name))),
+        _ => Err(PlanError::invalid(format!("unknown function: {}", name))),
     }
 }
 
-pub(crate) fn get_window_function(name: &str) -> PlannerResult<expr::WindowFunctionDefinition> {
+pub(crate) fn get_window_function(name: &str) -> PlanResult<expr::WindowFunctionDefinition> {
     match name {
         "avg" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
             AggregateFunction::Avg,
@@ -765,7 +753,7 @@ pub(crate) fn get_window_function(name: &str) -> PlannerResult<expr::WindowFunct
         "cume_dist" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
             BuiltInWindowFunction::CumeDist,
         )),
-        s => Err(PlannerError::invalid(format!(
+        s => Err(PlanError::invalid(format!(
             "unknown window function: {}",
             s
         ))),
