@@ -39,19 +39,19 @@
     {
       "input": "SELECT cast('a' as CHAR)",
       "output": {
-        "failure": "missing argument: char length"
+        "failure": "invalid argument: missing character length"
       }
     },
     {
       "input": "SELECT cast('a' as Character)",
       "output": {
-        "failure": "missing argument: char length"
+        "failure": "invalid argument: missing character length"
       }
     },
     {
       "input": "SELECT cast('a' as Varchar)",
       "output": {
-        "failure": "missing argument: char length"
+        "failure": "invalid argument: missing character length"
       }
     },
     {
