@@ -1,0 +1,25 @@
+[package]
+name = "framework-plan"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+framework-common = { path = "../framework-common" }
+framework-python = { path = "../framework-python" }
+framework-sql = { path = "../framework-sql" }
+
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-functions-array = { workspace = true }
+thiserror = { workspace = true }
+tokio-stream = { workspace = true }
+async-trait = { workspace = true }
+async-recursion = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_arrow = { workspace = true }
+pyo3 = { workspace = true }
+arrow = { workspace = true }
+arrow-cast = { workspace = true }

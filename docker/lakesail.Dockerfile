@@ -34,7 +34,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=${TARGETPLATFORM} \
     --mount=type=cache,target=/app/target,id=${TARGETPLATFORM} \
     cargo build --release && \
     cargo strip && \
-    mv /app/target/release/spark-connect-server /app
+    mv /app/target/release/framework-spark-connect /app
 
 
 FROM debian:bookworm-slim
@@ -55,5 +55,5 @@ COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # TODO: Adjust once we have a proper entrypoint
-COPY --from=builder /app/spark-connect-server /
-ENTRYPOINT ["./spark-connect-server"]
+COPY --from=builder /app/framework-spark-connect /
+ENTRYPOINT ["./framework-spark-connect"]

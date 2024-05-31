@@ -1,5 +1,5 @@
 use crate::error::{CommonError, CommonResult};
-use datafusion::arrow::datatypes as adt;
+use arrow::datatypes as adt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;

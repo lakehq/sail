@@ -40,7 +40,7 @@ jobs:
 
       - name: Update gold data
         run: |
-          env SPARK_UPDATE_GOLD_DATA=1 cargo test -p spark-connect-server --lib
+          env FRAMEWORK_UPDATE_GOLD_DATA=1 cargo test
 
       - name: Detect uncommitted changes
         run: |

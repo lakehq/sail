@@ -14,7 +14,7 @@ cd "${project_path}"/opt/spark
 # Define paths relative to the working directory (Spark project root directory).
 logs_path="logs/gold-data"
 scripts_path="../../scripts/spark-tests/gold-data"
-output_path="../../crates/spark-connect-server/tests/gold_data"
+output_path="../../crates/framework-spark-connect/tests/gold_data"
 
 function git_enter() {
   status="$(git status --porcelain)"

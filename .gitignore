@@ -12,6 +12,15 @@ target/
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
 
+# Common build directories
+build/
+dist/
+tmp/
+out/
+
+# Optional third-party libraries
+/opt/
+
 # Editor directories and files
 .idea/
 .vscode/*
@@ -40,5 +49,19 @@ Chart.lock
 *.gz
 *.tgz
 
-# Optional third-party libraries
-/opt/
+# Python build artifacts
+__pycache__/
+*.py[cod]
+.coverage
+.pytest_cache
+.mypy_cache
+
+# Python environments
+.python-version
+.env/
+.venv/
+env/
+venv/
+
+# Python Poetry files
+poetry.lock
