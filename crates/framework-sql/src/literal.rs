@@ -432,51 +432,8 @@ impl TryFrom<String> for LiteralValue<spec::Decimal> {
     type Error = SqlError;
 
     fn try_from(value: String) -> SqlResult<Self> {
-        let error = || SqlError::invalid(format!("decimal: {:?}", value));
-        let captures = DECIMAL_REGEX
-            .captures(&value)
-            .or_else(|| DECIMAL_FRACTION_REGEX.captures(&value))
-            .ok_or_else(error)?;
-        let sign = captures.name("sign").map(|s| s.as_str()).unwrap_or("");
-        let whole = captures
-            .name("whole")
-            .map(|s| s.as_str())
-            .unwrap_or("")
-            .trim_start_matches('0');
-        let fraction = captures.name("fraction").map(|s| s.as_str()).unwrap_or("");
-        let e: i8 = extract_match(&captures, "exponent", error)?.unwrap_or(0);
-        let (whole, w, f) = match (whole, fraction) {
-            ("", "") => ("0", 1i8, 0i8),
-            (whole, fraction) => (whole, whole.len() as i8, fraction.len() as i8),
-        };
-        let (scale, padding) = {
-            let scale = f.checked_sub(e).ok_or_else(error)?;
-            if scale < -SQL_DECIMAL_MAX_SCALE || scale > SQL_DECIMAL_MAX_SCALE {
-                return Err(error());
-            }
-            if scale < 0 {
-                // Although the decimal type allows negative scale,
-                // we always parse the literal as zero-scale and add padding.
-                (0, -scale)
-            } else {
-                (scale, 0)
-            }
-        };
-        let width = w + f + padding;
-        let precision = std::cmp::max(width, scale) as u8;
-        if precision > SQL_DECIMAL_MAX_PRECISION {
-            return Err(error());
-        }
-        let num = format!("{whole}{fraction}");
-        let width = width as usize;
-        let value = format!("{sign}{num:0<width$}")
-            .parse()
-            .map_err(|_| error())?;
-        Ok(LiteralValue(spec::Decimal {
-            value,
-            precision,
-            scale,
-        }))
+        let decimal = parse_decimal_string(value.as_str())?;
+        Ok(LiteralValue(decimal))
     }
 }
 
@@ -598,8 +555,51 @@ where
 }
 
 pub fn parse_decimal_string(s: &str) -> SqlResult<spec::Decimal> {
-    let decimal: LiteralValue<spec::Decimal> = s.to_string().try_into()?;
-    Ok(decimal.0)
+    let error = || SqlError::invalid(format!("decimal: {s}"));
+    let captures = DECIMAL_REGEX
+        .captures(s)
+        .or_else(|| DECIMAL_FRACTION_REGEX.captures(s))
+        .ok_or_else(error)?;
+    let sign = captures.name("sign").map(|s| s.as_str()).unwrap_or("");
+    let whole = captures
+        .name("whole")
+        .map(|s| s.as_str())
+        .unwrap_or("")
+        .trim_start_matches('0');
+    let fraction = captures.name("fraction").map(|s| s.as_str()).unwrap_or("");
+    let e: i8 = extract_match(&captures, "exponent", error)?.unwrap_or(0);
+    let (whole, w, f) = match (whole, fraction) {
+        ("", "") => ("0", 1i8, 0i8),
+        (whole, fraction) => (whole, whole.len() as i8, fraction.len() as i8),
+    };
+    let (scale, padding) = {
+        let scale = f.checked_sub(e).ok_or_else(error)?;
+        if scale < -SQL_DECIMAL_MAX_SCALE || scale > SQL_DECIMAL_MAX_SCALE {
+            return Err(error());
+        }
+        if scale < 0 {
+            // Although the decimal type allows negative scale,
+            // we always parse the literal as zero-scale and add padding.
+            (0, -scale)
+        } else {
+            (scale, 0)
+        }
+    };
+    let width = w + f + padding;
+    let precision = std::cmp::max(width, scale) as u8;
+    if precision > SQL_DECIMAL_MAX_PRECISION {
+        return Err(error());
+    }
+    let num = format!("{whole}{fraction}");
+    let width = width as usize;
+    let value = format!("{sign}{num:0<width$}")
+        .parse()
+        .map_err(|_| error())?;
+    Ok(spec::Decimal {
+        value,
+        precision,
+        scale,
+    })
 }
 
 pub fn parse_date_string(s: &str) -> SqlResult<spec::Literal> {

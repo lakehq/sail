@@ -8,6 +8,7 @@ use crate::catalog::database::DatabaseMetadata;
 use crate::catalog::function::FunctionMetadata;
 use crate::catalog::table::TableMetadata;
 use crate::catalog::{CatalogContext, EmptyMetadata, SingleValueMetadata};
+use crate::SqlEngine;
 use arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use datafusion::common::{DFSchemaRef, Result};
 use datafusion::datasource::{provider_as_source, MemTable};
@@ -202,9 +203,13 @@ impl CatalogCommand {
         Ok(Arc::new(Schema::new(fields)))
     }
 
-    pub(crate) async fn execute(self, ctx: &SessionContext) -> Result<LogicalPlan> {
+    pub(crate) async fn execute<S: SqlEngine>(
+        self,
+        ctx: &SessionContext,
+        engine: &S,
+    ) -> Result<LogicalPlan> {
         let schema = self.schema()?;
-        let ctx = CatalogContext::new(ctx);
+        let ctx = CatalogContext::new(ctx, engine);
         let batch = match self {
             CatalogCommand::CurrentCatalog => {
                 let value = ctx.default_catalog()?;
@@ -345,8 +350,12 @@ impl CatalogCommand {
 }
 
 impl CatalogCommandNode {
-    pub(crate) async fn execute(&self, ctx: &SessionContext) -> Result<LogicalPlan> {
-        self.command.clone().execute(ctx).await
+    pub(crate) async fn execute<S: SqlEngine>(
+        &self,
+        ctx: &SessionContext,
+        engine: &S,
+    ) -> Result<LogicalPlan> {
+        self.command.clone().execute(ctx, engine).await
     }
 }
 

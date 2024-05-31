@@ -1,3 +1,4 @@
+use crate::SqlEngine;
 use datafusion::execution::context::SessionState;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
@@ -57,15 +58,18 @@ impl SessionContextExt for SessionContext {
     }
 }
 
-pub(crate) struct CatalogContext<'a> {
+pub(crate) struct CatalogContext<'a, S: SqlEngine> {
     ctx: &'a SessionContext,
+    engine: &'a S,
 }
 
-impl CatalogContext<'_> {
-    pub(crate) fn new(ctx: &SessionContext) -> CatalogContext {
-        CatalogContext { ctx }
+impl<'a, S: SqlEngine> CatalogContext<'a, S> {
+    pub(crate) fn new(ctx: &'a SessionContext, engine: &'a S) -> Self {
+        CatalogContext { ctx, engine }
     }
+}
 
+impl<S: SqlEngine> CatalogContext<'_, S> {
     pub(crate) fn resolve_catalog_reference(&self, reference: Option<String>) -> Result<Arc<str>> {
         match reference {
             Some(catalog) => Ok(catalog.into()),

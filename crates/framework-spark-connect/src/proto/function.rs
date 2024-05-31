@@ -25,7 +25,8 @@ mod tests {
             "tests/gold_data/function/*.json",
             |example: FunctionExample| -> SparkResult<String> {
                 let ctx = session.context();
-                let result = rt.block_on(async { execute_query(&ctx, &example.query).await });
+                let result =
+                    rt.block_on(async { execute_query(ctx, example.query.as_str()).await });
                 // TODO: validate the result against the expected output
                 // TODO: handle non-deterministic results and error messages
                 match result {

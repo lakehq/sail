@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::catalog::utils::match_pattern;
 use crate::catalog::{CatalogContext, SessionContextExt};
+use crate::SqlEngine;
 use datafusion::catalog::CatalogProviderList;
 use datafusion_common::Result;
 use serde::{Deserialize, Serialize};
@@ -21,7 +22,7 @@ impl CatalogMetadata {
     }
 }
 
-impl CatalogContext<'_> {
+impl<S: SqlEngine> CatalogContext<'_, S> {
     pub(crate) fn default_catalog(&self) -> Result<String> {
         Ok(self
             .ctx
