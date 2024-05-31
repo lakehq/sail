@@ -10,6 +10,7 @@ use framework_common::unwrap_or;
 
 use crate::catalog::utils::match_pattern;
 use crate::catalog::CatalogContext;
+use crate::SqlEngine;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,7 +97,7 @@ impl TableMetadata {
     }
 }
 
-impl CatalogContext<'_> {
+impl<S: SqlEngine> CatalogContext<'_, S> {
     pub(crate) async fn create_memory_table(
         &self,
         table: TableReference,

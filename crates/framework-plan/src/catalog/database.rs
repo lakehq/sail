@@ -1,5 +1,6 @@
 use crate::catalog::utils::match_pattern;
 use crate::catalog::{CatalogContext, SessionContextExt};
+use crate::SqlEngine;
 use datafusion_common::{exec_err, DFSchema, DFSchemaRef, Result, SchemaReference};
 use datafusion_expr::{CreateCatalogSchema, DdlStatement, DropCatalogSchema, LogicalPlan};
 use framework_common::unwrap_or;
@@ -24,7 +25,7 @@ impl DatabaseMetadata {
     }
 }
 
-impl CatalogContext<'_> {
+impl<S: SqlEngine> CatalogContext<'_, S> {
     pub(crate) fn default_database(&self) -> Result<String> {
         Ok(self
             .ctx

@@ -133,7 +133,7 @@
     {
       "input": "1.20E-38BD",
       "output": {
-        "failure": "invalid argument: decimal: \"1.20E-38\""
+        "failure": "invalid argument: decimal: 1.20E-38"
       }
     },
     {
