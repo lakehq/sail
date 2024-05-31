@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes as adt;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::json::JsonFormat;
@@ -327,7 +327,7 @@ impl PlanResolver<'_> {
                     vec![]
                 };
                 let (schema, batches) = if let Some(schema) = schema {
-                    let schema: SchemaRef = Arc::new(schema.try_into()?);
+                    let schema: adt::SchemaRef = Arc::new(schema.try_into()?);
                     let batches = batches
                         .into_iter()
                         .map(|b| Ok(cast_record_batch(b, schema.clone())?))
@@ -666,7 +666,7 @@ impl PlanResolver<'_> {
                 let schema = DFSchema::empty(); // UDTF only has schema for return type
                 let arguments: Vec<Expr> = arguments
                     .iter()
-                    .map(|x| from_spark_expression(x.clone(), &schema))
+                    .map(|x| self.resolve_expression(x.clone(), &schema))
                     .collect::<PlanResult<Vec<Expr>>>()?;
                 let input_types: Vec<adt::DataType> = arguments
                     .iter()
@@ -686,16 +686,16 @@ impl PlanResolver<'_> {
                 };
 
                 let return_type: spec::Fields = match return_type {
-                            spec::DataType::Struct { fields } => {
-                                fields
-                            },
-                            _ => {
-                                return Err(PlanError::invalid(format!(
-                                    "Invalid Python user-defined table function return type. Expect a struct type, but got {:?}",
-                                    return_type
-                                )))
-                            }
-                        };
+                    spec::DataType::Struct { fields } => {
+                        fields
+                    },
+                    _ => {
+                        return Err(PlanError::invalid(format!(
+                            "Invalid Python user-defined table function return type. Expect a struct type, but got {:?}",
+                            return_type
+                        )))
+                    }
+                };
 
                 let pyo3_python_version: String = Python::with_gil(|py| py.version().to_string());
                 if !pyo3_python_version.starts_with(python_version.as_str()) {
