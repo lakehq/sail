@@ -26,7 +26,7 @@ use crate::spark::connect::analyze_plan_response::{
 use crate::spark::connect::plan;
 use crate::spark::connect::StorageLevel;
 use crate::SPARK_VERSION;
-use framework_plan::resolver::plan::from_spark_relation;
+use framework_plan::resolver::PlanResolver;
 
 pub(crate) async fn handle_analyze_schema(
     session: Arc<Session>,
@@ -38,7 +38,8 @@ pub(crate) async fn handle_analyze_schema(
         plan::OpType::Root(relation) => relation,
         plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
     };
-    let plan = from_spark_relation(&ctx, relation.try_into()?).await?;
+    let resolver = PlanResolver::new(ctx);
+    let plan = resolver.resolve_plan(relation.try_into()?).await?;
     let schema: SchemaRef = Arc::new(plan.schema().as_ref().into());
     Ok(SchemaResponse {
         schema: Some(to_spark_schema(schema)?),

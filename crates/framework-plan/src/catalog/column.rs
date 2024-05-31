@@ -1,6 +1,7 @@
 use crate::catalog::CatalogContext;
+use crate::SqlEngine;
 use arrow::datatypes::FieldRef;
-use datafusion_common::{Result, TableReference};
+use datafusion_common::{exec_datafusion_err, Result, TableReference};
 use framework_common::unwrap_or;
 use serde::{Deserialize, Serialize};
 
@@ -15,9 +16,13 @@ pub(crate) struct TableColumnMetadata {
 }
 
 impl TableColumnMetadata {
-    fn try_new(column: &FieldRef) -> Result<Self> {
-        // FIXME: use Spark simple string
-        let data_type = column.data_type().to_string();
+    fn try_new<S: SqlEngine>(column: &FieldRef, engine: &S) -> Result<Self> {
+        let data_type = column
+            .data_type()
+            .clone()
+            .try_into()
+            .map_err(|e| exec_datafusion_err!("{e}"))?;
+        let data_type = engine.to_data_type_string(data_type)?;
         Ok(Self {
             name: column.name().clone(),
             description: None, // TODO: support description
@@ -29,7 +34,7 @@ impl TableColumnMetadata {
     }
 }
 
-impl CatalogContext<'_> {
+impl<S: SqlEngine> CatalogContext<'_, S> {
     pub(crate) async fn list_table_columns(
         &self,
         table: TableReference,
@@ -51,7 +56,7 @@ impl CatalogContext<'_> {
             .schema()
             .fields()
             .iter()
-            .map(|column| TableColumnMetadata::try_new(column))
+            .map(|column| TableColumnMetadata::try_new(column, self.engine))
             .collect::<Result<Vec<_>>>()?)
     }
 }

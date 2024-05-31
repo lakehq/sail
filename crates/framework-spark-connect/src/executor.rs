@@ -9,6 +9,8 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::SessionContext;
+use datafusion_common::DataFusionError;
+use framework_common::spec;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -19,7 +21,7 @@ use crate::error::{SparkError, SparkResult};
 use crate::schema::to_spark_schema;
 use crate::spark::connect::execute_plan_response::{ArrowBatch, Metrics, ObservedMetrics};
 use crate::spark::connect::DataType;
-use framework_plan::execute_logical_plan;
+use framework_plan::{execute_logical_plan, SqlEngine};
 
 #[derive(Clone, Debug)]
 pub(crate) enum ExecutorBatch {
@@ -226,11 +228,22 @@ impl Drop for Executor {
     }
 }
 
+struct SparkSqlEngine {}
+
+impl SqlEngine for SparkSqlEngine {
+    fn to_data_type_string(&self, data_type: spec::DataType) -> Result<String, DataFusionError> {
+        DataType::try_from(data_type)
+            .and_then(|x| x.to_simple_string())
+            .map_err(|e| DataFusionError::Execution(format!("{e}")))
+    }
+}
+
 pub(crate) async fn execute_plan(
     ctx: &SessionContext,
     plan: LogicalPlan,
 ) -> SparkResult<SendableRecordBatchStream> {
-    let df = execute_logical_plan(ctx, plan).await?;
+    let engine = SparkSqlEngine {};
+    let df = execute_logical_plan(ctx, &engine, plan).await?;
     let plan = df.create_physical_plan().await?;
     Ok(execute_stream(plan, Arc::new(TaskContext::default()))?)
 }
@@ -252,7 +265,7 @@ pub(crate) async fn execute_query(
     ctx: &SessionContext,
     query: &str,
 ) -> SparkResult<Vec<RecordBatch>> {
-    use framework_plan::resolver::plan::from_spark_relation;
+    use framework_plan::resolver::PlanResolver;
     use std::collections::HashMap;
 
     let relation = crate::spark::connect::Relation {
@@ -265,8 +278,10 @@ pub(crate) async fn execute_query(
             },
         )),
     };
-    let plan = from_spark_relation(&ctx, relation.try_into()?).await?;
-    let mut stream = execute_plan(&ctx, plan).await?;
+    let plan = PlanResolver::new(ctx)
+        .resolve_plan(relation.try_into()?)
+        .await?;
+    let mut stream = execute_plan(ctx, plan).await?;
     let mut output = vec![];
     while let Some(batch) = stream.next().await {
         let batch = batch?;
