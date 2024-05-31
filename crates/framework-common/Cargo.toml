@@ -6,4 +6,7 @@ edition = "2021"
 [dependencies]
 thiserror = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 datafusion = { workspace = true }
+arrow = { workspace = true }
+glob = { workspace = true }

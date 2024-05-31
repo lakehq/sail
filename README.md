@@ -46,12 +46,12 @@ git -C opt/spark add .
 git -C opt/spark diff --staged -p > scripts/spark-tests/spark-3.5.1.patch
 ```
 
-### Python Examples Setup
+### Python Setup
 
-Run the following commands to set up a virtual environment for the Python examples.
+Run the following commands to set up a Python virtual environment for the project.
 
 ```bash
-poetry -C examples/python install
+poetry -C python install
 ```
 
 ### Running the Spark Connect Server
@@ -63,7 +63,7 @@ scripts/spark-tests/run-server.sh
 ```
 
 You can run the Python examples in another terminal.
-Please refer to `examples/python/README.md` for more information.
+Please refer to `python/README.md` for more information.
 
 ### Running Spark Tests
 

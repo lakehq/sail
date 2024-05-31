@@ -1,6 +1,6 @@
 use crate::error::{CommonError, CommonResult};
 use crate::spec::DataType;
-use datafusion::arrow::datatypes::IntervalMonthDayNanoType;
+use arrow::datatypes::IntervalMonthDayNanoType;
 use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::common::ScalarValue;
 use serde::{Deserialize, Serialize};
@@ -131,8 +131,7 @@ impl TryFrom<Literal> for ScalarValue {
                 element_type,
                 elements,
             } => {
-                let element_type: datafusion::arrow::datatypes::DataType =
-                    element_type.try_into()?;
+                let element_type: arrow::datatypes::DataType = element_type.try_into()?;
                 let scalars: Vec<ScalarValue> = elements
                     .into_iter()
                     .map(|literal| literal.try_into())
@@ -147,9 +146,9 @@ impl TryFrom<Literal> for ScalarValue {
                 struct_type,
                 elements,
             } => {
-                let struct_type: datafusion::arrow::datatypes::DataType = struct_type.try_into()?;
+                let struct_type: arrow::datatypes::DataType = struct_type.try_into()?;
                 let fields = match &struct_type {
-                    datafusion::arrow::datatypes::DataType::Struct(fields) => fields.clone(),
+                    arrow::datatypes::DataType::Struct(fields) => fields.clone(),
                     _ => return Err(CommonError::invalid("expected struct type")),
                 };
 

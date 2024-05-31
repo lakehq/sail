@@ -1,10 +1,6 @@
 [workspace]
 members = [
-    "crates/hello",
-    "crates/spark-connect-server",
-    "crates/framework-common",
-    "crates/framework-telemetry",
-    "crates/framework-python",
+    "crates/*",
 ]
 resolver = "2"
 
@@ -20,6 +16,7 @@ opentelemetry-proto = { version = "0.5.0" }
 opentelemetry-stdout = { version = "0.3.0", features = ["trace"] } # Temporary until we fully configure OpenTelemetry
 thiserror = { version = "1.0.61" }
 tokio = { version = "1.36.0", features = ["full"] }
+tokio-stream = "0.1.15"
 tonic = { version = "0.11", features = ["tls", "tls-roots"] }
 tonic-build = "0.11"
 tonic-reflection = "0.11"
@@ -32,6 +29,7 @@ pbjson-build = "0.6"
 tower = { version = "0.4", features = ["full"] }
 tower-http = { version = "0.4", features = ["full"] }
 uuid = { version = "1.8.0", features = ["v4"] }
+async-trait = "0.1.80"
 async-recursion = "1.1.0"
 async-stream = "0.3"
 lazy_static = "1.4.0"
@@ -62,7 +60,6 @@ sqlparser = { version = "0.46.0", features = ["serde", "visitor"] }
 polars = { version = "0.39.2", features = ["serde", "polars-io", "dtype-struct"] }
 polars-arrow = { version = "0.39.2", features = ["serde", "arrow_rs"] }
 serde_arrow = { version = "0.11", features = ["arrow-51"] }
-async-trait = "0.1.80"
 
 [patch.crates-io]
 # Override dependencies to use our forked versions.

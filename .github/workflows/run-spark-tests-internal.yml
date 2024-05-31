@@ -106,9 +106,9 @@ jobs:
         id: cache-env
         with:
           path: |
-            examples/python/.venv
+            python/.venv
             opt/spark/venv
-          key: spark-tests-env-${{ runner.os }}-${{ steps.info.outputs.env_key }}-${{ hashFiles('scripts/spark-tests/**', 'examples/python/pyproject.toml', 'examples/python/poetry.toml') }}
+          key: spark-tests-env-${{ runner.os }}-${{ steps.info.outputs.env_key }}-${{ hashFiles('scripts/spark-tests/**', 'python/pyproject.toml', 'python/poetry.toml') }}
 
       - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-jars.outputs.cache-hit != 'true'
         name: Build Spark jars
@@ -120,7 +120,7 @@ jobs:
         run: |
           scripts/spark-tests/setup-spark-env.sh
           pip install poetry
-          poetry -C examples/python install
+          poetry -C python install
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         uses: ./.github/actions/setup-rust
