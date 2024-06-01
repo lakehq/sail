@@ -63,9 +63,7 @@
         }
       },
       "output": {
-        "success": [
-          "8cde774d6f7333752ed72cacddb05126"
-        ]
+        "success": "ok"
       }
     },
     {

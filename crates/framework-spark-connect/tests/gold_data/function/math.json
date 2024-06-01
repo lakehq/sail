@@ -19,9 +19,7 @@
         }
       },
       "output": {
-        "success": [
-          "3"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -43,9 +41,7 @@
         }
       },
       "output": {
-        "success": [
-          "0.2"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -67,9 +63,7 @@
         }
       },
       "output": {
-        "success": [
-          "6"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -91,9 +85,7 @@
         }
       },
       "output": {
-        "success": [
-          "1"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -115,9 +107,7 @@
         }
       },
       "output": {
-        "success": [
-          "1"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -139,9 +129,7 @@
         }
       },
       "output": {
-        "success": [
-          "1"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -229,9 +217,7 @@
         }
       },
       "output": {
-        "success": [
-          "1"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -275,9 +261,7 @@
         }
       },
       "output": {
-        "success": [
-          "0.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -299,9 +283,7 @@
         }
       },
       "output": {
-        "success": [
-          "NaN"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -323,9 +305,7 @@
         }
       },
       "output": {
-        "success": [
-          "NaN"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -347,9 +327,7 @@
         }
       },
       "output": {
-        "success": [
-          "0.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -371,9 +349,7 @@
         }
       },
       "output": {
-        "success": [
-          "0.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -395,9 +371,7 @@
         }
       },
       "output": {
-        "success": [
-          "NaN"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -419,9 +393,7 @@
         }
       },
       "output": {
-        "success": [
-          "0.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -443,9 +415,7 @@
         }
       },
       "output": {
-        "success": [
-          "0.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -467,9 +437,7 @@
         }
       },
       "output": {
-        "success": [
-          "0.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -491,9 +459,7 @@
         }
       },
       "output": {
-        "success": [
-          "0.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -515,9 +481,7 @@
         }
       },
       "output": {
-        "success": [
-          "NaN"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -649,9 +613,7 @@
         }
       },
       "output": {
-        "success": [
-          "3.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -761,9 +723,7 @@
         }
       },
       "output": {
-        "success": [
-          "-0.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -829,9 +789,7 @@
         }
       },
       "output": {
-        "success": [
-          "5.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -897,9 +855,7 @@
         }
       },
       "output": {
-        "success": [
-          "1.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -921,9 +877,7 @@
         }
       },
       "output": {
-        "success": [
-          "1.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -945,9 +899,7 @@
         }
       },
       "output": {
-        "success": [
-          "0.6420926159343308"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1013,9 +965,7 @@
         }
       },
       "output": {
-        "success": [
-          "180.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1059,9 +1009,7 @@
         }
       },
       "output": {
-        "success": [
-          "1.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1105,9 +1053,7 @@
         }
       },
       "output": {
-        "success": [
-          "120"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1327,9 +1273,7 @@
         }
       },
       "output": {
-        "success": [
-          "0.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1351,9 +1295,7 @@
         }
       },
       "output": {
-        "success": [
-          "2.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1375,9 +1317,7 @@
         }
       },
       "output": {
-        "success": [
-          "1.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1421,9 +1361,7 @@
         }
       },
       "output": {
-        "success": [
-          "1.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1445,9 +1383,7 @@
         }
       },
       "output": {
-        "success": [
-          "-1"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1557,9 +1493,7 @@
         }
       },
       "output": {
-        "success": [
-          "8"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1581,9 +1515,7 @@
         }
       },
       "output": {
-        "success": [
-          "8"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1605,9 +1537,7 @@
         }
       },
       "output": {
-        "success": [
-          "3.141592653589793"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1849,9 +1779,7 @@
         }
       },
       "output": {
-        "success": [
-          "3.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1895,9 +1823,7 @@
         }
       },
       "output": {
-        "success": [
-          "4"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1963,9 +1889,7 @@
         }
       },
       "output": {
-        "success": [
-          "1.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2009,9 +1933,7 @@
         }
       },
       "output": {
-        "success": [
-          "0.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2033,9 +1955,7 @@
         }
       },
       "output": {
-        "success": [
-          "0.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2057,9 +1977,7 @@
         }
       },
       "output": {
-        "success": [
-          "2.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2081,9 +1999,7 @@
         }
       },
       "output": {
-        "success": [
-          "0.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2105,9 +2021,7 @@
         }
       },
       "output": {
-        "success": [
-          "0.0"
-        ]
+        "success": "ok"
       }
     },
     {

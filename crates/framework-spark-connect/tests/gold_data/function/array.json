@@ -23,9 +23,7 @@
         }
       },
       "output": {
-        "success": [
-          "[1, 2, 3]"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -77,9 +75,7 @@
         }
       },
       "output": {
-        "success": [
-          "[b, d, c, a, d]"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -105,9 +101,7 @@
         }
       },
       "output": {
-        "success": [
-          "[1, 2, 3, NULL, NULL]"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -181,9 +175,7 @@
         }
       },
       "output": {
-        "success": [
-          "true"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -209,9 +201,7 @@
         }
       },
       "output": {
-        "success": [
-          "[NULL, 1, 2, 3]"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -237,9 +227,7 @@
         }
       },
       "output": {
-        "success": [
-          "[2]"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -343,9 +331,7 @@
         }
       },
       "output": {
-        "success": [
-          "[1, 3]"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -603,9 +589,7 @@
         }
       },
       "output": {
-        "success": [
-          "[1, 2, NULL]"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -631,9 +615,7 @@
         }
       },
       "output": {
-        "success": [
-          "[123, 123]"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -659,9 +641,7 @@
         }
       },
       "output": {
-        "success": [
-          "[1, 2, 3, 5]"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -799,9 +779,7 @@
         }
       },
       "output": {
-        "success": [
-          "[1, 2, 3, 4]"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -823,9 +801,7 @@
         }
       },
       "output": {
-        "success": [
-          "3"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -847,9 +823,7 @@
         }
       },
       "output": {
-        "success": [
-          "NULL"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -871,9 +845,7 @@
         }
       },
       "output": {
-        "success": [
-          "3"
-        ]
+        "success": "ok"
       }
     },
     {

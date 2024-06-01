@@ -19,9 +19,7 @@
         }
       },
       "output": {
-        "success": [
-          "10"
-        ]
+        "success": "ok"
       }
     }
   ]

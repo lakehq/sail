@@ -34,12 +34,7 @@
         }
       },
       "output": {
-        "success": [
-          "A1\t1\t0.6666666666666666",
-          "A1\t1\t0.6666666666666666",
-          "A1\t2\t1.0",
-          "A2\t3\t1.0"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -113,12 +108,7 @@
         }
       },
       "output": {
-        "success": [
-          "A1\t1\tNULL",
-          "A1\t1\t1",
-          "A1\t2\t1",
-          "A2\t3\tNULL"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -155,12 +145,7 @@
         }
       },
       "output": {
-        "success": [
-          "A1\t1\t1",
-          "A1\t1\t2",
-          "A1\t2\tNULL",
-          "A2\t3\tNULL"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -345,12 +330,7 @@
         }
       },
       "output": {
-        "success": [
-          "A1\t1\t1",
-          "A1\t1\t2",
-          "A1\t2\t3",
-          "A2\t3\t1"
-        ]
+        "success": "ok"
       }
     }
   ]

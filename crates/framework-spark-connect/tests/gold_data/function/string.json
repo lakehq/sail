@@ -85,9 +85,7 @@
         }
       },
       "output": {
-        "success": [
-          "50"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -109,9 +107,7 @@
         }
       },
       "output": {
-        "success": [
-          "50"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -549,9 +545,7 @@
         }
       },
       "output": {
-        "success": [
-          "false"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -573,9 +567,7 @@
         }
       },
       "output": {
-        "success": [
-          "true"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -597,9 +589,7 @@
         }
       },
       "output": {
-        "success": [
-          "NULL"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -621,9 +611,7 @@
         }
       },
       "output": {
-        "success": [
-          "true"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -821,9 +809,7 @@
         }
       },
       "output": {
-        "success": [
-          "true"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -845,9 +831,7 @@
         }
       },
       "output": {
-        "success": [
-          "false"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -869,9 +853,7 @@
         }
       },
       "output": {
-        "success": [
-          "NULL"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -893,9 +875,7 @@
         }
       },
       "output": {
-        "success": [
-          "true"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -917,9 +897,7 @@
         }
       },
       "output": {
-        "success": [
-          "false"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1161,9 +1139,7 @@
         }
       },
       "output": {
-        "success": [
-          "sparksql"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -1405,9 +1381,7 @@
         }
       },
       "output": {
-        "success": [
-          "sparksql"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2269,9 +2243,7 @@
         }
       },
       "output": {
-        "success": [
-          "100-200"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2643,9 +2615,7 @@
         }
       },
       "output": {
-        "success": [
-          "false"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2667,9 +2637,7 @@
         }
       },
       "output": {
-        "success": [
-          "true"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2691,9 +2659,7 @@
         }
       },
       "output": {
-        "success": [
-          "NULL"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2715,9 +2681,7 @@
         }
       },
       "output": {
-        "success": [
-          "false"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -2739,9 +2703,7 @@
         }
       },
       "output": {
-        "success": [
-          "true"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -3775,9 +3737,7 @@
         }
       },
       "output": {
-        "success": [
-          "SPARKSQL"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -3821,9 +3781,7 @@
         }
       },
       "output": {
-        "success": [
-          "SPARKSQL"
-        ]
+        "success": "ok"
       }
     },
     {

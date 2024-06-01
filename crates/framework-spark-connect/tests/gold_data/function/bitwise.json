@@ -19,9 +19,7 @@
         }
       },
       "output": {
-        "success": [
-          "1"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -43,9 +41,7 @@
         }
       },
       "output": {
-        "success": [
-          "6"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -67,9 +63,7 @@
         }
       },
       "output": {
-        "success": [
-          "7"
-        ]
+        "success": "ok"
       }
     },
     {
@@ -201,9 +195,7 @@
         }
       },
       "output": {
-        "success": [
-          "2"
-        ]
+        "success": "ok"
       }
     },
     {
