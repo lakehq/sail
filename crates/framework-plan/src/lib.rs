@@ -9,6 +9,7 @@ use std::sync::Arc;
 mod catalog;
 pub mod error;
 mod extension;
+mod function;
 pub mod resolver;
 
 /// Trait to encapsulate behavior specific to a SQL engine.

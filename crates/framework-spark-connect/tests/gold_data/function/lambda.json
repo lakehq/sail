@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -67,7 +67,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: array_sort"
       }
     },
     {
@@ -93,7 +93,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -119,7 +119,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -141,7 +141,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: array at Line: 1, Column 15"
       }
     },
     {
@@ -163,7 +163,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: array at Line: 1, Column 15"
       }
     },
     {
@@ -185,7 +185,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: array at Line: 1, Column 15"
       }
     },
     {
@@ -207,7 +207,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: array at Line: 1, Column 15"
       }
     },
     {
@@ -229,7 +229,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: array at Line: 1, Column 15"
       }
     },
     {
@@ -255,7 +255,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -281,7 +281,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -307,7 +307,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -329,7 +329,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -351,7 +351,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -373,7 +373,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -395,7 +395,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -422,7 +422,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -449,7 +449,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -476,7 +476,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -498,7 +498,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -520,7 +520,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -546,7 +546,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -572,7 +572,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -599,7 +599,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: map_from_arrays"
       }
     },
     {
@@ -626,7 +626,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: map_from_arrays"
       }
     },
     {
@@ -653,7 +653,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: map_from_arrays"
       }
     },
     {
@@ -680,7 +680,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: map_from_arrays"
       }
     },
     {
@@ -706,7 +706,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -732,7 +732,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -774,7 +774,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not supported: expression: Tuple([Identifier(Ident { value: \"y\", quote_style: None }), Identifier(Ident { value: \"x\", quote_style: None })])"
       }
     }
   ]

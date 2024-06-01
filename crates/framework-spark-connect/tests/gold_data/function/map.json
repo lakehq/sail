@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: element_at"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: element_at"
       }
     },
     {
@@ -68,7 +68,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "{1.0: 2, 3.0: 4}"
+        ]
       }
     },
     {
@@ -95,7 +97,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: map_concat"
       }
     },
     {
@@ -117,7 +119,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: map_contains_key"
       }
     },
     {
@@ -139,7 +141,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: map_contains_key"
       }
     },
     {
@@ -181,7 +183,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: map_entries"
       }
     },
     {
@@ -208,7 +210,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: map_from_arrays"
       }
     },
     {
@@ -235,7 +237,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: map_from_entries"
       }
     },
     {
@@ -261,7 +263,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: map_keys"
       }
     },
     {
@@ -287,7 +289,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: map_values"
       }
     },
     {
@@ -314,7 +316,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: str_to_map"
       }
     },
     {
@@ -341,7 +343,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: str_to_map"
       }
     },
     {
@@ -363,7 +365,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: try_element_at"
       }
     },
     {
@@ -385,7 +387,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: try_element_at"
       }
     }
   ]

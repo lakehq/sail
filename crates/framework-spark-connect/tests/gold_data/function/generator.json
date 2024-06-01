@@ -20,7 +20,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not supported: table args"
       }
     },
     {
@@ -43,7 +43,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not supported: table args"
       }
     },
     {
@@ -72,7 +72,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not supported: table args"
       }
     },
     {
@@ -101,7 +101,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not supported: table args"
       }
     },
     {
@@ -124,7 +124,10 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "10",
+          "20"
+        ]
       }
     },
     {
@@ -147,7 +150,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not supported: named function argument"
       }
     },
     {
@@ -170,7 +173,10 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "10",
+          "20"
+        ]
       }
     },
     {
@@ -193,7 +199,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not supported: named function argument"
       }
     },
     {
@@ -222,7 +228,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: inline"
       }
     },
     {
@@ -251,7 +257,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: inline_outer"
       }
     },
     {
@@ -280,7 +286,10 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "0\t10",
+          "1\t20"
+        ]
       }
     },
     {
@@ -309,7 +318,10 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "0\t10",
+          "1\t20"
+        ]
       }
     },
     {
@@ -338,7 +350,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: stack"
       }
     }
   ]

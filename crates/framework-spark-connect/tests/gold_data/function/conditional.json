@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: when"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: when"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: when"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: coalesce"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: if"
       }
     },
     {
@@ -133,7 +133,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: ifnull"
       }
     },
     {
@@ -155,7 +155,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: nanvl"
       }
     },
     {
@@ -177,7 +177,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: nullif"
       }
     },
     {
@@ -203,7 +203,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: nvl"
       }
     },
     {
@@ -225,7 +225,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: nvl2"
       }
     }
   ]

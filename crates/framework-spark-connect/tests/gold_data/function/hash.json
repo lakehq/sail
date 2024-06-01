@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: crc32"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: hash"
       }
     },
     {
@@ -63,7 +63,9 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "success": [
+          "8cde774d6f7333752ed72cacddb05126"
+        ]
       }
     },
     {
@@ -85,7 +87,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: sha"
       }
     },
     {
@@ -107,7 +109,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: sha1"
       }
     },
     {
@@ -129,7 +131,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: sha2"
       }
     },
     {
@@ -151,7 +153,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: xxhash64"
       }
     }
   ]

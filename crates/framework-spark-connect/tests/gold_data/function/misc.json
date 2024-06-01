@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: unbase64"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: unbase64"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: unbase64"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: unbase64"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: unhex"
       }
     },
     {
@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: unhex"
       }
     },
     {
@@ -151,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: assert_true"
       }
     },
     {
@@ -173,7 +173,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: aes_encrypt"
       }
     },
     {
@@ -195,7 +195,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: aes_encrypt"
       }
     },
     {
@@ -217,7 +217,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: unhex"
       }
     },
     {
@@ -239,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: unhex"
       }
     },
     {
@@ -261,7 +261,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: bitmap_bit_position"
       }
     },
     {
@@ -283,7 +283,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: bitmap_bit_position"
       }
     },
     {
@@ -305,7 +305,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: bitmap_bucket_number"
       }
     },
     {
@@ -327,7 +327,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: bitmap_bucket_number"
       }
     },
     {
@@ -349,7 +349,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Expected ), found: '0' at Line: 1, Column 23"
       }
     },
     {
@@ -371,7 +371,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Expected ), found: '1010' at Line: 1, Column 23"
       }
     },
     {
@@ -393,7 +393,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Expected ), found: 'FFFF' at Line: 1, Column 23"
       }
     },
     {
@@ -415,7 +415,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: extra tokens after statement: ("
       }
     },
     {
@@ -437,7 +437,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: current_database"
       }
     },
     {
@@ -459,7 +459,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: current_schema"
       }
     },
     {
@@ -481,7 +481,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: extra tokens after statement: ("
       }
     },
     {
@@ -503,7 +503,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: equal_null"
       }
     },
     {
@@ -525,7 +525,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: equal_null"
       }
     },
     {
@@ -547,7 +547,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: equal_null"
       }
     },
     {
@@ -569,7 +569,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: equal_null"
       }
     },
     {
@@ -591,7 +591,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: equal_null"
       }
     },
     {
@@ -613,7 +613,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: aes_encrypt"
       }
     },
     {
@@ -635,7 +635,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: aes_encrypt"
       }
     },
     {
@@ -657,7 +657,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: hll_sketch_estimate"
       }
     },
     {
@@ -679,7 +679,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: hll_union"
       }
     },
     {
@@ -701,7 +701,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: input_file_block_length"
       }
     },
     {
@@ -723,7 +723,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: input_file_block_start"
       }
     },
     {
@@ -743,7 +743,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: input_file_name"
       }
     },
     {
@@ -765,7 +765,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: java_method"
       }
     },
     {
@@ -787,7 +787,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: java_method"
       }
     },
     {
@@ -809,7 +809,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: monotonically_increasing_id"
       }
     },
     {
@@ -832,7 +832,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: raise_error"
       }
     },
     {
@@ -854,7 +854,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: reflect"
       }
     },
     {
@@ -876,7 +876,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: reflect"
       }
     },
     {
@@ -898,7 +898,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: spark_partition_id"
       }
     },
     {
@@ -920,7 +920,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: unhex"
       }
     },
     {
@@ -942,7 +942,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: unhex"
       }
     },
     {
@@ -964,7 +964,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: typeof"
       }
     },
     {
@@ -986,7 +986,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: typeof"
       }
     },
     {
@@ -1008,7 +1008,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: extra tokens after statement: ("
       }
     },
     {
@@ -1030,7 +1030,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: uuid"
       }
     },
     {
@@ -1052,7 +1052,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: version"
       }
     }
   ]

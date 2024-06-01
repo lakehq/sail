@@ -23,7 +23,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: xpath"
       }
     },
     {
@@ -45,7 +45,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: xpath_boolean"
       }
     },
     {
@@ -67,7 +67,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: xpath_double"
       }
     },
     {
@@ -89,7 +89,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: xpath_float"
       }
     },
     {
@@ -111,7 +111,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: xpath_int"
       }
     },
     {
@@ -133,7 +133,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: xpath_long"
       }
     },
     {
@@ -155,7 +155,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: xpath_number"
       }
     },
     {
@@ -177,7 +177,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: xpath_short"
       }
     },
     {
@@ -199,7 +199,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: xpath_string"
       }
     }
   ]

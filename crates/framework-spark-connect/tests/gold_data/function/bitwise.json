@@ -19,7 +19,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "1"
+        ]
       }
     },
     {
@@ -41,7 +43,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "6"
+        ]
       }
     },
     {
@@ -63,7 +67,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "7"
+        ]
       }
     },
     {
@@ -85,7 +91,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: bit_count"
       }
     },
     {
@@ -107,7 +113,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: bit_get"
       }
     },
     {
@@ -129,7 +135,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: bit_get"
       }
     },
     {
@@ -151,7 +157,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: getbit"
       }
     },
     {
@@ -173,7 +179,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: getbit"
       }
     },
     {
@@ -195,7 +201,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "2"
+        ]
       }
     },
     {
@@ -217,7 +225,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: shiftrightunsigned"
       }
     },
     {
@@ -239,7 +247,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Expected an expression:, found: ~ at Line: 1, Column 8"
       }
     }
   ]

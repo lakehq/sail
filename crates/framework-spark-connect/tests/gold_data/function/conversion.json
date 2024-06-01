@@ -19,7 +19,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "10"
+        ]
       }
     }
   ]

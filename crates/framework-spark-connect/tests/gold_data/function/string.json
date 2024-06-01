@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: character_length"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: char_length"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not supported: expression: Position { expr: Value(SingleQuotedString(\"bar\")), in: Value(SingleQuotedString(\"foobarbar\")) }"
       }
     },
     {
@@ -85,7 +85,9 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "success": [
+          "50"
+        ]
       }
     },
     {
@@ -107,7 +109,9 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "success": [
+          "50"
+        ]
       }
     },
     {
@@ -129,7 +133,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: base64"
       }
     },
     {
@@ -151,7 +155,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: base64"
       }
     },
     {
@@ -173,7 +177,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: bit_length"
       }
     },
     {
@@ -195,7 +199,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: bit_length"
       }
     },
     {
@@ -217,7 +221,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: btrim"
       }
     },
     {
@@ -239,7 +243,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: btrim"
       }
     },
     {
@@ -261,7 +265,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: encode"
       }
     },
     {
@@ -283,7 +287,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: encode"
       }
     },
     {
@@ -305,7 +309,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: char"
       }
     },
     {
@@ -327,7 +331,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: char_length"
       }
     },
     {
@@ -349,7 +353,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: char_length"
       }
     },
     {
@@ -371,7 +375,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: character_length"
       }
     },
     {
@@ -393,7 +397,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: character_length"
       }
     },
     {
@@ -415,7 +419,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: chr"
       }
     },
     {
@@ -437,7 +441,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: space"
       }
     },
     {
@@ -459,7 +463,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: concat_ws"
       }
     },
     {
@@ -481,7 +485,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: concat_ws"
       }
     },
     {
@@ -501,7 +505,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: concat_ws"
       }
     },
     {
@@ -523,7 +527,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: concat_ws"
       }
     },
     {
@@ -545,7 +549,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -567,7 +573,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -589,7 +597,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "NULL"
+        ]
       }
     },
     {
@@ -611,7 +621,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -633,7 +645,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: decode"
       }
     },
     {
@@ -655,7 +667,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: decode"
       }
     },
     {
@@ -677,7 +689,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: decode"
       }
     },
     {
@@ -699,7 +711,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: encode"
       }
     },
     {
@@ -721,7 +733,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: decode"
       }
     },
     {
@@ -743,7 +755,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: elt"
       }
     },
     {
@@ -765,7 +777,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: elt"
       }
     },
     {
@@ -787,7 +799,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: encode"
       }
     },
     {
@@ -809,7 +821,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -831,7 +845,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -853,7 +869,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "NULL"
+        ]
       }
     },
     {
@@ -875,7 +893,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -897,7 +917,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -919,7 +941,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: find_in_set"
       }
     },
     {
@@ -941,7 +963,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: format_number"
       }
     },
     {
@@ -963,7 +985,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: format_number"
       }
     },
     {
@@ -985,7 +1007,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: format_string"
       }
     },
     {
@@ -1007,7 +1029,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: unhex"
       }
     },
     {
@@ -1029,7 +1051,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: unhex"
       }
     },
     {
@@ -1051,7 +1073,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: unhex"
       }
     },
     {
@@ -1073,7 +1095,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: unhex"
       }
     },
     {
@@ -1095,7 +1117,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: initcap"
       }
     },
     {
@@ -1117,7 +1139,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: instr"
       }
     },
     {
@@ -1139,7 +1161,9 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "success": [
+          "sparksql"
+        ]
       }
     },
     {
@@ -1161,7 +1185,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: left"
       }
     },
     {
@@ -1183,7 +1207,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: encode"
       }
     },
     {
@@ -1205,7 +1229,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: len"
       }
     },
     {
@@ -1227,7 +1251,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: len"
       }
     },
     {
@@ -1249,7 +1273,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: length"
       }
     },
     {
@@ -1271,7 +1295,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: length"
       }
     },
     {
@@ -1293,7 +1317,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: levenshtein"
       }
     },
     {
@@ -1315,7 +1339,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: levenshtein"
       }
     },
     {
@@ -1337,7 +1361,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: locate"
       }
     },
     {
@@ -1359,7 +1383,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: locate"
       }
     },
     {
@@ -1381,7 +1405,9 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "success": [
+          "sparksql"
+        ]
       }
     },
     {
@@ -1403,7 +1429,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lpad"
       }
     },
     {
@@ -1425,7 +1451,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lpad"
       }
     },
     {
@@ -1447,7 +1473,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: lpad"
       }
     },
     {
@@ -1469,7 +1495,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: ltrim"
       }
     },
     {
@@ -1491,7 +1517,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: luhn_check"
       }
     },
     {
@@ -1513,7 +1539,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: luhn_check"
       }
     },
     {
@@ -1535,7 +1561,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: luhn_check"
       }
     },
     {
@@ -1557,7 +1583,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: mask"
       }
     },
     {
@@ -1579,7 +1605,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: mask"
       }
     },
     {
@@ -1601,7 +1627,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: mask"
       }
     },
     {
@@ -1623,7 +1649,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: mask"
       }
     },
     {
@@ -1645,7 +1671,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: mask"
       }
     },
     {
@@ -1667,7 +1693,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: mask"
       }
     },
     {
@@ -1689,7 +1715,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: mask"
       }
     },
     {
@@ -1711,7 +1737,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: mask"
       }
     },
     {
@@ -1733,7 +1759,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: mask"
       }
     },
     {
@@ -1755,7 +1781,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: mask"
       }
     },
     {
@@ -1777,7 +1803,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: mask"
       }
     },
     {
@@ -1799,7 +1825,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: mask"
       }
     },
     {
@@ -1821,7 +1847,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: mask"
       }
     },
     {
@@ -1843,7 +1869,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: octet_length"
       }
     },
     {
@@ -1865,7 +1891,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: octet_length"
       }
     },
     {
@@ -1887,7 +1913,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: overlay"
       }
     },
     {
@@ -1909,7 +1935,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: overlay"
       }
     },
     {
@@ -1931,7 +1957,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: overlay"
       }
     },
     {
@@ -1953,7 +1979,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: overlay"
       }
     },
     {
@@ -1975,7 +2001,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: encode"
       }
     },
     {
@@ -1997,7 +2023,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: encode"
       }
     },
     {
@@ -2019,7 +2045,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: encode"
       }
     },
     {
@@ -2041,7 +2067,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: encode"
       }
     },
     {
@@ -2063,7 +2089,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Position function must include IN keyword at Line: 1, Column 22"
       }
     },
     {
@@ -2085,7 +2111,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Position function must include IN keyword at Line: 1, Column 22"
       }
     },
     {
@@ -2107,7 +2133,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: printf"
       }
     },
     {
@@ -2129,7 +2155,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: regexp_count"
       }
     },
     {
@@ -2151,7 +2177,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: regexp_count"
       }
     },
     {
@@ -2173,7 +2199,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: regexp_extract"
       }
     },
     {
@@ -2199,7 +2225,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: regexp_extract_all"
       }
     },
     {
@@ -2221,7 +2247,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: regexp_instr"
       }
     },
     {
@@ -2243,7 +2269,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "100-200"
+        ]
       }
     },
     {
@@ -2265,7 +2293,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: regexp_substr"
       }
     },
     {
@@ -2287,7 +2315,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: regexp_substr"
       }
     },
     {
@@ -2309,7 +2337,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: repeat"
       }
     },
     {
@@ -2331,7 +2359,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: replace"
       }
     },
     {
@@ -2353,7 +2381,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: right"
       }
     },
     {
@@ -2375,7 +2403,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: rpad"
       }
     },
     {
@@ -2397,7 +2425,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: rpad"
       }
     },
     {
@@ -2419,7 +2447,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: rpad"
       }
     },
     {
@@ -2441,7 +2469,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: rtrim"
       }
     },
     {
@@ -2471,7 +2499,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: sentences"
       }
     },
     {
@@ -2493,7 +2521,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: soundex"
       }
     },
     {
@@ -2519,7 +2547,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: split"
       }
     },
     {
@@ -2545,7 +2573,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: split"
       }
     },
     {
@@ -2571,7 +2599,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: split"
       }
     },
     {
@@ -2593,7 +2621,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: split_part"
       }
     },
     {
@@ -2615,7 +2643,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -2637,7 +2667,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -2659,7 +2691,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "NULL"
+        ]
       }
     },
     {
@@ -2681,7 +2715,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -2703,7 +2739,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -2725,7 +2763,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Expected ), found: FROM at Line: 1, Column 27"
       }
     },
     {
@@ -2747,7 +2785,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Expected ), found: FROM at Line: 1, Column 27"
       }
     },
     {
@@ -2769,7 +2807,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Expected ), found: FROM at Line: 1, Column 27"
       }
     },
     {
@@ -2791,7 +2829,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: substr"
       }
     },
     {
@@ -2813,7 +2851,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: substr"
       }
     },
     {
@@ -2835,7 +2873,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: substr"
       }
     },
     {
@@ -2857,7 +2895,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: encode"
       }
     },
     {
@@ -2879,7 +2917,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: substring"
       }
     },
     {
@@ -2901,7 +2939,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: substring"
       }
     },
     {
@@ -2923,7 +2961,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: substring"
       }
     },
     {
@@ -2945,7 +2983,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: substring"
       }
     },
     {
@@ -2967,7 +3005,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: substring"
       }
     },
     {
@@ -2989,7 +3027,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: substring"
       }
     },
     {
@@ -3011,7 +3049,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: encode"
       }
     },
     {
@@ -3033,7 +3071,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: substring_index"
       }
     },
     {
@@ -3055,7 +3093,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_binary"
       }
     },
     {
@@ -3077,7 +3115,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_char"
       }
     },
     {
@@ -3099,7 +3137,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_char"
       }
     },
     {
@@ -3121,7 +3159,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_char"
       }
     },
     {
@@ -3143,7 +3181,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_char"
       }
     },
     {
@@ -3165,7 +3203,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_char"
       }
     },
     {
@@ -3187,7 +3225,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_number"
       }
     },
     {
@@ -3209,7 +3247,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_number"
       }
     },
     {
@@ -3231,7 +3269,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_number"
       }
     },
     {
@@ -3253,7 +3291,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_number"
       }
     },
     {
@@ -3275,7 +3313,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_number"
       }
     },
     {
@@ -3297,7 +3335,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_varchar"
       }
     },
     {
@@ -3319,7 +3357,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_varchar"
       }
     },
     {
@@ -3341,7 +3379,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_varchar"
       }
     },
     {
@@ -3363,7 +3401,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_varchar"
       }
     },
     {
@@ -3385,7 +3423,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_varchar"
       }
     },
     {
@@ -3407,7 +3445,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: translate"
       }
     },
     {
@@ -3429,7 +3467,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: trim"
       }
     },
     {
@@ -3451,7 +3489,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: trim"
       }
     },
     {
@@ -3473,7 +3511,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: trim"
       }
     },
     {
@@ -3495,7 +3533,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Expected ), found: '    SparkSQL   ' at Line: 1, Column 23"
       }
     },
     {
@@ -3517,7 +3555,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: ltrim"
       }
     },
     {
@@ -3539,7 +3577,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Expected ), found: '    SparkSQL   ' at Line: 1, Column 26"
       }
     },
     {
@@ -3561,7 +3599,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: rtrim"
       }
     },
     {
@@ -3583,7 +3621,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Expected ), found: '    SparkSQL   ' at Line: 1, Column 27"
       }
     },
     {
@@ -3605,7 +3643,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: try_to_binary"
       }
     },
     {
@@ -3627,7 +3665,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: try_to_number"
       }
     },
     {
@@ -3649,7 +3687,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: try_to_number"
       }
     },
     {
@@ -3671,7 +3709,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: try_to_number"
       }
     },
     {
@@ -3693,7 +3731,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: try_to_number"
       }
     },
     {
@@ -3715,7 +3753,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: try_to_number"
       }
     },
     {
@@ -3737,7 +3775,9 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "success": [
+          "SPARKSQL"
+        ]
       }
     },
     {
@@ -3759,7 +3799,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: unbase64"
       }
     },
     {
@@ -3781,7 +3821,9 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "success": [
+          "SPARKSQL"
+        ]
       }
     },
     {
@@ -3803,7 +3845,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: try_to_binary"
       }
     },
     {
@@ -3825,7 +3867,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: try_to_binary"
       }
     }
   ]

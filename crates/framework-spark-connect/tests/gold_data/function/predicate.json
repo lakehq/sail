@@ -19,7 +19,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "NULL"
+        ]
       }
     },
     {
@@ -41,7 +43,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -63,7 +67,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -85,7 +91,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: two arguments expected"
       }
     },
     {
@@ -107,7 +113,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: two arguments expected"
       }
     },
     {
@@ -129,7 +135,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -151,7 +159,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -173,7 +183,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -195,7 +207,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -217,7 +231,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -239,7 +255,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "NULL"
+        ]
       }
     },
     {
@@ -261,7 +279,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "NULL"
+        ]
       }
     },
     {
@@ -283,7 +303,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: null-safe equal"
       }
     },
     {
@@ -305,7 +325,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -327,7 +349,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -349,7 +373,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "NULL"
+        ]
       }
     },
     {
@@ -371,7 +397,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "NULL"
+        ]
       }
     },
     {
@@ -393,7 +421,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -415,7 +445,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -437,7 +469,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -459,7 +493,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -481,7 +517,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -503,7 +541,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: null-safe equal"
       }
     },
     {
@@ -525,7 +563,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -547,7 +587,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -569,7 +611,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -591,7 +635,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -613,7 +659,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -635,7 +683,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -657,7 +707,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: null-safe equal"
       }
     },
     {
@@ -679,7 +729,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "NULL"
+        ]
       }
     },
     {
@@ -701,7 +753,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "NULL"
+        ]
       }
     },
     {
@@ -723,7 +777,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -745,7 +801,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "NULL"
+        ]
       }
     },
     {
@@ -767,7 +825,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -789,7 +849,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -811,7 +873,9 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -833,7 +897,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -855,7 +921,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -877,7 +945,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -899,7 +969,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: named_struct"
       }
     },
     {
@@ -921,7 +991,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: named_struct"
       }
     },
     {
@@ -943,7 +1013,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "NULL"
+        ]
       }
     },
     {
@@ -965,7 +1037,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -987,7 +1061,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -1009,7 +1085,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\Users\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\Users.*\")), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1031,7 +1107,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\\\Users\\\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\\\\\Users.*\")), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1053,7 +1129,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\Users\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\Users.*\")), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1075,7 +1151,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\\\Users\\\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\\\\\Users.*\")), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1097,7 +1173,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\Users\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\Users.*\")), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1119,7 +1195,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\\\Users\\\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\\\\\Users.*\")), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1141,7 +1217,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_date"
       }
     },
     {
@@ -1163,7 +1239,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_date"
       }
     },
     {
@@ -1185,7 +1261,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_date"
       }
     },
     {
@@ -1207,7 +1283,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_date"
       }
     },
     {
@@ -1229,7 +1305,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_date"
       }
     },
     {
@@ -1251,7 +1327,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_date"
       }
     },
     {
@@ -1273,7 +1349,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_date"
       }
     },
     {
@@ -1295,7 +1371,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: to_date"
       }
     },
     {
@@ -1317,7 +1393,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: null-safe equal"
       }
     },
     {
@@ -1339,7 +1415,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "NULL"
+        ]
       }
     },
     {
@@ -1361,7 +1439,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "NULL"
+        ]
       }
     },
     {
@@ -1383,7 +1463,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "NULL"
+        ]
       }
     },
     {
@@ -1405,7 +1487,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "false"
+        ]
       }
     },
     {
@@ -1427,7 +1511,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -1449,7 +1535,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -1471,7 +1559,9 @@
         }
       },
       "output": {
-        "success": "ok"
+        "success": [
+          "true"
+        ]
       }
     },
     {
@@ -1499,7 +1589,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: SQL set variable"
       }
     },
     {
@@ -1527,7 +1617,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: SQL set variable"
       }
     }
   ]
