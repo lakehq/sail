@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: bit_count"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: bit_get"
       }
     },
     {
@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: bit_get"
       }
     },
     {
@@ -151,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: getbit"
       }
     },
     {
@@ -173,7 +173,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: getbit"
       }
     },
     {
@@ -217,7 +217,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: shiftrightunsigned"
       }
     },
     {
@@ -239,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: sql parser error: Expected an expression:, found: ~ at Line: 1, Column 8"
       }
     }
   ]

@@ -2,17 +2,16 @@ use std::sync::Arc;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::alias::MultiAlias;
-use crate::extension::function::contains::Contains;
-use crate::extension::function::map_function::MapFunction;
-use crate::extension::function::struct_function::StructFunction;
+use crate::function::{
+    get_built_in_aggregate_function, get_built_in_function, get_built_in_window_function,
+};
 use crate::resolver::PlanResolver;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DFSchema, Result, ScalarValue};
-use datafusion::{functions, functions_array};
 use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::{
-    expr, window_frame, AggregateFunction, BuiltInWindowFunction, ExprSchemable, GetFieldAccess,
-    GetIndexedField, Operator, ScalarFunctionDefinition, ScalarUDF,
+    expr, window_frame, ExprSchemable, GetFieldAccess, GetIndexedField, ScalarFunctionDefinition,
+    ScalarUDF,
 };
 use framework_common::spec;
 
@@ -128,15 +127,18 @@ impl PlanResolver<'_> {
                 if is_user_defined_function {
                     return Err(PlanError::unsupported("user defined function"));
                 }
-                if is_distinct {
-                    return Err(PlanError::unsupported("distinct function"));
-                }
 
                 let args = arguments
                     .into_iter()
                     .map(|x| self.resolve_expression(x, schema))
                     .collect::<PlanResult<Vec<_>>>()?;
-                Ok(get_scalar_function(function_name.as_str(), args)?)
+                let func = match get_built_in_function(function_name.as_str()) {
+                    Ok(func) => func(args)?,
+                    Err(_) => {
+                        get_built_in_aggregate_function(function_name.as_str(), args, is_distinct)?
+                    }
+                };
+                Ok(func)
             }
             Expr::UnresolvedStar { target } => {
                 // FIXME: column reference is parsed as qualifier
@@ -235,7 +237,7 @@ impl PlanResolver<'_> {
                     window_frame::WindowFrame::new(None)
                 };
                 Ok(expr::Expr::WindowFunction(expr::WindowFunction {
-                    fun: get_window_function(func_name.as_str())?,
+                    fun: get_built_in_window_function(func_name.as_str())?,
                     args,
                     partition_by,
                     order_by,
@@ -355,370 +357,5 @@ impl PlanResolver<'_> {
                 None,
             ))),
         }
-    }
-}
-
-fn get_one_argument(mut args: Vec<expr::Expr>) -> PlanResult<Box<expr::Expr>> {
-    if args.len() != 1 {
-        return Err(PlanError::invalid("unary operator requires 1 argument"));
-    }
-    Ok(Box::new(args.pop().unwrap()))
-}
-
-fn get_two_arguments(mut args: Vec<expr::Expr>) -> PlanResult<(Box<expr::Expr>, Box<expr::Expr>)> {
-    if args.len() != 2 {
-        return Err(PlanError::invalid("binary operator requires 2 arguments"));
-    }
-    let right = Box::new(args.pop().unwrap());
-    let left = Box::new(args.pop().unwrap());
-    Ok((left, right))
-}
-
-pub(crate) fn get_scalar_function(name: &str, mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    use crate::extension::function::explode::Explode;
-
-    let name = name.to_lowercase();
-
-    match name.as_str() {
-        "+" if args.len() <= 1 => {
-            let arg = get_one_argument(args)?;
-            return Ok(*arg);
-        }
-        "-" if args.len() <= 1 => {
-            let arg = get_one_argument(args)?;
-            return Ok(expr::Expr::Negative(arg));
-        }
-        _ => {}
-    };
-
-    let op = match name.as_str() {
-        ">" => Some(Operator::Gt),
-        ">=" => Some(Operator::GtEq),
-        "<" => Some(Operator::Lt),
-        "<=" => Some(Operator::LtEq),
-        "+" if args.len() > 1 => Some(Operator::Plus),
-        "-" if args.len() > 1 => Some(Operator::Minus),
-        "*" => Some(Operator::Multiply),
-        "/" => Some(Operator::Divide),
-        "%" => Some(Operator::Modulo),
-        "<=>" => Some(Operator::Eq), // TODO: null safe equality
-        "and" => Some(Operator::And),
-        "or" => Some(Operator::Or),
-        "|" => Some(Operator::BitwiseOr),
-        "&" => Some(Operator::BitwiseAnd),
-        "^" => Some(Operator::BitwiseXor),
-        "==" => Some(Operator::Eq),
-        "!=" => Some(Operator::NotEq),
-        "shiftleft" => Some(Operator::BitwiseShiftLeft),
-        "shiftright" => Some(Operator::BitwiseShiftRight),
-        _ => None,
-    };
-    if let Some(op) = op {
-        let (left, right) = get_two_arguments(args)?;
-        return Ok(expr::Expr::BinaryExpr(expr::BinaryExpr { left, op, right }));
-    }
-
-    // TODO: Add all functions::expr_fn and all functions_array::expr_fn
-    match name.as_str() {
-        "isnull" => {
-            let expr = get_one_argument(args)?;
-            Ok(expr::Expr::IsNull(expr))
-        }
-        "isnotnull" => {
-            let expr = get_one_argument(args)?;
-            Ok(expr::Expr::IsNotNull(expr))
-        }
-        "negative" => {
-            let expr = get_one_argument(args)?;
-            Ok(expr::Expr::Negative(expr))
-        }
-        "not" => {
-            let expr = get_one_argument(args)?;
-            Ok(expr::Expr::Not(expr))
-        }
-        "like" => {
-            let (expr, pattern) = get_two_arguments(args)?;
-            Ok(expr::Expr::Like(expr::Like {
-                negated: false,
-                expr,
-                pattern,
-                case_insensitive: false,
-                escape_char: None,
-            }))
-        }
-        "ilike" => {
-            let (expr, pattern) = get_two_arguments(args)?;
-            Ok(expr::Expr::Like(expr::Like {
-                negated: false,
-                expr,
-                pattern,
-                case_insensitive: true,
-                escape_char: None,
-            }))
-        }
-        "rlike" => {
-            let (expr, pattern) = get_two_arguments(args)?;
-            Ok(expr::Expr::SimilarTo(expr::Like {
-                negated: false,
-                expr,
-                pattern,
-                case_insensitive: false,
-                escape_char: None,
-            }))
-        }
-        "contains" => {
-            // TODO: Validate that this works
-            Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(Contains::new()))),
-                args: args,
-            }))
-        }
-        "startswith" => {
-            let (left, right) = get_two_arguments(args)?;
-            Ok(functions::expr_fn::starts_with(*left, *right))
-        }
-        "endswith" => {
-            let (left, right) = get_two_arguments(args)?;
-            Ok(functions::expr_fn::ends_with(*left, *right))
-        }
-        "array" => Ok(functions_array::expr_fn::make_array(args)),
-        "array_has" | "array_contains" => {
-            let (left, right) = get_two_arguments(args)?;
-            Ok(functions_array::expr_fn::array_has(*left, *right))
-        }
-        "array_has_all" | "array_contains_all" => {
-            let (left, right) = get_two_arguments(args)?;
-            Ok(functions_array::expr_fn::array_has_all(*left, *right))
-        }
-        "array_has_any" | "array_contains_any" => {
-            let (left, right) = get_two_arguments(args)?;
-            Ok(functions_array::expr_fn::array_has_any(*left, *right))
-        }
-        "array_repeat" => {
-            let (element, count) = get_two_arguments(args)?;
-            let count = expr::Expr::Cast(expr::Cast {
-                expr: count,
-                data_type: DataType::Int64,
-            });
-            Ok(functions_array::expr_fn::array_repeat(*element, count))
-        }
-        "avg" => Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
-            func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Avg),
-            args,
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
-        })),
-        "sum" => Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
-            func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Sum),
-            args,
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
-        })),
-        "count" => Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
-            func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Count),
-            args,
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
-        })),
-        "max" => Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
-            func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Max),
-            args,
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
-        })),
-        "min" => Ok(expr::Expr::AggregateFunction(expr::AggregateFunction {
-            func_def: expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::Min),
-            args,
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
-        })),
-        "in" => {
-            if args.is_empty() {
-                return Err(PlanError::invalid("in requires at least 1 argument"));
-            }
-            let expr = args.remove(0);
-            Ok(expr::Expr::InList(expr::InList {
-                expr: Box::new(expr),
-                list: args,
-                negated: false,
-            }))
-        }
-        "abs" => {
-            let expr = get_one_argument(args)?;
-            Ok(functions::expr_fn::abs(*expr))
-        }
-        name @ ("explode" | "explode_outer" | "posexplode" | "posexplode_outer") => {
-            let udf = ScalarUDF::from(Explode::new(name));
-            Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func_def: ScalarFunctionDefinition::UDF(Arc::new(udf)),
-                args,
-            }))
-        }
-        "regexp_replace" => {
-            if args.len() != 3 {
-                return Err(PlanError::invalid("regexp_replace requires 3 arguments"));
-            }
-            // Planner replaces all occurrences of the pattern.
-            args.push(expr::Expr::Literal(ScalarValue::Utf8(Some(
-                "g".to_string(),
-            ))));
-            Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
-                    functions::regex::regexpreplace::RegexpReplaceFunc::new(),
-                ))),
-                args,
-            }))
-        }
-        "date" => Ok(functions::expr_fn::to_date(args)),
-        "timestamp" | "to_timestamp" => Ok(functions::expr_fn::to_timestamp_micros(args)),
-        "unix_timestamp" | "to_unixtime" => Ok(functions::expr_fn::to_unixtime(args)),
-        "struct" => Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-            func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
-                StructFunction::try_new_from_expressions(args.clone())?,
-            ))),
-            args,
-        })),
-        "map" => Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-            func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(MapFunction::new()))),
-            args,
-        })),
-        "bigint" => {
-            let expr = get_one_argument(args)?;
-            Ok(expr::Expr::Cast(expr::Cast {
-                expr,
-                data_type: DataType::Int64,
-            }))
-        }
-        "binary" => {
-            let expr = get_one_argument(args)?;
-            Ok(expr::Expr::Cast(expr::Cast {
-                expr,
-                data_type: DataType::Binary,
-            }))
-        }
-        "boolean" => {
-            let expr = get_one_argument(args)?;
-            Ok(expr::Expr::Cast(expr::Cast {
-                expr,
-                data_type: DataType::Boolean,
-            }))
-        }
-        "decimal" => {
-            let expr = get_one_argument(args)?;
-            Ok(expr::Expr::Cast(expr::Cast {
-                expr,
-                data_type: DataType::Decimal128(10, 0),
-            }))
-        }
-        "double" => {
-            let expr = get_one_argument(args)?;
-            Ok(expr::Expr::Cast(expr::Cast {
-                expr,
-                data_type: DataType::Float64,
-            }))
-        }
-        "float" => {
-            let expr = get_one_argument(args)?;
-            Ok(expr::Expr::Cast(expr::Cast {
-                expr,
-                data_type: DataType::Float32,
-            }))
-        }
-        "int" => {
-            let expr = get_one_argument(args)?;
-            Ok(expr::Expr::Cast(expr::Cast {
-                expr,
-                data_type: DataType::Int32,
-            }))
-        }
-        "smallint" => {
-            let expr = get_one_argument(args)?;
-            Ok(expr::Expr::Cast(expr::Cast {
-                expr,
-                data_type: DataType::Int16,
-            }))
-        }
-        "string" => {
-            let expr = get_one_argument(args)?;
-            Ok(expr::Expr::Cast(expr::Cast {
-                expr,
-                data_type: DataType::Utf8,
-            }))
-        }
-        "tinyint" => {
-            let expr = get_one_argument(args)?;
-            Ok(expr::Expr::Cast(expr::Cast {
-                expr,
-                data_type: DataType::Int8,
-            }))
-        }
-        _ => Err(PlanError::invalid(format!("unknown function: {}", name))),
-    }
-}
-
-pub(crate) fn get_window_function(name: &str) -> PlanResult<expr::WindowFunctionDefinition> {
-    match name {
-        "avg" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
-            AggregateFunction::Avg,
-        )),
-        "min" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
-            AggregateFunction::Min,
-        )),
-        "max" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
-            AggregateFunction::Max,
-        )),
-        "sum" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
-            AggregateFunction::Sum,
-        )),
-        "count" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
-            AggregateFunction::Count,
-        )),
-        "row_number" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::RowNumber,
-        )),
-        "rank" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::Rank,
-        )),
-        "dense_rank" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::DenseRank,
-        )),
-        "percent_rank" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::PercentRank,
-        )),
-        "ntile" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::Ntile,
-        )),
-        "first_value" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::FirstValue,
-        )),
-        "last_value" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::LastValue,
-        )),
-        "nth_value" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::NthValue,
-        )),
-        "lead" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::Lead,
-        )),
-        "lag" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::Lag,
-        )),
-        "cume_dist" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::CumeDist,
-        )),
-        s => Err(PlanError::invalid(format!(
-            "unknown window function: {}",
-            s
-        ))),
     }
 }

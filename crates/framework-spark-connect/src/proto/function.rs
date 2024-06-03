@@ -4,6 +4,9 @@ mod tests {
     use crate::executor::execute_query;
     use crate::proto::data_type_json::JsonDataType;
     use crate::session::Session;
+    use arrow::array::RecordBatch;
+    use arrow::error::ArrowError;
+    use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use framework_common::tests::test_gold_set;
     use serde::{Deserialize, Serialize};
 
@@ -13,6 +16,28 @@ mod tests {
         query: String,
         result: Vec<String>,
         schema: JsonDataType,
+    }
+
+    #[allow(dead_code)]
+    fn format_record_batches(batches: Vec<RecordBatch>) -> SparkResult<Vec<String>> {
+        let options = FormatOptions::default().with_null("NULL");
+        let mut output = vec![];
+        for batch in batches {
+            let formatters = batch
+                .columns()
+                .iter()
+                .map(|column| ArrayFormatter::try_new(column, &options))
+                .collect::<Result<Vec<_>, ArrowError>>()?;
+            for row in 0..batch.num_rows() {
+                let line = formatters
+                    .iter()
+                    .map(|formatter| formatter.value(row).try_to_string())
+                    .collect::<Result<Vec<_>, ArrowError>>()?
+                    .join("\t");
+                output.push(line);
+            }
+        }
+        Ok(output)
     }
 
     #[test]
@@ -30,8 +55,9 @@ mod tests {
                 // TODO: validate the result against the expected output
                 // TODO: handle non-deterministic results and error messages
                 match result {
+                    // FIXME: the output can be non-deterministic
                     Ok(_) => Ok("ok".to_string()),
-                    Err(_) => Err(SparkError::internal("error".to_string())),
+                    Err(x) => Err(x),
                 }
             },
             |e| SparkError::internal(e),

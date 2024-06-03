@@ -1355,6 +1355,7 @@ dependencies = [
  "framework-common",
  "framework-python",
  "framework-sql",
+ "lazy_static",
  "pyo3",
  "regex",
  "serde",

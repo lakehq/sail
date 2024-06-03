@@ -8,7 +8,7 @@ source "${project_path}"/python/.venv/bin/activate
 
 python_version=$(python -c 'import sys; print("%s.%s" % (sys.version_info.major, sys.version_info.minor))')
 
-export RUST_LOG="${RUST_LOG:-spark_connect_server=debug}"
+export RUST_LOG="${RUST_LOG:-framework_spark_connect=debug}"
 export RUST_BACKTRACE="${RUST_BACKTRACE:-full}"
 export RUST_MIN_STACK="${RUST_MIN_STACK:-8388608}"
 # We have to set `PYTHONPATH` even if we are using the virtual environment.
