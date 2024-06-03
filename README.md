@@ -85,6 +85,7 @@ scripts/spark-tests/run-tests.sh python/pyspark/sql/tests/connect/ -v -k test_so
 ```
 
 The following are useful commands to analyze test logs.
+You can replace `test.jsonl` with a different log file name if you are analyzing a different test suite.
 
 (1) Get the error counts for failed tests.
 

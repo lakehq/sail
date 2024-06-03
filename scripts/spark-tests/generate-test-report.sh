@@ -30,12 +30,46 @@ function show_commit_info() {
     "$(tr -d '\n' < "${dir}/ref")"
 }
 
-function show_test_summary() {
+function write_test_summary() {
   local name="$1"
   local dir="$2"
-  printf '* **%s**: %s\n' \
-    "${name}" \
-    "$(tail -n 1 "${dir}/test.log" | sed -e 's/^=* *//' -e 's/ *=*$//' | tr -d '\n')"
+  local output="$3"
+  for f in "${dir}"/*.log; do
+    printf '%s\t%s\t%s\n' \
+      "${name}" \
+      "$(basename "${f}" .log)" \
+      "$(tail -n 1 "${f}" | tr -d '\n')" \
+      >> "${output}"
+  done
+}
+
+function show_test_summary() {
+  local file="$1"
+  sort -t$'\t' -k2,2 -k1,1r < "${file}" | awk -F$'\t' '
+    BEGIN {
+      printf "| Suite | Commit | Failed | Passed | Skipped | Warnings | Time (s) |\n"
+      printf "| --- | --- | --- | --- | --- | --- | --- |\n"
+      suite = ""
+    }
+    {
+      match($3, /[0-9]+ failed/)
+      failed = substr($3, RSTART, RLENGTH - 7)
+      match($3, /[0-9]+ passed/)
+      passed = substr($3, RSTART, RLENGTH - 7)
+      match($3, /[0-9]+ skipped/)
+      skipped = substr($3, RSTART, RLENGTH - 8)
+      match($3, /[0-9]+ warnings/)
+      warnings = substr($3, RSTART, RLENGTH - 9)
+      match($3, /in [0-9.]+s/)
+      time = substr($3, RSTART + 3, RLENGTH - 4)
+
+      printf "| %s | **%s** | %s | %s | %s | %s | %s |\n", ($2 == suite ? "" : sprintf("`%s`", $2)), $1, failed, passed, skipped, warnings, time
+      suite = $2
+    }
+    END {
+      printf "\n"
+    }
+  '
 }
 
 function show_code_block() {
@@ -62,21 +96,26 @@ printf '### Spark Test Report\n\n'
 
 printf '#### Commit Information\n\n'
 
-show_commit_info 'Head' "$head_dir"
-show_commit_info 'Base' "$base_dir"
+show_commit_info 'Head' "${head_dir}"
+show_commit_info 'Base' "${base_dir}"
 
 printf '\n'
 printf '#### Test Summary\n\n'
 
-show_test_summary 'Head' "$head_dir"
-show_test_summary 'Base' "$base_dir"
+write_test_summary 'Head' "${head_dir}" "${tmp_dir}/summary.tsv"
+write_test_summary 'Base' "${base_dir}" "${tmp_dir}/summary.tsv"
+
+show_test_summary "${tmp_dir}/summary.tsv"
 
 printf '\n'
 printf '#### Test Details\n\n'
 
+cat "${head_dir}"/*.jsonl > "${tmp_dir}/head.jsonl"
+cat "${base_dir}"/*.jsonl > "${tmp_dir}/base.jsonl"
+
 jq -r -f "${project_path}/scripts/spark-tests/count-errors.jq" \
-  --slurpfile baseline "$base_dir/test.jsonl" \
-  "$head_dir/test.jsonl" > "${tmp_dir}/errors.txt"
+  --slurpfile baseline "${tmp_dir}/base.jsonl" \
+  "${tmp_dir}/head.jsonl" > "${tmp_dir}/errors.txt"
 
 printf '<details>\n'
 printf '<summary>Error Counts</summary>\n\n'
@@ -85,9 +124,9 @@ printf '</details>\n\n'
 
 mkdir "${tmp_dir}/passed-tests"
 jq -r -f "${project_path}/scripts/spark-tests/show-passed-tests.jq" \
-  "$base_dir/test.jsonl" > "${tmp_dir}/passed-tests/base"
+  "${tmp_dir}/base.jsonl" > "${tmp_dir}/passed-tests/base"
 jq -r -f "${project_path}/scripts/spark-tests/show-passed-tests.jq" \
-  "$head_dir/test.jsonl" > "${tmp_dir}/passed-tests/head"
+  "${tmp_dir}/head.jsonl" > "${tmp_dir}/passed-tests/head"
 
 pushd "${tmp_dir}/passed-tests" > /dev/null
 diff -u base head > ../passed-tests.diff || true
