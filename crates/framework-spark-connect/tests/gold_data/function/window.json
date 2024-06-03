@@ -71,7 +71,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'DENSE_RANK(Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tDENSE_RANK()"
       }
     },
     {
@@ -182,7 +182,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "error in DataFusion: Execution error: Internal(\"Cannot convert Int32(2) to i64\")"
       }
     },
     {
@@ -219,7 +219,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "error in DataFusion: Internal error: Cannot convert Int32(2) to i64.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
       }
     },
     {
@@ -256,7 +256,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'PERCENT_RANK(Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tPERCENT_RANK()"
       }
     },
     {
@@ -293,7 +293,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'RANK(Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tRANK()"
       }
     },
     {

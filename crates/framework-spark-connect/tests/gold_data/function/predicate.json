@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: two arguments expected"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "invalid argument: two arguments expected"
       }
     },
     {
@@ -283,7 +283,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: null-safe equal"
       }
     },
     {
@@ -503,7 +503,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: null-safe equal"
       }
     },
     {
@@ -657,7 +657,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: null-safe equal"
       }
     },
     {
@@ -811,7 +811,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "success": "ok"
       }
     },
     {
@@ -899,7 +899,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: named_struct"
       }
     },
     {
@@ -921,7 +921,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: named_struct"
       }
     },
     {
@@ -1009,7 +1009,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\Users\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\Users.*\")), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1031,7 +1031,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\\\Users\\\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\\\\\Users.*\")), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1053,7 +1053,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\Users\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\Users.*\")), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1075,7 +1075,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\\\Users\\\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\\\\\Users.*\")), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1097,7 +1097,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\Users\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\Users.*\")), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1119,7 +1119,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\\\Users\\\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\\\\\Users.*\")), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1141,7 +1141,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1163,7 +1163,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1185,7 +1185,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1207,7 +1207,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1229,7 +1229,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1251,7 +1251,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1273,7 +1273,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1295,7 +1295,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1317,7 +1317,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: null-safe equal"
       }
     },
     {
@@ -1499,7 +1499,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: SQL set variable"
       }
     },
     {
@@ -1527,7 +1527,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: SQL set variable"
       }
     }
   ]

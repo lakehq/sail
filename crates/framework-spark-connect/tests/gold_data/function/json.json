@@ -35,7 +35,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: from_json"
       }
     },
     {
@@ -93,7 +93,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: from_json"
       }
     },
     {
@@ -125,7 +125,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: from_json"
       }
     },
     {
@@ -147,7 +147,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: get_json_object"
       }
     },
     {
@@ -169,7 +169,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: json_array_length"
       }
     },
     {
@@ -191,7 +191,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: json_array_length"
       }
     },
     {
@@ -213,7 +213,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: json_array_length"
       }
     },
     {
@@ -239,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: json_object_keys"
       }
     },
     {
@@ -265,7 +265,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: json_object_keys"
       }
     },
     {
@@ -291,7 +291,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: json_object_keys"
       }
     },
     {
@@ -319,7 +319,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: json_tuple"
       }
     },
     {
@@ -341,7 +341,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: schema_of_json"
       }
     },
     {
@@ -363,7 +363,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: schema_of_json"
       }
     },
     {
@@ -385,7 +385,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: to_json"
       }
     },
     {
@@ -407,7 +407,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: named_struct"
       }
     },
     {
@@ -429,7 +429,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: to_json"
       }
     },
     {
@@ -451,7 +451,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: named_struct"
       }
     },
     {
@@ -473,7 +473,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: named_struct"
       }
     },
     {
@@ -495,7 +495,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: named_struct"
       }
     },
     {
@@ -517,7 +517,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: named_struct"
       }
     }
   ]

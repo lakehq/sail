@@ -20,7 +20,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not supported: table args"
       }
     },
     {
@@ -43,7 +43,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not supported: table args"
       }
     },
     {
@@ -72,7 +72,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not supported: table args"
       }
     },
     {
@@ -101,7 +101,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not supported: table args"
       }
     },
     {
@@ -147,7 +147,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not supported: named function argument"
       }
     },
     {
@@ -193,7 +193,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not supported: named function argument"
       }
     },
     {
@@ -222,7 +222,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: inline"
       }
     },
     {
@@ -251,7 +251,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: inline_outer"
       }
     },
     {
@@ -338,7 +338,7 @@
         }
       },
       "output": {
-        "failure": "internal error: error"
+        "failure": "not implemented: function: stack"
       }
     }
   ]
