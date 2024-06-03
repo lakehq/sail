@@ -1,14 +1,15 @@
+use crate::error::{PlanError, PlanResult};
 use crate::extension::function::contains::Contains;
 use crate::function::common::Function;
 use datafusion::functions;
 use datafusion::functions::expr_fn;
-use datafusion_common::{plan_err, ScalarValue};
+use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, ScalarFunctionDefinition, ScalarUDF};
 use std::sync::Arc;
 
-fn regexp_replace(mut args: Vec<expr::Expr>) -> datafusion_common::Result<expr::Expr> {
+fn regexp_replace(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     if args.len() != 3 {
-        return plan_err!("regexp_replace requires 3 arguments");
+        return Err(PlanError::invalid("regexp_replace requires 3 arguments"));
     }
     // Spark replaces all occurrences of the pattern.
     args.push(expr::Expr::Literal(ScalarValue::Utf8(Some(

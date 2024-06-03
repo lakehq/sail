@@ -8,7 +8,7 @@ pub(super) fn list_built_in_struct_functions() -> Vec<(&'static str, Function)> 
         ("named_struct", F::unknown("named_struct")),
         (
             "struct",
-            F::dynamic_udf(StructFunction::try_new_from_expressions),
+            F::dynamic_udf(|args| Ok(StructFunction::try_new_from_expressions(args)?)),
         ),
     ]
 }

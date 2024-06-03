@@ -109,28 +109,26 @@ impl FunctionBuilder {
         })
     }
 
-    pub fn dynamic_udf<F, U, E>(f: F) -> Function
+    pub fn dynamic_udf<F, U>(f: F) -> Function
     where
-        F: Fn(Vec<expr::Expr>) -> Result<U, E> + Send + Sync + 'static,
-        E: Into<PlanError>,
+        F: Fn(Vec<expr::Expr>) -> PlanResult<U> + Send + Sync + 'static,
         U: ScalarUDFImpl + Send + Sync + 'static,
     {
         Arc::new(move |args| {
             Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                 func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
-                    f(args.clone()).map_err(|e| e.into())?,
+                    f(args.clone())?,
                 ))),
                 args,
             }))
         })
     }
 
-    pub fn custom<F, E>(f: F) -> Function
+    pub fn custom<F>(f: F) -> Function
     where
-        F: Fn(Vec<expr::Expr>) -> Result<expr::Expr, E> + Send + Sync + 'static,
-        E: Into<PlanError>,
+        F: Fn(Vec<expr::Expr>) -> PlanResult<expr::Expr> + Send + Sync + 'static,
     {
-        Arc::new(move |args| f(args).map_err(|e| e.into()))
+        Arc::new(move |args| f(args))
     }
 
     pub fn unknown(name: &str) -> Function {

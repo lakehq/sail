@@ -1,6 +1,6 @@
+use crate::error::{PlanError, PlanResult};
 use crate::function::common::Function;
 use datafusion::functions::expr_fn;
-use datafusion_common::plan_err;
 use datafusion_expr::{expr, Operator};
 
 fn like(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
@@ -33,9 +33,11 @@ fn rlike(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
     })
 }
 
-fn in_list(mut args: Vec<expr::Expr>) -> datafusion_common::Result<expr::Expr> {
+fn in_list(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     if args.is_empty() {
-        return plan_err!("in operator requires at least 1 argument");
+        return Err(PlanError::invalid(
+            "in operator requires at least 1 argument",
+        ));
     }
     let value = args.pop().unwrap();
     let list = args;
