@@ -125,7 +125,7 @@ impl TryFrom<Literal> for ScalarValue {
                 Ok(ScalarValue::IntervalYearMonth(Some(months)))
             }
             Literal::DayTimeInterval { microseconds } => {
-                Ok(ScalarValue::IntervalDayTime(Some(microseconds)))
+                Ok(ScalarValue::DurationMicrosecond(Some(microseconds)))
             }
             Literal::Array {
                 element_type,

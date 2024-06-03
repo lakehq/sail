@@ -14,6 +14,7 @@ use datafusion::execution::context::DataFilePaths;
 use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
@@ -144,10 +145,25 @@ impl PlanResolver<'_> {
                 let (input, expr) = rewrite_wildcard(input, expr)?;
                 let (input, expr) = rewrite_explode(input, expr)?;
                 let (input, expr) = rewrite_window(input, expr)?;
-                Ok(LogicalPlan::Projection(plan::Projection::try_new(
-                    expr,
-                    Arc::new(input),
-                )?))
+                let has_aggregate = expr.iter().any(|e| {
+                    e.exists(|e| match e {
+                        Expr::AggregateFunction(_) => Ok(true),
+                        _ => Ok(false),
+                    })
+                    .unwrap_or(false)
+                });
+                if has_aggregate {
+                    Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+                        Arc::new(input),
+                        vec![],
+                        expr,
+                    )?))
+                } else {
+                    Ok(LogicalPlan::Projection(plan::Projection::try_new(
+                        expr,
+                        Arc::new(input),
+                    )?))
+                }
             }
             PlanNode::Filter { input, condition } => {
                 let input = self.resolve_plan(*input).await?;

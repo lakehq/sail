@@ -296,7 +296,7 @@ impl TryFrom<DataType> for adt::DataType {
             }
             DataType::Struct { fields } => Ok(adt::DataType::Struct(fields.try_into()?)),
             DataType::Decimal { scale, precision } => {
-                Ok(adt::DataType::Decimal128(precision as u8, scale as i8))
+                Ok(adt::DataType::Decimal128(precision, scale))
             }
             DataType::Char { .. } => Ok(adt::DataType::Utf8),
             DataType::VarChar { .. } => Ok(adt::DataType::Utf8),
@@ -319,6 +319,7 @@ impl TryFrom<DataType> for adt::DataType {
                 Ok(adt::DataType::Interval(adt::IntervalUnit::YearMonth))
             }
             DataType::DayTimeInterval { .. } => {
+                // Arrow `IntervalUnit::DayTime` only has millisecond precision
                 Ok(adt::DataType::Duration(adt::TimeUnit::Microsecond))
             }
             DataType::Map {
@@ -396,7 +397,9 @@ impl TryFrom<adt::DataType> for DataType {
             adt::DataType::Interval(adt::IntervalUnit::MonthDayNano) => {
                 Ok(DataType::CalendarInterval)
             }
-            adt::DataType::Interval(_) => Err(CommonError::unsupported("interval")),
+            adt::DataType::Interval(adt::IntervalUnit::DayTime) => {
+                Err(CommonError::unsupported("interval unit: day-time"))
+            }
             adt::DataType::Binary
             | adt::DataType::FixedSizeBinary(_)
             | adt::DataType::LargeBinary => Ok(DataType::Binary),
