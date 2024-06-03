@@ -48,7 +48,7 @@ function show_test_summary() {
   sort -t$'\t' -k2,2 -k1,1r < "${file}" | awk -F$'\t' '
     BEGIN {
       printf "| Suite | Commit | Failed | Passed | Skipped | Warnings | Time (s) |\n"
-      printf "| --- | --- | --- | --- | --- | --- | --- |\n"
+      printf "| :--- | :--- | ---: | ---: | ---: | ---: | ---: |\n"
       suite = ""
     }
     {
