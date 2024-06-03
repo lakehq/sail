@@ -23,7 +23,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: xpath"
+        "failure": "not implemented: function: xpath"
       }
     },
     {
@@ -45,7 +45,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: xpath_boolean"
+        "failure": "not implemented: function: xpath_boolean"
       }
     },
     {
@@ -67,7 +67,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: xpath_double"
+        "failure": "not implemented: function: xpath_double"
       }
     },
     {
@@ -89,7 +89,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: xpath_float"
+        "failure": "not implemented: function: xpath_float"
       }
     },
     {
@@ -111,7 +111,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: xpath_int"
+        "failure": "not implemented: function: xpath_int"
       }
     },
     {
@@ -133,7 +133,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: xpath_long"
+        "failure": "not implemented: function: xpath_long"
       }
     },
     {
@@ -155,7 +155,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: xpath_number"
+        "failure": "not implemented: function: xpath_number"
       }
     },
     {
@@ -177,7 +177,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: xpath_short"
+        "failure": "not implemented: function: xpath_short"
       }
     },
     {
@@ -199,7 +199,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: xpath_string"
+        "failure": "not implemented: function: xpath_string"
       }
     }
   ]

@@ -151,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: div"
+        "failure": "not implemented: function: div"
       }
     },
     {
@@ -173,7 +173,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: div"
+        "failure": "not implemented: function: div"
       }
     },
     {
@@ -195,7 +195,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: mod"
+        "failure": "not implemented: function: mod"
       }
     },
     {
@@ -503,7 +503,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: bin"
+        "failure": "not implemented: function: bin"
       }
     },
     {
@@ -525,7 +525,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: bin"
+        "failure": "not implemented: function: bin"
       }
     },
     {
@@ -547,7 +547,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: bin"
+        "failure": "not implemented: function: bin"
       }
     },
     {
@@ -569,7 +569,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: bround"
+        "failure": "not implemented: function: bround"
       }
     },
     {
@@ -591,7 +591,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: bround"
+        "failure": "not implemented: function: bround"
       }
     },
     {
@@ -811,7 +811,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: conv"
+        "failure": "not implemented: function: conv"
       }
     },
     {
@@ -833,7 +833,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: conv"
+        "failure": "not implemented: function: conv"
       }
     },
     {
@@ -921,7 +921,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: csc"
+        "failure": "not implemented: function: csc"
       }
     },
     {
@@ -943,7 +943,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unhex"
+        "failure": "not implemented: function: unhex"
       }
     },
     {
@@ -987,7 +987,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: e"
+        "failure": "not implemented: function: e"
       }
     },
     {
@@ -1031,7 +1031,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: expm1"
+        "failure": "not implemented: function: expm1"
       }
     },
     {
@@ -1163,7 +1163,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: greatest"
+        "failure": "not implemented: function: greatest"
       }
     },
     {
@@ -1185,7 +1185,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: hex"
+        "failure": "not implemented: function: hex"
       }
     },
     {
@@ -1207,7 +1207,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: hex"
+        "failure": "not implemented: function: hex"
       }
     },
     {
@@ -1229,7 +1229,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: hypot"
+        "failure": "not implemented: function: hypot"
       }
     },
     {
@@ -1251,7 +1251,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: least"
+        "failure": "not implemented: function: least"
       }
     },
     {
@@ -1339,7 +1339,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: log1p"
+        "failure": "not implemented: function: log1p"
       }
     },
     {
@@ -1405,7 +1405,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: pi"
+        "failure": "not implemented: function: pi"
       }
     },
     {
@@ -1427,7 +1427,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: pmod"
+        "failure": "not implemented: function: pmod"
       }
     },
     {
@@ -1449,7 +1449,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: pmod"
+        "failure": "not implemented: function: pmod"
       }
     },
     {
@@ -1471,7 +1471,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: positive"
+        "failure": "not implemented: function: positive"
       }
     },
     {
@@ -1559,7 +1559,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: rand"
+        "failure": "not implemented: function: rand"
       }
     },
     {
@@ -1581,7 +1581,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: rand"
+        "failure": "not implemented: function: rand"
       }
     },
     {
@@ -1603,7 +1603,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: rand"
+        "failure": "not implemented: function: rand"
       }
     },
     {
@@ -1625,7 +1625,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: randn"
+        "failure": "not implemented: function: randn"
       }
     },
     {
@@ -1647,7 +1647,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: randn"
+        "failure": "not implemented: function: randn"
       }
     },
     {
@@ -1669,7 +1669,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: randn"
+        "failure": "not implemented: function: randn"
       }
     },
     {
@@ -1691,7 +1691,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: random"
+        "failure": "not implemented: function: random"
       }
     },
     {
@@ -1713,7 +1713,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: random"
+        "failure": "not implemented: function: random"
       }
     },
     {
@@ -1735,7 +1735,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: random"
+        "failure": "not implemented: function: random"
       }
     },
     {
@@ -1757,7 +1757,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: rint"
+        "failure": "not implemented: function: rint"
       }
     },
     {
@@ -1801,7 +1801,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: sec"
+        "failure": "not implemented: function: sec"
       }
     },
     {
@@ -1845,7 +1845,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: sign"
+        "failure": "not implemented: function: sign"
       }
     },
     {
@@ -1867,7 +1867,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: sign"
+        "failure": "not implemented: function: sign"
       }
     },
     {
@@ -2043,7 +2043,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_add"
+        "failure": "not implemented: function: try_add"
       }
     },
     {
@@ -2065,7 +2065,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_add"
+        "failure": "not implemented: function: try_add"
       }
     },
     {
@@ -2087,7 +2087,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_add"
+        "failure": "not implemented: function: try_add"
       }
     },
     {
@@ -2109,7 +2109,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_add"
+        "failure": "not implemented: function: try_add"
       }
     },
     {
@@ -2131,7 +2131,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_add"
+        "failure": "not implemented: function: try_add"
       }
     },
     {
@@ -2153,7 +2153,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_add"
+        "failure": "not implemented: function: try_add"
       }
     },
     {
@@ -2175,7 +2175,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_divide"
+        "failure": "not implemented: function: try_divide"
       }
     },
     {
@@ -2197,7 +2197,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_divide"
+        "failure": "not implemented: function: try_divide"
       }
     },
     {
@@ -2219,7 +2219,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_divide"
+        "failure": "not implemented: function: try_divide"
       }
     },
     {
@@ -2241,7 +2241,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_divide"
+        "failure": "not implemented: function: try_divide"
       }
     },
     {
@@ -2263,7 +2263,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_divide"
+        "failure": "not implemented: function: try_divide"
       }
     },
     {
@@ -2285,7 +2285,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_multiply"
+        "failure": "not implemented: function: try_multiply"
       }
     },
     {
@@ -2307,7 +2307,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_multiply"
+        "failure": "not implemented: function: try_multiply"
       }
     },
     {
@@ -2329,7 +2329,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_multiply"
+        "failure": "not implemented: function: try_multiply"
       }
     },
     {
@@ -2351,7 +2351,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_subtract"
+        "failure": "not implemented: function: try_subtract"
       }
     },
     {
@@ -2373,7 +2373,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_subtract"
+        "failure": "not implemented: function: try_subtract"
       }
     },
     {
@@ -2395,7 +2395,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_subtract"
+        "failure": "not implemented: function: try_subtract"
       }
     },
     {
@@ -2417,7 +2417,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_subtract"
+        "failure": "not implemented: function: try_subtract"
       }
     },
     {
@@ -2439,7 +2439,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_subtract"
+        "failure": "not implemented: function: try_subtract"
       }
     },
     {
@@ -2461,7 +2461,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_subtract"
+        "failure": "not implemented: function: try_subtract"
       }
     },
     {
@@ -2483,7 +2483,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: width_bucket"
+        "failure": "not implemented: function: width_bucket"
       }
     },
     {
@@ -2505,7 +2505,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: width_bucket"
+        "failure": "not implemented: function: width_bucket"
       }
     },
     {
@@ -2527,7 +2527,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: width_bucket"
+        "failure": "not implemented: function: width_bucket"
       }
     },
     {
@@ -2549,7 +2549,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: width_bucket"
+        "failure": "not implemented: function: width_bucket"
       }
     },
     {
@@ -2571,7 +2571,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: width_bucket"
+        "failure": "not implemented: function: width_bucket"
       }
     },
     {
@@ -2593,7 +2593,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: width_bucket"
+        "failure": "not implemented: function: width_bucket"
       }
     },
     {
@@ -2615,7 +2615,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: width_bucket"
+        "failure": "not implemented: function: width_bucket"
       }
     },
     {
@@ -2637,7 +2637,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: width_bucket"
+        "failure": "not implemented: function: width_bucket"
       }
     }
   ]

@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: crc32"
+        "failure": "not implemented: function: crc32"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: hash"
+        "failure": "not implemented: function: hash"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: sha"
+        "failure": "not implemented: function: sha"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: sha1"
+        "failure": "not implemented: function: sha1"
       }
     },
     {
@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: sha2"
+        "failure": "not implemented: function: sha2"
       }
     },
     {
@@ -151,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: xxhash64"
+        "failure": "not implemented: function: xxhash64"
       }
     }
   ]

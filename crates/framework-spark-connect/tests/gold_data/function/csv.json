@@ -35,7 +35,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: from_csv"
+        "failure": "not implemented: function: from_csv"
       }
     },
     {
@@ -67,7 +67,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: from_csv"
+        "failure": "not implemented: function: from_csv"
       }
     },
     {
@@ -89,7 +89,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: schema_of_csv"
+        "failure": "not implemented: function: schema_of_csv"
       }
     },
     {
@@ -111,7 +111,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: named_struct"
+        "failure": "not implemented: function: named_struct"
       }
     },
     {
@@ -133,7 +133,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: named_struct"
+        "failure": "not implemented: function: named_struct"
       }
     }
   ]

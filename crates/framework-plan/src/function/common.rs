@@ -135,6 +135,6 @@ impl FunctionBuilder {
 
     pub fn unknown(name: &str) -> Function {
         let name = name.to_string();
-        Arc::new(move |_| Err(PlanError::todo(name.as_str())))
+        Arc::new(move |_| Err(PlanError::todo(format!("function: {name}"))))
     }
 }

@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: parse_url"
+        "failure": "not implemented: function: parse_url"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: parse_url"
+        "failure": "not implemented: function: parse_url"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: parse_url"
+        "failure": "not implemented: function: parse_url"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: url_decode"
+        "failure": "not implemented: function: url_decode"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: url_encode"
+        "failure": "not implemented: function: url_encode"
       }
     }
   ]

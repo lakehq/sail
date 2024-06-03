@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unbase64"
+        "failure": "not implemented: function: unbase64"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unbase64"
+        "failure": "not implemented: function: unbase64"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unbase64"
+        "failure": "not implemented: function: unbase64"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unbase64"
+        "failure": "not implemented: function: unbase64"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unhex"
+        "failure": "not implemented: function: unhex"
       }
     },
     {
@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unhex"
+        "failure": "not implemented: function: unhex"
       }
     },
     {
@@ -151,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: assert_true"
+        "failure": "not implemented: function: assert_true"
       }
     },
     {
@@ -173,7 +173,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: aes_encrypt"
+        "failure": "not implemented: function: aes_encrypt"
       }
     },
     {
@@ -195,7 +195,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: aes_encrypt"
+        "failure": "not implemented: function: aes_encrypt"
       }
     },
     {
@@ -217,7 +217,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unhex"
+        "failure": "not implemented: function: unhex"
       }
     },
     {
@@ -239,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unhex"
+        "failure": "not implemented: function: unhex"
       }
     },
     {
@@ -261,7 +261,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: bitmap_bit_position"
+        "failure": "not implemented: function: bitmap_bit_position"
       }
     },
     {
@@ -283,7 +283,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: bitmap_bit_position"
+        "failure": "not implemented: function: bitmap_bit_position"
       }
     },
     {
@@ -305,7 +305,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: bitmap_bucket_number"
+        "failure": "not implemented: function: bitmap_bucket_number"
       }
     },
     {
@@ -327,7 +327,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: bitmap_bucket_number"
+        "failure": "not implemented: function: bitmap_bucket_number"
       }
     },
     {
@@ -437,7 +437,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: current_database"
+        "failure": "not implemented: function: current_database"
       }
     },
     {
@@ -459,7 +459,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: current_schema"
+        "failure": "not implemented: function: current_schema"
       }
     },
     {
@@ -503,7 +503,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: equal_null"
+        "failure": "not implemented: function: equal_null"
       }
     },
     {
@@ -525,7 +525,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: equal_null"
+        "failure": "not implemented: function: equal_null"
       }
     },
     {
@@ -547,7 +547,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: equal_null"
+        "failure": "not implemented: function: equal_null"
       }
     },
     {
@@ -569,7 +569,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: equal_null"
+        "failure": "not implemented: function: equal_null"
       }
     },
     {
@@ -591,7 +591,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: equal_null"
+        "failure": "not implemented: function: equal_null"
       }
     },
     {
@@ -613,7 +613,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: aes_encrypt"
+        "failure": "not implemented: function: aes_encrypt"
       }
     },
     {
@@ -635,7 +635,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: aes_encrypt"
+        "failure": "not implemented: function: aes_encrypt"
       }
     },
     {
@@ -657,7 +657,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: hll_sketch_estimate"
+        "failure": "not implemented: function: hll_sketch_estimate"
       }
     },
     {
@@ -679,7 +679,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: hll_union"
+        "failure": "not implemented: function: hll_union"
       }
     },
     {
@@ -701,7 +701,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: input_file_block_length"
+        "failure": "not implemented: function: input_file_block_length"
       }
     },
     {
@@ -723,7 +723,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: input_file_block_start"
+        "failure": "not implemented: function: input_file_block_start"
       }
     },
     {
@@ -743,7 +743,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: input_file_name"
+        "failure": "not implemented: function: input_file_name"
       }
     },
     {
@@ -765,7 +765,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: java_method"
+        "failure": "not implemented: function: java_method"
       }
     },
     {
@@ -787,7 +787,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: java_method"
+        "failure": "not implemented: function: java_method"
       }
     },
     {
@@ -809,7 +809,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: monotonically_increasing_id"
+        "failure": "not implemented: function: monotonically_increasing_id"
       }
     },
     {
@@ -832,7 +832,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: raise_error"
+        "failure": "not implemented: function: raise_error"
       }
     },
     {
@@ -854,7 +854,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: reflect"
+        "failure": "not implemented: function: reflect"
       }
     },
     {
@@ -876,7 +876,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: reflect"
+        "failure": "not implemented: function: reflect"
       }
     },
     {
@@ -898,7 +898,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: spark_partition_id"
+        "failure": "not implemented: function: spark_partition_id"
       }
     },
     {
@@ -920,7 +920,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unhex"
+        "failure": "not implemented: function: unhex"
       }
     },
     {
@@ -942,7 +942,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unhex"
+        "failure": "not implemented: function: unhex"
       }
     },
     {
@@ -964,7 +964,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: typeof"
+        "failure": "not implemented: function: typeof"
       }
     },
     {
@@ -986,7 +986,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: typeof"
+        "failure": "not implemented: function: typeof"
       }
     },
     {
@@ -1030,7 +1030,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: uuid"
+        "failure": "not implemented: function: uuid"
       }
     },
     {
@@ -1052,7 +1052,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: version"
+        "failure": "not implemented: function: version"
       }
     }
   ]

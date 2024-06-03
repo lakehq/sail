@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: element_at"
+        "failure": "not implemented: function: element_at"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: element_at"
+        "failure": "not implemented: function: element_at"
       }
     },
     {
@@ -95,7 +95,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: map_concat"
+        "failure": "not implemented: function: map_concat"
       }
     },
     {
@@ -117,7 +117,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: map_contains_key"
+        "failure": "not implemented: function: map_contains_key"
       }
     },
     {
@@ -139,7 +139,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: map_contains_key"
+        "failure": "not implemented: function: map_contains_key"
       }
     },
     {
@@ -181,7 +181,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: map_entries"
+        "failure": "not implemented: function: map_entries"
       }
     },
     {
@@ -208,7 +208,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: map_from_arrays"
+        "failure": "not implemented: function: map_from_arrays"
       }
     },
     {
@@ -235,7 +235,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: map_from_entries"
+        "failure": "not implemented: function: map_from_entries"
       }
     },
     {
@@ -261,7 +261,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: map_keys"
+        "failure": "not implemented: function: map_keys"
       }
     },
     {
@@ -287,7 +287,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: map_values"
+        "failure": "not implemented: function: map_values"
       }
     },
     {
@@ -314,7 +314,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: str_to_map"
+        "failure": "not implemented: function: str_to_map"
       }
     },
     {
@@ -341,7 +341,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: str_to_map"
+        "failure": "not implemented: function: str_to_map"
       }
     },
     {
@@ -363,7 +363,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_element_at"
+        "failure": "not implemented: function: try_element_at"
       }
     },
     {
@@ -385,7 +385,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: try_element_at"
+        "failure": "not implemented: function: try_element_at"
       }
     }
   ]

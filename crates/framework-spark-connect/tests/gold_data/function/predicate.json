@@ -283,7 +283,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: null-safe equal"
+        "failure": "not implemented: function: null-safe equal"
       }
     },
     {
@@ -503,7 +503,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: null-safe equal"
+        "failure": "not implemented: function: null-safe equal"
       }
     },
     {
@@ -657,7 +657,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: null-safe equal"
+        "failure": "not implemented: function: null-safe equal"
       }
     },
     {
@@ -899,7 +899,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: named_struct"
+        "failure": "not implemented: function: named_struct"
       }
     },
     {
@@ -921,7 +921,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: named_struct"
+        "failure": "not implemented: function: named_struct"
       }
     },
     {
@@ -1141,7 +1141,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: to_date"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1163,7 +1163,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: to_date"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1185,7 +1185,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: to_date"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1207,7 +1207,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: to_date"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1229,7 +1229,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: to_date"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1251,7 +1251,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: to_date"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1273,7 +1273,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: to_date"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1295,7 +1295,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: to_date"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1317,7 +1317,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: null-safe equal"
+        "failure": "not implemented: function: null-safe equal"
       }
     },
     {

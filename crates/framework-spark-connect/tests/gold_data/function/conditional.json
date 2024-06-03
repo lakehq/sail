@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: when"
+        "failure": "not implemented: function: when"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: when"
+        "failure": "not implemented: function: when"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: when"
+        "failure": "not implemented: function: when"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: coalesce"
+        "failure": "not implemented: function: coalesce"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: if"
+        "failure": "not implemented: function: if"
       }
     },
     {
@@ -133,7 +133,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: ifnull"
+        "failure": "not implemented: function: ifnull"
       }
     },
     {
@@ -155,7 +155,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: nanvl"
+        "failure": "not implemented: function: nanvl"
       }
     },
     {
@@ -177,7 +177,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: nullif"
+        "failure": "not implemented: function: nullif"
       }
     },
     {
@@ -203,7 +203,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: nvl"
+        "failure": "not implemented: function: nvl"
       }
     },
     {
@@ -225,7 +225,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: nvl2"
+        "failure": "not implemented: function: nvl2"
       }
     }
   ]

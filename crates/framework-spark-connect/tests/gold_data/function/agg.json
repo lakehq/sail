@@ -963,7 +963,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: hex"
+        "failure": "not implemented: function: hex"
       }
     },
     {
@@ -1027,7 +1027,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: hll_sketch_estimate"
+        "failure": "not implemented: function: hll_sketch_estimate"
       }
     },
     {
@@ -2687,7 +2687,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: bitmap_bit_position"
+        "failure": "not implemented: function: bitmap_bit_position"
       }
     },
     {
@@ -2709,7 +2709,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: bitmap_bit_position"
+        "failure": "not implemented: function: bitmap_bit_position"
       }
     },
     {
