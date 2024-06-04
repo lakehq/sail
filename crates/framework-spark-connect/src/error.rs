@@ -160,6 +160,7 @@ impl From<SparkError> for Status {
                 Status::unimplemented(e.to_string())
             }
             SparkError::DataFusionError(e @ DataFusionError::Execution(_)) => {
+                // TODO: Map error code properly. This is just a test.
                 let mut metadata = HashMap::new();
                 metadata.insert(
                     "classes".into(),
