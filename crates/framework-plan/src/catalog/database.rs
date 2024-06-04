@@ -33,6 +33,14 @@ impl<S: SqlEngine> CatalogContext<'_, S> {
     }
 
     pub(crate) fn set_default_database(&self, database_name: String) -> Result<()> {
+        // TODO: Race condition if catalog or database is deleted.
+        let database = SchemaReference::Bare {
+            schema: database_name.clone().into(),
+        };
+        let database = self.get_database(database)?;
+        if database.is_none() {
+            return exec_err!("database does not exist: {}", database_name);
+        }
         self.ctx.write_state(move |state| {
             state.config_mut().options_mut().catalog.default_schema = database_name;
             Ok(())

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::PoisonError;
 
 use datafusion::common::DataFusionError;
@@ -8,6 +9,8 @@ use prost::DecodeError;
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
 use tokio::task::JoinError;
+use tonic::{Code, Status};
+use tonic_types::{ErrorDetails, StatusExt};
 
 pub type SparkResult<T> = Result<T, SparkError>;
 
@@ -140,33 +143,43 @@ impl<T> ProtoFieldExt<T> for Result<T, DecodeError> {
     }
 }
 
-impl From<SparkError> for tonic::Status {
+impl From<SparkError> for Status {
     fn from(error: SparkError) -> Self {
         match error {
             SparkError::DataFusionError(e @ DataFusionError::Plan(_))
             | SparkError::DataFusionError(e @ DataFusionError::Configuration(_)) => {
-                tonic::Status::invalid_argument(e.to_string())
+                Status::invalid_argument(e.to_string())
             }
             SparkError::DataFusionError(DataFusionError::SQL(e, _)) => {
-                tonic::Status::invalid_argument(e.to_string())
+                Status::invalid_argument(e.to_string())
             }
             SparkError::DataFusionError(DataFusionError::SchemaError(e, _)) => {
-                tonic::Status::invalid_argument(e.to_string())
+                Status::invalid_argument(e.to_string())
             }
             SparkError::DataFusionError(e @ DataFusionError::NotImplemented(_)) => {
-                tonic::Status::unimplemented(e.to_string())
+                Status::unimplemented(e.to_string())
             }
-            SparkError::DataFusionError(e) => tonic::Status::internal(e.to_string()),
+            SparkError::DataFusionError(e @ DataFusionError::Execution(_)) => {
+                let mut metadata = HashMap::new();
+                metadata.insert(
+                    "classes".into(),
+                    "[\"org.apache.spark.sql.AnalysisException\"]".into(),
+                );
+                let mut err_details = ErrorDetails::new();
+                err_details.set_error_info("AnalysisException", "org.apache.spark", metadata);
+                Status::with_error_details(Code::NotFound, e.to_string(), err_details)
+            }
+            SparkError::DataFusionError(e) => Status::internal(e.to_string()),
             e @ SparkError::MissingArgument(_) | e @ SparkError::InvalidArgument(_) => {
-                tonic::Status::invalid_argument(e.to_string())
+                Status::invalid_argument(e.to_string())
             }
-            SparkError::IoError(e) => tonic::Status::internal(e.to_string()),
-            SparkError::JsonError(e) => tonic::Status::invalid_argument(e.to_string()),
-            SparkError::ArrowError(e) => tonic::Status::internal(e.to_string()),
-            e @ SparkError::SendError(_) => tonic::Status::cancelled(e.to_string()),
-            e @ SparkError::NotImplemented(_) => tonic::Status::unimplemented(e.to_string()),
-            e @ SparkError::NotSupported(_) => tonic::Status::internal(e.to_string()),
-            e @ SparkError::InternalError(_) => tonic::Status::internal(e.to_string()),
+            SparkError::IoError(e) => Status::internal(e.to_string()),
+            SparkError::JsonError(e) => Status::invalid_argument(e.to_string()),
+            SparkError::ArrowError(e) => Status::internal(e.to_string()),
+            e @ SparkError::SendError(_) => Status::cancelled(e.to_string()),
+            e @ SparkError::NotImplemented(_) => Status::unimplemented(e.to_string()),
+            e @ SparkError::NotSupported(_) => Status::internal(e.to_string()),
+            e @ SparkError::InternalError(_) => Status::internal(e.to_string()),
         }
     }
 }

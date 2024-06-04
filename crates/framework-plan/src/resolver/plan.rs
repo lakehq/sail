@@ -30,7 +30,7 @@ use crate::extension::logical::{CatalogCommand, CatalogCommandNode, RangeNode};
 use crate::resolver::utils::{cast_record_batch, read_record_batches};
 use crate::resolver::PlanResolver;
 
-fn build_schema_reference(name: spec::ObjectName) -> PlanResult<SchemaReference> {
+pub(crate) fn build_schema_reference(name: spec::ObjectName) -> PlanResult<SchemaReference> {
     let names: Vec<String> = name.into();
     match names.as_slice() {
         [a] => Ok(SchemaReference::Bare {
