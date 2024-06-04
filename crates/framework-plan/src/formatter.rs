@@ -1,9 +1,11 @@
-use crate::error::{PlanError, PlanResult};
-use crate::utils::ItemTaker;
-use framework_common::object::DynObject;
-use framework_common::{impl_dyn_object_traits, spec};
 use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
+
+use framework_common::object::DynObject;
+use framework_common::{impl_dyn_object_traits, spec};
+
+use crate::error::{PlanError, PlanResult};
+use crate::utils::ItemTaker;
 
 /// Utilities to format various data structures in the plan specification.
 pub trait PlanFormatter: DynObject + Debug + Send + Sync {
@@ -377,9 +379,11 @@ impl Display for DecimalDisplay<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use framework_common::spec::Literal;
     use std::collections::HashMap;
+
+    use framework_common::spec::Literal;
+
+    use super::*;
 
     #[test]
     fn test_literal_to_string() -> PlanResult<()> {

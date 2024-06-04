@@ -1,10 +1,11 @@
-use crate::config::PlanConfig;
+use std::sync::Arc;
+
 use datafusion::execution::context::SessionState;
 use datafusion::prelude::SessionContext;
-use datafusion_common::Result;
-use datafusion_common::{exec_datafusion_err, SchemaReference, TableReference};
+use datafusion_common::{exec_datafusion_err, Result, SchemaReference, TableReference};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+
+use crate::config::PlanConfig;
 
 pub(crate) mod catalog;
 pub(crate) mod column;

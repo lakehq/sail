@@ -1,10 +1,12 @@
-use crate::error::{PlanError, PlanResult};
-use crate::utils::ItemTaker;
+use std::sync::Arc;
+
 use arrow::datatypes::DataType;
 use datafusion_expr::{
     expr, BinaryExpr, Operator, ScalarFunctionDefinition, ScalarUDF, ScalarUDFImpl,
 };
-use std::sync::Arc;
+
+use crate::error::{PlanError, PlanResult};
+use crate::utils::ItemTaker;
 
 pub(crate) type Function = Arc<dyn Fn(Vec<expr::Expr>) -> PlanResult<expr::Expr> + Send + Sync>;
 

@@ -4,10 +4,8 @@ use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use pyo3::{
-    prelude::*,
-    types::{PyDict, PyTuple},
-};
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyTuple};
 
 use crate::cereal::partial_python_udf::PartialPythonUDF;
 use crate::pyarrow::{FromPyArrow, ToPyArrow};

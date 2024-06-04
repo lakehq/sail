@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
+
 use crate::spec::data_type::DataType;
 use crate::spec::literal::Literal;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]

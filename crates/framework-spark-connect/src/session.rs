@@ -10,6 +10,7 @@ use framework_common::config::{ConfigKeyValue, SparkUdfConfig};
 use framework_plan::config::{PlanConfig, TimestampType};
 use framework_plan::formatter::DefaultPlanFormatter;
 use framework_plan::function::BUILT_IN_SCALAR_FUNCTIONS;
+use framework_plan::new_query_planner;
 
 use crate::config::{ConfigKeyValueList, SparkRuntimeConfig};
 use crate::error::SparkResult;
@@ -20,7 +21,6 @@ use crate::spark::config::{
     SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME,
     SPARK_SQL_SESSION_TIME_ZONE,
 };
-use framework_plan::new_query_planner;
 
 const DEFAULT_SPARK_SCHEMA: &str = "default";
 const DEFAULT_SPARK_CATALOG: &str = "spark_catalog";

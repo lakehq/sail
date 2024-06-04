@@ -15,13 +15,11 @@ use crate::spark::connect::analyze_plan_response::Result as AnalyzeResult;
 use crate::spark::connect::command::CommandType;
 use crate::spark::connect::config_request::operation::OpType as ConfigOpType;
 use crate::spark::connect::interrupt_request::{Interrupt, InterruptType};
-use crate::spark::connect::plan;
 use crate::spark::connect::release_execute_request::{Release, ReleaseAll, ReleaseUntil};
 use crate::spark::connect::spark_connect_service_server::SparkConnectService;
-use crate::spark::connect::Command;
 use crate::spark::connect::{
-    AddArtifactsRequest, AddArtifactsResponse, AnalyzePlanRequest, AnalyzePlanResponse,
-    ArtifactStatusesRequest, ArtifactStatusesResponse, ConfigRequest, ConfigResponse,
+    plan, AddArtifactsRequest, AddArtifactsResponse, AnalyzePlanRequest, AnalyzePlanResponse,
+    ArtifactStatusesRequest, ArtifactStatusesResponse, Command, ConfigRequest, ConfigResponse,
     ExecutePlanRequest, InterruptRequest, InterruptResponse, Plan, ReattachExecuteRequest,
     ReleaseExecuteRequest, ReleaseExecuteResponse,
 };

@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
+
 use crate::spec::data_type::Schema;
 use crate::spec::expression::{
     CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction, Expr, ObjectName,
@@ -5,8 +9,6 @@ use crate::spec::expression::{
 };
 use crate::spec::literal::Literal;
 use crate::spec::Identifier;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

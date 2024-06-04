@@ -1,19 +1,18 @@
 use std::env;
 use std::time::Duration;
 
-use opentelemetry::{global, trace::TraceError, trace::TracerProvider};
+use opentelemetry::global;
+use opentelemetry::trace::{TraceError, TracerProvider};
 use opentelemetry_otlp::{self, WithExportConfig};
-use opentelemetry_sdk::{
-    propagation::TraceContextPropagator,
-    resource::{
-        EnvResourceDetector, ResourceDetector, SdkProvidedResourceDetector,
-        TelemetryResourceDetector,
-    },
-    runtime, trace as sdktrace,
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::resource::{
+    EnvResourceDetector, ResourceDetector, SdkProvidedResourceDetector, TelemetryResourceDetector,
 };
+use opentelemetry_sdk::{runtime, trace as sdktrace};
 use thiserror::Error;
 use tracing::subscriber::SetGlobalDefaultError;
-use tracing_subscriber::{fmt, layer::SubscriberExt, Registry};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::{fmt, Registry};
 
 #[derive(Debug, Error)]
 pub enum TelemetryError {

@@ -1,9 +1,7 @@
 use std::hash::{Hash, Hasher};
 
-use pyo3::{
-    prelude::*,
-    types::{PyBytes, PyModule},
-};
+use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyModule};
 use serde::de::{self, IntoDeserializer, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_bytes::Bytes;

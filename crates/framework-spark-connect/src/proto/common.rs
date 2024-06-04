@@ -1,6 +1,7 @@
+use framework_common::spec;
+
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::spark::connect::StorageLevel;
-use framework_common::spec;
 
 impl TryFrom<StorageLevel> for spec::StorageLevel {
     type Error = SparkError;

@@ -1,12 +1,11 @@
-use tonic::codegen::http;
-use tower::ServiceBuilder;
-use tower_http::trace::{DefaultMakeSpan, TraceLayer};
-use tracing::{debug, Span};
-
 use framework_python::init_python;
 use framework_spark_connect::server::SparkConnectServer;
 use framework_spark_connect::spark::connect::spark_connect_service_server::SparkConnectServiceServer;
 use framework_telemetry::telemetry::init_telemetry;
+use tonic::codegen::http;
+use tower::ServiceBuilder;
+use tower_http::trace::{DefaultMakeSpan, TraceLayer};
+use tracing::{debug, Span};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,9 +1,10 @@
+use std::io::Cursor;
+
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::StreamReader;
 use arrow_cast::cast;
 use datafusion_common::Result;
-use std::io::Cursor;
 
 pub(crate) fn cast_record_batch(batch: RecordBatch, schema: SchemaRef) -> Result<RecordBatch> {
     let fields = schema.fields();

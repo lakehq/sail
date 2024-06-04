@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
+use lazy_static::lazy_static;
+
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::Function;
-use lazy_static::lazy_static;
-use std::collections::HashMap;
 
 mod aggregate;
 mod common;

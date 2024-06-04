@@ -5,18 +5,14 @@ use std::ffi::CStr;
 use arrow::error::ArrowError;
 use arrow::ffi;
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
-
 use datafusion::arrow::array::ArrayData;
 use datafusion::arrow::datatypes as adt;
-use pyo3::{
-    exceptions::{PyTypeError, PyValueError},
-    import_exception,
-    prelude::*,
-    types::{PyCapsule, PyTuple},
-};
-
 use framework_common::error::CommonError;
 use framework_common::spec;
+use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::import_exception;
+use pyo3::prelude::*;
+use pyo3::types::{PyCapsule, PyTuple};
 
 // TODO: Create error.rs in this crate and refactor to do a proper error implementation.
 import_exception!(pyarrow_scratch, ArrowException);

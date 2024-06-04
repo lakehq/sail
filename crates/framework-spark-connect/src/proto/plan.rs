@@ -1,13 +1,15 @@
+use std::collections::HashMap;
+
+use framework_common::spec;
+use framework_sql::expression::{parse_expression, parse_object_name};
+use framework_sql::plan::parse_sql_statement;
+
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::{parse_spark_data_type, DEFAULT_FIELD_NAME};
 use crate::spark::connect as sc;
 use crate::spark::connect::catalog::CatType;
 use crate::spark::connect::relation::RelType;
 use crate::spark::connect::{Catalog, Relation};
-use framework_common::spec;
-use framework_sql::expression::{parse_expression, parse_object_name};
-use framework_sql::plan::parse_sql_statement;
-use std::collections::HashMap;
 
 impl TryFrom<Relation> for spec::Plan {
     type Error = SparkError;
@@ -1162,11 +1164,12 @@ impl TryFrom<Catalog> for spec::PlanNode {
 
 #[cfg(test)]
 mod tests {
-    use crate::error::{SparkError, SparkResult};
     use framework_common::spec;
     use framework_common::tests::test_gold_set;
     use framework_sql::plan::parse_sql_statement;
     use serde::{Deserialize, Serialize};
+
+    use crate::error::{SparkError, SparkResult};
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     struct RootPlan {

@@ -1,7 +1,5 @@
-use crate::extension::logical::{RangeNode, ShowStringNode, SortWithinPartitionsNode};
-use crate::extension::physical::range::RangeExec;
-use crate::extension::physical::show_string::ShowStringExec;
-use crate::utils::ItemTaker;
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -9,7 +7,11 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{create_physical_sort_exprs, ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
-use std::sync::Arc;
+
+use crate::extension::logical::{RangeNode, ShowStringNode, SortWithinPartitionsNode};
+use crate::extension::physical::range::RangeExec;
+use crate::extension::physical::show_string::ShowStringExec;
+use crate::utils::ItemTaker;
 
 pub(crate) struct ExtensionPhysicalPlanner {}
 

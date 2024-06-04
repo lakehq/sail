@@ -1,6 +1,7 @@
+use std::fs;
+
 use glob;
 use serde::{Deserialize, Serialize};
-use std::fs;
 
 pub const UPDATE_GOLD_DATA_ENV_VAR: &str = "FRAMEWORK_UPDATE_GOLD_DATA";
 

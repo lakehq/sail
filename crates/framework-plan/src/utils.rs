@@ -1,5 +1,6 @@
-use datafusion_common::{plan_err, Result};
 use std::fmt::Debug;
+
+use datafusion_common::{plan_err, Result};
 
 /// A trait for taking items from a container of expected size.
 pub(crate) trait ItemTaker {

@@ -1,9 +1,10 @@
-use crate::catalog::utils::match_pattern;
-use crate::catalog::{CatalogManager, SessionContextExt};
 use datafusion_common::{exec_err, DFSchema, DFSchemaRef, Result, SchemaReference};
 use datafusion_expr::{CreateCatalogSchema, DdlStatement, DropCatalogSchema, LogicalPlan};
 use framework_common::unwrap_or;
 use serde::{Deserialize, Serialize};
+
+use crate::catalog::utils::match_pattern;
+use crate::catalog::{CatalogManager, SessionContextExt};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DatabaseMetadata {

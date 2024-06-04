@@ -1,7 +1,8 @@
-use crate::function::common::Function;
 use arrow::datatypes::DataType;
 use datafusion::functions_array::expr_fn;
 use datafusion_expr::expr;
+
+use crate::function::common::Function;
 
 fn array_repeat(element: expr::Expr, count: expr::Expr) -> expr::Expr {
     let count = expr::Expr::Cast(expr::Cast {

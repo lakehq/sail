@@ -1,6 +1,8 @@
-use crate::config::PlanConfig;
-use datafusion::prelude::SessionContext;
 use std::sync::Arc;
+
+use datafusion::prelude::SessionContext;
+
+use crate::config::PlanConfig;
 
 mod data_type;
 mod expression;

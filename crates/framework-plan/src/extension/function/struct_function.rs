@@ -1,10 +1,10 @@
+use std::any::Any;
+use std::sync::Arc;
+
 use datafusion::arrow::array::{ArrayRef, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Expr};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use std::any::Any;
-use std::sync::Arc;
+use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 
 fn to_struct_array(args: &[ArrayRef], field_names: &[String]) -> Result<ArrayRef> {
     if args.is_empty() {

@@ -1,9 +1,11 @@
-use crate::error::{PlanError, PlanResult};
-use crate::resolver::PlanResolver;
-use arrow::datatypes as adt;
-use framework_common::spec;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use arrow::datatypes as adt;
+use framework_common::spec;
+
+use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     /// References:

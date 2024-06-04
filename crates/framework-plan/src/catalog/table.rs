@@ -1,16 +1,16 @@
-use datafusion::datasource::TableProvider;
 use std::fmt;
 use std::sync::Arc;
 
+use datafusion::datasource::TableProvider;
 use datafusion_common::{
     exec_err, Constraints, DFSchema, DFSchemaRef, Result, SchemaReference, TableReference,
 };
 use datafusion_expr::{CreateMemoryTable, DdlStatement, DropTable, LogicalPlan, TableType};
 use framework_common::unwrap_or;
+use serde::{Deserialize, Serialize};
 
 use crate::catalog::utils::match_pattern;
 use crate::catalog::CatalogManager;
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TableTypeName {

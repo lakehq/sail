@@ -5,10 +5,8 @@ use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use pyo3::{
-    prelude::*,
-    types::{PyDict, PyIterator, PyList, PyTuple, PyType},
-};
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyIterator, PyList, PyTuple, PyType};
 
 use crate::cereal::partial_pyspark_udf::{
     is_pyspark_arrow_udf, is_pyspark_pandas_udf, PartialPySparkUDF, PY_SPARK_SQL_BATCHED_UDF,

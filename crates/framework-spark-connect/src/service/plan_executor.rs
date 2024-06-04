@@ -8,6 +8,9 @@ use datafusion::dataframe::DataFrame;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_common::config::{FormatOptions, TableOptions};
 use datafusion_expr::ScalarUDF;
+use framework_common::spec::{CommonInlineUserDefinedFunction, FunctionDefinition};
+use framework_plan::resolver::{PlanResolver, PlanResolverState};
+use framework_python::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
@@ -20,18 +23,15 @@ use crate::executor::{
 use crate::session::Session;
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::{ResponseType, ResultComplete};
-use crate::spark::connect::relation;
-use crate::spark::connect::write_operation::{save_table::TableSaveMethod, SaveMode, SaveType};
+use crate::spark::connect::write_operation::save_table::TableSaveMethod;
+use crate::spark::connect::write_operation::{SaveMode, SaveType};
 use crate::spark::connect::{
-    CommonInlineUserDefinedFunction as SCCommonInlineUserDefinedFunction,
+    relation, CommonInlineUserDefinedFunction as SCCommonInlineUserDefinedFunction,
     CommonInlineUserDefinedTableFunction as SCCommonInlineUserDefinedTableFunction,
     CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, Relation, SqlCommand,
     StreamingQueryCommand, StreamingQueryManagerCommand, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart,
 };
-use framework_common::spec::{CommonInlineUserDefinedFunction, FunctionDefinition};
-use framework_plan::resolver::{PlanResolver, PlanResolverState};
-use framework_python::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
 pub struct ExecutePlanResponseStream {
     session_id: String,

@@ -1,14 +1,15 @@
-use arrow::ipc::writer::StreamWriter;
-use datafusion::arrow::array::RecordBatch;
 use std::collections::VecDeque;
 use std::io::Cursor;
 use std::mem;
 use std::sync::Arc;
 
+use arrow::ipc::writer::StreamWriter;
+use datafusion::arrow::array::RecordBatch;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::SessionContext;
+use framework_plan::execute_logical_plan;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -19,7 +20,6 @@ use crate::error::{SparkError, SparkResult};
 use crate::schema::to_spark_schema;
 use crate::spark::connect::execute_plan_response::{ArrowBatch, Metrics, ObservedMetrics};
 use crate::spark::connect::DataType;
-use framework_plan::execute_logical_plan;
 
 #[derive(Clone, Debug)]
 pub(crate) enum ExecutorBatch {
@@ -253,9 +253,10 @@ pub(crate) async fn execute_query(
     ctx: &SessionContext,
     query: &str,
 ) -> SparkResult<Vec<RecordBatch>> {
+    use std::collections::HashMap;
+
     use framework_plan::config::PlanConfig;
     use framework_plan::resolver::{PlanResolver, PlanResolverState};
-    use std::collections::HashMap;
 
     let config = PlanConfig::default();
     let relation = crate::spark::connect::Relation {
