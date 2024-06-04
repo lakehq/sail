@@ -25,7 +25,10 @@ use crate::extension::analyzer::alias::rewrite_multi_alias;
 use crate::extension::analyzer::explode::rewrite_explode;
 use crate::extension::analyzer::wildcard::rewrite_wildcard;
 use crate::extension::analyzer::window::rewrite_window;
-use crate::extension::logical::{CatalogCommand, CatalogCommandNode, RangeNode};
+use crate::extension::logical::{
+    CatalogCommand, CatalogCommandNode, RangeNode, ShowStringFormat, ShowStringNode,
+    ShowStringStyle,
+};
 use crate::resolver::utils::{cast_record_batch, read_record_batches};
 use crate::resolver::PlanResolver;
 
@@ -256,7 +259,7 @@ impl PlanResolver<'_> {
                 let input = self.resolve_plan(*input).await?;
                 Ok(LogicalPlan::Limit(plan::Limit {
                     skip: 0,
-                    fetch: Some(limit as usize),
+                    fetch: Some(limit),
                     input: Arc::new(input),
                 }))
             }
@@ -352,7 +355,7 @@ impl PlanResolver<'_> {
             PlanNode::Offset { input, offset } => {
                 let input = self.resolve_plan(*input).await?;
                 Ok(LogicalPlan::Limit(plan::Limit {
-                    skip: offset as usize,
+                    skip: offset,
                     fetch: None,
                     input: Arc::new(input),
                 }))
@@ -414,7 +417,7 @@ impl PlanResolver<'_> {
                     )));
                 }
                 Ok(LogicalPlan::Extension(Extension {
-                    node: Arc::new(RangeNode::try_new(start, end, step, num_partitions as u32)?),
+                    node: Arc::new(RangeNode::try_new(start, end, step, num_partitions)?),
                 }))
             }
             PlanNode::SubqueryAlias {
@@ -434,9 +437,7 @@ impl PlanResolver<'_> {
                 // TODO: handle shuffle partition
                 Ok(LogicalPlan::Repartition(plan::Repartition {
                     input: Arc::new(input),
-                    partitioning_scheme: plan::Partitioning::RoundRobinBatch(
-                        num_partitions as usize,
-                    ),
+                    partitioning_scheme: plan::Partitioning::RoundRobinBatch(num_partitions),
                 }))
             }
             PlanNode::ToDf {
@@ -490,8 +491,21 @@ impl PlanResolver<'_> {
                     Arc::new(input),
                 )?))
             }
-            PlanNode::ShowString { .. } => {
-                return Err(PlanError::todo("show string"));
+            PlanNode::ShowString {
+                input,
+                num_rows,
+                truncate,
+                vertical,
+            } => {
+                let input = self.resolve_plan(*input).await?;
+                let style = match vertical {
+                    true => ShowStringStyle::Vertical,
+                    false => ShowStringStyle::Default,
+                };
+                let format = ShowStringFormat::new(style, truncate);
+                Ok(LogicalPlan::Extension(Extension {
+                    node: Arc::new(ShowStringNode::try_new(Arc::new(input), num_rows, format)?),
+                }))
             }
             PlanNode::Drop {
                 input,
@@ -615,7 +629,7 @@ impl PlanResolver<'_> {
                     .ok_or_else(|| PlanError::todo("rebalance partitioning by expression"))?;
                 Ok(LogicalPlan::Repartition(plan::Repartition {
                     input: Arc::new(input),
-                    partitioning_scheme: plan::Partitioning::Hash(expr, num_partitions as usize),
+                    partitioning_scheme: plan::Partitioning::Hash(expr, num_partitions),
                 }))
             }
             PlanNode::MapPartitions { .. } => {
@@ -639,8 +653,16 @@ impl PlanResolver<'_> {
             PlanNode::ApplyInPandasWithState { .. } => {
                 return Err(PlanError::todo("apply in pandas with state"));
             }
-            PlanNode::HtmlString { .. } => {
-                return Err(PlanError::todo("html string"));
+            PlanNode::HtmlString {
+                input,
+                num_rows,
+                truncate,
+            } => {
+                let input = self.resolve_plan(*input).await?;
+                let format = ShowStringFormat::new(ShowStringStyle::Html, truncate);
+                Ok(LogicalPlan::Extension(Extension {
+                    node: Arc::new(ShowStringNode::try_new(Arc::new(input), num_rows, format)?),
+                }))
             }
             PlanNode::CachedLocalRelation { .. } => {
                 return Err(PlanError::todo("cached local relation"));

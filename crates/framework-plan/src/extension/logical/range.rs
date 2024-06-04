@@ -9,13 +9,13 @@ use datafusion_common::plan_err;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct Range {
-    pub(crate) start: i64,
-    pub(crate) end: i64,
-    pub(crate) step: i64,
+    pub start: i64,
+    pub end: i64,
+    pub step: i64,
 }
 
 impl Range {
-    pub fn partition(&self, partition: u32, num_partitions: u32) -> Self {
+    pub fn partition(&self, partition: usize, num_partitions: usize) -> Self {
         let start = self.start as i128;
         let end = self.end as i128;
         let step = self.step as i128;
@@ -76,37 +76,28 @@ impl Iterator for RangeIterator {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct RangeNode {
-    range: Range,
-    num_partitions: u32,
-    schema: DFSchemaRef,
+    pub range: Range,
+    pub num_partitions: usize,
+    pub schema: DFSchemaRef,
 }
 
 impl RangeNode {
-    pub fn try_new(start: i64, end: i64, step: i64, num_partitions: u32) -> Result<Self> {
+    pub fn try_new(start: i64, end: i64, step: i64, num_partitions: usize) -> Result<Self> {
         if step == 0 {
             return plan_err!("the range step must not be 0");
         }
         if num_partitions == 0 {
             return plan_err!("the number of partitions must be greater than 0");
         }
-        let field = Field::new("id", DataType::Int64, false);
-        let schema = Arc::new(DFSchema::from_unqualifed_fields(
-            vec![field].into(),
-            HashMap::new(),
-        )?);
+        let fields = vec![Field::new("id", DataType::Int64, false)];
         Ok(Self {
             range: Range { start, end, step },
             num_partitions,
-            schema,
+            schema: Arc::new(DFSchema::from_unqualifed_fields(
+                fields.into(),
+                HashMap::new(),
+            )?),
         })
-    }
-
-    pub fn range(&self) -> &Range {
-        &self.range
-    }
-
-    pub fn num_partitions(&self) -> u32 {
-        self.num_partitions
     }
 }
 
