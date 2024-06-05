@@ -345,7 +345,6 @@ impl PlanResolver<'_> {
                     input_types,
                     python_function,
                     output_type,
-                    eval_type,
                 );
 
                 Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
