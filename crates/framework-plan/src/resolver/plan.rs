@@ -707,9 +707,10 @@ impl PlanResolver<'_> {
                 }
 
                 let python_function: PartialPythonUDF =
-                    deserialize_partial_python_udf(&command, &eval_type).map_err(|e| {
-                        PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
-                    })?;
+                    deserialize_partial_python_udf(&command, &eval_type, &(arguments.len() as i32))
+                        .map_err(|e| {
+                            PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
+                        })?;
 
                 let output_schema = adt::SchemaRef::new(
                     spec::Schema {
