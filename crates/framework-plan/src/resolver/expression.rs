@@ -332,10 +332,12 @@ impl PlanResolver<'_> {
                     )));
                 }
 
-                let python_function: PartialPythonUDF = deserialize_partial_python_udf(&command)
-                    .map_err(|e| {
+                let python_function: PartialPythonUDF =
+                    deserialize_partial_python_udf(&command, &eval_type).map_err(|e| {
                         PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
                     })?;
+
+                println!("CHECK HERE Python function: {:?}", python_function);
 
                 let python_udf: PythonUDF = PythonUDF::new(
                     function_name.to_owned(),

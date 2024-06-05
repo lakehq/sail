@@ -29,7 +29,9 @@ impl Serialize for PartialPythonUDF {
     }
 }
 
-struct PartialPythonUDFVisitor;
+struct PartialPythonUDFVisitor {
+    eval_type: i32,
+}
 
 impl<'de> Visitor<'de> for PartialPythonUDFVisitor {
     type Value = PartialPythonUDF;
@@ -43,23 +45,40 @@ impl<'de> Visitor<'de> for PartialPythonUDFVisitor {
         E: de::Error,
     {
         Python::with_gil(|py| {
-            PyModule::import_bound(py, pyo3::intern!(py, "pyspark.cloudpickle"))
-                .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
-                .and_then(|loads| loads.call1((v,)))
+            // PyModule::import_bound(py, pyo3::intern!(py, "pyspark.cloudpickle"))
+            //     .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
+            //     .and_then(|loads| loads.call1((v,)))
+            //     .and_then(|py_tuple| Ok(PartialPythonUDF(py_tuple.to_object(py))))
+            //     .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))
+
+            let infile = PyModule::import_bound(py, pyo3::intern!(py, "io"))
+                .and_then(|io| io.getattr(pyo3::intern!(py, "BytesIO")))
+                .and_then(|bytes_io| bytes_io.call1((PyBytes::new_bound(py, v),)))
+                .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))?;
+            let pickle_ser = PyModule::import_bound(py, pyo3::intern!(py, "pyspark.serializers"))
+                .and_then(|serializers| {
+                    serializers.getattr(pyo3::intern!(py, "CloudPickleSerializer"))
+                })
+                .and_then(|serializer| serializer.call0())
+                .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))?;
+
+            PyModule::import_bound(py, pyo3::intern!(py, "pyspark.worker"))
+                .and_then(|worker| worker.getattr(pyo3::intern!(py, "read_udfs")))
+                .and_then(|read_udfs| read_udfs.call1((pickle_ser, infile, self.eval_type)))
                 .and_then(|py_tuple| Ok(PartialPythonUDF(py_tuple.to_object(py))))
                 .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))
         })
     }
 }
 
-impl<'de> Deserialize<'de> for PartialPythonUDF {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_bytes(PartialPythonUDFVisitor)
-    }
-}
+// impl<'de> Deserialize<'de> for PartialPythonUDF {
+//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+//     where
+//         D: Deserializer<'de>,
+//     {
+//         deserializer.deserialize_bytes(PartialPythonUDFVisitor)
+//     }
+// }
 
 impl Hash for PartialPythonUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -79,9 +98,22 @@ impl PartialEq for PartialPythonUDF {
 
 impl Eq for PartialPythonUDF {}
 
+// pub fn deserialize_partial_python_udf(
+//     command: &[u8],
+//     eval_type: &i32,
+// ) -> Result<PartialPythonUDF, de::value::Error> {
+//     let bytes = Bytes::new(command);
+//     PartialPythonUDF::deserialize(bytes.into_deserializer(), eval_type)
+// }
+
 pub fn deserialize_partial_python_udf(
     command: &[u8],
+    eval_type: &i32,
 ) -> Result<PartialPythonUDF, de::value::Error> {
     let bytes = Bytes::new(command);
-    PartialPythonUDF::deserialize(bytes.into_deserializer())
+    let visitor = PartialPythonUDFVisitor {
+        eval_type: *eval_type,
+    };
+    let deserializer = bytes.into_deserializer();
+    deserializer.deserialize_bytes(visitor)
 }
