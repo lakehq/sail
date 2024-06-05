@@ -100,7 +100,6 @@ struct ShowStringStream {
     limit: usize,
     format: ShowStringFormat,
     input_schema: SchemaRef,
-    output_schema: SchemaRef,
     data: Vec<RecordBatch>,
     has_more_data: bool,
 }
@@ -108,13 +107,11 @@ struct ShowStringStream {
 impl ShowStringStream {
     pub fn new(input: SendableRecordBatchStream, limit: usize, format: ShowStringFormat) -> Self {
         let input_schema = input.schema();
-        let output_schema = format.schema();
         Self {
             input: Some(input),
             limit,
             format,
             input_schema,
-            output_schema,
             data: vec![],
             has_more_data: false,
         }
@@ -133,13 +130,13 @@ impl ShowStringStream {
             Err(x) => return Some(Err(x)),
         };
         let array = StringArray::from(vec![table]);
-        let batch = RecordBatch::try_new(self.output_schema.clone(), vec![Arc::new(array)])
+        let batch = RecordBatch::try_new(self.format.schema(), vec![Arc::new(array)])
             .map_err(|e| arrow_datafusion_err!(e));
         Some(batch)
     }
 
     fn wait(&self) -> Option<Result<RecordBatch>> {
-        Some(Ok(RecordBatch::new_empty(self.output_schema.clone())))
+        Some(Ok(RecordBatch::new_empty(self.format.schema())))
     }
 
     fn accept_batch(&mut self, batch: Option<Result<RecordBatch>>) -> Option<Result<RecordBatch>> {
@@ -185,6 +182,6 @@ impl Stream for ShowStringStream {
 
 impl RecordBatchStream for ShowStringStream {
     fn schema(&self) -> SchemaRef {
-        self.output_schema.clone()
+        self.format.schema()
     }
 }
