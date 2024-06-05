@@ -109,14 +109,18 @@ impl ScalarUDFImpl for PythonUDF {
                 .clone_ref(py)
                 .into_bound(py);
 
-            for i in 0..array_len {
-                let py_arg: Bound<PyAny> = py_args.get_item(i).unwrap();
-                let py_arg: Bound<PyTuple> = PyTuple::new_bound(py, &[py_arg]);
-                let result = python_function
-                    .call1(py_arg)
-                    .map_err(|e| DataFusionError::Execution(format!("{e:?}")))?;
-                results.push(result);
-            }
+            // for i in 0..array_len {
+            //     let py_arg: Bound<PyAny> = py_args.get_item(i).unwrap();
+            //     let py_arg: Bound<PyTuple> = PyTuple::new_bound(py, &[py_arg]);
+            //     let result = python_function
+            //         .call1(py_arg)
+            //         .map_err(|e| DataFusionError::Execution(format!("{e:?}")))?;
+            //     results.push(result);
+            // }
+
+            let results = python_function
+                .call1((py_args,))
+                .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
 
             let pyarrow_output_type = self
                 .output_type
