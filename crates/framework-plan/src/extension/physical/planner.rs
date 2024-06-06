@@ -1,13 +1,30 @@
-use crate::extension::logical::{RangeNode, ShowStringNode};
+use crate::extension::logical::{RangeNode, ShowStringNode, SortWithinPartitionNode};
 use crate::extension::physical::range::RangeExec;
 use crate::extension::physical::show_string::ShowStringExec;
 use async_trait::async_trait;
 use datafusion::execution::context::SessionState;
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
+use datafusion::physical_planner::{create_physical_sort_exprs, ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
 use std::sync::Arc;
+
+trait NodeContainer {
+    type Item;
+
+    fn one(&self) -> Result<Self::Item>;
+}
+
+impl NodeContainer for &[Arc<dyn ExecutionPlan>] {
+    type Item = Arc<dyn ExecutionPlan>;
+    fn one(&self) -> Result<Arc<dyn ExecutionPlan>> {
+        if self.len() != 1 {
+            return internal_err!("expecting one execution plan input: {:?}", self);
+        }
+        Ok(self[0].clone())
+    }
+}
 
 pub(crate) struct ExtensionPhysicalPlanner {}
 
@@ -19,9 +36,8 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let node = node;
         let plan: Arc<dyn ExecutionPlan> =
             if let Some(node) = node.as_any().downcast_ref::<RangeNode>() {
                 Arc::new(RangeExec::new(
@@ -30,14 +46,21 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     node.schema().inner().clone(),
                 ))
             } else if let Some(node) = node.as_any().downcast_ref::<ShowStringNode>() {
-                if physical_inputs.len() != 1 {
-                    return internal_err!("ShowStringExec should have one child");
-                }
                 Arc::new(ShowStringExec::new(
-                    physical_inputs[0].clone(),
+                    physical_inputs.one()?,
                     node.limit,
                     node.format.clone(),
                 ))
+            } else if let Some(node) = node.as_any().downcast_ref::<SortWithinPartitionNode>() {
+                let expr = create_physical_sort_exprs(
+                    node.expr.as_slice(),
+                    node.input.schema(),
+                    session_state.execution_props(),
+                )?;
+                let sort = SortExec::new(expr, physical_inputs.one()?)
+                    .with_fetch(node.fetch)
+                    .with_preserve_partitioning(true);
+                Arc::new(sort)
             } else {
                 return internal_err!("Unsupported logical extension node: {:?}", node);
             };
