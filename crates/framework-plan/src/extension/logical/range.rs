@@ -90,13 +90,14 @@ impl RangeNode {
             return plan_err!("the number of partitions must be greater than 0");
         }
         let fields = vec![Field::new("id", DataType::Int64, false)];
+        let schema = Arc::new(DFSchema::from_unqualifed_fields(
+            fields.into(),
+            HashMap::new(),
+        )?);
         Ok(Self {
             range: Range { start, end, step },
             num_partitions,
-            schema: Arc::new(DFSchema::from_unqualifed_fields(
-                fields.into(),
-                HashMap::new(),
-            )?),
+            schema,
         })
     }
 }

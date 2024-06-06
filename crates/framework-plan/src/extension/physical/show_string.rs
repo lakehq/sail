@@ -167,7 +167,7 @@ impl Stream for ShowStringStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match &mut self.input {
-            None => Poll::Ready(self.accept_batch(None)),
+            None => Poll::Ready(None),
             Some(input) => {
                 let poll = input.poll_next_unpin(cx);
                 poll.map(|x| self.accept_batch(x))
