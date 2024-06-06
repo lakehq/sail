@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::proto::data_type::parse_spark_schema;
+use crate::proto::data_type::{parse_spark_schema, DEFAULT_FIELD_NAME};
 use crate::schema::to_spark_schema;
 use crate::session::Session;
 use crate::spark::connect as sc;
@@ -98,9 +98,8 @@ pub(crate) async fn handle_analyze_ddl_parse(
     request: DdlParseRequest,
 ) -> SparkResult<DdlParseResponse> {
     let schema = parse_spark_schema(request.ddl_string.as_str())?;
-    let schema = Arc::new(schema.try_into()?);
     Ok(DdlParseResponse {
-        parsed: Some(to_spark_schema(schema)?),
+        parsed: Some(schema.try_into()?),
     })
 }
 

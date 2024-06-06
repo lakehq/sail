@@ -11,7 +11,6 @@ use serde_bytes::Bytes;
 const NON_UDF: i32 = 0;
 const SQL_BATCHED_UDF: i32 = 100;
 const SQL_ARROW_BATCHED_UDF: i32 = 101;
-
 const SQL_SCALAR_PANDAS_UDF: i32 = 200;
 const SQL_GROUPED_MAP_PANDAS_UDF: i32 = 201;
 const SQL_GROUPED_AGG_PANDAS_UDF: i32 = 202;
@@ -21,7 +20,6 @@ const SQL_MAP_PANDAS_ITER_UDF: i32 = 205;
 const SQL_COGROUPED_MAP_PANDAS_UDF: i32 = 206;
 const SQL_MAP_ARROW_ITER_UDF: i32 = 207;
 const SQL_GROUPED_MAP_PANDAS_UDF_WITH_STATE: i32 = 208;
-
 const SQL_TABLE_UDF: i32 = 300;
 const SQL_ARROW_TABLE_UDF: i32 = 301;
 
@@ -81,28 +79,25 @@ impl<'de> Visitor<'de> for PartialPySparkUDFVisitor {
 
             data.extend(&1i32.to_be_bytes()); // num_udfs
             data.extend(&self.num_args.to_be_bytes()); // num_args
-            data.extend(&0i32.to_be_bytes()); // arg_offsets
-
-            // let arg_offsets: Vec<i32> = vec![1]; // Your actual argument offsets
-            // data.extend(&(arg_offsets.len() as i32).to_be_bytes()); // length of arg_offsets list
-            // for &offset in &arg_offsets {
-            //     data.extend(&offset.to_be_bytes()); // actual arg_offsets values
-            // }
-
+            for index in 0..self.num_args {
+                data.extend(&index.to_be_bytes()); // arg_offsets
+            }
             data.extend(&1i32.to_be_bytes()); // num functions
             data.extend(&(v.len() as i32).to_be_bytes()); // len of the function
             data.extend_from_slice(v);
-            let data = data.as_slice();
+            let data: &[u8] = data.as_slice();
 
-            let infile = PyModule::import_bound(py, pyo3::intern!(py, "io"))
+            let infile: Bound<PyAny> = PyModule::import_bound(py, pyo3::intern!(py, "io"))
                 .and_then(|io| io.getattr(pyo3::intern!(py, "BytesIO")))
-                // .and_then(|bytes_io| bytes_io.call1((PyBytes::new_bound(py, &data),)))
                 .and_then(|bytes_io| bytes_io.call1((data,)))
                 .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))?;
-            let pickle_ser = PyModule::import_bound(py, pyo3::intern!(py, "pyspark.serializers"))
-                .and_then(|serializers| serializers.getattr(pyo3::intern!(py, "CPickleSerializer")))
-                .and_then(|serializer| serializer.call0())
-                .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))?;
+            let pickle_ser: Bound<PyAny> =
+                PyModule::import_bound(py, pyo3::intern!(py, "pyspark.serializers"))
+                    .and_then(|serializers| {
+                        serializers.getattr(pyo3::intern!(py, "CPickleSerializer"))
+                    })
+                    .and_then(|serializer| serializer.call0())
+                    .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))?;
 
             PyModule::import_bound(py, pyo3::intern!(py, "pyspark.worker"))
                 .and_then(|worker| worker.getattr(pyo3::intern!(py, "read_udfs")))

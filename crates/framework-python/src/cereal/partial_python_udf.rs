@@ -17,6 +17,7 @@ impl Serialize for PartialPythonUDF {
         S: Serializer,
     {
         Python::with_gil(|py| {
+            // TODO: Don't use pyspark.cloudpickle
             PyModule::import_bound(py, pyo3::intern!(py, "pyspark.cloudpickle"))
                 .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "dumps")))
                 .and_then(|dumps| dumps.call1((self.0.clone_ref(py).into_bound(py),)))

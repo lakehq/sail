@@ -342,8 +342,6 @@ impl PlanResolver<'_> {
                     PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
                 })?;
 
-                println!("CHECK HERE Python eval_type: {:?}", eval_type);
-
                 let python_udf: PySparkUDF = PySparkUDF::new(
                     function_name.to_owned(),
                     deterministic,
