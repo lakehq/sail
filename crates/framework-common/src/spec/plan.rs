@@ -84,7 +84,7 @@ pub enum PlanNode {
     },
     Limit {
         input: Box<Plan>,
-        limit: i32,
+        limit: usize,
     },
     Aggregate {
         input: Box<Plan>,
@@ -107,7 +107,7 @@ pub enum PlanNode {
     },
     Offset {
         input: Box<Plan>,
-        offset: i32,
+        offset: usize,
     },
     Deduplicate {
         input: Box<Plan>,
@@ -119,7 +119,7 @@ pub enum PlanNode {
         start: Option<i64>,
         end: i64,
         step: i64,
-        num_partitions: Option<i32>,
+        num_partitions: Option<usize>,
     },
     SubqueryAlias {
         input: Box<Plan>,
@@ -128,7 +128,7 @@ pub enum PlanNode {
     },
     Repartition {
         input: Box<Plan>,
-        num_partitions: i32,
+        num_partitions: usize,
         shuffle: bool,
     },
     ToDf {
@@ -141,8 +141,8 @@ pub enum PlanNode {
     },
     ShowString {
         input: Box<Plan>,
-        num_rows: i32,
-        truncate: i32,
+        num_rows: usize,
+        truncate: usize,
         vertical: bool,
     },
     Drop {
@@ -152,7 +152,7 @@ pub enum PlanNode {
     },
     Tail {
         input: Box<Plan>,
-        limit: i32,
+        limit: usize,
     },
     WithColumns {
         input: Box<Plan>,
@@ -177,7 +177,7 @@ pub enum PlanNode {
     RepartitionByExpression {
         input: Box<Plan>,
         partition_expressions: Vec<Expr>,
-        num_partitions: Option<i32>,
+        num_partitions: Option<usize>,
     },
     MapPartitions {
         input: Box<Plan>,
@@ -231,8 +231,8 @@ pub enum PlanNode {
     },
     HtmlString {
         input: Box<Plan>,
-        num_rows: i32,
-        truncate: i32,
+        num_rows: usize,
+        truncate: usize,
     },
     CachedLocalRelation {
         user_id: String,
@@ -252,7 +252,7 @@ pub enum PlanNode {
     DropNa {
         input: Box<Plan>,
         columns: Vec<Identifier>,
-        min_non_nulls: Option<i32>,
+        min_non_nulls: Option<usize>,
     },
     ReplaceNa {
         input: Box<Plan>,
@@ -482,7 +482,7 @@ pub enum TableSaveMethod {
 #[serde(rename_all = "camelCase")]
 pub struct SaveBucketBy {
     pub bucket_column_names: Vec<Identifier>,
-    pub num_buckets: i32,
+    pub num_buckets: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -572,5 +572,5 @@ pub struct StorageLevel {
     pub use_memory: bool,
     pub use_off_heap: bool,
     pub deserialized: bool,
-    pub replication: i32,
+    pub replication: usize,
 }
