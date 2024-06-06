@@ -89,9 +89,11 @@ impl ScalarUDFImpl for PySparkUDF {
             // TODO: Do zip in Rust for performance.
             let py_args_zip = py
                 .eval_bound("zip", None, None)
-                .map_err(|err| DataFusionError::Internal(format!("{:?}", err)))?
-                .call1(py_args_tuple)
-                .map_err(|err| DataFusionError::Internal(format!("{:?}", err)))?;
+                .map_err(|err| {
+                    DataFusionError::Internal(format!("py_args_zip eval_bound{:?}", err))
+                })?
+                .call1(&py_args_tuple)
+                .map_err(|err| DataFusionError::Internal(format!("py_args_zip zip{:?}", err)))?;
             let py_args = PyIterator::from_bound_object(&py_args_zip)
                 .map_err(|err| DataFusionError::Internal(format!("py_args_iter {:?}", err)))?;
 
@@ -102,13 +104,22 @@ impl ScalarUDFImpl for PySparkUDF {
                         .map_err(|e| {
                             DataFusionError::Execution(format!("PySpark UDF Result: {e:?}"))
                         })?;
+                    println!("CHECK HERE Result: {:?}", result);
                     let result = py
                         .eval_bound("list", None, None)
-                        .map_err(|err| DataFusionError::Internal(format!("{:?}", err)))?
+                        .map_err(|err| {
+                            DataFusionError::Internal(format!("eval_bound list: {:?}", err))
+                        })?
                         .call1((result,))
-                        .map_err(|err| DataFusionError::Internal(format!("{:?}", err)))?
+                        .map_err(|err| {
+                            DataFusionError::Internal(format!("Call eval_bound list: {:?}", err))
+                        })?
+                        // TODO: Ensure result list has only one item.
                         .get_item(0)
-                        .unwrap();
+                        .map_err(|err| {
+                            DataFusionError::Internal(format!("Result list get_item: {:?}", err))
+                        })?;
+                    println!("CHECK HERE Result: {:?}", result);
                     Ok(result)
                 })
                 .collect::<Result<Vec<_>, _>>()
@@ -116,7 +127,7 @@ impl ScalarUDFImpl for PySparkUDF {
                     DataFusionError::Internal(format!("PySpark UDF Results: {:?}", err))
                 })?;
 
-            let pyarrow_output_type = self.output_type.to_pyarrow(py).map_err(|err| {
+            let pyarrow_output_type: PyObject = self.output_type.to_pyarrow(py).map_err(|err| {
                 DataFusionError::Internal(format!("output_type to_pyarrow {:?}", err))
             })?;
 
