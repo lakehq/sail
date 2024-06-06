@@ -688,10 +688,11 @@ impl PlanResolver<'_> {
                 return Err(PlanError::todo("cached remote relation"));
             }
             PlanNode::CommonInlineUserDefinedTableFunction(udtf) => {
-                use framework_python::partial_python_udf::{
-                    deserialize_partial_python_udf, PartialPythonUDF,
+                // TODO: Function arg for if pyspark_udf or not
+                use framework_python::cereal::partial_pyspark_udf::{
+                    deserialize_partial_pyspark_udf, PartialPySparkUDF,
                 };
-                use framework_python::udtf::{PythonUDT, PythonUDTF};
+                use framework_python::udf::pyspark_udtf::{PySparkUDT, PySparkUDTF};
                 use pyo3::prelude::*;
 
                 let spec::CommonInlineUserDefinedTableFunction {
@@ -744,11 +745,14 @@ impl PlanResolver<'_> {
                             )));
                 }
 
-                let python_function: PartialPythonUDF =
-                    deserialize_partial_python_udf(&command, &eval_type, &(arguments.len() as i32))
-                        .map_err(|e| {
-                            PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
-                        })?;
+                let python_function: PartialPySparkUDF = deserialize_partial_pyspark_udf(
+                    &command,
+                    &eval_type,
+                    &(arguments.len() as i32),
+                )
+                .map_err(|e| {
+                    PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
+                })?;
 
                 let output_schema = adt::SchemaRef::new(
                     spec::Schema {
@@ -756,7 +760,7 @@ impl PlanResolver<'_> {
                     }
                     .try_into()?,
                 );
-                // let udtf = PythonUDTF::new(
+                // let udtf = PySparkUDTF::new(
                 //     function_name.to_string(),
                 //     input_types,
                 //     output_schema,

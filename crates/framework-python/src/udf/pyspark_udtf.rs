@@ -1,4 +1,4 @@
-use crate::partial_python_udf::PartialPythonUDF;
+use crate::cereal::partial_pyspark_udf::PartialPySparkUDF;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -13,13 +13,13 @@ use datafusion_expr::{ColumnarValue, Expr, TableType};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
-pub struct PythonUDT {
+pub struct PySparkUDT {
     output_schema: SchemaRef,
     // limit: Option<usize>,
     // batches: Vec<RecordBatch>,
 }
 
-impl PythonUDT {
+impl PySparkUDT {
     pub fn new(output_schema: SchemaRef) -> Self {
         Self { output_schema }
     }
@@ -50,23 +50,23 @@ impl PythonUDT {
 // }
 
 #[derive(Debug, Clone)]
-pub struct PythonUDTF {
+pub struct PySparkUDTF {
     function_name: String,
     input_types: Vec<DataType>,
     output_schema: SchemaRef,
-    python_function: PartialPythonUDF,
+    python_function: PartialPySparkUDF,
     #[allow(dead_code)]
     deterministic: bool,
     #[allow(dead_code)]
     eval_type: i32,
 }
 
-impl PythonUDTF {
+impl PySparkUDTF {
     pub fn new(
         function_name: String,
         input_types: Vec<DataType>,
         output_schema: SchemaRef,
-        python_function: PartialPythonUDF,
+        python_function: PartialPySparkUDF,
         deterministic: bool,
         eval_type: i32,
     ) -> Self {

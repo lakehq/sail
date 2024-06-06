@@ -19,6 +19,7 @@ opentelemetry-semantic-conventions = { workspace = true }
 opentelemetry-otlp = { workspace = true }
 opentelemetry-proto = { workspace = true }
 opentelemetry-stdout = { workspace = true }
+opentelemetry-resource-detectors = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
@@ -50,8 +51,6 @@ pyo3 = { workspace = true }
 arrow = { workspace = true }
 arrow-cast = { workspace = true }
 sqlparser = { workspace = true }
-polars = { workspace = true }
-polars-arrow = { workspace = true }
 serde_arrow = { workspace = true }
 
 [build-dependencies]

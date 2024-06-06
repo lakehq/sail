@@ -15,7 +15,5 @@ serde_bytes = { workspace = true }
 pyo3 = { workspace = true }
 arrow = { workspace = true }
 sqlparser = { workspace = true }
-polars = { workspace = true }
-polars-arrow = { workspace = true }
 bincode = { workspace = true }
 async-trait = { workspace = true }

@@ -1,6 +1,6 @@
 use std::any::Any;
 
-use crate::partial_python_udf::PartialPythonUDF;
+use crate::cereal::partial_pyspark_udf::PartialPySparkUDF;
 use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
@@ -14,19 +14,19 @@ use pyo3::{
 use crate::pyarrow::{FromPyArrow, ToPyArrow};
 
 #[derive(Debug, Clone)]
-pub struct PythonUDF {
+pub struct PySparkUDF {
     signature: Signature,
     function_name: String,
     output_type: DataType,
-    python_function: PartialPythonUDF,
+    python_function: PartialPySparkUDF,
 }
 
-impl PythonUDF {
+impl PySparkUDF {
     pub fn new(
         function_name: String,
         deterministic: bool,
         input_types: Vec<DataType>,
-        python_function: PartialPythonUDF,
+        python_function: PartialPySparkUDF,
         output_type: DataType,
     ) -> Self {
         Self {
@@ -45,7 +45,7 @@ impl PythonUDF {
     }
 }
 
-impl ScalarUDFImpl for PythonUDF {
+impl ScalarUDFImpl for PySparkUDF {
     fn as_any(&self) -> &dyn Any {
         self
     }

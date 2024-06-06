@@ -284,12 +284,13 @@ impl PlanResolver<'_> {
                 Err(PlanError::todo("unresolved named lambda variable"))
             }
             Expr::CommonInlineUserDefinedFunction(function) => {
+                // TODO: Function arg for if pyspark_udf or not
                 // TODO: eval_type For UDF type and multiple args.
                 //  Checkout worker.py and PythonRunner.Scala in Spark codebase
-                use framework_python::partial_python_udf::{
-                    deserialize_partial_python_udf, PartialPythonUDF,
+                use framework_python::cereal::partial_pyspark_udf::{
+                    deserialize_partial_pyspark_udf, PartialPySparkUDF,
                 };
-                use framework_python::udf::PythonUDF;
+                use framework_python::udf::pyspark_udf::PySparkUDF;
                 use pyo3::prelude::*;
 
                 let spec::CommonInlineUserDefinedFunction {
@@ -332,15 +333,18 @@ impl PlanResolver<'_> {
                     )));
                 }
 
-                let python_function: PartialPythonUDF =
-                    deserialize_partial_python_udf(&command, &eval_type, &(arguments.len() as i32))
-                        .map_err(|e| {
-                            PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
-                        })?;
+                let python_function: PartialPySparkUDF = deserialize_partial_pyspark_udf(
+                    &command,
+                    &eval_type,
+                    &(arguments.len() as i32),
+                )
+                .map_err(|e| {
+                    PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
+                })?;
 
                 println!("CHECK HERE Python eval_type: {:?}", eval_type);
 
-                let python_udf: PythonUDF = PythonUDF::new(
+                let python_udf: PySparkUDF = PySparkUDF::new(
                     function_name.to_owned(),
                     deterministic,
                     input_types,

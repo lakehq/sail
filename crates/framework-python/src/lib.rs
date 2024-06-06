@@ -1,9 +1,8 @@
 use pyo3::prelude::*;
 
-pub mod partial_python_udf;
+pub mod cereal;
 pub mod pyarrow;
 pub mod udf;
-pub mod udtf;
 
 // We need to make sure that SIGINT is not captured by Python
 // so that the Rust program can handle it.
