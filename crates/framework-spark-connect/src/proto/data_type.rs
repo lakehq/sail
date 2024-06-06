@@ -336,7 +336,7 @@ impl TryFrom<spec::DataType> for DataType {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_spark_data_type, parse_spark_schema};
+    use super::{parse_spark_data_type, parse_spark_schema, DEFAULT_FIELD_NAME};
     use crate::error::{SparkError, SparkResult};
     use framework_common::tests::test_gold_set;
 
@@ -353,7 +353,7 @@ mod tests {
     fn test_parse_spark_schema_gold_set() -> SparkResult<()> {
         test_gold_set(
             "tests/gold_data/table_schema.json",
-            |s: String| Ok(parse_spark_schema(&s)?),
+            |s: String| Ok(parse_spark_schema(&s)?.into_schema(DEFAULT_FIELD_NAME, true)),
             |e: String| SparkError::internal(e),
         )
     }
