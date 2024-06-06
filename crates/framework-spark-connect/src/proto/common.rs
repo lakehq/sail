@@ -1,4 +1,4 @@
-use crate::error::{SparkError, SparkResult};
+use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::spark::connect::StorageLevel;
 use framework_common::spec;
 
@@ -13,6 +13,7 @@ impl TryFrom<StorageLevel> for spec::StorageLevel {
             deserialized,
             replication,
         } = level;
+        let replication = usize::try_from(replication).required("replication")?;
         Ok(spec::StorageLevel {
             use_disk,
             use_memory,

@@ -45,12 +45,17 @@ impl Session {
         let runtime = Arc::new(RuntimeEnv::default());
         let state = DFSessionState::new_with_config_rt(config, runtime);
         let state = state.with_query_planner(new_query_planner());
+        let mut config = HashMap::new();
+        // FIXME: define all the default configurations
+        config.insert("spark.sql.repl.eagerEval.enabled".into(), "false".into());
+        config.insert("spark.sql.repl.eagerEval.maxNumRows".into(), "20".into());
+        config.insert("spark.sql.repl.eagerEval.truncate".into(), "20".into());
         Self {
             user_id,
             session_id,
             context: SessionContext::new_with_state(state),
             state: Mutex::new(SessionState {
-                config: HashMap::new(),
+                config,
                 executors: HashMap::new(),
             }),
         }

@@ -24,3 +24,6 @@ serde_arrow = { workspace = true }
 pyo3 = { workspace = true }
 arrow = { workspace = true }
 arrow-cast = { workspace = true }
+futures = { workspace = true }
+comfy-table = { workspace = true }
+html-escape = { workspace = true }

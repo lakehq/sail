@@ -198,6 +198,7 @@ impl TryFrom<RelType> for spec::PlanNode {
             RelType::Limit(limit) => {
                 let sc::Limit { input, limit } = *limit;
                 let input = input.required("limit input")?;
+                let limit = usize::try_from(limit).required("limit value")?;
                 Ok(spec::PlanNode::Limit {
                     input: Box::new((*input).try_into()?),
                     limit,
@@ -301,6 +302,7 @@ impl TryFrom<RelType> for spec::PlanNode {
             RelType::Offset(offset) => {
                 let sc::Offset { input, offset } = *offset;
                 let input = input.required("offset input")?;
+                let offset = usize::try_from(offset).required("offset value")?;
                 Ok(spec::PlanNode::Offset {
                     input: Box::new((*input).try_into()?),
                     offset,
@@ -329,6 +331,10 @@ impl TryFrom<RelType> for spec::PlanNode {
                     step,
                     num_partitions,
                 } = range;
+                let num_partitions = num_partitions
+                    .map(|x| usize::try_from(x))
+                    .transpose()
+                    .required("range num partitions")?;
                 Ok(spec::PlanNode::Range {
                     start,
                     end,
@@ -357,6 +363,8 @@ impl TryFrom<RelType> for spec::PlanNode {
                     shuffle,
                 } = *repartition;
                 let input = input.required("repartition input")?;
+                let num_partitions =
+                    usize::try_from(num_partitions).required("repartition num partitions")?;
                 Ok(spec::PlanNode::Repartition {
                     input: Box::new((*input).try_into()?),
                     num_partitions,
@@ -398,6 +406,8 @@ impl TryFrom<RelType> for spec::PlanNode {
                     vertical,
                 } = *show_string;
                 let input = input.required("show string input")?;
+                let num_rows = usize::try_from(num_rows).required("show string num rows")?;
+                let truncate = usize::try_from(truncate).required("show string truncate")?;
                 Ok(spec::PlanNode::ShowString {
                     input: Box::new((*input).try_into()?),
                     num_rows,
@@ -426,6 +436,7 @@ impl TryFrom<RelType> for spec::PlanNode {
             RelType::Tail(tail) => {
                 let sc::Tail { input, limit } = *tail;
                 let input = input.required("tail input")?;
+                let limit = usize::try_from(limit).required("tail limit")?;
                 Ok(spec::PlanNode::Tail {
                     input: Box::new((*input).try_into()?),
                     limit,
@@ -518,6 +529,10 @@ impl TryFrom<RelType> for spec::PlanNode {
                     .into_iter()
                     .map(|x| x.try_into())
                     .collect::<SparkResult<Vec<_>>>()?;
+                let num_partitions = num_partitions
+                    .map(|x| usize::try_from(x))
+                    .transpose()
+                    .required("repartition by expression num partitions")?;
                 Ok(spec::PlanNode::RepartitionByExpression {
                     input: Box::new((*input).try_into()?),
                     partition_expressions,
@@ -706,6 +721,8 @@ impl TryFrom<RelType> for spec::PlanNode {
                     truncate,
                 } = *html_string;
                 let input = input.required("html string input")?;
+                let num_rows = usize::try_from(num_rows).required("html string num rows")?;
+                let truncate = usize::try_from(truncate).required("html string truncate")?;
                 Ok(spec::PlanNode::HtmlString {
                     input: Box::new((*input).try_into()?),
                     num_rows,
@@ -757,6 +774,10 @@ impl TryFrom<RelType> for spec::PlanNode {
                 } = *drop_na;
                 let input = input.required("drop na input")?;
                 let columns = cols.into_iter().map(|x| x.into()).collect();
+                let min_non_nulls = min_non_nulls
+                    .map(|x| usize::try_from(x))
+                    .transpose()
+                    .required("drop na min non nulls")?;
                 Ok(spec::PlanNode::DropNa {
                     input: Box::new((*input).try_into()?),
                     columns,

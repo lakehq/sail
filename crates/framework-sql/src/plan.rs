@@ -221,7 +221,8 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::Plan> {
     };
 
     let plan = if let Some(ast::Offset { value, rows: _ }) = offset {
-        let offset = LiteralValue::<i32>::try_from(value)?.0;
+        let offset = LiteralValue::<i128>::try_from(value)?.0;
+        let offset = usize::try_from(offset).map_err(|e| SqlError::invalid(e.to_string()))?;
         spec::Plan::new(spec::PlanNode::Offset {
             input: Box::new(plan),
             offset,
@@ -231,7 +232,8 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::Plan> {
     };
 
     let plan = if let Some(limit) = limit {
-        let limit = LiteralValue::<i32>::try_from(limit)?.0;
+        let limit = LiteralValue::<i128>::try_from(limit)?.0;
+        let limit = usize::try_from(limit).map_err(|e| SqlError::invalid(e.to_string()))?;
         spec::Plan::new(spec::PlanNode::Limit {
             input: Box::new(plan),
             limit,

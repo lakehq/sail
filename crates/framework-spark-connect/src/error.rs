@@ -137,7 +137,10 @@ impl<T> ProtoFieldExt<T> for Option<T> {
     }
 }
 
-impl<T> ProtoFieldExt<T> for Result<T, DecodeError> {
+impl<T, E> ProtoFieldExt<T> for Result<T, E>
+where
+    E: std::fmt::Display,
+{
     fn required(self, description: impl Into<String>) -> SparkResult<T> {
         self.map_err(|e| SparkError::InvalidArgument(format!("{}: {}", description.into(), e)))
     }

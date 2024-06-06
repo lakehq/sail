@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BoolOr), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BoolOr), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BoolOr), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -273,7 +273,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(ArrayAgg), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -295,7 +295,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Avg), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -317,7 +317,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Avg), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -339,7 +339,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BitAnd), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -361,7 +361,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BitOr), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -383,7 +383,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BitXor), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -405,7 +405,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BoolAnd), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -427,7 +427,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BoolAnd), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -449,7 +449,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BoolAnd), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -471,7 +471,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BoolOr), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -493,7 +493,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BoolOr), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -515,7 +515,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BoolOr), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -541,7 +541,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(ArrayAgg), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -589,7 +589,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Correlation), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"c1\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"c2\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -611,7 +611,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Count), args: [Literal(Int64(1))], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -633,7 +633,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Count), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: true, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -655,7 +655,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Count), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -721,7 +721,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(CovariancePop), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"c1\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"c2\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -765,7 +765,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BoolAnd), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -787,7 +787,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BoolAnd), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -809,7 +809,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BoolAnd), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -831,7 +831,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(FirstValue), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -853,7 +853,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(FirstValue), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -897,7 +897,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(FirstValue), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -919,7 +919,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(FirstValue), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -1115,7 +1115,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(LastValue), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -1137,7 +1137,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(LastValue), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -1181,7 +1181,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(LastValue), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -1203,7 +1203,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(LastValue), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -1247,7 +1247,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Max), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -1291,7 +1291,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Avg), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -1313,7 +1313,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Avg), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -1335,7 +1335,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Median), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -1357,7 +1357,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Median), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "failure": "error in DataFusion: This feature is not implemented: MedianAccumulator not supported for MEDIAN(tab.col) with Interval(YearMonth)"
       }
     },
     {
@@ -1379,7 +1379,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Min), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -1763,7 +1763,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrAvgx), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -1785,7 +1785,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrAvgx), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -1807,7 +1807,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrAvgx), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -1873,7 +1873,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrAvgy), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -1895,7 +1895,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrAvgy), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -1917,7 +1917,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrAvgy), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -1983,7 +1983,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrCount), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2005,7 +2005,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrCount), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2027,7 +2027,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrCount), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2071,7 +2071,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrIntercept), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2115,7 +2115,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrR2), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2137,7 +2137,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrR2), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2159,7 +2159,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrR2), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2247,7 +2247,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrSlope), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2291,7 +2291,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrSXX), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2313,7 +2313,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrSXX), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2335,7 +2335,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrSXX), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2357,7 +2357,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrSXY), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2379,7 +2379,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrSXY), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2401,7 +2401,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrSXY), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2423,7 +2423,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrSYY), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2445,7 +2445,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrSYY), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2467,7 +2467,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(RegrSYY), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"y\" }), data_type: Float64 }), Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"x\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2533,7 +2533,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BoolOr), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2555,7 +2555,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BoolOr), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2577,7 +2577,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(BoolOr), args: [Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2599,7 +2599,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Stddev), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2621,7 +2621,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Stddev), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2643,7 +2643,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(StddevPop), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2665,7 +2665,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Stddev), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2775,7 +2775,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Sum), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" }), data_type: Int64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2797,7 +2797,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Sum), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" }), data_type: Int64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -2995,7 +2995,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(VariancePop), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -3017,7 +3017,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Variance), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     },
     {
@@ -3039,7 +3039,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression AggregateFunction(AggregateFunction { func_def: BuiltIn(Variance), args: [Cast(Cast { expr: Column(Column { relation: Some(Bare { table: \"tab\" }), name: \"col\" }), data_type: Float64 })], distinct: false, filter: None, order_by: None, null_treatment: None })"
+        "success": "ok"
       }
     }
   ]
