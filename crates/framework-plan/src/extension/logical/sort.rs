@@ -47,11 +47,11 @@ impl UserDefinedLogicalNodeCore for SortWithinPartitionsNode {
         Ok(())
     }
 
-    fn from_template(&self, _: &[Expr], input: &[LogicalPlan]) -> Self {
+    fn from_template(&self, exprs: &[Expr], input: &[LogicalPlan]) -> Self {
         assert_eq!(input.len(), 1);
         Self {
             input: Arc::new(input[0].clone()),
-            expr: self.expr.clone(),
+            expr: exprs.to_vec(),
             fetch: self.fetch,
         }
     }
