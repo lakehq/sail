@@ -4,21 +4,21 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub(crate) struct SortWithinPartitionNode {
+pub(crate) struct SortWithinPartitionsNode {
     pub input: Arc<LogicalPlan>,
     pub expr: Vec<Expr>,
     pub fetch: Option<usize>,
 }
 
-impl SortWithinPartitionNode {
+impl SortWithinPartitionsNode {
     pub fn new(input: Arc<LogicalPlan>, expr: Vec<Expr>, fetch: Option<usize>) -> Self {
         Self { input, expr, fetch }
     }
 }
 
-impl UserDefinedLogicalNodeCore for SortWithinPartitionNode {
+impl UserDefinedLogicalNodeCore for SortWithinPartitionsNode {
     fn name(&self) -> &str {
-        "SortWithinPartition"
+        "SortWithinPartitions"
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -34,7 +34,7 @@ impl UserDefinedLogicalNodeCore for SortWithinPartitionNode {
     }
 
     fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "SortWithinPartition: ")?;
+        write!(f, "SortWithinPartitions: ")?;
         for (i, e) in self.expr.iter().enumerate() {
             if i > 0 {
                 write!(f, ", ")?;

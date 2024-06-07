@@ -28,7 +28,7 @@ use crate::extension::analyzer::wildcard::rewrite_wildcard;
 use crate::extension::analyzer::window::rewrite_window;
 use crate::extension::logical::{
     CatalogCommand, CatalogCommandNode, RangeNode, ShowStringFormat, ShowStringNode,
-    ShowStringStyle, SortWithinPartitionNode,
+    ShowStringStyle, SortWithinPartitionsNode,
 };
 use crate::resolver::utils::{cast_record_batch, read_record_batches};
 use crate::resolver::PlanResolver;
@@ -294,7 +294,7 @@ impl PlanResolver<'_> {
                     }))
                 } else {
                     Ok(LogicalPlan::Extension(Extension {
-                        node: Arc::new(SortWithinPartitionNode::new(Arc::new(input), expr, None)),
+                        node: Arc::new(SortWithinPartitionsNode::new(Arc::new(input), expr, None)),
                     }))
                 }
             }

@@ -1,4 +1,4 @@
-use crate::extension::logical::{RangeNode, ShowStringNode, SortWithinPartitionNode};
+use crate::extension::logical::{RangeNode, ShowStringNode, SortWithinPartitionsNode};
 use crate::extension::physical::range::RangeExec;
 use crate::extension::physical::show_string::ShowStringExec;
 use async_trait::async_trait;
@@ -51,7 +51,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     node.limit,
                     node.format.clone(),
                 ))
-            } else if let Some(node) = node.as_any().downcast_ref::<SortWithinPartitionNode>() {
+            } else if let Some(node) = node.as_any().downcast_ref::<SortWithinPartitionsNode>() {
                 let expr = create_physical_sort_exprs(
                     node.expr.as_slice(),
                     node.input.schema(),
