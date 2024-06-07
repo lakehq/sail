@@ -28,7 +28,7 @@ use crate::extension::analyzer::wildcard::rewrite_wildcard;
 use crate::extension::analyzer::window::rewrite_window;
 use crate::extension::logical::{
     CatalogCommand, CatalogCommandNode, RangeNode, ShowStringFormat, ShowStringNode,
-    ShowStringStyle,
+    ShowStringStyle, SortWithinPartitionsNode,
 };
 use crate::resolver::utils::{cast_record_batch, read_record_batches};
 use crate::resolver::PlanResolver;
@@ -107,10 +107,11 @@ impl PlanResolver<'_> {
                             Some("json") => (Arc::new(JsonFormat::default()), ".json"),
                             Some("csv") => (Arc::new(CsvFormat::default()), ".csv"),
                             Some("parquet") => (Arc::new(ParquetFormat::new()), ".parquet"),
-                            _ => {
-                                return Err(PlanError::unsupported(
-                                    "unsupported data source format",
-                                ))
+                            other => {
+                                return Err(PlanError::unsupported(format!(
+                                    "unsupported data source format: {:?}",
+                                    other
+                                )))
                             }
                         };
                         let options = ListingOptions::new(format).with_file_extension(extension);
@@ -247,29 +248,55 @@ impl PlanResolver<'_> {
                     null_equals_null: false,
                 }))
             }
-            PlanNode::SetOperation { .. } => {
-                return Err(PlanError::todo("set operation"));
+            PlanNode::SetOperation {
+                left,
+                right,
+                set_op_type,
+                is_all,
+                by_name: _,
+                allow_missing_columns: _,
+            } => {
+                use spec::SetOpType;
+
+                // TODO: support set operation by name
+                let left = self.resolve_plan(*left).await?;
+                let right = self.resolve_plan(*right).await?;
+                match set_op_type {
+                    SetOpType::Intersect => Ok(LogicalPlanBuilder::intersect(left, right, is_all)?),
+                    SetOpType::Union => {
+                        if is_all {
+                            Ok(LogicalPlanBuilder::from(left).union(right)?.build()?)
+                        } else {
+                            Ok(LogicalPlanBuilder::from(left)
+                                .union_distinct(right)?
+                                .build()?)
+                        }
+                    }
+                    SetOpType::Except => Ok(LogicalPlanBuilder::except(left, right, is_all)?),
+                }
             }
             PlanNode::Sort {
                 input,
                 order,
-                is_global: _,
+                is_global,
             } => {
-                // TODO: handle sort.is_global
                 let input = self.resolve_plan(*input).await?;
                 let schema = input.schema();
                 let expr = order
                     .into_iter()
-                    .map(|o| {
-                        let expr = spec::Expr::SortOrder(o);
-                        self.resolve_expression(expr, schema)
-                    })
+                    .map(|o| self.resolve_sort_order(o, schema))
                     .collect::<PlanResult<_>>()?;
-                Ok(LogicalPlan::Sort(plan::Sort {
-                    expr,
-                    input: Arc::new(input),
-                    fetch: None,
-                }))
+                if is_global {
+                    Ok(LogicalPlan::Sort(plan::Sort {
+                        expr,
+                        input: Arc::new(input),
+                        fetch: None,
+                    }))
+                } else {
+                    Ok(LogicalPlan::Extension(Extension {
+                        node: Arc::new(SortWithinPartitionsNode::new(Arc::new(input), expr, None)),
+                    }))
+                }
             }
             PlanNode::Limit { input, limit } => {
                 let input = self.resolve_plan(*input).await?;
