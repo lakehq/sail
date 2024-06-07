@@ -199,7 +199,7 @@ impl TryFrom<SortDirection> for spec::SortDirection {
 
     fn try_from(sort_direction: SortDirection) -> SparkResult<spec::SortDirection> {
         match sort_direction {
-            SortDirection::Unspecified => Err(SparkError::invalid("unspecified sort direction")),
+            SortDirection::Unspecified => Ok(spec::SortDirection::Unspecified),
             SortDirection::Ascending => Ok(spec::SortDirection::Ascending),
             SortDirection::Descending => Ok(spec::SortDirection::Descending),
         }
@@ -211,9 +211,7 @@ impl TryFrom<NullOrdering> for spec::NullOrdering {
 
     fn try_from(null_ordering: NullOrdering) -> SparkResult<spec::NullOrdering> {
         match null_ordering {
-            NullOrdering::SortNullsUnspecified => {
-                Err(SparkError::invalid("unspecified null ordering"))
-            }
+            NullOrdering::SortNullsUnspecified => Ok(spec::NullOrdering::Unspecified),
             NullOrdering::SortNullsFirst => Ok(spec::NullOrdering::NullsFirst),
             NullOrdering::SortNullsLast => Ok(spec::NullOrdering::NullsLast),
         }

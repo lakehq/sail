@@ -61,6 +61,14 @@ impl ExecutionPlan for ShowStringExec {
         vec![Distribution::SinglePartition]
     }
 
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
     }
@@ -72,7 +80,11 @@ impl ExecutionPlan for ShowStringExec {
         if children.len() != 1 {
             return internal_err!("ShowStringExec should have one child");
         }
-        Ok(self)
+        Ok(Arc::new(ShowStringExec::new(
+            children[0].clone(),
+            self.limit,
+            self.format.clone(),
+        )))
     }
 
     fn execute(
