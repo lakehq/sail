@@ -17,8 +17,7 @@ impl Serialize for PartialPythonUDF {
         S: Serializer,
     {
         Python::with_gil(|py| {
-            // TODO: Don't use pyspark.cloudpickle
-            PyModule::import_bound(py, pyo3::intern!(py, "pyspark.cloudpickle"))
+            PyModule::import_bound(py, pyo3::intern!(py, "cloudpickle"))
                 .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "dumps")))
                 .and_then(|dumps| dumps.call1((self.0.clone_ref(py).into_bound(py),)))
                 .and_then(|py_bytes| {
@@ -44,7 +43,7 @@ impl<'de> Visitor<'de> for PartialPythonUDFVisitor {
         E: de::Error,
     {
         Python::with_gil(|py| {
-            PyModule::import_bound(py, pyo3::intern!(py, "pyspark.cloudpickle"))
+            PyModule::import_bound(py, pyo3::intern!(py, "cloudpickle"))
                 .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
                 .and_then(|loads| loads.call1((v,)))
                 .and_then(|py_tuple| Ok(PartialPythonUDF(py_tuple.to_object(py))))
