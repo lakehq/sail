@@ -60,33 +60,31 @@ impl<'de> Visitor<'de> for PartialPySparkUDFVisitor {
     where
         E: de::Error,
     {
+        let mut data: Vec<u8> = Vec::new();
+        if self.eval_type == SQL_ARROW_BATCHED_UDF
+            || self.eval_type == SQL_SCALAR_PANDAS_UDF
+            || self.eval_type == SQL_COGROUPED_MAP_PANDAS_UDF
+            || self.eval_type == SQL_SCALAR_PANDAS_ITER_UDF
+            || self.eval_type == SQL_MAP_PANDAS_ITER_UDF
+            || self.eval_type == SQL_MAP_ARROW_ITER_UDF
+            || self.eval_type == SQL_GROUPED_MAP_PANDAS_UDF
+            || self.eval_type == SQL_GROUPED_AGG_PANDAS_UDF
+            || self.eval_type == SQL_WINDOW_AGG_PANDAS_UDF
+            || self.eval_type == SQL_GROUPED_MAP_PANDAS_UDF_WITH_STATE
+        {
+            data.extend(&0i32.to_be_bytes()); // num_conf
+        }
+        data.extend(&1i32.to_be_bytes()); // num_udfs
+        data.extend(&self.num_args.to_be_bytes()); // num_args
+        for index in 0..self.num_args {
+            data.extend(&index.to_be_bytes()); // arg_offsets
+        }
+        data.extend(&1i32.to_be_bytes()); // num functions
+        data.extend(&(v.len() as i32).to_be_bytes()); // len of the function
+        data.extend_from_slice(v);
+        let data: &[u8] = data.as_slice();
+
         Python::with_gil(|py| {
-            let mut data: Vec<u8> = Vec::new();
-
-            if self.eval_type == SQL_ARROW_BATCHED_UDF
-                || self.eval_type == SQL_SCALAR_PANDAS_UDF
-                || self.eval_type == SQL_COGROUPED_MAP_PANDAS_UDF
-                || self.eval_type == SQL_SCALAR_PANDAS_ITER_UDF
-                || self.eval_type == SQL_MAP_PANDAS_ITER_UDF
-                || self.eval_type == SQL_MAP_ARROW_ITER_UDF
-                || self.eval_type == SQL_GROUPED_MAP_PANDAS_UDF
-                || self.eval_type == SQL_GROUPED_AGG_PANDAS_UDF
-                || self.eval_type == SQL_WINDOW_AGG_PANDAS_UDF
-                || self.eval_type == SQL_GROUPED_MAP_PANDAS_UDF_WITH_STATE
-            {
-                data.extend(&0i32.to_be_bytes()); // num_conf
-            }
-
-            data.extend(&1i32.to_be_bytes()); // num_udfs
-            data.extend(&self.num_args.to_be_bytes()); // num_args
-            for index in 0..self.num_args {
-                data.extend(&index.to_be_bytes()); // arg_offsets
-            }
-            data.extend(&1i32.to_be_bytes()); // num functions
-            data.extend(&(v.len() as i32).to_be_bytes()); // len of the function
-            data.extend_from_slice(v);
-            let data: &[u8] = data.as_slice();
-
             let infile: Bound<PyAny> = PyModule::import_bound(py, pyo3::intern!(py, "io"))
                 .and_then(|io| io.getattr(pyo3::intern!(py, "BytesIO")))
                 .and_then(|bytes_io| bytes_io.call1((data,)))
@@ -98,7 +96,6 @@ impl<'de> Visitor<'de> for PartialPySparkUDFVisitor {
                     })
                     .and_then(|serializer| serializer.call0())
                     .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))?;
-
             PyModule::import_bound(py, pyo3::intern!(py, "pyspark.worker"))
                 .and_then(|worker| worker.getattr(pyo3::intern!(py, "read_udfs")))
                 .and_then(|read_udfs| read_udfs.call1((pickle_ser, infile, self.eval_type)))

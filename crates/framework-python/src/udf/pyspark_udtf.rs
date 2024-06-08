@@ -12,18 +12,20 @@ use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{ColumnarValue, Expr, TableType};
 use std::sync::Arc;
 
-#[derive(Debug, Clone)]
-pub struct PySparkUDT {
-    output_schema: SchemaRef,
-    // limit: Option<usize>,
-    // batches: Vec<RecordBatch>,
-}
+// TODO: This PR got too big, going to create a new one for the rest of the work
 
-impl PySparkUDT {
-    pub fn new(output_schema: SchemaRef) -> Self {
-        Self { output_schema }
-    }
-}
+// #[derive(Debug, Clone)]
+// pub struct PySparkUDT {
+//     output_schema: SchemaRef,
+//     // limit: Option<usize>,
+//     // batches: Vec<RecordBatch>,
+// }
+
+// impl PySparkUDT {
+//     pub fn new(output_schema: SchemaRef) -> Self {
+//         Self { output_schema }
+//     }
+// }
 
 // #[async_trait]
 // impl TableProvider for PythonUDT {
@@ -49,37 +51,37 @@ impl PySparkUDT {
 //     }
 // }
 
-#[derive(Debug, Clone)]
-pub struct PySparkUDTF {
-    function_name: String,
-    input_types: Vec<DataType>,
-    output_schema: SchemaRef,
-    python_function: PartialPySparkUDF,
-    #[allow(dead_code)]
-    deterministic: bool,
-    #[allow(dead_code)]
-    eval_type: i32,
-}
-
-impl PySparkUDTF {
-    pub fn new(
-        function_name: String,
-        input_types: Vec<DataType>,
-        output_schema: SchemaRef,
-        python_function: PartialPySparkUDF,
-        deterministic: bool,
-        eval_type: i32,
-    ) -> Self {
-        Self {
-            function_name,
-            input_types,
-            output_schema,
-            python_function,
-            deterministic,
-            eval_type,
-        }
-    }
-}
+// #[derive(Debug, Clone)]
+// pub struct PySparkUDTF {
+//     function_name: String,
+//     input_types: Vec<DataType>,
+//     output_schema: SchemaRef,
+//     python_function: PartialPySparkUDF,
+//     #[allow(dead_code)]
+//     deterministic: bool,
+//     #[allow(dead_code)]
+//     eval_type: i32,
+// }
+//
+// impl PySparkUDTF {
+//     pub fn new(
+//         function_name: String,
+//         input_types: Vec<DataType>,
+//         output_schema: SchemaRef,
+//         python_function: PartialPySparkUDF,
+//         deterministic: bool,
+//         eval_type: i32,
+//     ) -> Self {
+//         Self {
+//             function_name,
+//             input_types,
+//             output_schema,
+//             python_function,
+//             deterministic,
+//             eval_type,
+//         }
+//     }
+// }
 
 // impl TableFunctionImpl for PythonUDTF {
 //     // https://spark.apache.org/docs/latest/api/python/user_guide/sql/python_udtf.html
