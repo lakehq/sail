@@ -16,10 +16,9 @@ use datafusion::logical_expr::{
 };
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, DataFusionError, ParamValues, ScalarValue, SchemaReference,
-    TableReference,
+    Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
-use datafusion_expr::{build_join_schema, ExprSchemable, LogicalPlanBuilder};
+use datafusion_expr::{build_join_schema, LogicalPlanBuilder};
 use framework_common::spec;
 
 use crate::error::{PlanError, PlanResult};
