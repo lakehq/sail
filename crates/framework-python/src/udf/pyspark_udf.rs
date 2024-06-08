@@ -192,6 +192,8 @@ impl ScalarUDFImpl for PySparkUDF {
                         arg.into_data()
                             .to_pyarrow(py)
                             .unwrap()
+                            .call_method0(py, pyo3::intern!(py, "to_pandas"))
+                            .unwrap()
                             .clone_ref(py)
                             .into_bound(py)
                     })
@@ -207,6 +209,7 @@ impl ScalarUDFImpl for PySparkUDF {
                 let results: Bound<PyAny> = builtins_list
                     .call1((results,))
                     .map_err(|err| {
+                        // err.print(py);
                         DataFusionError::Internal(format!("Error calling list(): {:?}", err))
                     })?
                     .get_item(0)
@@ -227,6 +230,11 @@ impl ScalarUDFImpl for PySparkUDF {
                 array_type_kwargs
                     .set_item("type", results_datatype)
                     .map_err(|err| DataFusionError::Internal(format!("kwargs {:?}", err)))?;
+                array_type_kwargs
+                    .set_item("from_pandas", true)
+                    .map_err(|err| {
+                        DataFusionError::Internal(format!("kwargs from_pandas {:?}", err))
+                    })?;
                 let results_data: Bound<PyAny> = pyarrow_module_array
                     .call((results_data,), Some(&array_type_kwargs))
                     .map_err(|err| DataFusionError::Internal(format!("Result array {:?}", err)))?;
