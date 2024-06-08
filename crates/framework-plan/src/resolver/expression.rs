@@ -344,6 +344,7 @@ impl PlanResolver<'_> {
                     function_name.to_owned(),
                     deterministic,
                     input_types,
+                    eval_type,
                     python_function,
                     output_type,
                 );

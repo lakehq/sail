@@ -8,20 +8,37 @@ use serde::de::{self, IntoDeserializer, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_bytes::Bytes;
 
-const NON_UDF: i32 = 0;
-const SQL_BATCHED_UDF: i32 = 100;
-const SQL_ARROW_BATCHED_UDF: i32 = 101;
-const SQL_SCALAR_PANDAS_UDF: i32 = 200;
-const SQL_GROUPED_MAP_PANDAS_UDF: i32 = 201;
-const SQL_GROUPED_AGG_PANDAS_UDF: i32 = 202;
-const SQL_WINDOW_AGG_PANDAS_UDF: i32 = 203;
-const SQL_SCALAR_PANDAS_ITER_UDF: i32 = 204;
-const SQL_MAP_PANDAS_ITER_UDF: i32 = 205;
-const SQL_COGROUPED_MAP_PANDAS_UDF: i32 = 206;
-const SQL_MAP_ARROW_ITER_UDF: i32 = 207;
-const SQL_GROUPED_MAP_PANDAS_UDF_WITH_STATE: i32 = 208;
-const SQL_TABLE_UDF: i32 = 300;
-const SQL_ARROW_TABLE_UDF: i32 = 301;
+pub const PY_SPARK_NON_UDF: i32 = 0;
+pub const PY_SPARK_SQL_BATCHED_UDF: i32 = 100;
+pub const PY_SPARK_SQL_ARROW_BATCHED_UDF: i32 = 101;
+pub const PY_SPARK_SQL_SCALAR_PANDAS_UDF: i32 = 200;
+pub const PY_SPARK_SQL_GROUPED_MAP_PANDAS_UDF: i32 = 201;
+pub const PY_SPARK_SQL_GROUPED_AGG_PANDAS_UDF: i32 = 202;
+pub const PY_SPARK_SQL_WINDOW_AGG_PANDAS_UDF: i32 = 203;
+pub const PY_SPARK_SQL_SCALAR_PANDAS_ITER_UDF: i32 = 204;
+pub const PY_SPARK_SQL_MAP_PANDAS_ITER_UDF: i32 = 205;
+pub const PY_SPARK_SQL_COGROUPED_MAP_PANDAS_UDF: i32 = 206;
+pub const PY_SPARK_SQL_MAP_ARROW_ITER_UDF: i32 = 207;
+pub const PY_SPARK_SQL_GROUPED_MAP_PANDAS_UDF_WITH_STATE: i32 = 208;
+pub const PY_SPARK_SQL_TABLE_UDF: i32 = 300;
+pub const PY_SPARK_SQL_ARROW_TABLE_UDF: i32 = 301;
+
+pub fn is_pyspark_arrow_udf(udf_type: i32) -> bool {
+    udf_type == PY_SPARK_SQL_ARROW_BATCHED_UDF
+        || udf_type == PY_SPARK_SQL_MAP_ARROW_ITER_UDF
+        || udf_type == PY_SPARK_SQL_ARROW_TABLE_UDF
+}
+
+pub fn is_pyspark_pandas_udf(udf_type: i32) -> bool {
+    udf_type == PY_SPARK_SQL_SCALAR_PANDAS_UDF
+        || udf_type == PY_SPARK_SQL_GROUPED_MAP_PANDAS_UDF
+        || udf_type == PY_SPARK_SQL_GROUPED_AGG_PANDAS_UDF
+        || udf_type == PY_SPARK_SQL_WINDOW_AGG_PANDAS_UDF
+        || udf_type == PY_SPARK_SQL_SCALAR_PANDAS_ITER_UDF
+        || udf_type == PY_SPARK_SQL_MAP_PANDAS_ITER_UDF
+        || udf_type == PY_SPARK_SQL_COGROUPED_MAP_PANDAS_UDF
+        || udf_type == PY_SPARK_SQL_GROUPED_MAP_PANDAS_UDF_WITH_STATE
+}
 
 #[derive(Debug, Clone)]
 pub struct PartialPySparkUDF(pub PyObject);
@@ -61,17 +78,7 @@ impl<'de> Visitor<'de> for PartialPySparkUDFVisitor {
         E: de::Error,
     {
         let mut data: Vec<u8> = Vec::new();
-        if self.eval_type == SQL_ARROW_BATCHED_UDF
-            || self.eval_type == SQL_SCALAR_PANDAS_UDF
-            || self.eval_type == SQL_COGROUPED_MAP_PANDAS_UDF
-            || self.eval_type == SQL_SCALAR_PANDAS_ITER_UDF
-            || self.eval_type == SQL_MAP_PANDAS_ITER_UDF
-            || self.eval_type == SQL_MAP_ARROW_ITER_UDF
-            || self.eval_type == SQL_GROUPED_MAP_PANDAS_UDF
-            || self.eval_type == SQL_GROUPED_AGG_PANDAS_UDF
-            || self.eval_type == SQL_WINDOW_AGG_PANDAS_UDF
-            || self.eval_type == SQL_GROUPED_MAP_PANDAS_UDF_WITH_STATE
-        {
+        if is_pyspark_arrow_udf(self.eval_type) || is_pyspark_pandas_udf(self.eval_type) {
             // TODO: Fill in conf.
             data.extend(&0i32.to_be_bytes()); // num_conf
         }

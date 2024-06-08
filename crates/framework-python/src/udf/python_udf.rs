@@ -1,6 +1,5 @@
 use std::any::Any;
 
-use crate::cereal::partial_python_udf::PartialPythonUDF;
 use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
@@ -10,6 +9,7 @@ use pyo3::{
     types::{PyDict, PyTuple},
 };
 
+use crate::cereal::partial_python_udf::PartialPythonUDF;
 use crate::pyarrow::{FromPyArrow, ToPyArrow};
 
 #[derive(Debug, Clone)]
