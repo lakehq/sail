@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::proto::data_type::{parse_spark_schema, DEFAULT_FIELD_NAME};
+use crate::proto::data_type::parse_spark_schema;
 use crate::schema::to_spark_schema;
 use crate::session::Session;
 use crate::spark::connect as sc;
