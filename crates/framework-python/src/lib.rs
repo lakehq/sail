@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 
 pub mod cereal;
 pub mod pyarrow;
+pub mod pyarrowz;
 pub mod udf;
 
 // We need to make sure that SIGINT is not captured by Python
