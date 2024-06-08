@@ -1,10 +1,10 @@
 use std::any::Any;
 
-use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
+use datafusion::arrow::array::{make_array, Array, ArrayData};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use pyo3::types::{PyList, PyTuple};
+use pyo3::types::PyTuple;
 use pyo3::{
     prelude::*,
     types::{PyDict, PyIterator},
@@ -112,26 +112,46 @@ impl ScalarUDFImpl for PySparkUDF {
                 let results: Bound<PyAny> = py
                     .eval_bound("list", None, None)
                     .map_err(|err| {
+                        // PyErr::print(&err, py);
                         DataFusionError::Internal(format!("eval_bound list: {:?}", err))
                     })?
                     .call1((results,))
                     .map_err(|err| {
+                        // PyErr::print(&err, py);
                         DataFusionError::Internal(format!("Call eval_bound list: {:?}", err))
                     })?
                     .get_item(0)
                     .map_err(|err| {
+                        // PyErr::print(&err, py);
                         DataFusionError::Internal(format!("Result list get_item: {:?}", err))
                     })?
                     .get_item(0)
                     .map_err(|err| {
+                        // PyErr::print(&err, py);
                         DataFusionError::Internal(format!("Result list get_item: {:?}", err))
                     })?;
                 println!("CHECK HERE results after list: {:?}", results);
-
+                // let pyarrow_output_type: PyObject =
+                //     self.output_type.to_pyarrow(py).map_err(|err| {
+                //         DataFusionError::Internal(format!("output_type to_pyarrow {:?}", err))
+                //     })?;
+                // let output_type_kwargs: Bound<PyDict> = PyDict::new_bound(py);
+                // output_type_kwargs
+                //     .set_item("type", pyarrow_output_type.clone_ref(py))
+                //     .map_err(|err| DataFusionError::Internal(format!("kwargs {:?}", err)))?;
+                // let results: Bound<PyAny> = pyarrow_module
+                //     .getattr(pyo3::intern!(py, "array"))
+                //     .and_then(|array| array.call((results,), Some(&output_type_kwargs)))
+                //     .map_err(|err| DataFusionError::Internal(format!("Result array {:?}", err)))?;
                 ArrayData::from_pyarrow_bound(&results)
                     .map_err(|err| DataFusionError::Internal(format!("array_data {:?}", err)))
             });
-            return Ok(ColumnarValue::Array(make_array(array_data?)));
+            println!("CHECK HERE array_data: {:?}", array_data);
+            let array_data = array_data?;
+            println!("CHECK HERE AFTER ? array_data: {:?}", array_data);
+            let array = make_array(array_data);
+            println!("CHECK HERE make_array: {:?}", array);
+            return Ok(ColumnarValue::Array(array));
         }
 
         let array_data: Result<ArrayData, DataFusionError> = Python::with_gil(|py| {
@@ -214,9 +234,7 @@ impl ScalarUDFImpl for PySparkUDF {
             let result: Bound<PyAny> = pyarrow_module
                 .getattr(pyo3::intern!(py, "array"))
                 .and_then(|array| array.call((results,), Some(&output_type_kwargs)))
-                .map_err(|err| {
-                    DataFusionError::Internal(format!("Result concat_arrays {:?}", err))
-                })?;
+                .map_err(|err| DataFusionError::Internal(format!("Result array {:?}", err)))?;
 
             ArrayData::from_pyarrow_bound(&result)
                 .map_err(|err| DataFusionError::Internal(format!("array_data {:?}", err)))
