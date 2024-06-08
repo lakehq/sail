@@ -72,6 +72,7 @@ impl<'de> Visitor<'de> for PartialPySparkUDFVisitor {
             || self.eval_type == SQL_WINDOW_AGG_PANDAS_UDF
             || self.eval_type == SQL_GROUPED_MAP_PANDAS_UDF_WITH_STATE
         {
+            // TODO: Fill in conf.
             data.extend(&0i32.to_be_bytes()); // num_conf
         }
         data.extend(&1i32.to_be_bytes()); // num_udfs
