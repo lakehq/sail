@@ -18,7 +18,5 @@ updates:
       - dependency-name: "datafusion-*"
       - dependency-name: "arrow"
       - dependency-name: "arrow-*"
-      - dependency-name: "polars"
-      - dependency-name: "polars-*"
       - dependency-name: "sqlparser"
       - dependency-name: "pyo3"

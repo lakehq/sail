@@ -385,12 +385,15 @@ impl TryFrom<udtf::Function> for spec::TableFunctionDefinition {
                 eval_type,
                 command,
                 python_ver,
-            }) => Ok(spec::TableFunctionDefinition::PythonUdtf {
-                return_type: return_type.map(|x| x.try_into()).transpose()?,
-                eval_type,
-                command,
-                python_version: python_ver,
-            }),
+            }) => {
+                let return_type = return_type.required("Python UDTF return type")?;
+                Ok(spec::TableFunctionDefinition::PythonUdtf {
+                    return_type: return_type.try_into()?,
+                    eval_type,
+                    command,
+                    python_version: python_ver,
+                })
+            }
         }
     }
 }

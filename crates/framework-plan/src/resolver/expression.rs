@@ -14,7 +14,6 @@ use datafusion_expr::{
     ScalarUDF,
 };
 use framework_common::spec;
-use framework_python::partial_python_udf::PartialPythonUDF;
 
 impl PlanResolver<'_> {
     pub(crate) fn resolve_sort_order(
@@ -285,8 +284,11 @@ impl PlanResolver<'_> {
                 Err(PlanError::todo("unresolved named lambda variable"))
             }
             Expr::CommonInlineUserDefinedFunction(function) => {
-                use framework_python::partial_python_udf::deserialize_partial_python_udf;
-                use framework_python::udf::PythonUDF;
+                // TODO: Function arg for if pyspark_udf or not.
+                use framework_python::cereal::partial_pyspark_udf::{
+                    deserialize_partial_pyspark_udf, PartialPySparkUDF,
+                };
+                use framework_python::udf::pyspark_udf::PySparkUDF;
                 use pyo3::prelude::*;
 
                 let spec::CommonInlineUserDefinedFunction {
@@ -329,18 +331,22 @@ impl PlanResolver<'_> {
                     )));
                 }
 
-                let python_function: PartialPythonUDF = deserialize_partial_python_udf(&command)
-                    .map_err(|e| {
-                        PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
-                    })?;
+                let python_function: PartialPySparkUDF = deserialize_partial_pyspark_udf(
+                    &command,
+                    &eval_type,
+                    &(arguments.len() as i32),
+                )
+                .map_err(|e| {
+                    PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
+                })?;
 
-                let python_udf: PythonUDF = PythonUDF::new(
+                let python_udf: PySparkUDF = PySparkUDF::new(
                     function_name.to_owned(),
                     deterministic,
                     input_types,
+                    eval_type,
                     python_function,
                     output_type,
-                    eval_type,
                 );
 
                 Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {

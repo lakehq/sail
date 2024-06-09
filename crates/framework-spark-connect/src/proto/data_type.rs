@@ -5,7 +5,7 @@ use framework_common::spec;
 use framework_sql::data_type::parse_spark_data_type;
 use std::collections::HashMap;
 
-const DEFAULT_FIELD_NAME: &str = "value";
+pub(crate) const DEFAULT_FIELD_NAME: &str = "value";
 
 #[allow(dead_code)]
 pub(crate) const SPARK_DECIMAL_MAX_PRECISION: u8 = 38;
@@ -18,15 +18,15 @@ pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_PRECISION: u8 = 38;
 #[allow(dead_code)]
 pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_SCALE: i8 = 18;
 
-pub(crate) fn parse_spark_schema(schema: &str) -> SparkResult<spec::Schema> {
-    let data_type: spec::DataType = if let Ok(dt) = parse_spark_data_type(schema) {
-        dt
+pub(crate) fn parse_spark_schema(schema: &str) -> SparkResult<spec::DataType> {
+    // TODO: Replicate parseDatatypeString functionality exactly
+    if let Ok(dt) = parse_spark_data_type(schema) {
+        Ok(dt)
     } else if let Ok(dt) = parse_spark_data_type(format!("struct<{schema}>").as_str()) {
-        dt
+        Ok(dt)
     } else {
-        parse_spark_json_data_type(schema)?.try_into()?
-    };
-    Ok(data_type.into_schema(DEFAULT_FIELD_NAME, true))
+        parse_spark_json_data_type(schema)?.try_into()
+    }
 }
 
 impl TryFrom<sdt::StructField> for spec::Field {
@@ -200,7 +200,7 @@ impl TryFrom<DataType> for spec::DataType {
                 })
             }
             Kind::Unparsed(sdt::Unparsed { data_type_string }) => {
-                Ok(spec::DataType::Unparsed(data_type_string))
+                Ok(parse_spark_schema(data_type_string.as_str())?)
             }
         }
     }
@@ -329,9 +329,6 @@ impl TryFrom<spec::DataType> for DataType {
                 serialized_python_class,
                 sql_type: Some(Box::new((*sql_type).try_into()?)),
             })),
-            spec::DataType::Unparsed(data_type_string) => {
-                Kind::Unparsed(sdt::Unparsed { data_type_string })
-            }
         };
         Ok(DataType { kind: Some(kind) })
     }
@@ -339,7 +336,7 @@ impl TryFrom<spec::DataType> for DataType {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_spark_data_type, parse_spark_schema};
+    use super::{parse_spark_data_type, parse_spark_schema, DEFAULT_FIELD_NAME};
     use crate::error::{SparkError, SparkResult};
     use framework_common::tests::test_gold_set;
 
@@ -356,7 +353,7 @@ mod tests {
     fn test_parse_spark_schema_gold_set() -> SparkResult<()> {
         test_gold_set(
             "tests/gold_data/table_schema.json",
-            |s: String| Ok(parse_spark_schema(&s)?),
+            |s: String| Ok(parse_spark_schema(&s)?.into_schema(DEFAULT_FIELD_NAME, true)),
             |e: String| SparkError::internal(e),
         )
     }

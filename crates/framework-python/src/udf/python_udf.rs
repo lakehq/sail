@@ -1,6 +1,5 @@
 use std::any::Any;
 
-use crate::partial_python_udf::PartialPythonUDF;
 use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
@@ -10,18 +9,14 @@ use pyo3::{
     types::{PyDict, PyTuple},
 };
 
+use crate::cereal::partial_python_udf::PartialPythonUDF;
 use crate::pyarrow::{FromPyArrow, ToPyArrow};
-
-use crate::utils::array_ref_to_columnar_value;
 
 #[derive(Debug, Clone)]
 pub struct PythonUDF {
     signature: Signature,
-    // TODO: See what we exactly need from below fields.
     function_name: String,
     output_type: DataType,
-    #[allow(dead_code)]
-    eval_type: i32,
     python_function: PartialPythonUDF,
 }
 
@@ -32,7 +27,6 @@ impl PythonUDF {
         input_types: Vec<DataType>,
         python_function: PartialPythonUDF,
         output_type: DataType,
-        eval_type: i32, // TODO: Incorporate this
     ) -> Self {
         Self {
             signature: Signature::exact(
@@ -46,7 +40,6 @@ impl PythonUDF {
             function_name,
             python_function,
             output_type,
-            eval_type,
         }
     }
 }
@@ -142,10 +135,6 @@ impl ScalarUDFImpl for PythonUDF {
             Ok(array)
         });
 
-        Ok(array_ref_to_columnar_value(
-            processed_array?,
-            &self.output_type,
-            is_scalar,
-        )?)
+        Ok(ColumnarValue::Array(processed_array?))
     }
 }

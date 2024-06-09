@@ -1,5 +1,5 @@
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::proto::data_type::parse_spark_schema;
+use crate::proto::data_type::{parse_spark_schema, DEFAULT_FIELD_NAME};
 use crate::spark::connect as sc;
 use crate::spark::connect::catalog::CatType;
 use crate::spark::connect::relation::RelType;
@@ -63,7 +63,13 @@ impl TryFrom<RelType> for spec::PlanNode {
                             paths,
                             predicates,
                         } = x;
-                        let schema = schema.map(|s| parse_spark_schema(s.as_str())).transpose()?;
+                        let schema = schema
+                            .map(|s| {
+                                parse_spark_schema(s.as_str()).map(|parsed_schema| {
+                                    parsed_schema.into_schema(DEFAULT_FIELD_NAME, true)
+                                })
+                            })
+                            .transpose()?;
                         let predicates = predicates
                             .into_iter()
                             .map(|x| Ok(parse_expression(x.as_str())?))
@@ -277,7 +283,13 @@ impl TryFrom<RelType> for spec::PlanNode {
             }
             RelType::LocalRelation(local_relation) => {
                 let sc::LocalRelation { data, schema } = local_relation;
-                let schema = schema.map(|s| parse_spark_schema(s.as_str())).transpose()?;
+                let schema = schema
+                    .map(|s| {
+                        parse_spark_schema(s.as_str()).map(|parsed_schema| {
+                            parsed_schema.into_schema(DEFAULT_FIELD_NAME, true)
+                        })
+                    })
+                    .transpose()?;
                 Ok(spec::PlanNode::LocalRelation { data, schema })
             }
             RelType::Sample(sample) => {
@@ -702,8 +714,10 @@ impl TryFrom<RelType> for spec::PlanNode {
                     .map(|x| x.try_into())
                     .collect::<SparkResult<Vec<_>>>()?;
                 let func = func.required("apply in pandas with state function")?;
-                let output_schema = parse_spark_schema(output_schema.as_str())?;
-                let state_schema = parse_spark_schema(state_schema.as_str())?;
+                let output_schema = parse_spark_schema(output_schema.as_str())?
+                    .into_schema(DEFAULT_FIELD_NAME, true);
+                let state_schema = parse_spark_schema(state_schema.as_str())?
+                    .into_schema(DEFAULT_FIELD_NAME, true);
                 Ok(spec::PlanNode::ApplyInPandasWithState {
                     input: Box::new((*input).try_into()?),
                     grouping_expressions,

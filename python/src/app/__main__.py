@@ -25,6 +25,11 @@ if __name__ == "__main__":
         return x + y
 
 
+    @F.udf(IntegerType())
+    def add(x, y):
+        return x + y
+
+
     print(spark.range(-1).toPandas())
     print(spark.range(10, 0, -2, 3).toPandas())
     print(spark.createDataFrame([1, 2, 3], schema="long").toPandas())
@@ -84,6 +89,7 @@ if __name__ == "__main__":
     print(df.select(add_one(F.col("a"))).toPandas())
     print(df.withColumn("x", F.col("a")).withColumn("y", F.col("a")).select(
         add_x_y(F.struct(F.col("x"), F.col("y")))).toPandas())
+    print(df.select(add(F.col("a"), F.col("a"))).toPandas())
 
     # FIXME: not working
     # print(df.selectExpr("b.foo").toPandas())

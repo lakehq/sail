@@ -57,7 +57,6 @@ pub enum DataType {
         serialized_python_class: Option<String>,
         sql_type: Box<DataType>,
     },
-    Unparsed(String),
 }
 
 impl DataType {
@@ -353,7 +352,6 @@ impl TryFrom<DataType> for adt::DataType {
             DataType::UserDefined { .. } => Err(CommonError::unsupported(
                 "user defined data type should only exist in a field",
             )),
-            DataType::Unparsed(_) => Err(CommonError::unsupported("unparsed")),
         }
     }
 }

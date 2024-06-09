@@ -216,7 +216,7 @@ pub struct CommonInlineUserDefinedTableFunction {
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum TableFunctionDefinition {
     PythonUdtf {
-        return_type: Option<DataType>,
+        return_type: DataType,
         eval_type: i32,
         command: Vec<u8>,
         python_version: String,

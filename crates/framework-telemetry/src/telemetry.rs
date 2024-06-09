@@ -6,8 +6,8 @@ use opentelemetry_otlp::{self, WithExportConfig};
 use opentelemetry_sdk::{
     propagation::TraceContextPropagator,
     resource::{
-        EnvResourceDetector, OsResourceDetector, ProcessResourceDetector, ResourceDetector,
-        SdkProvidedResourceDetector, TelemetryResourceDetector,
+        EnvResourceDetector, ResourceDetector, SdkProvidedResourceDetector,
+        TelemetryResourceDetector,
     },
     runtime, trace as sdktrace,
 };
@@ -40,8 +40,6 @@ pub fn init_telemetry() -> Result<(), TelemetryError> {
 pub fn init_tracer() -> Result<sdktrace::Tracer, TelemetryError> {
     global::set_text_map_propagator(TraceContextPropagator::new());
 
-    let os_resource = OsResourceDetector.detect(Duration::from_secs(0));
-    let process_resource = ProcessResourceDetector.detect(Duration::from_secs(0));
     let sdk_resource = SdkProvidedResourceDetector.detect(Duration::from_secs(0));
     let env_resource = EnvResourceDetector::new().detect(Duration::from_secs(0));
     let telemetry_resource = TelemetryResourceDetector.detect(Duration::from_secs(0));
@@ -65,13 +63,8 @@ pub fn init_tracer() -> Result<sdktrace::Tracer, TelemetryError> {
                     .with_timeout(Duration::from_secs(3)),
             )
             .with_trace_config(
-                sdktrace::config().with_resource(
-                    os_resource
-                        .merge(&process_resource)
-                        .merge(&sdk_resource)
-                        .merge(&env_resource)
-                        .merge(&telemetry_resource),
-                ),
+                sdktrace::config()
+                    .with_resource(sdk_resource.merge(&env_resource).merge(&telemetry_resource)),
             )
             .install_batch(runtime::TokioCurrentThread)?)
     } else {
@@ -80,13 +73,8 @@ pub fn init_tracer() -> Result<sdktrace::Tracer, TelemetryError> {
         let provider = sdktrace::TracerProvider::builder()
             .with_span_processor(processor)
             .with_config(
-                sdktrace::config().with_resource(
-                    os_resource
-                        .merge(&process_resource)
-                        .merge(&sdk_resource)
-                        .merge(&env_resource)
-                        .merge(&telemetry_resource),
-                ),
+                sdktrace::config()
+                    .with_resource(sdk_resource.merge(&env_resource).merge(&telemetry_resource)),
             )
             .build();
 
