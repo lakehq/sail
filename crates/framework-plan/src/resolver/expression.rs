@@ -284,7 +284,7 @@ impl PlanResolver<'_> {
                 Err(PlanError::todo("unresolved named lambda variable"))
             }
             Expr::CommonInlineUserDefinedFunction(function) => {
-                // TODO: Function arg for if pyspark_udf or note
+                // TODO: Function arg for if pyspark_udf or not.
                 use framework_python::cereal::partial_pyspark_udf::{
                     deserialize_partial_pyspark_udf, PartialPySparkUDF,
                 };

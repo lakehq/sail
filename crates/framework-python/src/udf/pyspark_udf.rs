@@ -68,6 +68,7 @@ impl ScalarUDFImpl for PySparkUDF {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        // TODO: Refactor different udf types into different functions.
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(args)?;
 
         if is_pyspark_arrow_udf(self.eval_type) {
