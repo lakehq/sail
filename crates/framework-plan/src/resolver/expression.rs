@@ -99,7 +99,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub(crate) fn resolve_expression(
+    pub fn resolve_expression(
         &self,
         expr: spec::Expr,
         schema: &DFSchema,
