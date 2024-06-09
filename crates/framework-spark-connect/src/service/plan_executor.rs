@@ -137,7 +137,6 @@ pub(crate) async fn handle_execute_register_function(
 ) -> SparkResult<ExecutePlanResponseStream> {
     // TODO: Should probably just call PlanNode::RegisterFunction
     //  even though SC implementation creates the UDF and registers it directly.
-    println!("CHECK HERE handle_execute_register_function");
     let ctx = session.context();
     let resolver = PlanResolver::new(ctx);
 
