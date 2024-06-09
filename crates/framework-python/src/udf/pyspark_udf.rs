@@ -1,15 +1,10 @@
-use arrow::ffi;
-use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use std::any::Any;
-use std::ptr::addr_of_mut;
 
 use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use pyo3::exceptions::PyTypeError;
-use pyo3::ffi::Py_uintptr_t;
-use pyo3::types::{PyCapsule, PyTuple};
+use pyo3::types::PyTuple;
 use pyo3::{
     prelude::*,
     types::{PyDict, PyIterator},
@@ -19,7 +14,6 @@ use crate::cereal::partial_pyspark_udf::{
     is_pyspark_arrow_udf, is_pyspark_pandas_udf, PartialPySparkUDF,
 };
 use crate::pyarrow::{FromPyArrow, ToPyArrow};
-use crate::pyarrowz::pyarrow_bound_and_datatype_to_array_data;
 
 #[derive(Debug, Clone)]
 pub struct PySparkUDF {
@@ -242,15 +236,6 @@ impl ScalarUDFImpl for PySparkUDF {
                 let array_data = ArrayData::from_pyarrow_bound(&results_data)
                     .map_err(|err| DataFusionError::Internal(format!("array_data {:?}", err)))?;
                 Ok(array_data)
-
-                // let array_data: ArrayData =
-                //     pyarrow_bound_and_datatype_to_array_data(&results, self.output_type.clone())
-                //         .map_err(|err| {
-                //             DataFusionError::Internal(format!(
-                //                 "pyarrow_bound_and_datatype_to_array_data: {:?}",
-                //                 err
-                //             ))
-                //         })?;
             });
             return Ok(ColumnarValue::Array(make_array(array_data?)));
         }

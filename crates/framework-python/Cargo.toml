@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+framework-common = { path = "../framework-common" }
+
 thiserror = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }

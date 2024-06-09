@@ -1271,6 +1271,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "datafusion-functions-array",
+ "framework-common",
  "pyo3",
  "serde",
  "serde_bytes",
