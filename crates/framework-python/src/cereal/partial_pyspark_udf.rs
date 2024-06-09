@@ -132,10 +132,19 @@ impl PartialEq for PartialPySparkUDF {
 impl Eq for PartialPySparkUDF {}
 
 pub fn deserialize_partial_pyspark_udf(
+    python_version: &str,
     command: &[u8],
     eval_type: &i32,
     num_args: &i32,
 ) -> Result<PartialPySparkUDF, de::value::Error> {
+    let pyo3_python_version: String = Python::with_gil(|py| py.version().to_string());
+    if !pyo3_python_version.starts_with(python_version) {
+        return Err(de::Error::custom(format!(
+            "Python version mismatch. Version used to compile the UDF must match the version used to run the UDF. Version used to compile the UDF: {:?}. Version used to run the UDF: {:?}",
+            python_version,
+            pyo3_python_version,
+        )));
+    }
     let bytes = Bytes::new(command);
     let visitor = PartialPySparkUDFVisitor {
         eval_type: *eval_type,

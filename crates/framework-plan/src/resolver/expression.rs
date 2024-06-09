@@ -289,7 +289,6 @@ impl PlanResolver<'_> {
                     deserialize_partial_pyspark_udf, PartialPySparkUDF,
                 };
                 use framework_python::udf::pyspark_udf::PySparkUDF;
-                use pyo3::prelude::*;
 
                 let spec::CommonInlineUserDefinedFunction {
                     function_name,
@@ -322,16 +321,8 @@ impl PlanResolver<'_> {
                 };
                 let output_type: DataType = output_type.try_into()?;
 
-                let pyo3_python_version: String = Python::with_gil(|py| py.version().to_string());
-                if !pyo3_python_version.starts_with(python_version.as_str()) {
-                    return Err(PlanError::invalid(format!(
-                        "Python version mismatch. Version used to compile the UDF must match the version used to run the UDF. Version used to compile the UDF: {:?}. Version used to run the UDF: {:?}",
-                        python_version,
-                        pyo3_python_version,
-                    )));
-                }
-
                 let python_function: PartialPySparkUDF = deserialize_partial_pyspark_udf(
+                    &python_version,
                     &command,
                     &eval_type,
                     &(arguments.len() as i32),
