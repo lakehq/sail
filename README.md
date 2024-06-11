@@ -11,15 +11,26 @@ It is recommended to install Python via [pyenv](https://github.com/pyenv/pyenv).
 pyenv install 3.11.9
 
 # Set the global Python version.
+# If you do not want to set the global version, you can use the `PYENV_VERSION` environment variable
+# or the `pyenv shell` command to set the Python version for the current terminal session.
 pyenv global 3.11.9
 
-# Install required tools for the global Python version.
+# Install required tools for the Python version.
 pip install poetry
 ```
 
 The same Python version should be used in all the following sections.
-At a high level, we will use this Python interpreter to create two virtual environments,
-one for the Spark project and the other for the framework Python examples.
+We will use this Python interpreter to create two virtual environments,
+one for the Spark project and the other for the framework.
+
+### Java Setup
+
+Please install OpenJDK 17 on your host.
+You can use any widely-used OpenJDK distribution, such as [Amazon Corretto](https://aws.amazon.com/corretto/).
+
+It is recommended to set `JAVA_HOME` when following the instructions in the next sections.
+If the `JAVA_HOME` environment variable is not set, the Spark build script will try to find the Java installation using either
+(1) the location of `javac` (for Linux), or (2) the output of `/usr/libexec/java_home` (for macOS).
 
 ### Spark Setup
 
@@ -30,7 +41,7 @@ git clone git@github.com:apache/spark.git opt/spark
 ```
 
 Run the following command to patch the Spark project and set up the Spark environment.
-You need to make sure your working directory is clean before applying the patch.
+You need to make sure the Spark directory is clean before applying the patch.
 
 ```bash
 git -C opt/spark checkout v3.5.1
@@ -39,14 +50,10 @@ scripts/spark-tests/build-spark-jars.sh
 scripts/spark-tests/setup-spark-env.sh
 ```
 
-You can use the following commands to update the Spark patch with your local modification.
+It may take a while to build the Spark project.
+(On GitHub Actions, it takes about 40 minutes on the default GitHub-hosted runners.)
 
-```bash
-git -C opt/spark add .
-git -C opt/spark diff --staged -p > scripts/spark-tests/spark-3.5.1.patch
-```
-
-### Python Setup
+### Python Virtual Environment Setup
 
 Run the following commands to set up a Python virtual environment for the project.
 
@@ -62,8 +69,11 @@ Use the following commands to build and run the Spark Connect server powered by 
 scripts/spark-tests/run-server.sh
 ```
 
-You can run the Python examples in another terminal.
-Please refer to `python/README.md` for more information.
+You can run the Python examples in another terminal using the following command.
+
+```bash
+poetry -C python run python -m app
+```
 
 ### Running Spark Tests
 
@@ -81,8 +91,13 @@ You can also use `PYTEST_` environment variables to customize the test execution
 For example, `PYTEST_ADDOPTS="-k <expression>"` can be used to run specific tests matching `<expression>`.
 
 ```bash
+# Write the test logs to a different directory.
+export TEST_RUN_NAME=selected
+
 scripts/spark-tests/run-tests.sh python/pyspark/sql/tests/connect/ -v -k test_something
 ```
+
+### Analyzing Test Logs
 
 The following are useful commands to analyze test logs.
 You can replace `test.jsonl` with a different log file name if you are analyzing a different test suite.
@@ -104,13 +119,52 @@ jq -r -f scripts/spark-tests/show-passed-tests.jq \
   opt/spark/logs/latest/test.jsonl | less
 ```
 
+### Starting a Local PySpark Session
+
 You can use the following commands to start a local PySpark session.
 
 ```bash
 cd opt/spark
 source venv/bin/activate
-env SPARK_LOCAL_IP=127.0.0.1 SPARK_PREPEND_CLASSES=1 bin/pyspark
+
+# Run the PySpark shell using the original Java implementation.
+env SPARK_PREPEND_CLASSES=1 SPARK_LOCAL_IP=127.0.0.1 bin/pyspark
+
+# Run the PySpark shell using the Spark Connect implementation.
+# You can ignore the "sparkContext() is not implemented" error when the shell starts.
+env SPARK_PREPEND_CLASSES=1 SPARK_REMOTE="sc://localhost:50051" bin/pyspark
 ```
 
-The Spark tests are also triggered in GitHub Actions for pull requests,
+### Running Spark Tests in GitHub Actions
+
+The Spark tests are triggered in GitHub Actions for pull requests,
 either when the pull request is opened or when the commit message contains `[spark tests]` (case-insensitive).
+
+The Spark tests are always run when the pull request is merged into the `main` branch.
+
+### Running the Rust Debugger in RustRover
+
+Since we use PyO3 to support Python binding in Rust, we need some additional setup to run the Rust debugger in RustRover.
+In **Run** > **Edit Configurations**, add a new **Cargo** configuration with the following settings:
+
+1. Name: **Run Spark Connect server**. (You can use any name you like.)
+2. Command: `run -p framework-spark-connect`
+3. Environment Variables:
+    - (required) `PYTHONPATH`: `python/.venv/lib/python<version>/site-packages` (Please replace `<version>` with the actual Python version, e.g. `3.11`.)
+    - (required) `PYO3_PYTHON`: `<project>/python/.venv/bin/python` (Please replace `<project>` with the actual project path. **This must be an absolute path.**)
+    - (required) `RUST_MIN_STACK`: `8388608`
+    - (optional) `RUST_BACKTRACE`: `full`
+    - (optional) `RUST_LOG`: `framework_spark_connect=debug`
+
+When entering environment variables, you can click on the button on the right side of the input box to open the dialog and add the environment variables one by one.
+
+You can leave the other settings as default.
+
+### Updating the Spark Patch
+
+You can use the following commands to update the Spark patch with your local modification.
+
+```bash
+git -C opt/spark add .
+git -C opt/spark diff --staged -p > scripts/spark-tests/spark-3.5.1.patch
+```
