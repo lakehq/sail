@@ -16,4 +16,8 @@ pub mod spark {
         pub const FILE_DESCRIPTOR_SET: &[u8] =
             tonic::include_file_descriptor_set!("spark_connect_descriptor");
     }
+
+    pub mod config {
+        include!(concat!(env!("OUT_DIR"), "/spark_config.rs"));
+    }
 }
