@@ -11,7 +11,7 @@ It is recommended to install Python via [pyenv](https://github.com/pyenv/pyenv).
 pyenv install 3.11.9
 
 # Set the global Python version.
-# If you do not want to set the global version, you can use the `PYENV_VERSION` environment variable
+# If you do not want to set the global Python version, you can use the `PYENV_VERSION` environment variable
 # or the `pyenv shell` command to set the Python version for the current terminal session.
 pyenv global 3.11.9
 
