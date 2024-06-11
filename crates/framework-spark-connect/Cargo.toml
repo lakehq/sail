@@ -52,7 +52,14 @@ arrow = { workspace = true }
 arrow-cast = { workspace = true }
 sqlparser = { workspace = true }
 serde_arrow = { workspace = true }
+phf = { workspace = true }
 
 [build-dependencies]
 tonic-build = { workspace = true }
 pbjson-build = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+syn = { workspace = true }
+quote = { workspace = true }
+prettyplease = { workspace = true }
+regex = { workspace = true }
