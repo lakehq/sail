@@ -147,9 +147,11 @@ pub(crate) async fn handle_execute_register_function(
         arguments,
         function,
     } = udf;
-    let schema = DFSchema::empty();
-
     let function_name: &str = function_name.as_str();
+
+    // TODO: args always empty so dont need schema and input types.
+    //  Register UnresolvedPysparkUDF after we create it.
+    let schema = DFSchema::empty();
     let arguments: Vec<expr::Expr> = arguments
         .into_iter()
         .map(|x| resolver.resolve_expression(x, &schema))
@@ -191,6 +193,7 @@ pub(crate) async fn handle_execute_register_function(
     );
 
     let scalar_udf = ScalarUDF::from(python_udf);
+    //  TODO: Register UnresolvedPySparkUDF after we create iot
     ctx.register_udf(scalar_udf);
 
     let (tx, rx) = tokio::sync::mpsc::channel(1);

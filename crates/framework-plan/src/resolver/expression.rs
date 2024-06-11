@@ -2,18 +2,21 @@ use std::sync::Arc;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::alias::MultiAlias;
+use crate::extension::function::explode::Explode;
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, get_built_in_window_function,
 };
 use crate::resolver::PlanResolver;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DFSchema, Result, ScalarValue};
+use datafusion::execution::FunctionRegistry;
 use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::{
     expr, window_frame, ExprSchemable, GetFieldAccess, GetIndexedField, ScalarFunctionDefinition,
     ScalarUDF,
 };
 use framework_common::spec;
+use framework_python::udf::pyspark_udf::PySparkUDF;
 
 impl PlanResolver<'_> {
     pub(crate) fn resolve_sort_order(
@@ -124,21 +127,43 @@ impl PlanResolver<'_> {
                 is_distinct,
                 is_user_defined_function,
             } => {
-                if is_user_defined_function {
-                    return Err(PlanError::unsupported("user defined function"));
-                }
-
                 let args = arguments
                     .into_iter()
                     .map(|x| self.resolve_expression(x, schema))
                     .collect::<PlanResult<Vec<_>>>()?;
-                let func = match get_built_in_function(function_name.as_str()) {
-                    Ok(func) => func(args)?,
-                    Err(_) => {
-                        get_built_in_aggregate_function(function_name.as_str(), args, is_distinct)?
+
+                if !is_user_defined_function {
+                    if let Ok(func) = get_built_in_function(function_name.as_str()) {
+                        return Ok(func(args.clone())?);
                     }
-                };
-                Ok(func)
+                    if let Ok(func) = get_built_in_aggregate_function(
+                        function_name.as_str(),
+                        args.clone(),
+                        is_distinct,
+                    ) {
+                        return Ok(func);
+                    }
+                }
+
+                if let Ok(func) = self.ctx.udf(function_name.as_str()) {
+                    // TODO: Change PySparkUDF to UnresolvedPySparkUDF when its created.
+                    let func = match func.inner().as_any().downcast_ref::<PySparkUDF>() {
+                        Some(f) => {
+                            // TODO: convert UnresolvedPySparkUDF to PySparkUDF
+                            func
+                        }
+                        None => func,
+                    };
+                    return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                        func_def: ScalarFunctionDefinition::UDF(func),
+                        args,
+                    }));
+                }
+
+                return Err(PlanError::unsupported(format!(
+                    "Expr::UnresolvedFunction Unknown Function: {}",
+                    function_name
+                )));
             }
             Expr::UnresolvedStar { target } => {
                 // FIXME: column reference is parsed as qualifier

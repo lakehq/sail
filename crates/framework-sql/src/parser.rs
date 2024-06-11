@@ -25,7 +25,11 @@ impl SparkDialect {
 
     fn parse_array_function(&self, parser: &mut Parser) -> Result<Expr, ParserError> {
         parser.expect_keyword(Keyword::ARRAY)?;
-        parser.parse_function(ObjectName(vec![Ident::new("array")]))
+        if parser.peek_token() == Token::LParen {
+            parser.parse_function(ObjectName(vec![Ident::new("array")]))
+        } else {
+            Ok(Expr::Identifier(Ident::new("array")))
+        }
     }
 
     fn parse_struct_function(&self, parser: &mut Parser) -> Result<Expr, ParserError> {
