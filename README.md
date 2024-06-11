@@ -40,7 +40,7 @@ Run the following command to clone the Spark project.
 git clone git@github.com:apache/spark.git opt/spark
 ```
 
-Run the following command to patch the Spark project and set up the Spark environment.
+Run the following command to patch the Spark project and set up the Python virtual environment for Spark.
 You need to make sure the Spark directory is clean before applying the patch.
 
 ```bash
@@ -85,21 +85,27 @@ the `TEST_RUN_NAME` environment variable whose default value is `latest`.
 scripts/spark-tests/run-tests.sh
 ```
 
+The above command runs a default set of test suites for Spark Connect.
+Each test suite will write its `<suite>.jsonl` and `<suite>.log` files to the log directory,
+where `<suite>` is the test suite name.
+
 You can pass arguments to the script, which will be forwarded to `pytest`.
-If no arguments are passed, the script will run a default set of tests for Spark Connect.
 You can also use `PYTEST_` environment variables to customize the test execution.
 For example, `PYTEST_ADDOPTS="-k <expression>"` can be used to run specific tests matching `<expression>`.
 
 ```bash
-# Write the test logs to a different directory.
+# Write the test logs to a different directory (`opt/spark/logs/selected`).
 export TEST_RUN_NAME=selected
 
 scripts/spark-tests/run-tests.sh python/pyspark/sql/tests/connect/ -v -k test_something
 ```
 
-### Analyzing Test Logs
+When you customize the test execution using the above command, a single test suite will be run,
+and the test log files are always `test.jsonl` and `test.log` in the log directory.
 
-The following are useful commands to analyze test logs.
+### Analyzing Spark Test Logs
+
+Here are some useful commands to analyze Spark test logs.
 You can replace `test.jsonl` with a different log file name if you are analyzing a different test suite.
 
 (1) Get the error counts for failed tests.
@@ -147,7 +153,7 @@ The Spark tests are always run when the pull request is merged into the `main` b
 Since we use PyO3 to support Python binding in Rust, we need some additional setup to run the Rust debugger in RustRover.
 In **Run** > **Edit Configurations**, add a new **Cargo** configuration with the following settings:
 
-1. Name: **Run Spark Connect server**. (You can use any name you like.)
+1. Name: **Run Spark Connect server** (You can use any name you like.)
 2. Command: `run -p framework-spark-connect`
 3. Environment Variables:
     - (required) `PYTHONPATH`: `python/.venv/lib/python<version>/site-packages` (Please replace `<version>` with the actual Python version, e.g. `3.11`.)
