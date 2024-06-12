@@ -1,6 +1,6 @@
-use crate::catalog::CatalogContext;
-use crate::SqlEngine;
-use arrow::datatypes::FieldRef;
+use crate::catalog::CatalogManager;
+use crate::error::PlanResult;
+use crate::resolver::PlanResolver;
 use datafusion_common::{exec_datafusion_err, Result, TableReference};
 use framework_common::unwrap_or;
 use serde::{Deserialize, Serialize};
@@ -16,25 +16,19 @@ pub(crate) struct TableColumnMetadata {
 }
 
 impl TableColumnMetadata {
-    fn try_new<S: SqlEngine>(column: &FieldRef, engine: &S) -> Result<Self> {
-        let data_type = column
-            .data_type()
-            .clone()
-            .try_into()
-            .map_err(|e| exec_datafusion_err!("{e}"))?;
-        let data_type = engine.to_data_type_string(data_type)?;
-        Ok(Self {
-            name: column.name().clone(),
+    fn new(name: String, data_type: String, nullable: bool) -> Self {
+        Self {
+            name,
             description: None, // TODO: support description
             data_type,
-            nullable: column.is_nullable(),
+            nullable,
             is_partition: false, // TODO: Add actual is_partition if available
             is_bucket: false,    // TODO: Add actual is_bucket if available
-        })
+        }
     }
 }
 
-impl<S: SqlEngine> CatalogContext<'_, S> {
+impl<'a> CatalogManager<'a> {
     pub(crate) async fn list_table_columns(
         &self,
         table: TableReference,
@@ -52,11 +46,23 @@ impl<S: SqlEngine> CatalogContext<'_, S> {
             schema_provider.table(table_name.as_ref()).await?,
             return Ok(Vec::new())
         );
-        Ok(table
+        table
             .schema()
             .fields()
             .iter()
-            .map(|column| TableColumnMetadata::try_new(column, self.engine))
-            .collect::<Result<Vec<_>>>()?)
+            .map(|column| -> PlanResult<_> {
+                let data_type = PlanResolver::unresolve_data_type(column.data_type().clone())?;
+                let data_type = self
+                    .config
+                    .data_type_formatter
+                    .to_simple_string(data_type)?;
+                Ok(TableColumnMetadata::new(
+                    column.name().clone(),
+                    data_type,
+                    column.is_nullable(),
+                ))
+            })
+            .collect::<PlanResult<Vec<_>>>()
+            .map_err(|e| exec_datafusion_err!("{e}"))
     }
 }

@@ -346,7 +346,7 @@ impl PlanResolver<'_> {
                 let input = if positional_arguments.len() > 0 {
                     let params = positional_arguments
                         .into_iter()
-                        .map(|arg| -> PlanResult<ScalarValue> { Ok(arg.try_into()?) })
+                        .map(|arg| self.resolve_literal(arg))
                         .collect::<PlanResult<_>>()?;
                     input.with_param_values(ParamValues::List(params))?
                 } else {
@@ -356,7 +356,7 @@ impl PlanResolver<'_> {
                     let params = named_arguments
                         .into_iter()
                         .map(|(name, arg)| -> PlanResult<(String, ScalarValue)> {
-                            Ok((name, arg.try_into()?))
+                            Ok((name, self.resolve_literal(arg)?))
                         })
                         .collect::<PlanResult<_>>()?;
                     input.with_param_values(ParamValues::Map(params))?
@@ -372,7 +372,7 @@ impl PlanResolver<'_> {
                     vec![]
                 };
                 let (schema, batches) = if let Some(schema) = schema {
-                    let schema: adt::SchemaRef = Arc::new(schema.try_into()?);
+                    let schema: adt::SchemaRef = Arc::new(self.resolve_schema(schema)?);
                     let batches = batches
                         .into_iter()
                         .map(|b| Ok(cast_record_batch(b, schema.clone())?))
@@ -825,6 +825,7 @@ impl PlanResolver<'_> {
             PlanNode::CurrentDatabase {} => Ok(LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::CurrentDatabase,
+                    self.config.clone(),
                 )?),
             })),
             PlanNode::SetCurrentDatabase { database_name } => {
@@ -833,6 +834,7 @@ impl PlanResolver<'_> {
                         CatalogCommand::SetCurrentDatabase {
                             database_name: database_name.into(),
                         },
+                        self.config.clone(),
                     )?),
                 }))
             }
@@ -845,16 +847,20 @@ impl PlanResolver<'_> {
                         catalog: catalog.map(|x| x.into()),
                         database_pattern,
                     },
+                    self.config.clone(),
                 )?),
             })),
             PlanNode::ListTables {
                 database,
                 table_pattern,
             } => Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::ListTables {
-                    database: database.map(|x| build_schema_reference(x)).transpose()?,
-                    table_pattern,
-                })?),
+                node: Arc::new(CatalogCommandNode::try_new(
+                    CatalogCommand::ListTables {
+                        database: database.map(|x| build_schema_reference(x)).transpose()?,
+                        table_pattern,
+                    },
+                    self.config.clone(),
+                )?),
             })),
             PlanNode::ListFunctions {
                 database,
@@ -865,45 +871,63 @@ impl PlanResolver<'_> {
                         database: database.map(|x| build_schema_reference(x)).transpose()?,
                         function_pattern,
                     },
+                    self.config.clone(),
                 )?),
             })),
             PlanNode::ListColumns { table } => Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::ListColumns {
-                    table: build_table_reference(table)?,
-                })?),
+                node: Arc::new(CatalogCommandNode::try_new(
+                    CatalogCommand::ListColumns {
+                        table: build_table_reference(table)?,
+                    },
+                    self.config.clone(),
+                )?),
             })),
             PlanNode::GetDatabase { database } => Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::GetDatabase {
-                    database: build_schema_reference(database)?,
-                })?),
+                node: Arc::new(CatalogCommandNode::try_new(
+                    CatalogCommand::GetDatabase {
+                        database: build_schema_reference(database)?,
+                    },
+                    self.config.clone(),
+                )?),
             })),
             PlanNode::GetTable { table } => Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::GetTable {
-                    table: build_table_reference(table)?,
-                })?),
+                node: Arc::new(CatalogCommandNode::try_new(
+                    CatalogCommand::GetTable {
+                        table: build_table_reference(table)?,
+                    },
+                    self.config.clone(),
+                )?),
             })),
             PlanNode::GetFunction { function } => Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::GetFunction {
-                    function: build_table_reference(function)?,
-                })?),
+                node: Arc::new(CatalogCommandNode::try_new(
+                    CatalogCommand::GetFunction {
+                        function: build_table_reference(function)?,
+                    },
+                    self.config.clone(),
+                )?),
             })),
             PlanNode::DatabaseExists { database } => Ok(LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::DatabaseExists {
                         database: build_schema_reference(database)?,
                     },
+                    self.config.clone(),
                 )?),
             })),
             PlanNode::TableExists { table } => Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::TableExists {
-                    table: build_table_reference(table)?,
-                })?),
+                node: Arc::new(CatalogCommandNode::try_new(
+                    CatalogCommand::TableExists {
+                        table: build_table_reference(table)?,
+                    },
+                    self.config.clone(),
+                )?),
             })),
             PlanNode::FunctionExists { function } => Ok(LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::FunctionExists {
                         function: build_table_reference(function)?,
                     },
+                    self.config.clone(),
                 )?),
             })),
             PlanNode::CreateTable {
@@ -927,10 +951,13 @@ impl PlanResolver<'_> {
                     is_streaming: false,
                 });
                 Ok(LogicalPlan::Extension(Extension {
-                    node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::CreateTable {
-                        table: build_table_reference(table)?,
-                        plan: Arc::new(self.resolve_plan(read).await?),
-                    })?),
+                    node: Arc::new(CatalogCommandNode::try_new(
+                        CatalogCommand::CreateTable {
+                            table: build_table_reference(table)?,
+                            plan: Arc::new(self.resolve_plan(read).await?),
+                        },
+                        self.config.clone(),
+                    )?),
                 }))
             }
             PlanNode::DropTemporaryView {
@@ -944,6 +971,7 @@ impl PlanResolver<'_> {
                         is_global,
                         if_exists,
                     },
+                    self.config.clone(),
                 )?),
             })),
             PlanNode::DropDatabase {
@@ -951,39 +979,51 @@ impl PlanResolver<'_> {
                 if_exists,
                 cascade,
             } => Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::DropDatabase {
-                    database: build_schema_reference(database)?,
-                    if_exists,
-                    cascade,
-                })?),
+                node: Arc::new(CatalogCommandNode::try_new(
+                    CatalogCommand::DropDatabase {
+                        database: build_schema_reference(database)?,
+                        if_exists,
+                        cascade,
+                    },
+                    self.config.clone(),
+                )?),
             })),
             PlanNode::DropFunction {
                 function,
                 if_exists,
                 is_temporary,
             } => Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::DropFunction {
-                    function: build_table_reference(function)?,
-                    if_exists,
-                    is_temporary,
-                })?),
+                node: Arc::new(CatalogCommandNode::try_new(
+                    CatalogCommand::DropFunction {
+                        function: build_table_reference(function)?,
+                        if_exists,
+                        is_temporary,
+                    },
+                    self.config.clone(),
+                )?),
             })),
             PlanNode::DropTable {
                 table,
                 if_exists,
                 purge,
             } => Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::DropTable {
-                    table: build_table_reference(table)?,
-                    if_exists,
-                    purge,
-                })?),
+                node: Arc::new(CatalogCommandNode::try_new(
+                    CatalogCommand::DropTable {
+                        table: build_table_reference(table)?,
+                        if_exists,
+                        purge,
+                    },
+                    self.config.clone(),
+                )?),
             })),
             PlanNode::DropView { view, if_exists } => Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::DropView {
-                    view: build_table_reference(view)?,
-                    if_exists,
-                })?),
+                node: Arc::new(CatalogCommandNode::try_new(
+                    CatalogCommand::DropView {
+                        view: build_table_reference(view)?,
+                        if_exists,
+                    },
+                    self.config.clone(),
+                )?),
             })),
             PlanNode::RecoverPartitions { .. } => {
                 Err(PlanError::todo("PlanNode::RecoverPartitions"))
@@ -995,19 +1035,24 @@ impl PlanResolver<'_> {
             PlanNode::RefreshTable { .. } => Err(PlanError::todo("PlanNode::RefreshTable")),
             PlanNode::RefreshByPath { .. } => Err(PlanError::todo("PlanNode::RefreshByPath")),
             PlanNode::CurrentCatalog => Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::CurrentCatalog)?),
+                node: Arc::new(CatalogCommandNode::try_new(
+                    CatalogCommand::CurrentCatalog,
+                    self.config.clone(),
+                )?),
             })),
             PlanNode::SetCurrentCatalog { catalog_name } => Ok(LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::SetCurrentCatalog {
                         catalog_name: catalog_name.into(),
                     },
+                    self.config.clone(),
                 )?),
             })),
             PlanNode::ListCatalogs { catalog_pattern } => Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(CatalogCommandNode::try_new(CatalogCommand::ListCatalogs {
-                    catalog_pattern,
-                })?),
+                node: Arc::new(CatalogCommandNode::try_new(
+                    CatalogCommand::ListCatalogs { catalog_pattern },
+                    self.config.clone(),
+                )?),
             })),
             PlanNode::CreateDatabase {
                 database,
@@ -1029,6 +1074,7 @@ impl PlanResolver<'_> {
                             location,
                             properties,
                         },
+                        self.config.clone(),
                     )?),
                 }))
             }

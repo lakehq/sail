@@ -51,7 +51,7 @@ fn pyarrow_bound_and_datatype_to_array_data(
     pyarrow_array: &Bound<PyAny>,
     data_type: spec::DataType,
 ) -> PyResult<ArrayData> {
-    let adt_data_type: adt::DataType = data_type.try_into().map_err(common_to_py_err)?;
+    let adt_data_type: adt::DataType = todo!("convert data type using the plan resolver");
     if !pyarrow_array.hasattr("__arrow_c_array__")? {
         return Err(PyTypeError::new_err(
             "The provided PyObject does not have the '__arrow_c_array__' attribute.",

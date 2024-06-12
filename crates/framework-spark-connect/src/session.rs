@@ -6,10 +6,13 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use datafusion::execution::context::SessionState as DFSessionState;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use framework_plan::config::{PlanConfig, TimestampType};
 use lazy_static::lazy_static;
 
 use crate::error::SparkResult;
 use crate::executor::Executor;
+use crate::spark::config::SPARK_SQL_SESSION_TIME_ZONE;
+use crate::utils::SparkDataTypeFormatter;
 use framework_plan::new_query_planner;
 
 const DEFAULT_SPARK_SCHEMA: &str = "default";
@@ -76,6 +79,18 @@ impl Session {
 
     pub(crate) fn lock(&self) -> SparkResult<MutexGuard<SessionState>> {
         Ok(self.state.lock()?)
+    }
+
+    pub(crate) fn plan_config(&self) -> SparkResult<Arc<PlanConfig>> {
+        let state = self.lock()?;
+        Ok(Arc::new(PlanConfig {
+            time_zone: state
+                .get_config(SPARK_SQL_SESSION_TIME_ZONE)
+                .map(|x| x.clone())
+                .unwrap_or_else(|| "UTC".into()),
+            timestamp_type: TimestampType::TimestampLtz,
+            data_type_formatter: Arc::new(SparkDataTypeFormatter),
+        }))
     }
 }
 
