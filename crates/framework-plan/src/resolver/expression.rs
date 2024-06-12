@@ -154,6 +154,8 @@ impl PlanResolver<'_> {
                 }
 
                 if let Ok(func) = self.ctx.udf(function_name.as_str()) {
+                    // TODO: UnresolvedPythonUDF will likely need to be accounted for as well
+                    //      once we integrate LakeSail Python UDF.
                     let func = match func.inner().as_any().downcast_ref::<UnresolvedPySparkUDF>() {
                         Some(f) => {
                             let deterministic = f.deterministic()?;
@@ -207,6 +209,8 @@ impl PlanResolver<'_> {
                         args: arguments,
                     }));
                 }
+
+                // TODO: udaf and udwf
 
                 return Err(PlanError::unsupported(format!(
                     "Expr::UnresolvedFunction Unknown Function: {}",
