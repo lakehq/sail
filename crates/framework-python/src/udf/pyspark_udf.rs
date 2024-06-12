@@ -300,7 +300,6 @@ impl ScalarUDFImpl for PySparkUDF {
                         .map_err(|e| {
                             DataFusionError::Execution(format!("PySpark UDF Result: {e:?}"))
                         })?;
-                    println!("CHECK HERE Result: {:?}", result);
                     let result: Bound<PyAny> = py
                         .eval_bound("list", None, None)
                         .map_err(|err| {
@@ -315,7 +314,6 @@ impl ScalarUDFImpl for PySparkUDF {
                         .map_err(|err| {
                             DataFusionError::Internal(format!("Result list get_item: {:?}", err))
                         })?;
-                    println!("CHECK HERE result after list: {:?}", result);
                     Ok(result)
                 })
                 .collect::<Result<Vec<_>, _>>()
