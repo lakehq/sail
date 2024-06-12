@@ -36,6 +36,10 @@ impl PlanError {
     pub fn invalid(message: impl Into<String>) -> Self {
         PlanError::InvalidArgument(message.into())
     }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        PlanError::InternalError(message.into())
+    }
 }
 
 impl From<CommonError> for PlanError {
