@@ -2,19 +2,20 @@ use std::fmt;
 
 use datafusion::arrow::datatypes as adt;
 use framework_common::spec;
+use framework_plan::resolver::PlanResolver;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::spark::connect as sc;
 use crate::spark::connect::data_type as sdt;
 
 pub(crate) fn to_spark_schema(schema: adt::SchemaRef) -> SparkResult<sc::DataType> {
-    let fields: spec::Fields = schema.fields().clone().try_into()?;
+    let fields = PlanResolver::unresolve_fields(schema.fields().clone())?;
     Ok(spec::DataType::Struct { fields }.try_into()?)
 }
 
 #[allow(dead_code)]
 pub(crate) fn to_spark_data_type(data_type: &adt::DataType) -> SparkResult<sc::DataType> {
-    let data_type: spec::DataType = data_type.clone().try_into()?;
+    let data_type = PlanResolver::unresolve_data_type(data_type.clone())?;
     Ok(data_type.try_into()?)
 }
 

@@ -7,8 +7,8 @@ use crate::catalog::column::TableColumnMetadata;
 use crate::catalog::database::DatabaseMetadata;
 use crate::catalog::function::FunctionMetadata;
 use crate::catalog::table::TableMetadata;
-use crate::catalog::{CatalogContext, EmptyMetadata, SingleValueMetadata};
-use crate::SqlEngine;
+use crate::catalog::{CatalogManager, EmptyMetadata, SingleValueMetadata};
+use crate::config::PlanConfig;
 use arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use datafusion::common::{DFSchemaRef, Result};
 use datafusion::datasource::{provider_as_source, MemTable};
@@ -25,15 +25,17 @@ pub(crate) struct CatalogCommandNode {
     name: String,
     schema: DFSchemaRef,
     command: CatalogCommand,
+    config: Arc<PlanConfig>,
 }
 
 impl CatalogCommandNode {
-    pub(crate) fn try_new(command: CatalogCommand) -> Result<Self> {
+    pub(crate) fn try_new(command: CatalogCommand, config: Arc<PlanConfig>) -> Result<Self> {
         let schema = command.schema()?;
         Ok(Self {
             name: format!("CatalogCommand: {}", command.name()),
             schema: DFSchemaRef::new(DFSchema::try_from(schema)?),
             command,
+            config,
         })
     }
 }
@@ -203,35 +205,30 @@ impl CatalogCommand {
         Ok(Arc::new(Schema::new(fields)))
     }
 
-    pub(crate) async fn execute<S: SqlEngine>(
-        self,
-        ctx: &SessionContext,
-        engine: &S,
-    ) -> Result<LogicalPlan> {
+    pub(crate) async fn execute(self, manager: CatalogManager<'_>) -> Result<LogicalPlan> {
         let schema = self.schema()?;
-        let ctx = CatalogContext::new(ctx, engine);
         let batch = match self {
             CatalogCommand::CurrentCatalog => {
-                let value = ctx.default_catalog()?;
+                let value = manager.default_catalog()?;
                 let rows = vec![SingleValueMetadata { value }];
                 build_record_batch(schema, &rows)?
             }
             CatalogCommand::SetCurrentCatalog { catalog_name } => {
-                ctx.set_default_catalog(catalog_name)?;
+                manager.set_default_catalog(catalog_name)?;
                 let rows: Vec<EmptyMetadata> = vec![];
                 build_record_batch(schema, &rows)?
             }
             CatalogCommand::ListCatalogs { catalog_pattern } => {
-                let rows = ctx.list_catalogs(catalog_pattern.as_deref())?;
+                let rows = manager.list_catalogs(catalog_pattern.as_deref())?;
                 build_record_batch(schema, &rows)?
             }
             CatalogCommand::CurrentDatabase => {
-                let value = ctx.default_database()?;
+                let value = manager.default_database()?;
                 let rows = vec![SingleValueMetadata { value }];
                 build_record_batch(schema, &rows)?
             }
             CatalogCommand::SetCurrentDatabase { database_name } => {
-                ctx.set_default_database(database_name)?;
+                manager.set_default_database(database_name)?;
                 let rows: Vec<EmptyMetadata> = vec![];
                 build_record_batch(schema, &rows)?
             }
@@ -242,7 +239,7 @@ impl CatalogCommand {
                 location,
                 properties,
             } => {
-                let value = ctx
+                let value = manager
                     .create_database(database, if_not_exists, comment, location, properties)
                     .await
                     .is_ok();
@@ -250,12 +247,12 @@ impl CatalogCommand {
                 build_record_batch(schema, &rows)?
             }
             CatalogCommand::DatabaseExists { database } => {
-                let value = ctx.get_database(database)?.is_some();
+                let value = manager.get_database(database)?.is_some();
                 let rows = vec![SingleValueMetadata { value }];
                 build_record_batch(schema, &rows)?
             }
             CatalogCommand::GetDatabase { database } => {
-                let rows = match ctx.get_database(database)? {
+                let rows = match manager.get_database(database)? {
                     Some(x) => vec![x],
                     None => vec![],
                 };
@@ -265,7 +262,7 @@ impl CatalogCommand {
                 catalog,
                 database_pattern,
             } => {
-                let rows = ctx.list_databases(catalog, database_pattern.as_deref())?;
+                let rows = manager.list_databases(catalog, database_pattern.as_deref())?;
                 build_record_batch(schema, &rows)?
             }
             CatalogCommand::DropDatabase {
@@ -273,7 +270,7 @@ impl CatalogCommand {
                 if_exists,
                 cascade,
             } => {
-                let value = ctx
+                let value = manager
                     .drop_database(database, if_exists, cascade)
                     .await
                     .is_ok();
@@ -282,17 +279,17 @@ impl CatalogCommand {
             }
             CatalogCommand::CreateTable { table, plan } => {
                 // TODO: we should probably create external table here
-                ctx.create_memory_table(table, plan).await?;
+                manager.create_memory_table(table, plan).await?;
                 let rows: Vec<EmptyMetadata> = vec![];
                 build_record_batch(schema, &rows)?
             }
             CatalogCommand::TableExists { table } => {
-                let value = ctx.get_table(table).await?.is_some();
+                let value = manager.get_table(table).await?.is_some();
                 let rows = vec![SingleValueMetadata { value }];
                 build_record_batch(schema, &rows)?
             }
             CatalogCommand::GetTable { table } => {
-                let rows = match ctx.get_table(table).await? {
+                let rows = match manager.get_table(table).await? {
                     Some(x) => vec![x],
                     None => vec![],
                 };
@@ -302,7 +299,9 @@ impl CatalogCommand {
                 database,
                 table_pattern,
             } => {
-                let rows = ctx.list_tables(database, table_pattern.as_deref()).await?;
+                let rows = manager
+                    .list_tables(database, table_pattern.as_deref())
+                    .await?;
                 build_record_batch(schema, &rows)?
             }
             CatalogCommand::DropTable {
@@ -310,12 +309,12 @@ impl CatalogCommand {
                 if_exists,
                 purge,
             } => {
-                let value = ctx.drop_table(table, if_exists, purge).await.is_ok();
+                let value = manager.drop_table(table, if_exists, purge).await.is_ok();
                 let rows = vec![SingleValueMetadata { value }];
                 build_record_batch(schema, &rows)?
             }
             CatalogCommand::ListColumns { table } => {
-                let rows = ctx.list_table_columns(table).await?;
+                let rows = manager.list_table_columns(table).await?;
                 build_record_batch(schema, &rows)?
             }
             CatalogCommand::FunctionExists { .. } => return not_impl_err!("function exists"),
@@ -328,12 +327,12 @@ impl CatalogCommand {
                 if_exists,
             } => {
                 // TODO: use the correct catalog and database for global temporary views
-                let value = ctx.drop_view(view, if_exists).await.is_ok();
+                let value = manager.drop_view(view, if_exists).await.is_ok();
                 let rows = vec![SingleValueMetadata { value }];
                 build_record_batch(schema, &rows)?
             }
             CatalogCommand::DropView { view, if_exists } => {
-                let value = ctx.drop_view(view, if_exists).await.is_ok();
+                let value = manager.drop_view(view, if_exists).await.is_ok();
                 let rows = vec![SingleValueMetadata { value }];
                 build_record_batch(schema, &rows)?
             }
@@ -350,12 +349,9 @@ impl CatalogCommand {
 }
 
 impl CatalogCommandNode {
-    pub(crate) async fn execute<S: SqlEngine>(
-        &self,
-        ctx: &SessionContext,
-        engine: &S,
-    ) -> Result<LogicalPlan> {
-        self.command.clone().execute(ctx, engine).await
+    pub(crate) async fn execute(&self, ctx: &SessionContext) -> Result<LogicalPlan> {
+        let manager = CatalogManager::new(ctx, self.config.clone());
+        self.command.clone().execute(manager).await
     }
 }
 

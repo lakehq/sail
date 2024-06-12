@@ -9,8 +9,7 @@ use datafusion_expr::{CreateMemoryTable, DdlStatement, DropTable, LogicalPlan, T
 use framework_common::unwrap_or;
 
 use crate::catalog::utils::match_pattern;
-use crate::catalog::CatalogContext;
-use crate::SqlEngine;
+use crate::catalog::CatalogManager;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,7 +96,7 @@ impl TableMetadata {
     }
 }
 
-impl<S: SqlEngine> CatalogContext<'_, S> {
+impl<'a> CatalogManager<'a> {
     pub(crate) async fn create_memory_table(
         &self,
         table: TableReference,
@@ -167,6 +166,7 @@ impl<S: SqlEngine> CatalogContext<'_, S> {
         //   We should create a "hidden" catalog provider and include the temporary views in the result.
         //   Spark *global* temporary views should be put in the `global_temp` database, and they will be
         //   included in the result if the database pattern matches `global_temp`.
+        //   The `global_temp` database name can be configured via `spark.sql.globalTempDatabase`.
     }
 
     pub(crate) async fn drop_table(

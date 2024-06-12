@@ -38,7 +38,7 @@ pub(crate) async fn handle_analyze_schema(
         plan::OpType::Root(relation) => relation,
         plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
     };
-    let resolver = PlanResolver::new(ctx);
+    let resolver = PlanResolver::new(ctx, session.plan_config()?);
     let plan = resolver.resolve_plan(relation.try_into()?).await?;
     let schema: SchemaRef = Arc::new(plan.schema().as_ref().into());
     Ok(SchemaResponse {

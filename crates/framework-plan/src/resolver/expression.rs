@@ -107,7 +107,7 @@ impl PlanResolver<'_> {
         use spec::Expr;
 
         match expr {
-            Expr::Literal(literal) => Ok(expr::Expr::Literal(literal.try_into()?)),
+            Expr::Literal(literal) => Ok(expr::Expr::Literal(self.resolve_literal(literal)?)),
             Expr::UnresolvedAttribute {
                 identifier,
                 plan_id: _,
@@ -177,7 +177,7 @@ impl PlanResolver<'_> {
                 }
             }
             Expr::Cast { expr, cast_to_type } => {
-                let data_type = cast_to_type.try_into()?;
+                let data_type = self.resolve_data_type(cast_to_type)?;
                 Ok(expr::Expr::Cast(expr::Cast {
                     expr: Box::new(self.resolve_expression(*expr, schema)?),
                     data_type,
@@ -320,7 +320,7 @@ impl PlanResolver<'_> {
                         return Err(PlanError::invalid("UDF function type must be Python UDF"));
                     }
                 };
-                let output_type: DataType = output_type.try_into()?;
+                let output_type = self.resolve_data_type(output_type)?;
 
                 let pyo3_python_version: String = Python::with_gil(|py| py.version().to_string());
                 if !pyo3_python_version.starts_with(python_version.as_str()) {
