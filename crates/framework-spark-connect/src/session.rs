@@ -88,6 +88,7 @@ impl Session {
                 .get_config(SPARK_SQL_SESSION_TIME_ZONE)
                 .map(|x| x.clone())
                 .unwrap_or_else(|| "UTC".into()),
+            // TODO: get the default timestamp type from configuration
             timestamp_type: TimestampType::TimestampLtz,
             data_type_formatter: Arc::new(SparkDataTypeFormatter),
         }))

@@ -15,6 +15,8 @@ pub trait DataTypeFormatter: DynObject + Debug + Send + Sync {
     fn to_simple_string(&self, data_type: spec::DataType) -> PlanResult<String>;
 }
 
+impl_dyn_object_traits!(DataTypeFormatter);
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct DefaultDataTypeFormatter;
 
@@ -23,8 +25,6 @@ impl DataTypeFormatter for DefaultDataTypeFormatter {
         Err(PlanError::unsupported("default data type formatter"))
     }
 }
-
-impl_dyn_object_traits!(DataTypeFormatter);
 
 // The generic type parameter is used to work around the issue deriving `PartialEq` for `dyn` trait.
 // See also: https://github.com/rust-lang/rust/issues/78808
