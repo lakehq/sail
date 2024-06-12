@@ -41,6 +41,7 @@ use framework_python::cereal::partial_pyspark_udf::{
     deserialize_partial_pyspark_udf, PartialPySparkUDF,
 };
 use framework_python::udf::pyspark_udf::PySparkUDF;
+use framework_python::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
 pub struct ExecutePlanResponseStream {
     session_id: String,
@@ -149,20 +150,7 @@ pub(crate) async fn handle_execute_register_function(
     } = udf;
     let function_name: &str = function_name.as_str();
 
-    // TODO: args always empty so dont need schema and input types.
-    //  Register UnresolvedPysparkUDF after we create it.
-    let schema = DFSchema::empty();
-    let arguments: Vec<expr::Expr> = arguments
-        .into_iter()
-        .map(|x| resolver.resolve_expression(x, &schema))
-        .collect::<PlanResult<Vec<expr::Expr>>>()?;
-    let input_types: Vec<ArrowDataType> =
-        arguments
-            .iter()
-            .map(|arg| arg.get_type(&schema))
-            .collect::<datafusion_common::Result<Vec<ArrowDataType>, DataFusionError>>()?;
-
-    let (output_type, eval_type, command, python_version) = match function {
+    let (output_type, _eval_type, _command, _python_version) = match &function {
         FunctionDefinition::PythonUdf {
             output_type,
             eval_type,
@@ -173,27 +161,16 @@ pub(crate) async fn handle_execute_register_function(
             return Err(SparkError::invalid("UDF function type must be Python UDF"));
         }
     };
-    let output_type: ArrowDataType = output_type.try_into()?;
+    let output_type: ArrowDataType = output_type.clone().try_into()?;
 
-    let python_function: PartialPySparkUDF = deserialize_partial_pyspark_udf(
-        &python_version,
-        &command,
-        &eval_type,
-        &(arguments.len() as i32),
-    )
-    .map_err(|e| SparkError::invalid(format!("Python UDF deserialization error: {:?}", e)))?;
-
-    let python_udf: PySparkUDF = PySparkUDF::new(
+    let python_udf: UnresolvedPySparkUDF = UnresolvedPySparkUDF::new(
         function_name.to_owned(),
-        deterministic,
-        input_types,
-        eval_type,
-        python_function,
+        function,
         output_type,
+        deterministic,
     );
 
     let scalar_udf = ScalarUDF::from(python_udf);
-    //  TODO: Register UnresolvedPySparkUDF after we create iot
     ctx.register_udf(scalar_udf);
 
     let (tx, rx) = tokio::sync::mpsc::channel(1);

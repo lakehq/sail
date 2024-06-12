@@ -38,8 +38,8 @@ impl PythonUDF {
                 },
             ),
             function_name,
-            python_function,
             output_type,
+            python_function,
         }
     }
 }

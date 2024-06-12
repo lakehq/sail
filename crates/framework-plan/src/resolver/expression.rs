@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::alias::MultiAlias;
-use crate::extension::function::explode::Explode;
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, get_built_in_window_function,
 };
@@ -16,7 +15,11 @@ use datafusion_expr::{
     ScalarUDF,
 };
 use framework_common::spec;
+use framework_python::cereal::partial_pyspark_udf::{
+    deserialize_partial_pyspark_udf, PartialPySparkUDF,
+};
 use framework_python::udf::pyspark_udf::PySparkUDF;
+use framework_python::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
 impl PlanResolver<'_> {
     pub(crate) fn resolve_sort_order(
@@ -127,18 +130,23 @@ impl PlanResolver<'_> {
                 is_distinct,
                 is_user_defined_function,
             } => {
-                let args = arguments
+                let arguments = arguments
                     .into_iter()
                     .map(|x| self.resolve_expression(x, schema))
-                    .collect::<PlanResult<Vec<_>>>()?;
+                    .collect::<PlanResult<Vec<expr::Expr>>>()?;
+                let input_types: Vec<DataType> = arguments
+                    .iter()
+                    .map(|arg| arg.get_type(schema))
+                    .collect::<Result<Vec<DataType>, DataFusionError>>(
+                )?;
 
                 if !is_user_defined_function {
                     if let Ok(func) = get_built_in_function(function_name.as_str()) {
-                        return Ok(func(args.clone())?);
+                        return Ok(func(arguments.clone())?);
                     }
                     if let Ok(func) = get_built_in_aggregate_function(
                         function_name.as_str(),
-                        args.clone(),
+                        arguments.clone(),
                         is_distinct,
                     ) {
                         return Ok(func);
@@ -146,17 +154,57 @@ impl PlanResolver<'_> {
                 }
 
                 if let Ok(func) = self.ctx.udf(function_name.as_str()) {
-                    // TODO: Change PySparkUDF to UnresolvedPySparkUDF when its created.
-                    let func = match func.inner().as_any().downcast_ref::<PySparkUDF>() {
+                    let func = match func.inner().as_any().downcast_ref::<UnresolvedPySparkUDF>() {
                         Some(f) => {
-                            // TODO: convert UnresolvedPySparkUDF to PySparkUDF
-                            func
+                            let deterministic = f.deterministic()?;
+                            let function_definition = f.python_function_definition()?;
+                            let (output_type, eval_type, command, python_version) =
+                                match &function_definition {
+                                    spec::FunctionDefinition::PythonUdf {
+                                        output_type,
+                                        eval_type,
+                                        command,
+                                        python_version,
+                                    } => (output_type, eval_type, command, python_version),
+                                    _ => {
+                                        return Err(PlanError::invalid(
+                                            "UDF function type must be Python UDF",
+                                        ));
+                                    }
+                                };
+                            let output_type: DataType = output_type.clone().try_into()?;
+
+                            let python_function: PartialPySparkUDF =
+                                deserialize_partial_pyspark_udf(
+                                    &python_version,
+                                    &command,
+                                    &eval_type,
+                                    &(arguments.len() as i32),
+                                )
+                                .map_err(|e| {
+                                    PlanError::invalid(format!(
+                                        "Python UDF deserialization error: {:?}",
+                                        e
+                                    ))
+                                })?;
+
+                            let python_udf: PySparkUDF = PySparkUDF::new(
+                                function_name.to_owned(),
+                                deterministic,
+                                input_types,
+                                eval_type.clone(),
+                                python_function,
+                                output_type,
+                            );
+
+                            Arc::new(ScalarUDF::from(python_udf))
                         }
                         None => func,
                     };
+
                     return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                         func_def: ScalarFunctionDefinition::UDF(func),
-                        args,
+                        args: arguments,
                     }));
                 }
 

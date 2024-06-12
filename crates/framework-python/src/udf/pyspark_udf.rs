@@ -43,9 +43,9 @@ impl PySparkUDF {
                 },
             ),
             function_name,
+            output_type,
             eval_type,
             python_function,
-            output_type,
         }
     }
 }
