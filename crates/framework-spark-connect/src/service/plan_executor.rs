@@ -139,7 +139,7 @@ pub(crate) async fn handle_execute_register_function(
     // TODO: Should probably just call PlanNode::RegisterFunction
     //  even though SC implementation creates the UDF and registers it directly.
     let ctx = session.context();
-    let resolver = PlanResolver::new(ctx);
+    let resolver = PlanResolver::new(ctx, session.plan_config()?);
 
     let udf: CommonInlineUserDefinedFunction = udf.try_into()?;
     let CommonInlineUserDefinedFunction {
@@ -161,7 +161,7 @@ pub(crate) async fn handle_execute_register_function(
             return Err(SparkError::invalid("UDF function type must be Python UDF"));
         }
     };
-    let output_type: ArrowDataType = output_type.clone().try_into()?;
+    let output_type: ArrowDataType = resolver.resolve_data_type(output_type.clone())?;
 
     let python_udf: UnresolvedPySparkUDF = UnresolvedPySparkUDF::new(
         function_name.to_owned(),

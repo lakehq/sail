@@ -174,7 +174,8 @@ impl PlanResolver<'_> {
                                         ));
                                     }
                                 };
-                            let output_type: DataType = output_type.clone().try_into()?;
+                            let output_type: DataType =
+                                self.resolve_data_type(output_type.clone())?;
 
                             let python_function: PartialPySparkUDF =
                                 deserialize_partial_pyspark_udf(
