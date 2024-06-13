@@ -253,7 +253,9 @@ impl From<SparkError> for Status {
             }
             SparkError::ArrowError(e)
             | SparkError::DataFusionError(DataFusionError::ArrowError(e, _)) => match e {
-                ArrowError::NotYetImplemented(s) => Status::unimplemented(s),
+                ArrowError::NotYetImplemented(s) => {
+                    SparkThrowable::UnsupportedOperationException(s).into()
+                }
                 ArrowError::CastError(s) | ArrowError::SchemaError(s) => {
                     SparkThrowable::AnalysisException(s).into()
                 }
@@ -276,8 +278,8 @@ impl From<SparkError> for Status {
             SparkError::DataFusionError(DataFusionError::SchemaError(e, _)) => {
                 SparkThrowable::AnalysisException(e.to_string()).into()
             }
-            SparkError::DataFusionError(e @ DataFusionError::NotImplemented(_)) => {
-                Status::unimplemented(e.to_string())
+            SparkError::DataFusionError(DataFusionError::NotImplemented(s)) => {
+                SparkThrowable::UnsupportedOperationException(s).into()
             }
             SparkError::DataFusionError(e @ DataFusionError::Execution(_)) => {
                 // TODO: handle situations where a different exception type is more appropriate.
@@ -293,14 +295,11 @@ impl From<SparkError> for Status {
             SparkError::JsonError(e) => {
                 SparkThrowable::IllegalArgumentException(e.to_string()).into()
             }
+            SparkError::NotImplemented(s) | SparkError::NotSupported(s) => {
+                SparkThrowable::UnsupportedOperationException(s).into()
+            }
             e @ SparkError::SendError(_) => Status::cancelled(e.to_string()),
-            e @ SparkError::NotImplemented(_) => Status::unimplemented(e.to_string()),
-            e @ SparkError::NotSupported(_) => {
-                SparkThrowable::UnsupportedOperationException(e.to_string()).into()
-            }
-            e @ SparkError::InternalError(_) => {
-                SparkThrowable::SparkRuntimeException(e.to_string()).into()
-            }
+            e @ SparkError::InternalError(_) => Status::internal(e.to_string()),
         }
     }
 }
