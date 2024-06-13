@@ -48,6 +48,17 @@ impl PySparkUDF {
             python_function,
         }
     }
+
+    fn get_python_function<'py>(&self, py: Python<'py>) -> Result<Bound<'py, PyAny>> {
+        let python_function: Bound<PyAny> = self
+            .python_function
+            .0
+            .clone_ref(py)
+            .into_bound(py)
+            .get_item(0)
+            .map_err(|err| DataFusionError::Internal(format!("python_function {:?}", err)))?;
+        Ok(python_function)
+    }
 }
 
 impl ScalarUDFImpl for PySparkUDF {
@@ -90,15 +101,7 @@ impl ScalarUDFImpl for PySparkUDF {
                         DataFusionError::Internal(format!("Error getting list: {:?}", err))
                     })?;
 
-                let python_function: Bound<PyAny> = self
-                    .python_function
-                    .0
-                    .clone_ref(py)
-                    .into_bound(py)
-                    .get_item(0)
-                    .map_err(|err| {
-                        DataFusionError::Internal(format!("python_function {:?}", err))
-                    })?;
+                let python_function: Bound<PyAny> = self.get_python_function(py)?;
 
                 let py_args: Vec<Bound<PyAny>> = args
                     .iter()
@@ -171,15 +174,7 @@ impl ScalarUDFImpl for PySparkUDF {
                         DataFusionError::Internal(format!("Error getting list: {:?}", err))
                     })?;
 
-                let python_function: Bound<PyAny> = self
-                    .python_function
-                    .0
-                    .clone_ref(py)
-                    .into_bound(py)
-                    .get_item(0)
-                    .map_err(|err| {
-                        DataFusionError::Internal(format!("python_function {:?}", err))
-                    })?;
+                let python_function: Bound<PyAny> = self.get_python_function(py)?;
 
                 let py_args: Vec<Bound<PyAny>> = args
                     .iter()
@@ -258,13 +253,7 @@ impl ScalarUDFImpl for PySparkUDF {
                     DataFusionError::Internal(format!("Error getting list: {:?}", err))
                 })?;
 
-            let python_function: Bound<PyAny> = self
-                .python_function
-                .0
-                .clone_ref(py)
-                .into_bound(py)
-                .get_item(0)
-                .map_err(|err| DataFusionError::Internal(format!("python_function {:?}", err)))?;
+            let python_function: Bound<PyAny> = self.get_python_function(py)?;
 
             let py_args_columns_list: Vec<Bound<PyAny>> = args
                 .iter()
@@ -360,13 +349,7 @@ impl ScalarUDFImpl for PySparkUDF {
                     DataFusionError::Internal(format!("Error getting list: {:?}", err))
                 })?;
 
-            let python_function: Bound<PyAny> = self
-                .python_function
-                .0
-                .clone_ref(py)
-                .into_bound(py)
-                .get_item(0)
-                .map_err(|err| DataFusionError::Internal(format!("python_function {:?}", err)))?;
+            let python_function: Bound<PyAny> = self.get_python_function(py)?;
 
             let pyarrow_output_type: Bound<PyAny> = self
                 .output_type
