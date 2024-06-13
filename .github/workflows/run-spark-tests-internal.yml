@@ -140,6 +140,10 @@ jobs:
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         name: Run Spark tests
+        # We set a timeout to prevent the tests from hanging indefinitely,
+        # which can happen occasionally for unknown reasons.
+        # The timeout value should be adjusted as we add more tests.
+        timeout-minutes: 5
         run: |
           export TEST_RUN_GIT_COMMIT="${{ steps.info.outputs.commit_hash }}"
           export TEST_RUN_GIT_REF="${{ inputs.ref }}"
