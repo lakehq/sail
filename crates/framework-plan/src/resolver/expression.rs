@@ -170,6 +170,7 @@ impl PlanResolver<'_> {
                                     &command,
                                     &eval_type,
                                     &(arguments.len() as i32),
+                                    &self.config.spark_udf_config,
                                 )
                                 .map_err(|e| {
                                     PlanError::invalid(format!(
@@ -406,6 +407,7 @@ impl PlanResolver<'_> {
                     &command,
                     &eval_type,
                     &(arguments.len() as i32),
+                    &self.config.spark_udf_config,
                 )
                 .map_err(|e| {
                     PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))

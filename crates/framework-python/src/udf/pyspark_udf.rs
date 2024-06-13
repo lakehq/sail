@@ -102,6 +102,14 @@ impl ScalarUDFImpl for PySparkUDF {
                     })?;
 
                 let python_function: Bound<PyAny> = self.get_python_function(py)?;
+                let pyarrow_output_type: Bound<PyAny> = self
+                    .output_type
+                    .to_pyarrow(py)
+                    .map_err(|err| {
+                        DataFusionError::Internal(format!("output_type to_pyarrow {:?}", err))
+                    })?
+                    .clone_ref(py)
+                    .into_bound(py);
 
                 let py_args: Vec<Bound<PyAny>> = args
                     .iter()
@@ -142,7 +150,7 @@ impl ScalarUDFImpl for PySparkUDF {
                 })?;
                 let array_type_kwargs: Bound<PyDict> = PyDict::new_bound(py);
                 array_type_kwargs
-                    .set_item("type", results_datatype)
+                    .set_item("type", pyarrow_output_type)
                     .map_err(|err| DataFusionError::Internal(format!("kwargs {:?}", err)))?;
                 let results_data: Bound<PyAny> = pyarrow_module_array
                     .call((results_data,), Some(&array_type_kwargs))
@@ -175,6 +183,14 @@ impl ScalarUDFImpl for PySparkUDF {
                     })?;
 
                 let python_function: Bound<PyAny> = self.get_python_function(py)?;
+                let pyarrow_output_type: Bound<PyAny> = self
+                    .output_type
+                    .to_pyarrow(py)
+                    .map_err(|err| {
+                        DataFusionError::Internal(format!("output_type to_pyarrow {:?}", err))
+                    })?
+                    .clone_ref(py)
+                    .into_bound(py);
 
                 let py_args: Vec<Bound<PyAny>> = args
                     .iter()
@@ -217,7 +233,7 @@ impl ScalarUDFImpl for PySparkUDF {
                 })?;
                 let array_type_kwargs: Bound<PyDict> = PyDict::new_bound(py);
                 array_type_kwargs
-                    .set_item("type", results_datatype)
+                    .set_item("type", pyarrow_output_type)
                     .map_err(|err| DataFusionError::Internal(format!("kwargs {:?}", err)))?;
                 array_type_kwargs
                     .set_item("from_pandas", true)
