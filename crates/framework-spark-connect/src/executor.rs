@@ -173,10 +173,11 @@ impl Executor {
         let state = mem::replace(&mut self.state, ExecutorState::Idle);
         let context = match state {
             ExecutorState::Pending(context) => context,
-            ExecutorState::Failed(ref e) => {
-                let error = e.to_string();
-                self.state = state;
-                return Err(SparkError::internal(error));
+            ExecutorState::Failed(e) => {
+                self.state = ExecutorState::Failed(SparkError::internal(
+                    "task failed due to a previous error",
+                ));
+                return Err(e);
             }
             ExecutorState::Idle => {
                 self.state = state;

@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::sync::PoisonError;
 
+use arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use framework_common::error::CommonError;
 use framework_plan::error::PlanError;
 use framework_sql::error::SqlError;
 use prost::DecodeError;
+use pyo3::PyErr;
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
 use tokio::task::JoinError;
@@ -21,7 +23,7 @@ pub enum SparkError {
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
     #[error("error in Arrow: {0}")]
-    ArrowError(#[from] arrow::error::ArrowError),
+    ArrowError(#[from] ArrowError),
     #[error("error in JSON serde: {0}")]
     JsonError(#[from] serde_json::Error),
     #[error("error in channel: {0}")]
@@ -146,44 +148,159 @@ where
     }
 }
 
+enum SparkThrowable {
+    ParseException(String),
+    AnalysisException(String),
+    #[allow(dead_code)]
+    StreamingQueryException(String),
+    QueryExecutionException(String),
+    #[allow(dead_code)]
+    NumberFormatException(String),
+    IllegalArgumentException(String),
+    ArithmeticException(String),
+    UnsupportedOperationException(String),
+    #[allow(dead_code)]
+    ArrayIndexOutOfBoundsException(String),
+    #[allow(dead_code)]
+    DateTimeException(String),
+    SparkRuntimeException(String),
+    #[allow(dead_code)]
+    SparkUpgradeException(String),
+    PythonException(String),
+}
+
+impl SparkThrowable {
+    fn message(&self) -> &str {
+        match self {
+            SparkThrowable::ParseException(message)
+            | SparkThrowable::AnalysisException(message)
+            | SparkThrowable::StreamingQueryException(message)
+            | SparkThrowable::QueryExecutionException(message)
+            | SparkThrowable::NumberFormatException(message)
+            | SparkThrowable::IllegalArgumentException(message)
+            | SparkThrowable::ArithmeticException(message)
+            | SparkThrowable::UnsupportedOperationException(message)
+            | SparkThrowable::ArrayIndexOutOfBoundsException(message)
+            | SparkThrowable::DateTimeException(message)
+            | SparkThrowable::SparkRuntimeException(message)
+            | SparkThrowable::SparkUpgradeException(message)
+            | SparkThrowable::PythonException(message) => message,
+        }
+    }
+
+    fn class_name(&self) -> &'static str {
+        match self {
+            SparkThrowable::ParseException(_) => {
+                "org.apache.spark.sql.catalyst.parser.ParseException"
+            }
+            SparkThrowable::AnalysisException(_) => "org.apache.spark.sql.AnalysisException",
+            SparkThrowable::StreamingQueryException(_) => {
+                "org.apache.spark.sql.streaming.StreamingQueryException"
+            }
+            SparkThrowable::QueryExecutionException(_) => {
+                "org.apache.spark.sql.execution.QueryExecutionException"
+            }
+            SparkThrowable::NumberFormatException(_) => "java.lang.NumberFormatException",
+            SparkThrowable::IllegalArgumentException(_) => "java.lang.IllegalArgumentException",
+            SparkThrowable::ArithmeticException(_) => "java.lang.ArithmeticException",
+            SparkThrowable::UnsupportedOperationException(_) => {
+                "java.lang.UnsupportedOperationException"
+            }
+            SparkThrowable::ArrayIndexOutOfBoundsException(_) => {
+                "java.lang.ArrayIndexOutOfBoundsException"
+            }
+            SparkThrowable::DateTimeException(_) => "java.time.DateTimeException",
+            SparkThrowable::SparkRuntimeException(_) => "org.apache.spark.SparkRuntimeException",
+            SparkThrowable::SparkUpgradeException(_) => "org.apache.spark.SparkUpgradeException",
+            SparkThrowable::PythonException(_) => "org.apache.spark.api.python.PythonException",
+        }
+    }
+}
+
+impl From<SparkThrowable> for Status {
+    fn from(throwable: SparkThrowable) -> Status {
+        let class = throwable.class_name();
+
+        let mut metadata = HashMap::new();
+        // We do not add the "stackTrace" field since the Java stack trace is not available.
+        metadata.insert("classes".into(), format!("[\"{class}\"]"));
+
+        let mut details = ErrorDetails::new();
+        details.set_error_info(class, "org.apache.spark", metadata);
+
+        // The original Spark Connect server implementation uses the "INTERNAL" status code
+        // for all Spark exceptions, so we do the same here.
+        // Reference: org.apache.spark.sql.connect.utils.ErrorUtils#buildStatusFromThrowable
+        Status::with_error_details(Code::Internal, throwable.message(), details)
+    }
+}
+
 impl From<SparkError> for Status {
     fn from(error: SparkError) -> Self {
         match error {
+            SparkError::ArrowError(ArrowError::ExternalError(e))
+            | SparkError::DataFusionError(DataFusionError::ArrowError(
+                ArrowError::ExternalError(e),
+                _,
+            ))
+            | SparkError::DataFusionError(DataFusionError::External(e)) => {
+                if let Some(e) = e.downcast_ref::<PyErr>() {
+                    // TODO: get Python traceback
+                    SparkThrowable::PythonException(e.to_string()).into()
+                } else {
+                    SparkThrowable::SparkRuntimeException(e.to_string()).into()
+                }
+            }
+            SparkError::ArrowError(e)
+            | SparkError::DataFusionError(DataFusionError::ArrowError(e, _)) => match e {
+                ArrowError::NotYetImplemented(s) => Status::unimplemented(s),
+                ArrowError::CastError(s) | ArrowError::SchemaError(s) => {
+                    SparkThrowable::AnalysisException(s).into()
+                }
+                ArrowError::ParseError(s) => SparkThrowable::ParseException(s).into(),
+                ArrowError::DivideByZero => {
+                    SparkThrowable::ArithmeticException("divide by zero".to_string()).into()
+                }
+                ArrowError::InvalidArgumentError(s) => {
+                    SparkThrowable::IllegalArgumentException(s).into()
+                }
+                _ => SparkThrowable::QueryExecutionException(e.to_string()).into(),
+            },
             SparkError::DataFusionError(e @ DataFusionError::Plan(_))
             | SparkError::DataFusionError(e @ DataFusionError::Configuration(_)) => {
-                Status::invalid_argument(e.to_string())
+                SparkThrowable::AnalysisException(e.to_string()).into()
             }
             SparkError::DataFusionError(DataFusionError::SQL(e, _)) => {
-                Status::invalid_argument(e.to_string())
+                SparkThrowable::ParseException(e.to_string()).into()
             }
             SparkError::DataFusionError(DataFusionError::SchemaError(e, _)) => {
-                Status::invalid_argument(e.to_string())
+                SparkThrowable::AnalysisException(e.to_string()).into()
             }
             SparkError::DataFusionError(e @ DataFusionError::NotImplemented(_)) => {
                 Status::unimplemented(e.to_string())
             }
             SparkError::DataFusionError(e @ DataFusionError::Execution(_)) => {
-                // TODO: Map error code properly. This is just a test.
-                let mut metadata = HashMap::new();
-                metadata.insert(
-                    "classes".into(),
-                    "[\"org.apache.spark.sql.AnalysisException\"]".into(),
-                );
-                let mut err_details = ErrorDetails::new();
-                err_details.set_error_info("AnalysisException", "org.apache.spark", metadata);
-                Status::with_error_details(Code::NotFound, e.to_string(), err_details)
+                // TODO: handle situations where a different exception type is more appropriate.
+                SparkThrowable::AnalysisException(e.to_string()).into()
             }
-            SparkError::DataFusionError(e) => Status::internal(e.to_string()),
+            SparkError::DataFusionError(e) => {
+                SparkThrowable::SparkRuntimeException(e.to_string()).into()
+            }
             e @ SparkError::MissingArgument(_) | e @ SparkError::InvalidArgument(_) => {
-                Status::invalid_argument(e.to_string())
+                SparkThrowable::IllegalArgumentException(e.to_string()).into()
             }
-            SparkError::IoError(e) => Status::internal(e.to_string()),
-            SparkError::JsonError(e) => Status::invalid_argument(e.to_string()),
-            SparkError::ArrowError(e) => Status::internal(e.to_string()),
+            SparkError::IoError(e) => SparkThrowable::QueryExecutionException(e.to_string()).into(),
+            SparkError::JsonError(e) => {
+                SparkThrowable::IllegalArgumentException(e.to_string()).into()
+            }
             e @ SparkError::SendError(_) => Status::cancelled(e.to_string()),
             e @ SparkError::NotImplemented(_) => Status::unimplemented(e.to_string()),
-            e @ SparkError::NotSupported(_) => Status::internal(e.to_string()),
-            e @ SparkError::InternalError(_) => Status::internal(e.to_string()),
+            e @ SparkError::NotSupported(_) => {
+                SparkThrowable::UnsupportedOperationException(e.to_string()).into()
+            }
+            e @ SparkError::InternalError(_) => {
+                SparkThrowable::SparkRuntimeException(e.to_string()).into()
+            }
         }
     }
 }
