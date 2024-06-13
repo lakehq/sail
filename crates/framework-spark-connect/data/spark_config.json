@@ -27,7 +27,11 @@
     },
     {
       "key": "spark.sql.adaptive.coalescePartitions.minPartitionNum",
-      "doc": "(deprecated) The suggested (not guaranteed) minimum number of shuffle partitions after coalescing. If not set, the default value is the default parallelism of the Spark cluster. This configuration only has an effect when 'spark.sql.adaptive.enabled' and 'spark.sql.adaptive.coalescePartitions.enabled' are both true."
+      "doc": "(deprecated) The suggested (not guaranteed) minimum number of shuffle partitions after coalescing. If not set, the default value is the default parallelism of the Spark cluster. This configuration only has an effect when 'spark.sql.adaptive.enabled' and 'spark.sql.adaptive.coalescePartitions.enabled' are both true.",
+      "deprecated": {
+        "version": "3.2",
+        "comment": "Use 'spark.sql.adaptive.coalescePartitions.minPartitionSize' instead."
+      }
     },
     {
       "key": "spark.sql.adaptive.coalescePartitions.minPartitionSize",
@@ -100,7 +104,11 @@
     {
       "key": "spark.sql.adaptive.shuffle.targetPostShuffleInputSize",
       "doc": "(Deprecated since Spark 3.0)",
-      "defaultValue": "64MB"
+      "defaultValue": "64MB",
+      "deprecated": {
+        "version": "3.0",
+        "comment": "Use 'spark.sql.adaptive.advisoryPartitionSizeInBytes' instead of it."
+      }
     },
     {
       "key": "spark.sql.adaptive.skewJoin.enabled",
@@ -163,6 +171,15 @@
       "defaultValue": "false"
     },
     {
+      "key": "spark.sql.ansi.strictIndexOperator",
+      "doc": "(Removed)",
+      "defaultValue": "true",
+      "removed": {
+        "version": "3.4.0",
+        "comment": "This was an internal configuration. It is not needed anymore since Spark SQL always returns null when getting a map value with a non-existing key. See SPARK-40066 for more details."
+      }
+    },
+    {
       "key": "spark.sql.autoBroadcastJoinThreshold",
       "doc": "Configures the maximum size in bytes for a table that will be broadcast to all worker nodes when performing a join.  By setting this value to -1 broadcasting can be disabled. Note that currently statistics are only supported for Hive Metastore tables where the command `ANALYZE TABLE <tableName> COMPUTE STATISTICS noscan` has been run, and file-based data source tables where the statistics are computed directly on the files of data.",
       "defaultValue": "10MB"
@@ -201,7 +218,8 @@
     {
       "key": "spark.sql.broadcastExchange.maxThreadThreshold",
       "doc": "The maximum degree of parallelism to fetch and broadcast the table. If we encounter memory issue like frequently full GC or OOM when broadcast table we can decrease this number in order to reduce memory usage. Notice the number should be carefully chosen since decreasing parallelism might cause longer waiting for other broadcasting. Also, increasing parallelism may cause memory problem.",
-      "defaultValue": "128"
+      "defaultValue": "128",
+      "isStatic": true
     },
     {
       "key": "spark.sql.broadcastTimeout",
@@ -221,7 +239,8 @@
     {
       "key": "spark.sql.cache.serializer",
       "doc": "The name of a class that implements org.apache.spark.sql.columnar.CachedBatchSerializer. It will be used to translate SQL data into a format that can more efficiently be cached. The underlying API is subject to change so use with caution. Multiple classes cannot be specified. The class must have a no-arg constructor.",
-      "defaultValue": "org.apache.spark.sql.execution.columnar.DefaultCachedBatchSerializer"
+      "defaultValue": "org.apache.spark.sql.execution.columnar.DefaultCachedBatchSerializer",
+      "isStatic": true
     },
     {
       "key": "spark.sql.cartesianProductExec.buffer.in.memory.threshold",
@@ -245,12 +264,14 @@
     {
       "key": "spark.sql.catalog.spark_catalog.defaultDatabase",
       "doc": "The default database for session catalog.",
-      "defaultValue": "default"
+      "defaultValue": "default",
+      "isStatic": true
     },
     {
       "key": "spark.sql.catalogImplementation",
       "doc": "",
-      "defaultValue": "in-memory"
+      "defaultValue": "in-memory",
+      "isStatic": true
     },
     {
       "key": "spark.sql.cbo.enabled",
@@ -335,12 +356,14 @@
     {
       "key": "spark.sql.codegen.cache.maxEntries",
       "doc": "When nonzero, enable caching of generated classes for operators and expressions. All jobs share the cache that can use up to the specified number for generated classes.",
-      "defaultValue": "100"
+      "defaultValue": "100",
+      "isStatic": true
     },
     {
       "key": "spark.sql.codegen.comments",
       "doc": "When true, put comment in the generated code. Since computing huge comments can be extremely expensive in certain cases, such as deeply-nested expressions which operate over inputs with wide schemas, default is false.",
-      "defaultValue": "false"
+      "defaultValue": "false",
+      "isStatic": true
     },
     {
       "key": "spark.sql.codegen.factoryMode",
@@ -449,7 +472,8 @@
     {
       "key": "spark.sql.debug",
       "doc": "Only used for internal debugging. Not all functions are supported when it is enabled.",
-      "defaultValue": "false"
+      "defaultValue": "false",
+      "isStatic": true
     },
     {
       "key": "spark.sql.debug.maxToStringFields",
@@ -489,7 +513,8 @@
     {
       "key": "spark.sql.defaultUrlStreamHandlerFactory.enabled",
       "doc": "When true, register Hadoop's FsUrlStreamHandlerFactory to support ADD JAR against HDFS locations. It should be disabled when a different stream protocol handler should be registered to support a particular protocol type, or if Hadoop's FsUrlStreamHandlerFactory conflicts with other protocol types such as `http` or `https`. See also SPARK-25694 and HADOOP-14598.",
-      "defaultValue": "true"
+      "defaultValue": "true",
+      "isStatic": true
     },
     {
       "key": "spark.sql.error.messageFormat",
@@ -499,7 +524,8 @@
     {
       "key": "spark.sql.event.truncate.length",
       "doc": "Threshold of SQL length beyond which it will be truncated before adding to event. Defaults to no truncation. If set to 0, callsite will be logged instead.",
-      "defaultValue": "2147483647"
+      "defaultValue": "2147483647",
+      "isStatic": true
     },
     {
       "key": "spark.sql.exchange.reuse",
@@ -509,12 +535,20 @@
     {
       "key": "spark.sql.execution.arrow.enabled",
       "doc": "(Deprecated since Spark 3.0, please set 'spark.sql.execution.arrow.pyspark.enabled'.)",
-      "defaultValue": "false"
+      "defaultValue": "false",
+      "deprecated": {
+        "version": "3.0",
+        "comment": "Use 'spark.sql.execution.arrow.pyspark.enabled' instead of it."
+      }
     },
     {
       "key": "spark.sql.execution.arrow.fallback.enabled",
       "doc": "(Deprecated since Spark 3.0, please set 'spark.sql.execution.arrow.pyspark.fallback.enabled'.)",
-      "defaultValue": "true"
+      "defaultValue": "true",
+      "deprecated": {
+        "version": "3.0",
+        "comment": "Use 'spark.sql.execution.arrow.pyspark.fallback.enabled' instead of it."
+      }
     },
     {
       "key": "spark.sql.execution.arrow.localRelationThreshold",
@@ -565,6 +599,15 @@
       "key": "spark.sql.execution.pandas.convertToArrowArraySafely",
       "doc": "When true, Arrow will perform safe type conversion when converting Pandas.Series to Arrow array during serialization. Arrow will raise errors when detecting unsafe type conversion like overflow. When false, disabling Arrow's type check and do type conversions anyway. This config only works for Arrow 0.11.0+.",
       "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.execution.pandas.respectSessionTimeZone",
+      "doc": "(Removed)",
+      "defaultValue": "true",
+      "removed": {
+        "version": "3.0.0",
+        "comment": "The non-default behavior is considered as a bug, see SPARK-22395. The config was deprecated since Spark 2.3."
+      }
     },
     {
       "key": "spark.sql.execution.pandas.structHandlingMode",
@@ -642,7 +685,8 @@
     },
     {
       "key": "spark.sql.extensions",
-      "doc": "A comma-separated list of classes that implement Function1[SparkSessionExtensions, Unit] used to configure Spark Session extensions. The classes must have a no-args constructor. If multiple extensions are specified, they are applied in the specified order. For the case of rules and planner strategies, they are applied in the specified order. For the case of parsers, the last parser is used and each parser can delegate to its predecessor. For the case of function name conflicts, the last registered function name is used."
+      "doc": "A comma-separated list of classes that implement Function1[SparkSessionExtensions, Unit] used to configure Spark Session extensions. The classes must have a no-args constructor. If multiple extensions are specified, they are applied in the specified order. For the case of rules and planner strategies, they are applied in the specified order. For the case of parsers, the last parser is used and each parser can delegate to its predecessor. For the case of function name conflicts, the last registered function name is used.",
+      "isStatic": true
     },
     {
       "key": "spark.sql.files.ignoreCorruptFiles",
@@ -680,7 +724,17 @@
     {
       "key": "spark.sql.filesourceTableRelationCacheSize",
       "doc": "The maximum size of the cache that maps qualified table names to table relation plans.",
-      "defaultValue": "1000"
+      "defaultValue": "1000",
+      "isStatic": true
+    },
+    {
+      "key": "spark.sql.fromJsonForceNullableSchema",
+      "doc": "(Removed)",
+      "defaultValue": "true",
+      "removed": {
+        "version": "3.0.0",
+        "comment": "It was removed to prevent errors like SPARK-23173 for non-default value."
+      }
     },
     {
       "key": "spark.sql.function.concatBinaryAsString",
@@ -695,7 +749,8 @@
     {
       "key": "spark.sql.globalTempDatabase",
       "doc": "",
-      "defaultValue": "global_temp"
+      "defaultValue": "global_temp",
+      "isStatic": true
     },
     {
       "key": "spark.sql.groupByAliases",
@@ -720,7 +775,11 @@
     {
       "key": "spark.sql.hive.convertCTAS",
       "doc": "When true, a table created by a Hive CTAS statement (no USING clause) without specifying any storage property will be converted to a data source table, using the data source set by spark.sql.sources.default.",
-      "defaultValue": "false"
+      "defaultValue": "false",
+      "deprecated": {
+        "version": "3.1",
+        "comment": "Set 'spark.sql.legacy.createHiveTableByDefault' to false instead."
+      }
     },
     {
       "key": "spark.sql.hive.dropPartitionByName.enabled",
@@ -769,12 +828,17 @@
     {
       "key": "spark.sql.hive.thriftServer.singleSession",
       "doc": "When set to true, Hive Thrift server is running in a single session mode. All the JDBC/ODBC connections share the temporary views, function registries, SQL configuration and the current database.",
-      "defaultValue": "false"
+      "defaultValue": "false",
+      "isStatic": true
     },
     {
       "key": "spark.sql.hive.verifyPartitionPath",
       "doc": "When true, check all the partition paths under the table's root directory when reading data stored in HDFS. This configuration will be deprecated in the future releases and replaced by spark.files.ignoreMissingFiles.",
-      "defaultValue": "false"
+      "defaultValue": "false",
+      "deprecated": {
+        "version": "3.0",
+        "comment": "This config is replaced by 'spark.files.ignoreMissingFiles'."
+      }
     },
     {
       "key": "spark.sql.inMemoryColumnarStorage.batchSize",
@@ -844,6 +908,15 @@
       "key": "spark.sql.legacy.allowAutoGeneratedAliasForView",
       "doc": "When true, it's allowed to use a input query without explicit alias when creating a permanent view.",
       "defaultValue": "false"
+    },
+    {
+      "key": "spark.sql.legacy.allowCreatingManagedTableUsingNonemptyLocation",
+      "doc": "(Removed)",
+      "defaultValue": "false",
+      "removed": {
+        "version": "3.0.0",
+        "comment": "It was removed to prevent loss of user data for non-default value."
+      }
     },
     {
       "key": "spark.sql.legacy.allowEmptySchemaWrite",
@@ -916,6 +989,15 @@
       "defaultValue": "false"
     },
     {
+      "key": "spark.sql.legacy.compareDateTimestampInTimestamp",
+      "doc": "(Removed)",
+      "defaultValue": "true",
+      "removed": {
+        "version": "3.0.0",
+        "comment": "It was removed to prevent errors like SPARK-23549 for non-default value."
+      }
+    },
+    {
       "key": "spark.sql.legacy.createEmptyCollectionUsingStringType",
       "doc": "When set to true, Spark returns an empty collection with `StringType` as element type if the `array`/`map` function is called without any parameters. Otherwise, Spark returns an empty collection with `NullType` as element type.",
       "defaultValue": "false"
@@ -952,7 +1034,11 @@
     {
       "key": "spark.sql.legacy.execution.pandas.groupedMap.assignColumnsByName",
       "doc": "When true, columns will be looked up by name if labeled with a string and fallback to use position if not. When false, a grouped map Pandas UDF will assign columns from the returned Pandas DataFrame based on position, regardless of column label type. This configuration will be deprecated in future releases.",
-      "defaultValue": "true"
+      "defaultValue": "true",
+      "deprecated": {
+        "version": "2.4",
+        "comment": "The config allows to switch to the behaviour before Spark 2.4 and will be removed in the future releases."
+      }
     },
     {
       "key": "spark.sql.legacy.exponentLiteralAsDecimal.enabled",
@@ -1081,7 +1167,11 @@
     {
       "key": "spark.sql.legacy.replaceDatabricksSparkAvro.enabled",
       "doc": "If it is set to true, the data source provider com.databricks.spark.avro is mapped to the built-in but external Avro data source module for backward compatibility.",
-      "defaultValue": "true"
+      "defaultValue": "true",
+      "deprecated": {
+        "version": "3.2",
+        "comment": "Use `.format(\"avro\")` in `DataFrameWriter` or `DataFrameReader` instead."
+      }
     },
     {
       "key": "spark.sql.legacy.respectNullabilityInTextDatasetConversion",
@@ -1091,7 +1181,8 @@
     {
       "key": "spark.sql.legacy.sessionInitWithConfigDefaults",
       "doc": "Flag to revert to legacy behavior where a cloned SparkSession receives SparkConf defaults, dropping any overrides in its parent SparkSession.",
-      "defaultValue": "false"
+      "defaultValue": "false",
+      "isStatic": true
     },
     {
       "key": "spark.sql.legacy.setCommandRejectsSparkCoreConfs",
@@ -1191,7 +1282,8 @@
     {
       "key": "spark.sql.metadataCacheTTLSeconds",
       "doc": "Time-to-live (TTL) value for the metadata caches: partition file metadata cache and session catalog cache. This configuration only has an effect when this value having a positive value (> 0). It also requires setting 'spark.sql.catalogImplementation' to `hive`, setting 'spark.sql.hive.filesourcePartitionFileCacheSize' > 0 and setting 'spark.sql.hive.manageFilesourcePartitions' to `true` to be applied to the partition file metadata cache.",
-      "defaultValue": "-1000ms"
+      "defaultValue": "-1000ms",
+      "isStatic": true
     },
     {
       "key": "spark.sql.objectHashAggregate.sortBased.fallbackThreshold",
@@ -1300,7 +1392,11 @@
     {
       "key": "spark.sql.optimizer.metadataOnly",
       "doc": "When true, enable the metadata-only query optimization that use the table's metadata to produce the partition columns instead of table scans. It applies when all the columns scanned are partition columns and the query has an aggregate operator that satisfies distinct semantics. By default the optimization is disabled, and deprecated as of Spark 3.0 since it may return incorrect results when the files are empty, see also SPARK-26709.It will be removed in the future releases. If you must use, use 'SparkSessionExtensions' instead to inject it as a custom rule.",
-      "defaultValue": "false"
+      "defaultValue": "false",
+      "deprecated": {
+        "version": "3.0",
+        "comment": "Avoid to depend on this optimization to prevent a potential correctness issue. If you must use, use 'SparkSessionExtensions' instead to inject it as a custom rule."
+      }
     },
     {
       "key": "spark.sql.optimizer.nestedPredicatePushdown.supportedFileSources",
@@ -1321,6 +1417,33 @@
       "key": "spark.sql.optimizer.optimizeOneRowRelationSubquery.alwaysInline",
       "doc": "When true, the optimizer will always inline single row subqueries even if it causes extra duplication. It only takes effect when spark.sql.optimizer.optimizeOneRowRelationSubquery is set to true.",
       "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.optimizer.planChangeLog.batches",
+      "doc": "(Removed)",
+      "defaultValue": "",
+      "removed": {
+        "version": "3.1.0",
+        "comment": "Please use `spark.sql.planChangeLog.batches` instead."
+      }
+    },
+    {
+      "key": "spark.sql.optimizer.planChangeLog.level",
+      "doc": "(Removed)",
+      "defaultValue": "trace",
+      "removed": {
+        "version": "3.1.0",
+        "comment": "Please use `spark.sql.planChangeLog.level` instead."
+      }
+    },
+    {
+      "key": "spark.sql.optimizer.planChangeLog.rules",
+      "doc": "(Removed)",
+      "defaultValue": "",
+      "removed": {
+        "version": "3.1.0",
+        "comment": "Please use `spark.sql.planChangeLog.rules` instead."
+      }
     },
     {
       "key": "spark.sql.optimizer.plannedWrite.enabled",
@@ -1549,6 +1672,15 @@
       "defaultValue": "true"
     },
     {
+      "key": "spark.sql.parquet.int64AsTimestampMillis",
+      "doc": "(Removed)",
+      "defaultValue": "false",
+      "removed": {
+        "version": "3.0.0",
+        "comment": "The config was deprecated since Spark 2.3.Use 'spark.sql.parquet.outputTimestampType' instead of it."
+      }
+    },
+    {
       "key": "spark.sql.parquet.int96AsTimestamp",
       "doc": "Some Parquet-producing systems, in particular Impala, store Timestamp into INT96. Spark would also store Timestamp as INT96 because we need to avoid precision lost of the nanoseconds field. This flag tells Spark SQL to interpret INT96 data as a timestamp to provide compatibility with these systems.",
       "defaultValue": "true"
@@ -1659,7 +1791,8 @@
     },
     {
       "key": "spark.sql.queryExecutionListeners",
-      "doc": "List of class names implementing QueryExecutionListener that will be automatically added to newly created sessions. The classes should have either a no-arg constructor, or a constructor that expects a SparkConf argument."
+      "doc": "List of class names implementing QueryExecutionListener that will be automatically added to newly created sessions. The classes should have either a no-arg constructor, or a constructor that expects a SparkConf argument.",
+      "isStatic": true
     },
     {
       "key": "spark.sql.readSideCharPadding",
@@ -1799,7 +1932,8 @@
     {
       "key": "spark.sql.sources.disabledJdbcConnProviderList",
       "doc": "Configures a list of JDBC connection providers, which are disabled. The list contains the name of the JDBC connection providers separated by comma.",
-      "defaultValue": ""
+      "defaultValue": "",
+      "isStatic": true
     },
     {
       "key": "spark.sql.sources.fileCompressionFactor",
@@ -1838,7 +1972,12 @@
     {
       "key": "spark.sql.sources.schemaStringLengthThreshold",
       "doc": "The maximum length allowed in a single cell when storing additional schema information in Hive's metastore.",
-      "defaultValue": "4000"
+      "defaultValue": "4000",
+      "isStatic": true,
+      "deprecated": {
+        "version": "3.2",
+        "comment": "Use 'spark.sql.hive.tablePropertyLengthThreshold' instead."
+      }
     },
     {
       "key": "spark.sql.sources.useV1SourceList",
@@ -2156,27 +2295,32 @@
     },
     {
       "key": "spark.sql.streaming.streamingQueryListeners",
-      "doc": "List of class names implementing StreamingQueryListener that will be automatically added to newly created sessions. The classes should have either a no-arg constructor, or a constructor that expects a SparkConf argument."
+      "doc": "List of class names implementing StreamingQueryListener that will be automatically added to newly created sessions. The classes should have either a no-arg constructor, or a constructor that expects a SparkConf argument.",
+      "isStatic": true
     },
     {
       "key": "spark.sql.streaming.ui.enabled",
       "doc": "Whether to run the Structured Streaming Web UI for the Spark application when the Spark Web UI is enabled.",
-      "defaultValue": "true"
+      "defaultValue": "true",
+      "isStatic": true
     },
     {
       "key": "spark.sql.streaming.ui.enabledCustomMetricList",
       "doc": "Configures a list of custom metrics on Structured Streaming UI, which are enabled. The list contains the name of the custom metrics separated by comma. In aggregationonly sum used. The list of supported custom metrics is state store provider specific and it can be found out for example from query progress log entry.",
-      "defaultValue": ""
+      "defaultValue": "",
+      "isStatic": true
     },
     {
       "key": "spark.sql.streaming.ui.retainedProgressUpdates",
       "doc": "The number of progress updates to retain for a streaming query for Structured Streaming UI.",
-      "defaultValue": "100"
+      "defaultValue": "100",
+      "isStatic": true
     },
     {
       "key": "spark.sql.streaming.ui.retainedQueries",
       "doc": "The number of inactive queries to retain for Structured Streaming UI.",
-      "defaultValue": "100"
+      "defaultValue": "100",
+      "isStatic": true
     },
     {
       "key": "spark.sql.streaming.unsupportedOperationCheck",
@@ -2201,7 +2345,8 @@
     {
       "key": "spark.sql.subquery.maxThreadThreshold",
       "doc": "The maximum degree of parallelism to execute the subquery.",
-      "defaultValue": "16"
+      "defaultValue": "16",
+      "isStatic": true
     },
     {
       "key": "spark.sql.thriftServer.incrementalCollect",
@@ -2255,7 +2400,8 @@
     {
       "key": "spark.sql.ui.retainedExecutions",
       "doc": "Number of executions to retain in the Spark UI.",
-      "defaultValue": "1000"
+      "defaultValue": "1000",
+      "isStatic": true
     },
     {
       "key": "spark.sql.variable.substitute",
@@ -2270,7 +2416,8 @@
     {
       "key": "spark.sql.warehouse.dir",
       "doc": "The default location for managed databases and tables.",
-      "defaultValue": null
+      "defaultValue": null,
+      "isStatic": true
     },
     {
       "key": "spark.sql.windowExec.buffer.in.memory.threshold",

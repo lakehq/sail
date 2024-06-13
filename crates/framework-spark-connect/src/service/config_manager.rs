@@ -1,101 +1,115 @@
 use std::sync::Arc;
 
+use crate::config::{ConfigKeyValue, ConfigKeyValueList, SparkRuntimeConfig};
 use crate::error::SparkResult;
 use crate::session::Session;
-use crate::spark::connect::KeyValue;
+use crate::spark::connect::{ConfigResponse, KeyValue};
 
 pub(crate) fn handle_config_get(
     session: Arc<Session>,
     keys: Vec<String>,
-    pairs: &mut Vec<KeyValue>,
-) -> SparkResult<()> {
-    let state = session.lock()?;
-    for key in keys {
-        pairs.push(KeyValue {
-            key: key.clone(),
-            value: state.get_config(&key).map(|v| v.clone()),
-        });
-    }
-    Ok(())
+) -> SparkResult<ConfigResponse> {
+    let warnings = SparkRuntimeConfig::get_warnings_by_keys(&keys);
+    let pairs = session.get_config(keys)?.into();
+    Ok(ConfigResponse {
+        session_id: session.session_id().to_string(),
+        pairs,
+        warnings,
+    })
 }
 
-pub(crate) fn handle_config_set(session: Arc<Session>, kv: Vec<KeyValue>) -> SparkResult<()> {
-    let mut state = session.lock()?;
-    for KeyValue { key, value } in kv {
-        if let Some(value) = value {
-            state.set_config(&key, &value);
-        } else {
-            state.unset_config(&key);
-        }
-    }
-    Ok(())
+pub(crate) fn handle_config_set(
+    session: Arc<Session>,
+    kv: Vec<KeyValue>,
+) -> SparkResult<ConfigResponse> {
+    let kv: ConfigKeyValueList = kv.into();
+    let warnings = SparkRuntimeConfig::get_warnings(&kv);
+    session.set_config(kv)?;
+    Ok(ConfigResponse {
+        session_id: session.session_id().to_string(),
+        pairs: Vec::new(),
+        warnings,
+    })
 }
 
 pub(crate) fn handle_config_get_with_default(
     session: Arc<Session>,
     kv: Vec<KeyValue>,
-    pairs: &mut Vec<KeyValue>,
-) -> SparkResult<()> {
-    let state = session.lock()?;
-    for KeyValue { key, value } in kv {
-        pairs.push(KeyValue {
-            key: key.clone(),
-            value: state.get_config(&key).map(|v| v.clone()).or(value),
-        });
-    }
-    Ok(())
+) -> SparkResult<ConfigResponse> {
+    let kv: ConfigKeyValueList = kv.into();
+    let warnings = SparkRuntimeConfig::get_warnings(&kv);
+    let pairs = session.get_config_with_default(kv)?.into();
+    Ok(ConfigResponse {
+        session_id: session.session_id().to_string(),
+        pairs,
+        warnings,
+    })
 }
 
 pub(crate) fn handle_config_get_option(
     session: Arc<Session>,
     keys: Vec<String>,
-    pairs: &mut Vec<KeyValue>,
-) -> SparkResult<()> {
-    let state = session.lock()?;
-    for key in keys {
-        if let Some(value) = state.get_config(&key) {
-            pairs.push(KeyValue {
-                key: key.clone(),
-                value: Some(value.clone()),
-            });
-        }
-    }
-    Ok(())
+) -> SparkResult<ConfigResponse> {
+    let warnings = SparkRuntimeConfig::get_warnings_by_keys(&keys);
+    let kv = keys
+        .into_iter()
+        .map(|key| ConfigKeyValue { key, value: None })
+        .collect::<Vec<_>>()
+        .into();
+    let pairs = session.get_config_with_default(kv)?.into();
+    Ok(ConfigResponse {
+        session_id: session.session_id().to_string(),
+        pairs,
+        warnings,
+    })
 }
 
 pub(crate) fn handle_config_get_all(
     session: Arc<Session>,
     prefix: Option<String>,
-    pairs: &mut Vec<KeyValue>,
-) -> SparkResult<()> {
-    let state = session.lock()?;
-    for (k, v) in state.iter_config(&prefix) {
-        pairs.push(KeyValue {
-            key: k.clone(),
-            value: Some(v.clone()),
-        });
-    }
-    Ok(())
+) -> SparkResult<ConfigResponse> {
+    let kv = session.get_all_config(prefix.as_deref())?;
+    let warnings = SparkRuntimeConfig::get_warnings(&kv);
+    let pairs = kv.into();
+    Ok(ConfigResponse {
+        session_id: session.session_id().to_string(),
+        pairs,
+        warnings,
+    })
 }
 
-pub(crate) fn handle_config_unset(session: Arc<Session>, keys: Vec<String>) -> SparkResult<()> {
-    let mut state = session.lock()?;
-    for key in keys {
-        state.unset_config(&key);
-    }
-    Ok(())
+pub(crate) fn handle_config_unset(
+    session: Arc<Session>,
+    keys: Vec<String>,
+) -> SparkResult<ConfigResponse> {
+    let warnings = SparkRuntimeConfig::get_warnings_by_keys(&keys);
+    session.unset_config(keys)?;
+    Ok(ConfigResponse {
+        session_id: session.session_id().to_string(),
+        pairs: Vec::new(),
+        warnings,
+    })
 }
 
 pub(crate) fn handle_config_is_modifiable(
-    _session: Arc<Session>,
+    session: Arc<Session>,
     keys: Vec<String>,
-    pairs: &mut Vec<KeyValue>,
-) -> SparkResult<()> {
-    for key in keys {
-        pairs.push(KeyValue {
-            key: key.clone(),
-            value: Some("true".to_string()),
-        });
-    }
-    Ok(())
+) -> SparkResult<ConfigResponse> {
+    let warnings = SparkRuntimeConfig::get_warnings_by_keys(&keys);
+    let pairs = keys
+        .into_iter()
+        .map(|key| {
+            let modifiable = SparkRuntimeConfig::is_modifiable(key.as_str());
+            let value = if modifiable { "true" } else { "false" };
+            KeyValue {
+                key: key.clone(),
+                value: Some(value.to_string()),
+            }
+        })
+        .collect();
+    Ok(ConfigResponse {
+        session_id: session.session_id().to_string(),
+        pairs,
+        warnings,
+    })
 }

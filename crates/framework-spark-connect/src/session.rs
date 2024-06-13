@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 
-use datafusion::execution::context::SessionState as DFSessionState;
+use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use framework_plan::config::{PlanConfig, TimestampType};
-use lazy_static::lazy_static;
 
+use crate::config::{ConfigKeyValue, ConfigKeyValueList, SparkRuntimeConfig};
 use crate::error::SparkResult;
 use crate::executor::Executor;
 use crate::spark::config::SPARK_SQL_SESSION_TIME_ZONE;
@@ -22,7 +22,7 @@ pub(crate) struct Session {
     user_id: Option<String>,
     session_id: String,
     context: SessionContext,
-    state: Mutex<SessionState>,
+    state: Mutex<SparkSessionState>,
 }
 
 impl Debug for Session {
@@ -34,11 +34,6 @@ impl Debug for Session {
     }
 }
 
-pub(crate) struct SessionState {
-    config: HashMap<String, String>,
-    executors: HashMap<String, Executor>,
-}
-
 impl Session {
     pub(crate) fn new(user_id: Option<String>, session_id: String) -> Self {
         let config = SessionConfig::new()
@@ -46,21 +41,13 @@ impl Session {
             .with_default_catalog_and_schema(DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA)
             .with_information_schema(true);
         let runtime = Arc::new(RuntimeEnv::default());
-        let state = DFSessionState::new_with_config_rt(config, runtime);
+        let state = SessionState::new_with_config_rt(config, runtime);
         let state = state.with_query_planner(new_query_planner());
-        let mut config = HashMap::new();
-        // FIXME: define all the default configurations
-        config.insert("spark.sql.repl.eagerEval.enabled".into(), "false".into());
-        config.insert("spark.sql.repl.eagerEval.maxNumRows".into(), "20".into());
-        config.insert("spark.sql.repl.eagerEval.truncate".into(), "20".into());
         Self {
             user_id,
             session_id,
             context: SessionContext::new_with_state(state),
-            state: Mutex::new(SessionState {
-                config,
-                executors: HashMap::new(),
-            }),
+            state: Mutex::new(SparkSessionState::new()),
         }
     }
 
@@ -77,88 +64,125 @@ impl Session {
         &self.context
     }
 
-    pub(crate) fn lock(&self) -> SparkResult<MutexGuard<SessionState>> {
-        Ok(self.state.lock()?)
-    }
-
     pub(crate) fn plan_config(&self) -> SparkResult<Arc<PlanConfig>> {
-        let state = self.lock()?;
+        let state = self.state.lock()?;
         Ok(Arc::new(PlanConfig {
             time_zone: state
-                .get_config(SPARK_SQL_SESSION_TIME_ZONE)
-                .map(|x| x.clone())
+                .config
+                .get(SPARK_SQL_SESSION_TIME_ZONE)?
+                .map(|x| x.to_string())
                 .unwrap_or_else(|| "UTC".into()),
             // TODO: get the default timestamp type from configuration
             timestamp_type: TimestampType::TimestampLtz,
             data_type_formatter: Arc::new(SparkDataTypeFormatter),
         }))
     }
-}
 
-impl SessionState {
-    pub(crate) fn get_config(&self, key: &str) -> Option<&String> {
-        self.config.get(key).or_else(|| {
-            CONFIG_FALLBACK
-                .get(key)
-                .and_then(|fallback| self.config.get(*fallback))
-        })
+    pub(crate) fn get_config(&self, keys: Vec<String>) -> SparkResult<ConfigKeyValueList> {
+        let state = self.state.lock()?;
+        Ok(keys
+            .into_iter()
+            .map(|key| {
+                let value = state.config.get(&key)?.map(|v| v.to_string());
+                Ok(ConfigKeyValue { key, value })
+            })
+            .collect::<SparkResult<Vec<_>>>()?
+            .into())
     }
 
-    pub(crate) fn set_config(&mut self, key: &str, value: &str) {
-        self.config.insert(key.to_string(), value.to_string());
+    pub(crate) fn get_config_with_default(
+        &self,
+        kv: ConfigKeyValueList,
+    ) -> SparkResult<ConfigKeyValueList> {
+        let state = self.state.lock()?;
+        let kv: Vec<ConfigKeyValue> = kv.into();
+        Ok(kv
+            .into_iter()
+            .map(|ConfigKeyValue { key, value }| {
+                let value = state.config.get(&key)?.map(|v| v.to_string()).or(value);
+                Ok(ConfigKeyValue { key, value })
+            })
+            .collect::<SparkResult<Vec<_>>>()?
+            .into())
     }
 
-    pub(crate) fn unset_config(&mut self, key: &str) {
-        self.config.remove(key);
-    }
-
-    pub(crate) fn iter_config<'a>(
-        &'a self,
-        prefix: &'a Option<String>,
-    ) -> Box<dyn Iterator<Item = (&String, &String)> + 'a> {
-        if let Some(prefix) = prefix {
-            Box::new(
-                self.config
-                    .iter()
-                    .filter(move |(k, _)| k.starts_with(prefix)),
-            )
-        } else {
-            Box::new(self.config.iter())
+    pub(crate) fn set_config(&self, kv: ConfigKeyValueList) -> SparkResult<()> {
+        let mut state = self.state.lock()?;
+        let kv: Vec<ConfigKeyValue> = kv.into();
+        for ConfigKeyValue { key, value } in kv {
+            if let Some(value) = value {
+                state.config.set(key, value)?;
+            } else {
+                state.config.unset(&key)?;
+            }
         }
+        Ok(())
     }
 
-    pub(crate) fn add_executor(&mut self, executor: Executor) {
+    pub(crate) fn unset_config(&self, keys: Vec<String>) -> SparkResult<()> {
+        let mut state = self.state.lock()?;
+        for key in keys {
+            state.config.unset(&key)?
+        }
+        Ok(())
+    }
+
+    pub(crate) fn get_all_config(&self, prefix: Option<&str>) -> SparkResult<ConfigKeyValueList> {
+        let state = self.state.lock()?;
+        state.config.get_all(prefix)
+    }
+
+    pub(crate) fn add_executor(&self, executor: Executor) -> SparkResult<()> {
+        let mut state = self.state.lock()?;
         let id = executor.metadata.operation_id.clone();
-        self.executors.insert(id, executor);
+        state.executors.insert(id, executor);
+        Ok(())
     }
 
-    pub(crate) fn remove_executor(&mut self, id: &str) -> Option<Executor> {
-        self.executors.remove(id)
+    pub(crate) fn remove_executor(&self, id: &str) -> SparkResult<Option<Executor>> {
+        let mut state = self.state.lock()?;
+        Ok(state.executors.remove(id))
     }
 
-    pub(crate) fn remove_all_executors(&mut self) -> Vec<Executor> {
+    pub(crate) fn remove_all_executors(&self) -> SparkResult<Vec<Executor>> {
+        let mut state = self.state.lock()?;
         let mut out = Vec::new();
-        for (_, executor) in self.executors.drain() {
+        for (_, executor) in state.executors.drain() {
             out.push(executor);
         }
-        out
+        Ok(out)
     }
 
-    pub(crate) fn remove_executors_by_tag(&mut self, tag: &str) -> Vec<Executor> {
+    pub(crate) fn remove_executors_by_tag(&self, tag: &str) -> SparkResult<Vec<Executor>> {
+        let mut state = self.state.lock()?;
         let tag = tag.to_string();
         let mut ids = Vec::new();
         let mut removed = Vec::new();
-        for (key, executor) in &self.executors {
+        for (key, executor) in &state.executors {
             if executor.metadata.tags.contains(&tag) {
                 ids.push(key.clone());
             }
         }
         for key in ids {
-            if let Some(executor) = self.executors.remove(&key) {
+            if let Some(executor) = state.executors.remove(&key) {
                 removed.push(executor);
             }
         }
-        removed
+        Ok(removed)
+    }
+}
+
+struct SparkSessionState {
+    config: SparkRuntimeConfig,
+    executors: HashMap<String, Executor>,
+}
+
+impl SparkSessionState {
+    fn new() -> Self {
+        Self {
+            config: SparkRuntimeConfig::new(),
+            executors: HashMap::new(),
+        }
     }
 }
 
@@ -195,80 +219,4 @@ impl SessionManager {
         self.sessions.lock()?.remove(key);
         Ok(())
     }
-}
-
-lazy_static! {
-    static ref CONFIG_FALLBACK: HashMap<&'static str, &'static str> = {
-        let mut m = HashMap::new();
-        m.insert(
-            "spark.sql.adaptive.advisoryPartitionSizeInBytes",
-            "spark.sql.adaptive.shuffle.targetPostShuffleInputSize",
-        );
-        m.insert(
-            "spark.sql.execution.arrow.pyspark.enabled",
-            "spark.sql.execution.arrow.enabled",
-        );
-        m.insert(
-            "spark.sql.execution.arrow.pyspark.fallback.enabled",
-            "spark.sql.execution.arrow.fallback.enabled",
-        );
-        m.insert(
-            "spark.sql.execution.pandas.udf.buffer.size",
-            "spark.buffer.size",
-        );
-        m.insert(
-            "spark.sql.parquet.filterPushdown.stringPredicate",
-            "spark.sql.parquet.filterPushdown.string.startsWith",
-        );
-        m.insert(
-            "spark.sql.redaction.string.regex",
-            "spark.redaction.string.regex",
-        );
-        m.insert(
-            "spark.history.fs.driverlog.cleaner.enabled",
-            "spark.history.fs.cleaner.enabled",
-        );
-        m.insert(
-            "spark.history.fs.driverlog.cleaner.interval",
-            "spark.history.fs.cleaner.interval",
-        );
-        m.insert(
-            "spark.history.fs.driverlog.cleaner.maxAge",
-            "spark.history.fs.cleaner.maxAge",
-        );
-        m.insert(
-            "spark.authenticate.secret.driver.file",
-            "spark.authenticate.secret.file",
-        );
-        m.insert(
-            "spark.authenticate.secret.executor.file",
-            "spark.authenticate.secret.file",
-        );
-        m.insert("spark.driver.bindAddress", "spark.driver.host");
-        m.insert("spark.driver.blockManager.port", "spark.blockManager.port");
-        m.insert(
-            "spark.dynamicAllocation.initialExecutors",
-            "spark.dynamicAllocation.minExecutors",
-        );
-        m.insert(
-            "spark.dynamicAllocation.sustainedSchedulerBacklogTimeout",
-            "spark.dynamicAllocation.schedulerBacklogTimeout",
-        );
-        m.insert("spark.locality.wait.node", "spark.locality.wait");
-        m.insert("spark.locality.wait.process", "spark.locality.wait");
-        m.insert("spark.locality.wait.rack", "spark.locality.wait");
-        m.insert(
-            "spark.kubernetes.driver.container.image",
-            "spark.kubernetes.container.image",
-        );
-        m.insert(
-            "spark.kubernetes.executor.container.image",
-            "spark.kubernetes.container.image",
-        );
-        m.insert(
-            "spark.streaming.backpressure.initialRate",
-            "spark.streaming.receiver.maxRate",
-        );
-        m
-    };
 }
