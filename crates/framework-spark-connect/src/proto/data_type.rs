@@ -2,7 +2,7 @@ use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type_json::parse_spark_json_data_type;
 use crate::spark::connect::{data_type as sdt, DataType};
 use framework_common::spec;
-use framework_sql::data_type::parse_spark_data_type;
+use framework_sql::data_type::parse_data_type;
 use std::collections::HashMap;
 
 pub(crate) const DEFAULT_FIELD_NAME: &str = "value";
@@ -18,11 +18,15 @@ pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_PRECISION: u8 = 38;
 #[allow(dead_code)]
 pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_SCALE: i8 = 18;
 
-pub(crate) fn parse_spark_schema(schema: &str) -> SparkResult<spec::DataType> {
-    // TODO: Replicate parseDatatypeString functionality exactly
-    if let Ok(dt) = parse_spark_data_type(schema) {
+/// Parse a Spark data type string of various forms.
+/// Reference: org.apache.spark.sql.connect.planner.SparkConnectPlanner#parseDatatypeString
+pub(crate) fn parse_spark_data_type(schema: &str) -> SparkResult<spec::DataType> {
+    if let Ok(dt) = parse_data_type(schema) {
         Ok(dt)
-    } else if let Ok(dt) = parse_spark_data_type(format!("struct<{schema}>").as_str()) {
+    } else if let Ok(dt) = parse_data_type(format!("struct<{schema}>").as_str()) {
+        // The SQL parser supports both `struct<name: type, ...>` and `struct<name type, ...>` syntax.
+        // Therefore, by wrapping the input with `struct<...>`, we do not need separate logic
+        // to parse table schema input (`name type, ...`).
         Ok(dt)
     } else {
         parse_spark_json_data_type(schema)?.try_into()
@@ -200,7 +204,7 @@ impl TryFrom<DataType> for spec::DataType {
                 })
             }
             Kind::Unparsed(sdt::Unparsed { data_type_string }) => {
-                Ok(parse_spark_schema(data_type_string.as_str())?)
+                Ok(parse_spark_data_type(data_type_string.as_str())?)
             }
         }
     }
@@ -336,24 +340,25 @@ impl TryFrom<spec::DataType> for DataType {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_spark_data_type, parse_spark_schema, DEFAULT_FIELD_NAME};
+    use super::{parse_spark_data_type, DEFAULT_FIELD_NAME};
     use crate::error::{SparkError, SparkResult};
     use framework_common::tests::test_gold_set;
+    use framework_sql::data_type::parse_data_type;
 
     #[test]
     fn test_parse_spark_data_type_gold_set() -> SparkResult<()> {
         test_gold_set(
             "tests/gold_data/data_type.json",
-            |s: String| Ok(parse_spark_data_type(&s)?),
+            |s: String| Ok(parse_data_type(&s)?),
             |e: String| SparkError::internal(e),
         )
     }
 
     #[test]
-    fn test_parse_spark_schema_gold_set() -> SparkResult<()> {
+    fn test_parse_spark_table_schema_gold_set() -> SparkResult<()> {
         test_gold_set(
             "tests/gold_data/table_schema.json",
-            |s: String| Ok(parse_spark_schema(&s)?.into_schema(DEFAULT_FIELD_NAME, true)),
+            |s: String| Ok(parse_spark_data_type(&s)?.into_schema(DEFAULT_FIELD_NAME, true)),
             |e: String| SparkError::internal(e),
         )
     }
