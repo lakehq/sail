@@ -158,7 +158,19 @@ impl sdt::Kind {
                 let element_type = array.element_type.as_ref().required("array element type")?;
                 Ok(format!("array<{}>", element_type.to_simple_string()?))
             }
-            sdt::Kind::Struct(_) => Ok("struct".to_string()),
+            sdt::Kind::Struct(sdt::Struct { fields, .. }) => {
+                let fields = fields
+                    .iter()
+                    .map(|field| {
+                        let data_type = field
+                            .data_type
+                            .as_ref()
+                            .required("struct field data type")?;
+                        Ok(format!("{}:{}", field.name, data_type.to_simple_string()?))
+                    })
+                    .collect::<SparkResult<Vec<String>>>()?;
+                Ok(format!("struct<{}>", fields.join(",")))
+            }
             sdt::Kind::Map(map) => {
                 let key_type = map.key_type.as_ref().required("map key type")?;
                 let value_type = map.value_type.as_ref().required("map value type")?;
@@ -172,7 +184,7 @@ impl sdt::Kind {
                 let sql_type = udt.sql_type.as_ref().required("UDT SQL type")?;
                 Ok(sql_type.to_simple_string()?)
             }
-            sdt::Kind::Unparsed(_) => Err(SparkError::invalid("to_simple_string for unparsed")),
+            sdt::Kind::Unparsed(sdt::Unparsed { data_type_string }) => Ok(data_type_string.clone()),
         }
     }
 }
