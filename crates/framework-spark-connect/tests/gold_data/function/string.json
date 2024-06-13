@@ -173,7 +173,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: bit_length"
+        "success": "ok"
       }
     },
     {
@@ -195,7 +195,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: bit_length"
+        "success": "ok"
       }
     },
     {
@@ -217,7 +217,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: btrim"
+        "success": "ok"
       }
     },
     {
@@ -239,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: btrim"
+        "success": "ok"
       }
     },
     {
@@ -261,7 +261,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: encode"
+        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
       }
     },
     {
@@ -283,7 +283,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: encode"
+        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
       }
     },
     {
@@ -327,7 +327,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: char_length"
+        "success": "ok"
       }
     },
     {
@@ -349,7 +349,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: char_length"
+        "success": "ok"
       }
     },
     {
@@ -371,7 +371,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: character_length"
+        "success": "ok"
       }
     },
     {
@@ -393,7 +393,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: character_length"
+        "success": "ok"
       }
     },
     {
@@ -415,7 +415,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: chr"
+        "success": "ok"
       }
     },
     {
@@ -459,7 +459,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: concat_ws"
+        "success": "ok"
       }
     },
     {
@@ -481,7 +481,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: concat_ws"
+        "success": "ok"
       }
     },
     {
@@ -501,7 +501,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: concat_ws"
+        "failure": "error in DataFusion: Execution error: concat_ws was called with 1 arguments. It requires at least 2."
       }
     },
     {
@@ -523,7 +523,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: concat_ws"
+        "success": "ok"
       }
     },
     {
@@ -633,7 +633,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: decode"
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'decode(Int32, Int32, Utf8, Int32, Utf8, Int32, Utf8, Int32, Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdecode(Utf8, Utf8)\n\tdecode(LargeUtf8, Utf8)\n\tdecode(Binary, Utf8)\n\tdecode(LargeBinary, Utf8)"
       }
     },
     {
@@ -655,7 +655,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: decode"
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'decode(Int32, Int32, Utf8, Int32, Utf8, Int32, Utf8, Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdecode(Utf8, Utf8)\n\tdecode(LargeUtf8, Utf8)\n\tdecode(Binary, Utf8)\n\tdecode(LargeBinary, Utf8)"
       }
     },
     {
@@ -677,7 +677,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: decode"
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'decode(Int32, Int32, Utf8, Int32, Utf8, Int32, Utf8, Int32, Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdecode(Utf8, Utf8)\n\tdecode(LargeUtf8, Utf8)\n\tdecode(Binary, Utf8)\n\tdecode(LargeBinary, Utf8)"
       }
     },
     {
@@ -699,7 +699,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: encode"
+        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
       }
     },
     {
@@ -721,7 +721,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: decode"
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'decode(Null, Int32, Utf8, Null, Utf8, Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdecode(Utf8, Utf8)\n\tdecode(LargeUtf8, Utf8)\n\tdecode(Binary, Utf8)\n\tdecode(LargeBinary, Utf8)"
       }
     },
     {
@@ -787,7 +787,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: encode"
+        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
       }
     },
     {
@@ -919,7 +919,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: find_in_set"
+        "success": "ok"
       }
     },
     {
@@ -1095,7 +1095,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: initcap"
+        "success": "ok"
       }
     },
     {
@@ -1117,7 +1117,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: instr"
+        "success": "ok"
       }
     },
     {
@@ -1161,7 +1161,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: left"
+        "success": "ok"
       }
     },
     {
@@ -1183,7 +1183,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: encode"
+        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
       }
     },
     {
@@ -1249,7 +1249,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: length"
+        "success": "ok"
       }
     },
     {
@@ -1271,7 +1271,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: length"
+        "success": "ok"
       }
     },
     {
@@ -1293,7 +1293,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: levenshtein"
+        "success": "ok"
       }
     },
     {
@@ -1315,7 +1315,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: levenshtein"
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'levenshtein(Utf8, Utf8, Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tlevenshtein(Utf8, Utf8)\n\tlevenshtein(LargeUtf8, LargeUtf8)"
       }
     },
     {
@@ -1403,7 +1403,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: lpad"
+        "success": "ok"
       }
     },
     {
@@ -1425,7 +1425,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: lpad"
+        "success": "ok"
       }
     },
     {
@@ -1447,7 +1447,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: lpad"
+        "success": "ok"
       }
     },
     {
@@ -1469,7 +1469,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: ltrim"
+        "success": "ok"
       }
     },
     {
@@ -1843,7 +1843,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: octet_length"
+        "success": "ok"
       }
     },
     {
@@ -1865,7 +1865,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: octet_length"
+        "success": "ok"
       }
     },
     {
@@ -1887,7 +1887,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: overlay"
+        "success": "ok"
       }
     },
     {
@@ -1909,7 +1909,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: overlay"
+        "success": "ok"
       }
     },
     {
@@ -1931,7 +1931,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: overlay"
+        "success": "ok"
       }
     },
     {
@@ -1953,7 +1953,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: overlay"
+        "success": "ok"
       }
     },
     {
@@ -1975,7 +1975,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: encode"
+        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
       }
     },
     {
@@ -1997,7 +1997,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: encode"
+        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
       }
     },
     {
@@ -2019,7 +2019,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: encode"
+        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
       }
     },
     {
@@ -2041,7 +2041,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: encode"
+        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
       }
     },
     {
@@ -2309,7 +2309,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: repeat"
+        "success": "ok"
       }
     },
     {
@@ -2331,7 +2331,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: replace"
+        "success": "ok"
       }
     },
     {
@@ -2353,7 +2353,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: right"
+        "success": "ok"
       }
     },
     {
@@ -2375,7 +2375,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rpad"
+        "success": "ok"
       }
     },
     {
@@ -2397,7 +2397,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rpad"
+        "success": "ok"
       }
     },
     {
@@ -2419,7 +2419,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rpad"
+        "success": "ok"
       }
     },
     {
@@ -2441,7 +2441,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rtrim"
+        "success": "ok"
       }
     },
     {
@@ -2593,7 +2593,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: split_part"
+        "success": "ok"
       }
     },
     {
@@ -2791,7 +2791,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: substr"
+        "success": "ok"
       }
     },
     {
@@ -2813,7 +2813,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: substr"
+        "success": "ok"
       }
     },
     {
@@ -2835,7 +2835,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: substr"
+        "success": "ok"
       }
     },
     {
@@ -2857,7 +2857,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: encode"
+        "failure": "error in DataFusion: Error during planning: There is no built-in encoding named 'utf-8', currently supported encodings are: base64, hex"
       }
     },
     {
@@ -3011,7 +3011,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: encode"
+        "failure": "not implemented: function: substring"
       }
     },
     {
@@ -3033,7 +3033,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: substring_index"
+        "success": "ok"
       }
     },
     {
@@ -3077,7 +3077,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_char"
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'to_char(Decimal128(6, 1), Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tto_char(Date32, Utf8)\n\tto_char(Date64, Utf8)\n\tto_char(Time32(Millisecond), Utf8)\n\tto_char(Time32(Second), Utf8)\n\tto_char(Time64(Microsecond), Utf8)\n\tto_char(Time64(Nanosecond), Utf8)\n\tto_char(Timestamp(Second, None), Utf8)\n\tto_char(Timestamp(Second, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Millisecond, None), Utf8)\n\tto_char(Timestamp(Millisecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Microsecond, None), Utf8)\n\tto_char(Timestamp(Microsecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Nanosecond, None), Utf8)\n\tto_char(Timestamp(Nanosecond, Some(\"+TZ\")), Utf8)\n\tto_char(Duration(Second), Utf8)\n\tto_char(Duration(Millisecond), Utf8)\n\tto_char(Duration(Microsecond), Utf8)\n\tto_char(Duration(Nanosecond), Utf8)"
       }
     },
     {
@@ -3099,7 +3099,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_char"
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'to_char(Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tto_char(Date32, Utf8)\n\tto_char(Date64, Utf8)\n\tto_char(Time32(Millisecond), Utf8)\n\tto_char(Time32(Second), Utf8)\n\tto_char(Time64(Microsecond), Utf8)\n\tto_char(Time64(Nanosecond), Utf8)\n\tto_char(Timestamp(Second, None), Utf8)\n\tto_char(Timestamp(Second, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Millisecond, None), Utf8)\n\tto_char(Timestamp(Millisecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Microsecond, None), Utf8)\n\tto_char(Timestamp(Microsecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Nanosecond, None), Utf8)\n\tto_char(Timestamp(Nanosecond, Some(\"+TZ\")), Utf8)\n\tto_char(Duration(Second), Utf8)\n\tto_char(Duration(Millisecond), Utf8)\n\tto_char(Duration(Microsecond), Utf8)\n\tto_char(Duration(Nanosecond), Utf8)"
       }
     },
     {
@@ -3121,7 +3121,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_char"
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'to_char(Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tto_char(Date32, Utf8)\n\tto_char(Date64, Utf8)\n\tto_char(Time32(Millisecond), Utf8)\n\tto_char(Time32(Second), Utf8)\n\tto_char(Time64(Microsecond), Utf8)\n\tto_char(Time64(Nanosecond), Utf8)\n\tto_char(Timestamp(Second, None), Utf8)\n\tto_char(Timestamp(Second, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Millisecond, None), Utf8)\n\tto_char(Timestamp(Millisecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Microsecond, None), Utf8)\n\tto_char(Timestamp(Microsecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Nanosecond, None), Utf8)\n\tto_char(Timestamp(Nanosecond, Some(\"+TZ\")), Utf8)\n\tto_char(Duration(Second), Utf8)\n\tto_char(Duration(Millisecond), Utf8)\n\tto_char(Duration(Microsecond), Utf8)\n\tto_char(Duration(Nanosecond), Utf8)"
       }
     },
     {
@@ -3143,7 +3143,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_char"
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'to_char(Decimal128(5, 2), Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tto_char(Date32, Utf8)\n\tto_char(Date64, Utf8)\n\tto_char(Time32(Millisecond), Utf8)\n\tto_char(Time32(Second), Utf8)\n\tto_char(Time64(Microsecond), Utf8)\n\tto_char(Time64(Nanosecond), Utf8)\n\tto_char(Timestamp(Second, None), Utf8)\n\tto_char(Timestamp(Second, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Millisecond, None), Utf8)\n\tto_char(Timestamp(Millisecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Microsecond, None), Utf8)\n\tto_char(Timestamp(Microsecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Nanosecond, None), Utf8)\n\tto_char(Timestamp(Nanosecond, Some(\"+TZ\")), Utf8)\n\tto_char(Duration(Second), Utf8)\n\tto_char(Duration(Millisecond), Utf8)\n\tto_char(Duration(Microsecond), Utf8)\n\tto_char(Duration(Nanosecond), Utf8)"
       }
     },
     {
@@ -3165,7 +3165,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_char"
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'to_char(Decimal128(4, 2), Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tto_char(Date32, Utf8)\n\tto_char(Date64, Utf8)\n\tto_char(Time32(Millisecond), Utf8)\n\tto_char(Time32(Second), Utf8)\n\tto_char(Time64(Microsecond), Utf8)\n\tto_char(Time64(Nanosecond), Utf8)\n\tto_char(Timestamp(Second, None), Utf8)\n\tto_char(Timestamp(Second, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Millisecond, None), Utf8)\n\tto_char(Timestamp(Millisecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Microsecond, None), Utf8)\n\tto_char(Timestamp(Microsecond, Some(\"+TZ\")), Utf8)\n\tto_char(Timestamp(Nanosecond, None), Utf8)\n\tto_char(Timestamp(Nanosecond, Some(\"+TZ\")), Utf8)\n\tto_char(Duration(Second), Utf8)\n\tto_char(Duration(Millisecond), Utf8)\n\tto_char(Duration(Microsecond), Utf8)\n\tto_char(Duration(Nanosecond), Utf8)"
       }
     },
     {
@@ -3407,7 +3407,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: translate"
+        "success": "ok"
       }
     },
     {
@@ -3429,7 +3429,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: trim"
+        "success": "ok"
       }
     },
     {
@@ -3451,7 +3451,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: trim"
+        "success": "ok"
       }
     },
     {
@@ -3473,7 +3473,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: trim"
+        "success": "ok"
       }
     },
     {
@@ -3517,7 +3517,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: ltrim"
+        "success": "ok"
       }
     },
     {
@@ -3561,7 +3561,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rtrim"
+        "success": "ok"
       }
     },
     {

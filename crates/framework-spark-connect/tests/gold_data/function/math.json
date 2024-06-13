@@ -1405,7 +1405,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: pi"
+        "success": "ok"
       }
     },
     {
@@ -1713,7 +1713,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'random(Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\trandom()"
       }
     },
     {
@@ -1735,7 +1735,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'random(Null)'. You might need to add explicit type casts.\n\tCandidate functions:\n\trandom()"
       }
     },
     {
