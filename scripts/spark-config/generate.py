@@ -11,7 +11,7 @@ KEYS_WITH_DYNAMIC_DEFAULT = [
 ]
 
 
-def _convert_spark_config_entry(spark, entry):
+def _build_config_entry(spark, entry, *, is_static, deprecated):
     seq_to_list = spark._jvm.scala.collection.JavaConverters.seqAsJavaList
 
     output = {"key": entry.key(), "doc": entry.doc()}
@@ -25,6 +25,12 @@ def _convert_spark_config_entry(spark, entry):
     if not entry.alternatives().isEmpty():
         output["alternatives"] = list(seq_to_list(entry.alternatives()))
 
+    if is_static:
+        output["isStatic"] = True
+
+    if deprecated is not None:
+        output["deprecated"] = deprecated
+
     try:
         output["fallback"] = entry.fallback().key()
     except Py4JError:
@@ -33,16 +39,47 @@ def _convert_spark_config_entry(spark, entry):
     return output
 
 
+def _build_removed_config_entry(entry):
+    return {
+        "key": entry.key(),
+        "doc": "(Removed)",
+        "defaultValue": entry.defaultValue(),
+        "removed": {
+            "version": entry.version(),
+            "comment": entry.comment(),
+        },
+    }
+
+
 def collect_spark_config(spark):
+    to_java_map = spark._jvm.scala.collection.JavaConverters.mapAsJavaMap
+
     clazz = spark._jvm.java.lang.Class.forName("org.apache.spark.sql.internal.SQLConf$")
     obj = clazz.getDeclaredField("MODULE$").get(None)
-    entries = obj.getConfigEntries().toArray()
+
+    deprecation_map = {
+        x.key(): {"version": x.version(), "comment": x.comment()}
+        for x in to_java_map(obj.deprecatedSQLConfigs()).values()
+    }
+    entries = [
+        _build_config_entry(
+            spark,
+            entry,
+            is_static=obj.isStaticConfigKey(entry.key()),
+            deprecated=deprecation_map.get(entry.key()),
+        )
+        for entry in obj.getConfigEntries().toArray()
+    ]
+    removed_entries = [
+        _build_removed_config_entry(entry)
+        for entry in to_java_map(obj.removedSQLConfigs()).values()
+    ]
 
     return {
         "sparkVersion": pyspark.__version__,
         "comment": "This is a generated file. Do not edit it directly.",
         "entries": sorted(
-            [_convert_spark_config_entry(spark, entry) for entry in entries],
+            entries + removed_entries,
             key=lambda x: x["key"],
         ),
     }

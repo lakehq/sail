@@ -1,3 +1,4 @@
+mod config;
 mod error;
 mod executor;
 mod proto;
