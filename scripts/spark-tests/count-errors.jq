@@ -15,7 +15,7 @@ def extract_error:
         split("\n")
         | map(gsub("\\t"; "    "))
         | map([
-            capture("^(\\w+\\.)*(?<error>[\\w]*Error:\\s*.*)$"),
+            capture("^(\\w+\\.)*(?<error>[\\w]*(Error|Exception):\\s*.*)$"),
             capture("^\\s*details = \"(?<error>.*?)\"?$"),
             capture("(?<error>DocTestFailure)")
         ])
