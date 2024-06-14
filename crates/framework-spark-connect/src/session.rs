@@ -53,7 +53,8 @@ impl Session {
         let context = SessionContext::new_with_state(state);
 
         // TODO: This is a temp workaround to deregister all built-in functions that we define.
-        for (&name, function) in BUILT_IN_FUNCTIONS.iter() {
+        //  We should deregister all context.udfs() once we have better coverage of functions.
+        for (&name, _function) in BUILT_IN_FUNCTIONS.iter() {
             context.deregister_udf(name);
         }
 
