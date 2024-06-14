@@ -53,6 +53,21 @@ struct SparkConfigEntry {
     #[serde(default)]
     alternatives: Vec<String>,
     fallback: Option<String>,
+    #[serde(default)]
+    is_static: bool,
+    deprecated: Option<SparkConfigNotice>,
+    removed: Option<SparkConfigNotice>,
+    // Spark supports "prepending" the value of another configuration key.
+    // This is only used in a few places such as the Java options configuration.
+    // We do not support this feature in the Rust implementation.
+    // Reference: `org.apache.spark.internal.config.ConfigBuilder#withPrepended`
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SparkConfigNotice {
+    version: String,
+    comment: String,
 }
 
 fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
@@ -81,6 +96,20 @@ fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect::<Vec<_>>();
 
+    let notice_to_token_stream = |notice: &Option<SparkConfigNotice>| match notice {
+        None => quote! { None },
+        Some(notice) => {
+            let version = &notice.version;
+            let comment = &notice.comment;
+            quote! {
+                Some(SparkConfigNotice {
+                    version: #version,
+                    comment: #comment,
+                })
+            }
+        }
+    };
+
     let entries = config
         .entries
         .iter()
@@ -97,12 +126,18 @@ fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
                     quote! { Some(#x) }
                 }
             };
+            let is_static = entry.is_static;
+            let deprecated = notice_to_token_stream(&entry.deprecated);
+            let removed = notice_to_token_stream(&entry.removed);
             quote! {
                 #key => SparkConfigEntry {
                     key: #key,
                     default_value: #default_value,
                     alternatives: &[#(#alternatives),*],
                     fallback: #fallback,
+                    is_static: #is_static,
+                    deprecated: #deprecated,
+                    removed: #removed,
                 },
             }
         })
@@ -117,13 +152,26 @@ fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
             pub default_value: Option<&'a str>,
             pub alternatives: &'a [&'a str],
             pub fallback: Option<&'a str>,
+            pub is_static: bool,
+            pub deprecated: Option<SparkConfigNotice<'a>>,
+            pub removed: Option<SparkConfigNotice<'a>>,
+        }
+
+        #[derive(Debug, Clone, PartialEq)]
+        pub struct SparkConfigNotice<'a> {
+            pub version: &'a str,
+            pub comment: &'a str,
         }
 
         #(#keys)*
 
-        static SPARK_CONFIG: phf::Map<&'static str, SparkConfigEntry<'static>> = phf_map! {
-            #(#entries)*
-        };
+        // We define the map in a separate macro to avoid slowing down the IDE
+        // when previewing the definition of `SPARK_CONFIG`.
+        macro_rules! spark_config_map {
+            () => { phf_map! { #(#entries)* } }
+        }
+
+        pub static SPARK_CONFIG: phf::Map<&'static str, SparkConfigEntry<'static>> = spark_config_map!();
     };
 
     let tree = syn::parse2(tokens)?;

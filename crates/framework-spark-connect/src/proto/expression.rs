@@ -16,7 +16,7 @@ use crate::spark::connect::{
     Expression, JavaUdf, PythonUdf, PythonUdtf, ScalarScalaUdf,
 };
 use framework_common::spec;
-use framework_sql::data_type::parse_spark_data_type;
+use framework_sql::data_type::parse_data_type;
 use framework_sql::expression::{
     parse_object_name, parse_qualified_wildcard, parse_wildcard_expression,
 };
@@ -83,7 +83,7 @@ impl TryFrom<Expression> for spec::Expr {
                 let cast_to_type = cast_to_type.required("cast type")?;
                 let cast_to_type = match cast_to_type {
                     CastToType::Type(x) => x.try_into()?,
-                    CastToType::TypeStr(s) => parse_spark_data_type(s.as_str())?,
+                    CastToType::TypeStr(s) => parse_data_type(s.as_str())?,
                 };
                 Ok(spec::Expr::Cast {
                     expr: Box::new((*expr).try_into()?),

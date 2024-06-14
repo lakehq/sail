@@ -213,34 +213,29 @@ impl SparkConnectService for SparkConnectServer {
         let sc::config_request::Operation { op_type: op } =
             request.operation.required("operation")?;
         let op = op.required("operation type")?;
-        let mut response = ConfigResponse {
-            session_id: request.session_id,
-            pairs: vec![],
-            warnings: vec![],
-        };
-        match op {
+        let response = match op {
             ConfigOpType::Get(sc::config_request::Get { keys }) => {
-                service::handle_config_get(session, keys, &mut response.pairs)?;
+                service::handle_config_get(session, keys)?
             }
             ConfigOpType::Set(sc::config_request::Set { pairs }) => {
-                service::handle_config_set(session, pairs)?;
+                service::handle_config_set(session, pairs)?
             }
             ConfigOpType::GetWithDefault(sc::config_request::GetWithDefault { pairs }) => {
-                service::handle_config_get_with_default(session, pairs, &mut response.pairs)?;
+                service::handle_config_get_with_default(session, pairs)?
             }
             ConfigOpType::GetOption(sc::config_request::GetOption { keys }) => {
-                service::handle_config_get_option(session, keys, &mut response.pairs)?;
+                service::handle_config_get_option(session, keys)?
             }
             ConfigOpType::GetAll(sc::config_request::GetAll { prefix }) => {
-                service::handle_config_get_all(session, prefix, &mut response.pairs)?;
+                service::handle_config_get_all(session, prefix)?
             }
             ConfigOpType::Unset(sc::config_request::Unset { keys }) => {
-                service::handle_config_unset(session, keys)?;
+                service::handle_config_unset(session, keys)?
             }
             ConfigOpType::IsModifiable(sc::config_request::IsModifiable { keys }) => {
-                service::handle_config_is_modifiable(session, keys, &mut response.pairs)?;
+                service::handle_config_is_modifiable(session, keys)?
             }
-        }
+        };
         debug!("{:?}", response);
         Ok(Response::new(response))
     }
