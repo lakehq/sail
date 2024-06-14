@@ -407,7 +407,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_json"
+        "failure": "not implemented: function: named_struct"
       }
     },
     {
@@ -451,7 +451,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_json"
+        "failure": "not implemented: function: named_struct"
       }
     },
     {
@@ -473,7 +473,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_json"
+        "failure": "not implemented: function: named_struct"
       }
     },
     {
@@ -495,7 +495,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_json"
+        "failure": "not implemented: function: named_struct"
       }
     },
     {
@@ -517,7 +517,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_json"
+        "failure": "not implemented: function: named_struct"
       }
     }
   ]

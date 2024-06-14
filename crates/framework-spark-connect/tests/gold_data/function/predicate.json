@@ -899,7 +899,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: named_struct"
       }
     },
     {
@@ -921,7 +921,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: named_struct"
       }
     },
     {
@@ -1053,7 +1053,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\Users\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\Users.*\")), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1075,7 +1075,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\\\Users\\\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\\\\\Users.*\")), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1141,7 +1141,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1163,7 +1163,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1185,7 +1185,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1207,7 +1207,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1229,7 +1229,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1251,7 +1251,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1273,7 +1273,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -1295,7 +1295,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: to_date"
       }
     },
     {

@@ -1030,7 +1030,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: uuid"
       }
     },
     {

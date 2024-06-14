@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: cardinality"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'cardinality(Map(Field { name: \"entries\", data_type: Struct([Field { name: \"key\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"value\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tcardinality(array)"
+        "failure": "not implemented: function: cardinality"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: concat"
       }
     },
     {
@@ -111,7 +111,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: concat"
       }
     },
     {
@@ -133,7 +133,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: reverse"
       }
     },
     {
@@ -159,7 +159,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: The REVERSE function can only accept strings, but got List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })."
+        "failure": "not implemented: function: reverse"
       }
     },
     {

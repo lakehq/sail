@@ -326,7 +326,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: current_date"
       }
     },
     {
@@ -348,7 +348,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: current_date"
       }
     },
     {
@@ -502,7 +502,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: date_format"
       }
     },
     {
@@ -546,7 +546,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'date_part(Utf8, Duration(Microsecond))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdate_part(Utf8, Timestamp(Nanosecond, None))\n\tdate_part(Utf8, Timestamp(Nanosecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Millisecond, None))\n\tdate_part(Utf8, Timestamp(Millisecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Microsecond, None))\n\tdate_part(Utf8, Timestamp(Microsecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Second, None))\n\tdate_part(Utf8, Timestamp(Second, Some(\"+TZ\")))\n\tdate_part(Utf8, Date64)\n\tdate_part(Utf8, Date32)\n\tdate_part(Utf8, Time32(Second))\n\tdate_part(Utf8, Time32(Millisecond))\n\tdate_part(Utf8, Time64(Microsecond))\n\tdate_part(Utf8, Time64(Nanosecond))"
+        "failure": "not implemented: function: date_part"
       }
     },
     {
@@ -568,7 +568,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'date_part(Utf8, Interval(YearMonth))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdate_part(Utf8, Timestamp(Nanosecond, None))\n\tdate_part(Utf8, Timestamp(Nanosecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Millisecond, None))\n\tdate_part(Utf8, Timestamp(Millisecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Microsecond, None))\n\tdate_part(Utf8, Timestamp(Microsecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Second, None))\n\tdate_part(Utf8, Timestamp(Second, Some(\"+TZ\")))\n\tdate_part(Utf8, Date64)\n\tdate_part(Utf8, Date32)\n\tdate_part(Utf8, Time32(Second))\n\tdate_part(Utf8, Time32(Millisecond))\n\tdate_part(Utf8, Time64(Microsecond))\n\tdate_part(Utf8, Time64(Nanosecond))"
+        "failure": "not implemented: function: date_part"
       }
     },
     {
@@ -590,7 +590,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Date part 'SECONDS' not supported"
+        "failure": "not implemented: function: date_part"
       }
     },
     {
@@ -612,7 +612,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: date_part"
       }
     },
     {
@@ -634,7 +634,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'date_part(Utf8, Duration(Microsecond))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdate_part(Utf8, Timestamp(Nanosecond, None))\n\tdate_part(Utf8, Timestamp(Nanosecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Millisecond, None))\n\tdate_part(Utf8, Timestamp(Millisecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Microsecond, None))\n\tdate_part(Utf8, Timestamp(Microsecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Second, None))\n\tdate_part(Utf8, Timestamp(Second, Some(\"+TZ\")))\n\tdate_part(Utf8, Date64)\n\tdate_part(Utf8, Date32)\n\tdate_part(Utf8, Time32(Second))\n\tdate_part(Utf8, Time32(Millisecond))\n\tdate_part(Utf8, Time64(Microsecond))\n\tdate_part(Utf8, Time64(Nanosecond))"
+        "failure": "not implemented: function: date_part"
       }
     },
     {
@@ -656,7 +656,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: date_part"
       }
     },
     {
@@ -678,7 +678,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'date_part(Utf8, Duration(Microsecond))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdate_part(Utf8, Timestamp(Nanosecond, None))\n\tdate_part(Utf8, Timestamp(Nanosecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Millisecond, None))\n\tdate_part(Utf8, Timestamp(Millisecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Microsecond, None))\n\tdate_part(Utf8, Timestamp(Microsecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Second, None))\n\tdate_part(Utf8, Timestamp(Second, Some(\"+TZ\")))\n\tdate_part(Utf8, Date64)\n\tdate_part(Utf8, Date32)\n\tdate_part(Utf8, Time32(Second))\n\tdate_part(Utf8, Time32(Millisecond))\n\tdate_part(Utf8, Time64(Microsecond))\n\tdate_part(Utf8, Time64(Nanosecond))"
+        "failure": "not implemented: function: date_part"
       }
     },
     {
@@ -700,7 +700,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: date_part"
       }
     },
     {
@@ -744,7 +744,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Unsupported date_trunc granularity: dd"
+        "failure": "not implemented: function: date_trunc"
       }
     },
     {
@@ -766,7 +766,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: date_trunc"
       }
     },
     {
@@ -788,7 +788,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: date_trunc"
       }
     },
     {
@@ -810,7 +810,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Unsupported date_trunc granularity: mm"
+        "failure": "not implemented: function: date_trunc"
       }
     },
     {
@@ -832,7 +832,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: date_trunc"
       }
     },
     {
@@ -920,7 +920,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'date_part(Utf8, Duration(Microsecond))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdate_part(Utf8, Timestamp(Nanosecond, None))\n\tdate_part(Utf8, Timestamp(Nanosecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Millisecond, None))\n\tdate_part(Utf8, Timestamp(Millisecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Microsecond, None))\n\tdate_part(Utf8, Timestamp(Microsecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Second, None))\n\tdate_part(Utf8, Timestamp(Second, Some(\"+TZ\")))\n\tdate_part(Utf8, Date64)\n\tdate_part(Utf8, Date32)\n\tdate_part(Utf8, Time32(Second))\n\tdate_part(Utf8, Time32(Millisecond))\n\tdate_part(Utf8, Time64(Microsecond))\n\tdate_part(Utf8, Time64(Nanosecond))"
+        "failure": "not implemented: function: datepart"
       }
     },
     {
@@ -942,7 +942,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'date_part(Utf8, Interval(YearMonth))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdate_part(Utf8, Timestamp(Nanosecond, None))\n\tdate_part(Utf8, Timestamp(Nanosecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Millisecond, None))\n\tdate_part(Utf8, Timestamp(Millisecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Microsecond, None))\n\tdate_part(Utf8, Timestamp(Microsecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Second, None))\n\tdate_part(Utf8, Timestamp(Second, Some(\"+TZ\")))\n\tdate_part(Utf8, Date64)\n\tdate_part(Utf8, Date32)\n\tdate_part(Utf8, Time32(Second))\n\tdate_part(Utf8, Time32(Millisecond))\n\tdate_part(Utf8, Time64(Microsecond))\n\tdate_part(Utf8, Time64(Nanosecond))"
+        "failure": "not implemented: function: datepart"
       }
     },
     {
@@ -964,7 +964,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Date part 'SECONDS' not supported"
+        "failure": "not implemented: function: datepart"
       }
     },
     {
@@ -986,7 +986,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: datepart"
       }
     },
     {
@@ -1008,7 +1008,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'date_part(Utf8, Duration(Microsecond))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdate_part(Utf8, Timestamp(Nanosecond, None))\n\tdate_part(Utf8, Timestamp(Nanosecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Millisecond, None))\n\tdate_part(Utf8, Timestamp(Millisecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Microsecond, None))\n\tdate_part(Utf8, Timestamp(Microsecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Second, None))\n\tdate_part(Utf8, Timestamp(Second, Some(\"+TZ\")))\n\tdate_part(Utf8, Date64)\n\tdate_part(Utf8, Date32)\n\tdate_part(Utf8, Time32(Second))\n\tdate_part(Utf8, Time32(Millisecond))\n\tdate_part(Utf8, Time64(Microsecond))\n\tdate_part(Utf8, Time64(Nanosecond))"
+        "failure": "not implemented: function: datepart"
       }
     },
     {
@@ -1030,7 +1030,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: datepart"
       }
     },
     {
@@ -1052,7 +1052,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'date_part(Utf8, Duration(Microsecond))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdate_part(Utf8, Timestamp(Nanosecond, None))\n\tdate_part(Utf8, Timestamp(Nanosecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Millisecond, None))\n\tdate_part(Utf8, Timestamp(Millisecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Microsecond, None))\n\tdate_part(Utf8, Timestamp(Microsecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Second, None))\n\tdate_part(Utf8, Timestamp(Second, Some(\"+TZ\")))\n\tdate_part(Utf8, Date64)\n\tdate_part(Utf8, Date32)\n\tdate_part(Utf8, Time32(Second))\n\tdate_part(Utf8, Time32(Millisecond))\n\tdate_part(Utf8, Time64(Microsecond))\n\tdate_part(Utf8, Time64(Nanosecond))"
+        "failure": "not implemented: function: datepart"
       }
     },
     {
@@ -1074,7 +1074,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: datepart"
       }
     },
     {
@@ -1360,7 +1360,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: from_unixtime"
       }
     },
     {
@@ -1382,7 +1382,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'from_unixtime(Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tfrom_unixtime(Int64)"
+        "failure": "not implemented: function: from_unixtime"
       }
     },
     {
@@ -1492,7 +1492,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: make_date"
       }
     },
     {
@@ -1514,7 +1514,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Unable to parse date from null/empty value"
+        "failure": "not implemented: function: make_date"
       }
     },
     {
@@ -2130,7 +2130,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: now"
       }
     },
     {
@@ -2284,7 +2284,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -2306,7 +2306,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Error parsing timestamp from '2016-12-31' using format 'yyyy-MM-dd': input contains invalid characters"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -2504,7 +2504,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'trunc(Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\ttrunc(Float32, Int64)\n\ttrunc(Float64, Int64)\n\ttrunc(Float64)\n\ttrunc(Float32)"
+        "failure": "not implemented: function: trunc"
       }
     },
     {
@@ -2526,7 +2526,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'trunc(Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\ttrunc(Float32, Int64)\n\ttrunc(Float64, Int64)\n\ttrunc(Float64)\n\ttrunc(Float32)"
+        "failure": "not implemented: function: trunc"
       }
     },
     {
@@ -2548,7 +2548,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'trunc(Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\ttrunc(Float32, Int64)\n\ttrunc(Float64, Int64)\n\ttrunc(Float64)\n\ttrunc(Float32)"
+        "failure": "not implemented: function: trunc"
       }
     },
     {
@@ -2570,7 +2570,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'trunc(Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\ttrunc(Float32, Int64)\n\ttrunc(Float64, Int64)\n\ttrunc(Float64)\n\ttrunc(Float32)"
+        "failure": "not implemented: function: trunc"
       }
     },
     {

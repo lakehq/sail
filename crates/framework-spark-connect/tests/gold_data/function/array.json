@@ -353,7 +353,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: array_join"
       }
     },
     {
@@ -375,7 +375,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: array_join"
       }
     },
     {
@@ -397,7 +397,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: array_join"
       }
     },
     {
@@ -463,7 +463,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: array_position"
       }
     },
     {
@@ -485,7 +485,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: array_position"
       }
     },
     {
@@ -615,7 +615,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: could not cast value to arrow_array::array::primitive_array::PrimitiveArray<arrow_array::types::Int64Type>.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "success": "ok"
       }
     },
     {
@@ -923,7 +923,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: unsupported type for range"
+        "failure": "not implemented: function: to_date"
       }
     },
     {
@@ -949,7 +949,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: unsupported type for range"
+        "failure": "not implemented: function: to_date"
       }
     },
     {

@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: named_struct"
       }
     },
     {

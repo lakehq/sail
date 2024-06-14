@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: coalesce"
       }
     },
     {
@@ -133,7 +133,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: ifnull"
       }
     },
     {
@@ -155,7 +155,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: nanvl"
       }
     },
     {
@@ -177,7 +177,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: nullif"
       }
     },
     {
@@ -203,7 +203,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: nvl"
       }
     },
     {
@@ -225,7 +225,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: nvl2"
       }
     }
   ]

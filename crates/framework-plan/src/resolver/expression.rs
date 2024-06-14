@@ -128,7 +128,7 @@ impl PlanResolver<'_> {
                 function_name,
                 arguments,
                 is_distinct,
-                is_user_defined_function, // FIXME: is_user_defined_function is always false.
+                is_user_defined_function: _, // FIXME: is_user_defined_function is always false.
             } => {
                 let arguments = arguments
                     .into_iter()
@@ -203,17 +203,15 @@ impl PlanResolver<'_> {
 
                 // FIXME: is_user_defined_function is always false
                 //  So, we need to check udf's before built-in functions.
-                if !is_user_defined_function {
-                    if let Ok(func) = get_built_in_function(function_name.as_str()) {
-                        return Ok(func(arguments.clone())?);
-                    }
-                    if let Ok(func) = get_built_in_aggregate_function(
-                        function_name.as_str(),
-                        arguments.clone(),
-                        is_distinct,
-                    ) {
-                        return Ok(func);
-                    }
+                if let Ok(func) = get_built_in_function(function_name.as_str()) {
+                    return Ok(func(arguments.clone())?);
+                }
+                if let Ok(func) = get_built_in_aggregate_function(
+                    function_name.as_str(),
+                    arguments.clone(),
+                    is_distinct,
+                ) {
+                    return Ok(func);
                 }
 
                 return Err(PlanError::unsupported(format!(
