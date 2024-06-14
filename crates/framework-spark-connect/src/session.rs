@@ -8,6 +8,7 @@ use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use framework_common::config::{ConfigEntry, SparkUdfConfig, TimestampType};
 use framework_plan::config::PlanConfig;
+use framework_plan::function::BUILT_IN_FUNCTIONS;
 
 use crate::config::{ConfigKeyValue, ConfigKeyValueList, SparkRuntimeConfig};
 use crate::error::SparkResult;
@@ -49,10 +50,17 @@ impl Session {
         let runtime = Arc::new(RuntimeEnv::default());
         let state = SessionState::new_with_config_rt(config, runtime);
         let state = state.with_query_planner(new_query_planner());
+        let context = SessionContext::new_with_state(state);
+
+        // TODO: This is a temp workaround to deregister all built-in functions that we define.
+        for (&name, _function) in BUILT_IN_FUNCTIONS.iter() {
+            context.deregister_udf(name);
+        }
+
         Self {
             user_id,
             session_id,
-            context: SessionContext::new_with_state(state),
+            context: context,
             state: Mutex::new(SparkSessionState::new()),
         }
     }

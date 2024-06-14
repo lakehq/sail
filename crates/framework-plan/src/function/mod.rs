@@ -13,7 +13,7 @@ pub(crate) use aggregate::get_built_in_aggregate_function;
 pub(crate) use window::get_built_in_window_function;
 
 lazy_static! {
-    static ref BUILT_IN_FUNCTIONS: HashMap<&'static str, Function> = {
+    pub static ref BUILT_IN_FUNCTIONS: HashMap<&'static str, Function> = {
         let mut m = HashMap::new();
         for (name, func) in list_built_in_functions() {
             m.insert(name, func);
