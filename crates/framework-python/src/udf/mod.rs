@@ -43,14 +43,20 @@ pub trait CommonPythonUDF {
         Ok(python_function)
     }
 
-    fn get_python_builtins_list_function<'py>(&self, py: Python<'py>) -> Result<Bound<'py, PyAny>> {
-        let builtins_list = PyModule::import_bound(py, pyo3::intern!(py, "builtins"))
+    fn get_python_builtins<'py>(&self, py: Python<'py>) -> Result<Bound<'py, PyModule>> {
+        let builtins: Bound<PyModule> = PyModule::import_bound(py, pyo3::intern!(py, "builtins"))
             .map_err(|err| {
-                DataFusionError::Internal(format!(
-                    "get_python_builtins_list_function Error importing builtins: {}",
-                    err
-                ))
-            })?
+            DataFusionError::Internal(format!(
+                "get_python_builtins_list_function Error importing builtins: {}",
+                err
+            ))
+        })?;
+        Ok(builtins)
+    }
+
+    fn get_python_builtins_list_function<'py>(&self, py: Python<'py>) -> Result<Bound<'py, PyAny>> {
+        let builtins_list: Bound<PyAny> = self
+            .get_python_builtins(py)?
             .getattr(pyo3::intern!(py, "list"))
             .map_err(|err| {
                 DataFusionError::Internal(format!("Error getting builtins list function: {}", err))
@@ -59,25 +65,23 @@ pub trait CommonPythonUDF {
     }
 
     fn get_python_builtins_str_function<'py>(&self, py: Python<'py>) -> Result<Bound<'py, PyAny>> {
-        let builtins_list = PyModule::import_bound(py, pyo3::intern!(py, "builtins"))
-            .map_err(|err| {
-                DataFusionError::Internal(format!(
-                    "get_python_builtins_str_function Error importing builtins: {}",
-                    err
-                ))
-            })?
+        let builtins_str: Bound<PyAny> = self
+            .get_python_builtins(py)?
             .getattr(pyo3::intern!(py, "str"))
             .map_err(|err| {
                 DataFusionError::Internal(format!("Error getting builtins str function: {}", err))
             })?;
-        Ok(builtins_list)
+        Ok(builtins_str)
     }
 
     fn get_pyarrow_module_array_function<'py>(&self, py: Python<'py>) -> Result<Bound<'py, PyAny>> {
-        let pyarrow_module_array = PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
-            .map_err(|err| DataFusionError::Internal(format!("pyarrow import error: {}", err)))?
-            .getattr(pyo3::intern!(py, "array"))
-            .map_err(|err| DataFusionError::Internal(format!("pyarrow array error: {}", err)))?;
+        let pyarrow_module_array: Bound<PyAny> =
+            PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
+                .map_err(|err| DataFusionError::Internal(format!("pyarrow import error: {}", err)))?
+                .getattr(pyo3::intern!(py, "array"))
+                .map_err(|err| {
+                    DataFusionError::Internal(format!("pyarrow array error: {}", err))
+                })?;
         Ok(pyarrow_module_array)
     }
 
