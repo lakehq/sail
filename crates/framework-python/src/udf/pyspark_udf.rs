@@ -82,7 +82,7 @@ impl ScalarUDFImpl for PySparkUDF {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(args)?;
 
-        if is_pyspark_arrow_udf(self.eval_type) {
+        if is_pyspark_arrow_udf(&self.eval_type) {
             let array_data: Result<ArrayData, DataFusionError> = Python::with_gil(|py| {
                 let pyarrow_module_array: Bound<PyAny> =
                     self.get_pyarrow_module_array_function(py)?;
@@ -140,7 +140,7 @@ impl ScalarUDFImpl for PySparkUDF {
             return Ok(ColumnarValue::Array(make_array(array_data?)));
         }
 
-        if is_pyspark_pandas_udf(self.eval_type) {
+        if is_pyspark_pandas_udf(&self.eval_type) {
             let array_data: Result<ArrayData, DataFusionError> = Python::with_gil(|py| {
                 let pyarrow_module_array: Bound<PyAny> =
                     self.get_pyarrow_module_array_function(py)?;
