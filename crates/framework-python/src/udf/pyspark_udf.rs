@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::borrow::Cow;
 
 use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
 use datafusion::arrow::datatypes::DataType;
@@ -6,11 +7,11 @@ use datafusion::common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use pyo3::{
     prelude::*,
-    types::{PyDict, PyIterator, PyList, PyTuple},
+    types::{PyDict, PyIterator, PyList, PyTuple, PyType},
 };
 
 use crate::cereal::partial_pyspark_udf::{
-    is_pyspark_arrow_udf, is_pyspark_pandas_udf, PartialPySparkUDF,
+    is_pyspark_arrow_udf, is_pyspark_pandas_udf, PartialPySparkUDF, PY_SPARK_SQL_BATCHED_UDF,
 };
 use crate::pyarrow::{FromPyArrow, ToPyArrow};
 use crate::udf::CommonPythonUDF;
@@ -19,6 +20,7 @@ use crate::udf::CommonPythonUDF;
 pub struct PySparkUDF {
     signature: Signature,
     function_name: String,
+    deterministic: bool,
     output_type: DataType,
     eval_type: i32,
     python_function: PartialPySparkUDF,
@@ -43,6 +45,7 @@ impl PySparkUDF {
                 },
             ),
             function_name,
+            deterministic,
             output_type,
             eval_type,
             python_function,
@@ -233,6 +236,7 @@ impl ScalarUDFImpl for PySparkUDF {
         let array_data: Result<ArrayData, DataFusionError> = Python::with_gil(|py| {
             let pyarrow_module_array: Bound<PyAny> = self.get_pyarrow_module_array_function(py)?;
             let builtins_list: Bound<PyAny> = self.get_python_builtins_list_function(py)?;
+            let builtins_str: Bound<PyAny> = self.get_python_builtins_str_function(py)?;
             let python_function: Bound<PyAny> = self.get_python_function(py)?;
             let pyarrow_output_data_type: Bound<PyAny> = self.get_pyarrow_output_data_type(py)?;
             let output_data_type_kwargs: Bound<PyDict> =
@@ -269,6 +273,7 @@ impl ScalarUDFImpl for PySparkUDF {
                     DataFusionError::Internal(format!("PySpark UDF py_args_iter {:?}", err))
                 })?;
 
+            let mut already_str: bool = false;
             let results: Vec<Bound<PyAny>> = py_args
                 .map(|py_arg| -> Result<Bound<PyAny>, DataFusionError> {
                     let result: Bound<PyAny> = python_function
@@ -291,6 +296,35 @@ impl ScalarUDFImpl for PySparkUDF {
                                 err
                             ))
                         })?;
+
+                    if self.eval_type == PY_SPARK_SQL_BATCHED_UDF
+                        && self.deterministic
+                        && self.output_type == DataType::Utf8
+                    {
+                        if already_str {
+                            return Ok(result);
+                        }
+                        let result_type: Bound<PyType> = result.get_type();
+                        let result_data_type_name: Cow<str> =
+                            result_type.name().map_err(|err| {
+                                DataFusionError::Internal(format!(
+                                    "PySpark UDF Error getting result data type name: {:?}",
+                                    err
+                                ))
+                            })?;
+                        if result_data_type_name != "str" {
+                            let result: Bound<PyAny> =
+                                builtins_str.call1((result,)).map_err(|err| {
+                                    DataFusionError::Internal(format!(
+                                        "PySpark UDF Result Error calling str(): {:?}",
+                                        err
+                                    ))
+                                })?;
+                            return Ok(result);
+                        } else {
+                            already_str = true;
+                        }
+                    }
                     Ok(result)
                 })
                 .collect::<Result<Vec<_>, _>>()
@@ -316,19 +350,20 @@ impl ScalarUDFImpl for PySparkUDF {
         let array_data: Result<ArrayData, DataFusionError> = Python::with_gil(|py| {
             let pyarrow_module_array: Bound<PyAny> = self.get_pyarrow_module_array_function(py)?;
             let builtins_list: Bound<PyAny> = self.get_python_builtins_list_function(py)?;
+            let builtins_str: Bound<PyAny> = self.get_python_builtins_str_function(py)?;
             let python_function: Bound<PyAny> = self.get_python_function(py)?;
             let pyarrow_output_data_type: Bound<PyAny> = self.get_pyarrow_output_data_type(py)?;
             let output_data_type_kwargs: Bound<PyDict> =
                 self.build_pyarrow_module_array_kwargs(py, pyarrow_output_data_type, false)?;
 
-            let results: Bound<PyAny> = python_function
+            let result: Bound<PyAny> = python_function
                 .call1((py.None(), (PyList::empty_bound(py),)))
                 .map_err(|e| {
                     DataFusionError::Execution(format!("PySpark UDF No Args Result: {e:?}"))
                 })?;
 
-            let results: Bound<PyAny> = builtins_list
-                .call1((results,))
+            let result: Bound<PyAny> = builtins_list
+                .call1((result,))
                 .map_err(|err| {
                     DataFusionError::Internal(format!(
                         "PySpark UDF No Args Error calling list(): {:?}",
@@ -343,13 +378,36 @@ impl ScalarUDFImpl for PySparkUDF {
                     ))
                 })?;
 
-            let results: Bound<PyAny> = pyarrow_module_array
-                .call(([results],), Some(&output_data_type_kwargs))
+            let result_type: Bound<PyType> = result.get_type();
+            let result_data_type_name: Cow<str> = result_type.name().map_err(|err| {
+                DataFusionError::Internal(format!(
+                    "PySpark UDF  No Args Error getting result data type name: {:?}",
+                    err
+                ))
+            })?;
+
+            let result: Bound<PyAny> = if self.eval_type == PY_SPARK_SQL_BATCHED_UDF
+                && self.deterministic
+                && self.output_type == DataType::Utf8
+                && result_data_type_name != "str"
+            {
+                builtins_str.call1((result,)).map_err(|err| {
+                    DataFusionError::Internal(format!(
+                        "PySpark UDF No Args Result Error calling str(): {:?}",
+                        err
+                    ))
+                })?
+            } else {
+                result
+            };
+
+            let result: Bound<PyAny> = pyarrow_module_array
+                .call(([result],), Some(&output_data_type_kwargs))
                 .map_err(|err| {
                     DataFusionError::Internal(format!("PySpark UDF No Args Result array {:?}", err))
                 })?;
 
-            ArrayData::from_pyarrow_bound(&results).map_err(|err| {
+            ArrayData::from_pyarrow_bound(&result).map_err(|err| {
                 DataFusionError::Internal(format!("PySpark UDF No Args array_data {:?}", err))
             })
         });

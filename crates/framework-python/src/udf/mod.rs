@@ -39,25 +39,45 @@ pub trait CommonPythonUDF {
             .python_function()
             .get_inner(py)
             .get_item(0)
-            .map_err(|err| DataFusionError::Internal(format!("python_function {:?}", err)))?;
+            .map_err(|err| DataFusionError::Internal(format!("python_function {}", err)))?;
         Ok(python_function)
     }
 
     fn get_python_builtins_list_function<'py>(&self, py: Python<'py>) -> Result<Bound<'py, PyAny>> {
         let builtins_list = PyModule::import_bound(py, pyo3::intern!(py, "builtins"))
             .map_err(|err| {
-                DataFusionError::Internal(format!("Error importing builtins: {:?}", err))
+                DataFusionError::Internal(format!(
+                    "get_python_builtins_list_function Error importing builtins: {}",
+                    err
+                ))
             })?
             .getattr(pyo3::intern!(py, "list"))
-            .map_err(|err| DataFusionError::Internal(format!("Error getting list: {:?}", err)))?;
+            .map_err(|err| {
+                DataFusionError::Internal(format!("Error getting builtins list function: {}", err))
+            })?;
+        Ok(builtins_list)
+    }
+
+    fn get_python_builtins_str_function<'py>(&self, py: Python<'py>) -> Result<Bound<'py, PyAny>> {
+        let builtins_list = PyModule::import_bound(py, pyo3::intern!(py, "builtins"))
+            .map_err(|err| {
+                DataFusionError::Internal(format!(
+                    "get_python_builtins_str_function Error importing builtins: {}",
+                    err
+                ))
+            })?
+            .getattr(pyo3::intern!(py, "str"))
+            .map_err(|err| {
+                DataFusionError::Internal(format!("Error getting builtins str function: {}", err))
+            })?;
         Ok(builtins_list)
     }
 
     fn get_pyarrow_module_array_function<'py>(&self, py: Python<'py>) -> Result<Bound<'py, PyAny>> {
         let pyarrow_module_array = PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
-            .map_err(|err| DataFusionError::Internal(format!("pyarrow import error: {:?}", err)))?
+            .map_err(|err| DataFusionError::Internal(format!("pyarrow import error: {}", err)))?
             .getattr(pyo3::intern!(py, "array"))
-            .map_err(|err| DataFusionError::Internal(format!("pyarrow array error: {:?}", err)))?;
+            .map_err(|err| DataFusionError::Internal(format!("pyarrow array error: {}", err)))?;
         Ok(pyarrow_module_array)
     }
 
@@ -65,7 +85,7 @@ pub trait CommonPythonUDF {
         let pyarrow_output_data_type: Bound<PyAny> = self
             .output_type()
             .to_pyarrow(py)
-            .map_err(|err| DataFusionError::Internal(format!("output_type to_pyarrow {:?}", err)))?
+            .map_err(|err| DataFusionError::Internal(format!("output_type to_pyarrow {}", err)))?
             .clone_ref(py)
             .into_bound(py);
         Ok(pyarrow_output_data_type)
@@ -80,13 +100,11 @@ pub trait CommonPythonUDF {
         let output_data_type_kwargs: Bound<PyDict> = PyDict::new_bound(py);
         output_data_type_kwargs
             .set_item("type", output_data_type)
-            .map_err(|err| DataFusionError::Internal(format!("kwargs {:?}", err)))?;
+            .map_err(|err| DataFusionError::Internal(format!("kwargs {}", err)))?;
         if from_pandas {
             output_data_type_kwargs
                 .set_item("from_pandas", from_pandas)
-                .map_err(|err| {
-                    DataFusionError::Internal(format!("kwargs from_pandas {:?}", err))
-                })?;
+                .map_err(|err| DataFusionError::Internal(format!("kwargs from_pandas {}", err)))?;
         }
         Ok(output_data_type_kwargs)
     }
