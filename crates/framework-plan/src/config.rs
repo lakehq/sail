@@ -1,5 +1,5 @@
 use crate::error::{PlanError, PlanResult};
-use framework_common::config::{ConfigEntry, SparkUdfConfig, TimestampType};
+use framework_common::config::{ConfigKeyValue, SparkUdfConfig, TimestampType};
 use framework_common::object::DynObject;
 use framework_common::{impl_dyn_object_traits, spec};
 use std::fmt::Debug;
@@ -41,24 +41,25 @@ impl Default for PlanConfig {
             timestamp_type: TimestampType::TimestampLtz,
             data_type_formatter: Arc::new(DefaultDataTypeFormatter),
             spark_udf_config: SparkUdfConfig {
-                timezone: ConfigEntry {
-                    key: "spark.sql.session.timeZone",
+                timezone: ConfigKeyValue {
+                    key: "spark.sql.session.timeZone".to_string(),
                     value: Some("UTC".to_string()),
                 },
-                pandas_window_bound_types: ConfigEntry {
-                    key: "pandas_window_bound_types",
+                pandas_window_bound_types: ConfigKeyValue {
+                    key: "pandas_window_bound_types".to_string(),
                     value: None,
                 },
-                pandas_grouped_map_assign_columns_by_name: ConfigEntry {
-                    key: "spark.sql.legacy.execution.pandas.groupedMap.assignColumnsByName",
+                pandas_grouped_map_assign_columns_by_name: ConfigKeyValue {
+                    key: "spark.sql.legacy.execution.pandas.groupedMap.assignColumnsByName"
+                        .to_string(),
                     value: None,
                 },
-                pandas_convert_to_arrow_array_safely: ConfigEntry {
-                    key: "spark.sql.execution.pandas.convertToArrowArraySafely",
+                pandas_convert_to_arrow_array_safely: ConfigKeyValue {
+                    key: "spark.sql.execution.pandas.convertToArrowArraySafely".to_string(),
                     value: None,
                 },
-                arrow_max_records_per_batch: ConfigEntry {
-                    key: "spark.sql.execution.arrow.maxRecordsPerBatch",
+                arrow_max_records_per_batch: ConfigKeyValue {
+                    key: "spark.sql.execution.arrow.maxRecordsPerBatch".to_string(),
                     value: None,
                 },
             },

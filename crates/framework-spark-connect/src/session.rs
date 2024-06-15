@@ -6,11 +6,11 @@ use std::sync::{Arc, Mutex};
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use framework_common::config::{ConfigEntry, SparkUdfConfig, TimestampType};
+use framework_common::config::{ConfigKeyValue, SparkUdfConfig, TimestampType};
 use framework_plan::config::PlanConfig;
 use framework_plan::function::BUILT_IN_FUNCTIONS;
 
-use crate::config::{ConfigKeyValue, ConfigKeyValueList, SparkRuntimeConfig};
+use crate::config::{ConfigKeyValueList, SparkRuntimeConfig};
 use crate::error::SparkResult;
 use crate::executor::Executor;
 use crate::spark::config::{
@@ -87,33 +87,34 @@ impl Session {
             .map(|x| x.to_string())
             .unwrap_or_else(|| "UTC".into());
         let spark_udf_config = SparkUdfConfig {
-            timezone: ConfigEntry {
-                key: "spark.sql.session.timeZone",
+            timezone: ConfigKeyValue {
+                key: "spark.sql.session.timeZone".to_string(),
                 value: Some(time_zone.clone()),
             },
-            pandas_window_bound_types: ConfigEntry {
-                key: "pandas_window_bound_types",
+            pandas_window_bound_types: ConfigKeyValue {
+                key: "pandas_window_bound_types".to_string(),
                 value: state
                     .config
                     .get("pandas_window_bound_types")?
                     .map(|s| s.to_string()),
             },
-            pandas_grouped_map_assign_columns_by_name: ConfigEntry {
-                key: SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME,
+            pandas_grouped_map_assign_columns_by_name: ConfigKeyValue {
+                key: SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME
+                    .to_string(),
                 value: state
                     .config
                     .get(SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME)?
                     .map(|s| s.to_string()),
             },
-            pandas_convert_to_arrow_array_safely: ConfigEntry {
-                key: SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY,
+            pandas_convert_to_arrow_array_safely: ConfigKeyValue {
+                key: SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY.to_string(),
                 value: state
                     .config
                     .get(SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY)?
                     .map(|s| s.to_string()),
             },
-            arrow_max_records_per_batch: ConfigEntry {
-                key: SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH,
+            arrow_max_records_per_batch: ConfigKeyValue {
+                key: SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH.to_string(),
                 value: state
                     .config
                     .get(SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH)?
