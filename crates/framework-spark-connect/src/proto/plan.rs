@@ -518,7 +518,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                 let input = input.required("to schema input")?;
                 let schema = schema.required("to schema schema")?;
                 let schema: spec::DataType = schema.try_into()?;
-                let schema = schema.into_schema("value", true);
+                let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
                 Ok(spec::PlanNode::ToSchema {
                     input: Box::new((*input).try_into()?),
                     schema,
@@ -595,7 +595,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                 Ok(spec::PlanNode::Parse {
                     input: Box::new((*input).try_into()?),
                     format,
-                    schema: schema.map(|x| x.into_schema("value", true)),
+                    schema: schema.map(|x| x.into_schema(DEFAULT_FIELD_NAME, true)),
                     options,
                 })
             }
@@ -1049,7 +1049,7 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     options,
                 } = x;
                 let schema: Option<spec::DataType> = schema.map(|s| s.try_into()).transpose()?;
-                let schema = schema.map(|s| s.into_schema("value", true));
+                let schema = schema.map(|s| s.into_schema(DEFAULT_FIELD_NAME, true));
                 // "CreateExternalTable" is deprecated, so we use "CreateTable" instead.
                 Ok(spec::PlanNode::CreateTable {
                     table: parse_object_name(table_name.as_str())?,
@@ -1070,7 +1070,7 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     options,
                 } = x;
                 let schema: Option<spec::DataType> = schema.map(|s| s.try_into()).transpose()?;
-                let schema = schema.map(|s| s.into_schema("value", true));
+                let schema = schema.map(|s| s.into_schema(DEFAULT_FIELD_NAME, true));
                 Ok(spec::PlanNode::CreateTable {
                     table: parse_object_name(table_name.as_str())?,
                     path,

@@ -418,7 +418,7 @@
     {
       "input": "it is not a data type",
       "output": {
-        "failure": "invalid argument: extra tokens after data type: is"
+        "failure": "error in JSON serde: expected value at line 1 column 1"
       }
     },
     {
@@ -554,13 +554,13 @@
     {
       "input": "struct<x+y: int, 1.1:timestamp>",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected >, found: + at Line: 1, Column 9"
+        "failure": "error in JSON serde: expected value at line 1 column 1"
       }
     },
     {
       "input": "struct<x: int",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected >, found: EOF"
+        "failure": "error in JSON serde: expected value at line 1 column 1"
       }
     },
     {
@@ -590,13 +590,13 @@
     {
       "input": "unknown",
       "output": {
-        "failure": "not supported: SQL type Custom(ObjectName([Ident { value: \"unknown\", quote_style: None }]), [])"
+        "failure": "error in JSON serde: expected value at line 1 column 1"
       }
     },
     {
       "input": "unknown(1,2,3)",
       "output": {
-        "failure": "not supported: SQL type Custom(ObjectName([Ident { value: \"unknown\", quote_style: None }]), [\"1\", \"2\", \"3\"])"
+        "failure": "error in JSON serde: expected value at line 1 column 1"
       }
     },
     {

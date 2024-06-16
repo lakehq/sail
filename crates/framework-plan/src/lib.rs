@@ -9,10 +9,12 @@ mod catalog;
 pub mod config;
 pub mod error;
 mod extension;
+pub mod formatter;
 mod function;
 pub mod resolver;
+mod utils;
 
-/// Execute a logical plan.
+/// Executes a logical plan.
 /// This replaces DDL statements and catalog operations with the execution results.
 /// Logical plan nodes with corresponding physical plan nodes remain unchanged.
 pub async fn execute_logical_plan(ctx: &SessionContext, plan: LogicalPlan) -> Result<DataFrame> {

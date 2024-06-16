@@ -253,12 +253,11 @@ pub(crate) async fn execute_query(
     ctx: &SessionContext,
     query: &str,
 ) -> SparkResult<Vec<RecordBatch>> {
-    use crate::utils::SparkDataTypeFormatter;
     use framework_plan::config::PlanConfig;
-    use framework_plan::resolver::PlanResolver;
+    use framework_plan::resolver::{PlanResolver, PlanResolverState};
     use std::collections::HashMap;
 
-    let config = PlanConfig::default().with_data_type_formatter(Arc::new(SparkDataTypeFormatter));
+    let config = PlanConfig::default();
     let relation = crate::spark::connect::Relation {
         common: None,
         rel_type: Some(crate::spark::connect::relation::RelType::Sql(
@@ -270,7 +269,7 @@ pub(crate) async fn execute_query(
         )),
     };
     let plan = PlanResolver::new(ctx, Arc::new(config))
-        .resolve_plan(relation.try_into()?)
+        .resolve_plan(relation.try_into()?, &mut PlanResolverState::new())
         .await?;
     let mut stream = execute_plan(ctx, plan).await?;
     let mut output = vec![];

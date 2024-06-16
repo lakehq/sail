@@ -18,3 +18,19 @@ impl<'a> PlanResolver<'a> {
         Self { ctx, config }
     }
 }
+
+pub struct PlanResolverState {
+    next_id: usize,
+}
+
+impl PlanResolverState {
+    pub fn new() -> Self {
+        Self { next_id: 0 }
+    }
+
+    pub fn next_id(&mut self) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+}

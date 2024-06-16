@@ -1,4 +1,5 @@
 use crate::error::{PlanError, PlanResult};
+use crate::utils::ItemTaker;
 use arrow::datatypes::DataType;
 use datafusion_expr::{
     expr, BinaryExpr, Operator, ScalarFunctionDefinition, ScalarUDF, ScalarUDFImpl,
@@ -7,34 +8,6 @@ use std::sync::Arc;
 
 pub(crate) type Function = Arc<dyn Fn(Vec<expr::Expr>) -> PlanResult<expr::Expr> + Send + Sync>;
 
-pub(crate) fn get_one_argument(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    if args.len() != 1 {
-        return Err(PlanError::invalid("one argument expected"));
-    }
-    Ok(args.pop().unwrap())
-}
-
-pub(crate) fn get_two_arguments(mut args: Vec<expr::Expr>) -> PlanResult<(expr::Expr, expr::Expr)> {
-    if args.len() != 2 {
-        return Err(PlanError::invalid("two arguments expected"));
-    }
-    let right = args.pop().unwrap();
-    let left = args.pop().unwrap();
-    Ok((left, right))
-}
-
-pub(crate) fn get_three_arguments(
-    mut args: Vec<expr::Expr>,
-) -> PlanResult<(expr::Expr, expr::Expr, expr::Expr)> {
-    if args.len() != 3 {
-        return Err(PlanError::invalid("three arguments expected"));
-    }
-    let first = args.pop().unwrap();
-    let second = args.pop().unwrap();
-    let third = args.pop().unwrap();
-    Ok((first, second, third))
-}
-
 pub(crate) struct FunctionBuilder;
 
 impl FunctionBuilder {
@@ -42,10 +15,7 @@ impl FunctionBuilder {
     where
         F: Fn(expr::Expr) -> expr::Expr + Send + Sync + 'static,
     {
-        Arc::new(move |args| {
-            let arg = get_one_argument(args)?;
-            Ok(f(arg))
-        })
+        Arc::new(move |args| Ok(f(args.one()?)))
     }
 
     pub fn binary<F>(f: F) -> Function
@@ -53,7 +23,7 @@ impl FunctionBuilder {
         F: Fn(expr::Expr, expr::Expr) -> expr::Expr + Send + Sync + 'static,
     {
         Arc::new(move |args| {
-            let (left, right) = get_two_arguments(args)?;
+            let (left, right) = args.two()?;
             Ok(f(left, right))
         })
     }
@@ -63,7 +33,7 @@ impl FunctionBuilder {
         F: Fn(expr::Expr, expr::Expr, expr::Expr) -> expr::Expr + Send + Sync + 'static,
     {
         Arc::new(move |args| {
-            let (first, second, third) = get_three_arguments(args)?;
+            let (first, second, third) = args.three()?;
             Ok(f(first, second, third))
         })
     }
@@ -77,7 +47,7 @@ impl FunctionBuilder {
 
     pub fn binary_op(op: Operator) -> Function {
         Arc::new(move |args| {
-            let (left, right) = get_two_arguments(args)?;
+            let (left, right) = args.two()?;
             Ok(expr::Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(left),
                 op,
@@ -88,9 +58,8 @@ impl FunctionBuilder {
 
     pub fn cast(data_type: DataType) -> Function {
         Arc::new(move |args| {
-            let arg = get_one_argument(args)?;
             Ok(expr::Expr::Cast(expr::Cast {
-                expr: Box::new(arg),
+                expr: Box::new(args.one()?),
                 data_type: data_type.clone(),
             }))
         })

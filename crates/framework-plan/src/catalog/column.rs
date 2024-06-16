@@ -54,8 +54,8 @@ impl<'a> CatalogManager<'a> {
                 let data_type = PlanResolver::unresolve_data_type(column.data_type().clone())?;
                 let data_type = self
                     .config
-                    .data_type_formatter
-                    .to_simple_string(data_type)?;
+                    .plan_formatter
+                    .data_type_to_simple_string(&data_type)?;
                 Ok(TableColumnMetadata::new(
                     column.name().clone(),
                     data_type,

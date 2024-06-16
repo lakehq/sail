@@ -7,12 +7,12 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use framework_plan::config::{PlanConfig, TimestampType};
+use framework_plan::formatter::DefaultPlanFormatter;
 
 use crate::config::{ConfigKeyValue, ConfigKeyValueList, SparkRuntimeConfig};
 use crate::error::SparkResult;
 use crate::executor::Executor;
 use crate::spark::config::SPARK_SQL_SESSION_TIME_ZONE;
-use crate::utils::SparkDataTypeFormatter;
 use framework_plan::new_query_planner;
 
 const DEFAULT_SPARK_SCHEMA: &str = "default";
@@ -74,7 +74,7 @@ impl Session {
                 .unwrap_or_else(|| "UTC".into()),
             // TODO: get the default timestamp type from configuration
             timestamp_type: TimestampType::TimestampLtz,
-            data_type_formatter: Arc::new(SparkDataTypeFormatter),
+            plan_formatter: Arc::new(DefaultPlanFormatter),
         }))
     }
 

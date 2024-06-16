@@ -5,13 +5,8 @@ use lazy_static::lazy_static;
 use std::collections::HashMap;
 
 lazy_static! {
-    static ref BUILT_IN_AGGREGATE_FUNCTIONS: HashMap<&'static str, AggregateFunctionDefinition> = {
-        let mut m = HashMap::new();
-        for (name, func) in list_built_in_aggregate_functions() {
-            m.insert(name, func);
-        }
-        m
-    };
+    static ref BUILT_IN_AGGREGATE_FUNCTIONS: HashMap<&'static str, AggregateFunctionDefinition> =
+        HashMap::from_iter(list_built_in_aggregate_functions());
 }
 
 struct AggregateFunctionBuilder;

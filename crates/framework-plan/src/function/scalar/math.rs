@@ -1,14 +1,14 @@
 use crate::error::PlanResult;
-use crate::function::common::{get_one_argument, get_two_arguments, Function};
+use crate::function::common::Function;
+use crate::utils::ItemTaker;
 use datafusion::functions::expr_fn;
 use datafusion_expr::{expr, BinaryExpr, Operator};
 
 fn plus(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     if args.len() < 2 {
-        let arg = get_one_argument(args)?;
-        Ok(arg)
+        Ok(args.one()?)
     } else {
-        let (left, right) = get_two_arguments(args)?;
+        let (left, right) = args.two()?;
         Ok(expr::Expr::BinaryExpr(BinaryExpr {
             left: Box::new(left),
             op: Operator::Plus,
@@ -19,10 +19,9 @@ fn plus(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
 
 fn minus(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     if args.len() < 2 {
-        let arg = get_one_argument(args)?;
-        Ok(expr::Expr::Negative(Box::new(arg)))
+        Ok(expr::Expr::Negative(Box::new(args.one()?)))
     } else {
-        let (left, right) = get_two_arguments(args)?;
+        let (left, right) = args.two()?;
         Ok(expr::Expr::BinaryExpr(BinaryExpr {
             left: Box::new(left),
             op: Operator::Minus,

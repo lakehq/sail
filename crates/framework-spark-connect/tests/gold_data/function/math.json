@@ -745,7 +745,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: one argument expected"
+        "failure": "error in DataFusion: Error during planning: one value expected: [Alias(Alias { expr: Literal(Decimal128(Some(31411),5,4)), relation: None, name: \"3.1411\" }), Alias(Alias { expr: Negative(Alias(Alias { expr: Literal(Int32(3)), relation: None, name: \"3\" })), relation: None, name: \"(- 3)\" })]"
       }
     },
     {
@@ -767,7 +767,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: one argument expected"
+        "failure": "error in DataFusion: Error during planning: one value expected: [Alias(Alias { expr: Literal(Decimal128(Some(31411),5,4)), relation: None, name: \"3.1411\" }), Alias(Alias { expr: Literal(Int32(3)), relation: None, name: \"3\" })]"
       }
     },
     {

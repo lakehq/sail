@@ -4,8 +4,9 @@ use crate::error::{PlanError, PlanResult};
 use crate::extension::function::alias::MultiAlias;
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, get_built_in_window_function,
+    is_built_in_generator_function,
 };
-use crate::resolver::PlanResolver;
+use crate::resolver::{PlanResolver, PlanResolverState};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DFSchema, Result, ScalarValue};
 use datafusion_common::{Column, DataFusionError};
@@ -20,6 +21,7 @@ impl PlanResolver<'_> {
         &self,
         sort: spec::SortOrder,
         schema: &DFSchema,
+        state: &mut PlanResolverState,
     ) -> PlanResult<expr::Expr> {
         use spec::{NullOrdering, SortDirection};
 
@@ -39,7 +41,7 @@ impl PlanResolver<'_> {
             NullOrdering::Unspecified => asc,
         };
         Ok(expr::Expr::Sort(expr::Sort {
-            expr: Box::new(self.resolve_expression(*child, schema)?),
+            expr: Box::new(self.resolve_expression(*child, schema, state)?),
             asc,
             nulls_first,
         }))
@@ -48,6 +50,7 @@ impl PlanResolver<'_> {
     pub(crate) fn resolve_window_frame(
         &self,
         frame: spec::WindowFrame,
+        state: &mut PlanResolverState,
     ) -> PlanResult<window_frame::WindowFrame> {
         use spec::{WindowFrameBoundary, WindowFrameType};
 
@@ -68,7 +71,7 @@ impl PlanResolver<'_> {
                 window_frame::WindowFrameBound::Preceding(ScalarValue::UInt64(None))
             }
             WindowFrameBoundary::Value(value) => window_frame::WindowFrameBound::Preceding(
-                self.resolve_window_boundary_value(*value)?,
+                self.resolve_window_boundary_value(*value, state)?,
             ),
         };
         let end = match upper {
@@ -77,14 +80,20 @@ impl PlanResolver<'_> {
                 window_frame::WindowFrameBound::Following(ScalarValue::UInt64(None))
             }
             WindowFrameBoundary::Value(value) => window_frame::WindowFrameBound::Following(
-                self.resolve_window_boundary_value(*value)?,
+                self.resolve_window_boundary_value(*value, state)?,
             ),
         };
         Ok(window_frame::WindowFrame::new_bounds(units, start, end))
     }
 
-    fn resolve_window_boundary_value(&self, value: spec::Expr) -> PlanResult<ScalarValue> {
-        let value = self.resolve_expression(value, &DFSchema::empty())?;
+    fn resolve_window_boundary_value(
+        &self,
+        value: spec::Expr,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<ScalarValue> {
+        let value = self
+            .resolve_expression(value, &DFSchema::empty(), state)?
+            .unalias();
         match value {
             expr::Expr::Literal(
                 v @ (ScalarValue::UInt32(_)
@@ -93,7 +102,7 @@ impl PlanResolver<'_> {
                 | ScalarValue::Int64(_)),
             ) => Ok(v),
             _ => Err(PlanError::invalid(format!(
-                "invalid boundary value: {:?}",
+                "invalid window boundary value: {:?}",
                 value
             ))),
         }
@@ -103,11 +112,20 @@ impl PlanResolver<'_> {
         &self,
         expr: spec::Expr,
         schema: &DFSchema,
+        state: &mut PlanResolverState,
     ) -> PlanResult<expr::Expr> {
         use spec::Expr;
 
         match expr {
-            Expr::Literal(literal) => Ok(expr::Expr::Literal(self.resolve_literal(literal)?)),
+            Expr::Literal(literal) => {
+                let name = self.config.plan_formatter.literal_to_string(&literal)?;
+                let literal = self.resolve_literal(literal)?;
+                Ok(expr::Expr::Alias(expr::Alias {
+                    expr: Box::new(expr::Expr::Literal(literal)),
+                    relation: None,
+                    name,
+                }))
+            }
             Expr::UnresolvedAttribute {
                 identifier,
                 plan_id: _,
@@ -130,7 +148,11 @@ impl PlanResolver<'_> {
 
                 let args = arguments
                     .into_iter()
-                    .map(|x| self.resolve_expression(x, schema))
+                    .map(|x| self.resolve_expression(x, schema, state))
+                    .collect::<PlanResult<Vec<_>>>()?;
+                let arg_names = args
+                    .iter()
+                    .map(|arg| -> PlanResult<_> { Ok(arg.display_name()?) })
                     .collect::<PlanResult<Vec<_>>>()?;
                 let func = match get_built_in_function(function_name.as_str()) {
                     Ok(func) => func(args)?,
@@ -138,7 +160,19 @@ impl PlanResolver<'_> {
                         get_built_in_aggregate_function(function_name.as_str(), args, is_distinct)?
                     }
                 };
-                Ok(func)
+                if is_built_in_generator_function(function_name.as_str()) {
+                    Ok(func)
+                } else {
+                    let name = self.config.plan_formatter.function_to_string(
+                        function_name.as_str(),
+                        arg_names.iter().map(|x| x.as_str()).collect(),
+                    )?;
+                    Ok(expr::Expr::Alias(expr::Alias {
+                        expr: Box::new(func),
+                        relation: None,
+                        name,
+                    }))
+                }
             }
             Expr::UnresolvedStar { target } => {
                 // FIXME: column reference is parsed as qualifier
@@ -159,7 +193,7 @@ impl PlanResolver<'_> {
                 if metadata.is_some() {
                     return Err(PlanError::unsupported("alias metadata"));
                 }
-                let expr = self.resolve_expression(*expr, schema)?;
+                let expr = self.resolve_expression(*expr, schema, state)?.unalias();
                 if let [name] = name.as_slice() {
                     Ok(expr::Expr::Alias(expr::Alias {
                         expr: Box::new(expr),
@@ -179,12 +213,12 @@ impl PlanResolver<'_> {
             Expr::Cast { expr, cast_to_type } => {
                 let data_type = self.resolve_data_type(cast_to_type)?;
                 Ok(expr::Expr::Cast(expr::Cast {
-                    expr: Box::new(self.resolve_expression(*expr, schema)?),
+                    expr: Box::new(self.resolve_expression(*expr, schema, state)?),
                     data_type,
                 }))
             }
             Expr::UnresolvedRegex { .. } => Err(PlanError::todo("unresolved regex")),
-            Expr::SortOrder(sort) => self.resolve_sort_order(sort, schema),
+            Expr::SortOrder(sort) => self.resolve_sort_order(sort, schema, state),
             Expr::LambdaFunction { .. } => Err(PlanError::todo("lambda function")),
             Expr::Window {
                 window_function,
@@ -207,7 +241,7 @@ impl PlanResolver<'_> {
                         }
                         let args = arguments
                             .into_iter()
-                            .map(|x| self.resolve_expression(x, schema))
+                            .map(|x| self.resolve_expression(x, schema, state))
                             .collect::<PlanResult<Vec<_>>>()?;
                         (function_name, args)
                     }
@@ -225,14 +259,14 @@ impl PlanResolver<'_> {
                 };
                 let partition_by = partition_spec
                     .into_iter()
-                    .map(|x| self.resolve_expression(x, schema))
+                    .map(|x| self.resolve_expression(x, schema, state))
                     .collect::<PlanResult<Vec<_>>>()?;
                 let order_by = order_spec
                     .into_iter()
-                    .map(|x| self.resolve_sort_order(x, schema))
+                    .map(|x| self.resolve_sort_order(x, schema, state))
                     .collect::<PlanResult<Vec<_>>>()?;
                 let window_frame = if let Some(frame) = frame_spec {
-                    self.resolve_window_frame(frame)?
+                    self.resolve_window_frame(frame, state)?
                 } else {
                     window_frame::WindowFrame::new(None)
                 };
@@ -275,7 +309,7 @@ impl PlanResolver<'_> {
                     }
                 };
                 Ok(expr::Expr::GetIndexedField(GetIndexedField {
-                    expr: Box::new(self.resolve_expression(*child, schema)?),
+                    expr: Box::new(self.resolve_expression(*child, schema, state)?),
                     field,
                 }))
             }
@@ -301,7 +335,7 @@ impl PlanResolver<'_> {
                 let function_name: &str = function_name.as_str();
                 let arguments: Vec<expr::Expr> = arguments
                     .into_iter()
-                    .map(|x| self.resolve_expression(x, schema))
+                    .map(|x| self.resolve_expression(x, schema, state))
                     .collect::<PlanResult<Vec<expr::Expr>>>()?;
                 let input_types: Vec<DataType> = arguments
                     .iter()

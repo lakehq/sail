@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: two arguments expected"
+        "failure": "error in DataFusion: Error during planning: two values expected: [Alias(Alias { expr: Literal(Utf8(\"%SystemDrive%/Users/John\")), relation: None, name: \"%SystemDrive%/Users/John\" }), Alias(Alias { expr: Literal(Utf8(\"/%SYSTEMDrive/%//Users%\")), relation: None, name: \"/%SYSTEMDrive/%//Users%\" }), Alias(Alias { expr: Literal(Utf8(\"/\")), relation: None, name: \"/\" })]"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: two arguments expected"
+        "failure": "error in DataFusion: Error during planning: two values expected: [Alias(Alias { expr: Literal(Utf8(\"%SystemDrive%/Users/John\")), relation: None, name: \"%SystemDrive%/Users/John\" }), Alias(Alias { expr: Literal(Utf8(\"/%SystemDrive/%//Users%\")), relation: None, name: \"/%SystemDrive/%//Users%\" }), Alias(Alias { expr: Literal(Utf8(\"/\")), relation: None, name: \"/\" })]"
       }
     },
     {
@@ -1009,7 +1009,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\Users\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\Users.*\")), escape_char: None, case_insensitive: false })"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Alias(Alias { expr: Literal(Utf8(\"%SystemDrive%\\Users\\John\")), relation: None, name: \"%SystemDrive%\\\\Users\\\\John\" }), pattern: Alias(Alias { expr: Literal(Utf8(\"%SystemDrive%\\\\Users.*\")), relation: None, name: \"%SystemDrive%\\\\\\\\Users.*\" }), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1031,7 +1031,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\\\Users\\\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\\\\\Users.*\")), escape_char: None, case_insensitive: false })"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Alias(Alias { expr: Literal(Utf8(\"%SystemDrive%\\\\Users\\\\John\")), relation: None, name: \"%SystemDrive%\\\\\\\\Users\\\\\\\\John\" }), pattern: Alias(Alias { expr: Literal(Utf8(\"%SystemDrive%\\\\\\\\Users.*\")), relation: None, name: \"%SystemDrive%\\\\\\\\\\\\\\\\Users.*\" }), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1053,7 +1053,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\Users\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\Users.*\")), escape_char: None, case_insensitive: false })"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Alias(Alias { expr: Literal(Utf8(\"%SystemDrive%\\Users\\John\")), relation: None, name: \"%SystemDrive%\\\\Users\\\\John\" }), pattern: Alias(Alias { expr: Literal(Utf8(\"%SystemDrive%\\\\Users.*\")), relation: None, name: \"%SystemDrive%\\\\\\\\Users.*\" }), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1075,7 +1075,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\\\Users\\\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\\\\\Users.*\")), escape_char: None, case_insensitive: false })"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Alias(Alias { expr: Literal(Utf8(\"%SystemDrive%\\\\Users\\\\John\")), relation: None, name: \"%SystemDrive%\\\\\\\\Users\\\\\\\\John\" }), pattern: Alias(Alias { expr: Literal(Utf8(\"%SystemDrive%\\\\\\\\Users.*\")), relation: None, name: \"%SystemDrive%\\\\\\\\\\\\\\\\Users.*\" }), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1097,7 +1097,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\Users\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\Users.*\")), escape_char: None, case_insensitive: false })"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Alias(Alias { expr: Literal(Utf8(\"%SystemDrive%\\Users\\John\")), relation: None, name: \"%SystemDrive%\\\\Users\\\\John\" }), pattern: Alias(Alias { expr: Literal(Utf8(\"%SystemDrive%\\\\Users.*\")), relation: None, name: \"%SystemDrive%\\\\\\\\Users.*\" }), escape_char: None, case_insensitive: false })"
       }
     },
     {
@@ -1119,7 +1119,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Literal(Utf8(\"%SystemDrive%\\\\Users\\\\John\")), pattern: Literal(Utf8(\"%SystemDrive%\\\\\\\\Users.*\")), escape_char: None, case_insensitive: false })"
+        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression SimilarTo(Like { negated: false, expr: Alias(Alias { expr: Literal(Utf8(\"%SystemDrive%\\\\Users\\\\John\")), relation: None, name: \"%SystemDrive%\\\\\\\\Users\\\\\\\\John\" }), pattern: Alias(Alias { expr: Literal(Utf8(\"%SystemDrive%\\\\\\\\Users.*\")), relation: None, name: \"%SystemDrive%\\\\\\\\\\\\\\\\Users.*\" }), escape_char: None, case_insensitive: false })"
       }
     },
     {
