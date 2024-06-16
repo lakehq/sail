@@ -62,7 +62,7 @@ impl ScalarUDFImpl for UnresolvedPySparkUDF {
         Ok(self.output_type.clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
         Err(DataFusionError::Internal(format!(
             "{} Unresolved UDF cannot be invoked",
             self.name()

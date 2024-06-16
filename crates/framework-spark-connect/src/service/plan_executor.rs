@@ -6,11 +6,8 @@ use datafusion::arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSch
 use datafusion::common::{FileType, TableReference};
 use datafusion::dataframe::DataFrame;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
-use datafusion_common::{
-    config::{FormatOptions, TableOptions},
-    DFSchema, DataFusionError,
-};
-use datafusion_expr::{expr, ExprSchemable, ScalarUDF};
+use datafusion_common::config::{FormatOptions, TableOptions};
+use datafusion_expr::ScalarUDF;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
@@ -32,15 +29,8 @@ use crate::spark::connect::{
     StreamingQueryCommand, StreamingQueryManagerCommand, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart,
 };
-use framework_common::spec::{
-    CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction, FunctionDefinition,
-};
-use framework_plan::error::PlanResult;
+use framework_common::spec::{CommonInlineUserDefinedFunction, FunctionDefinition};
 use framework_plan::resolver::PlanResolver;
-use framework_python::cereal::partial_pyspark_udf::{
-    deserialize_partial_pyspark_udf, PartialPySparkUDF,
-};
-use framework_python::udf::pyspark_udf::PySparkUDF;
 use framework_python::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
 pub struct ExecutePlanResponseStream {
@@ -136,8 +126,7 @@ pub(crate) async fn handle_execute_register_function(
     udf: SCCommonInlineUserDefinedFunction,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    // TODO: Should probably just call PlanNode::RegisterFunction
-    //  even though SC implementation creates the UDF and registers it directly.
+    // TODO: Call PlanNode::RegisterFunction even though SC implementation registers it directly.
     let ctx = session.context();
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
 
@@ -145,7 +134,7 @@ pub(crate) async fn handle_execute_register_function(
     let CommonInlineUserDefinedFunction {
         function_name,
         deterministic,
-        arguments,
+        arguments: _,
         function,
     } = udf;
     let function_name: &str = function_name.as_str();
