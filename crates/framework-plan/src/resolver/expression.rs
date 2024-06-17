@@ -396,3 +396,95 @@ impl PlanResolver<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::config::PlanConfig;
+    use crate::error::PlanResult;
+    use crate::resolver::{PlanResolver, PlanResolverState};
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::{DFSchema, ScalarValue};
+    use datafusion_expr::expr::{Alias, Expr};
+    use datafusion_expr::{BinaryExpr, Operator};
+    use framework_common::spec;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_resolve_expression_with_alias() -> PlanResult<()> {
+        let ctx = SessionContext::default();
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::default()));
+        let resolve = |expr: spec::Expr| {
+            resolver.resolve_expression(expr, &DFSchema::empty(), &mut PlanResolverState::new())
+        };
+
+        assert_eq!(
+            resolve(spec::Expr::UnresolvedFunction {
+                function_name: "not".to_string(),
+                arguments: vec![spec::Expr::Literal(spec::Literal::Boolean(true))],
+                is_distinct: false,
+                is_user_defined_function: false,
+            })?,
+            Expr::Alias(Alias {
+                expr: Box::new(Expr::Not(Box::new(Expr::Alias(Alias {
+                    expr: Box::new(Expr::Literal(ScalarValue::Boolean(Some(true)))),
+                    relation: None,
+                    name: "true".to_string(),
+                })))),
+                relation: None,
+                name: "(NOT true)".to_string(),
+            })
+        );
+
+        // We need to make sure there is no nested alias in the resolved logical expression.
+        // This is because many DataFusion functions (e.g. `Expr::unalias()`) can only work with
+        // a single level of alias.
+        assert_eq!(
+            resolve(spec::Expr::Alias {
+                // This alias "b" is overridden by the outer alias "c".
+                expr: Box::new(spec::Expr::Alias {
+                    // The resolver assigns an alias (a human-readable string) for the function,
+                    // and is then overridden by the explicitly specified outer alias.
+                    expr: Box::new(spec::Expr::UnresolvedFunction {
+                        function_name: "+".to_string(),
+                        arguments: vec![
+                            spec::Expr::Alias {
+                                // The resolver assigns an alias "1" for the literal,
+                                // and is then overridden by the explicitly specified alias.
+                                expr: Box::new(spec::Expr::Literal(spec::Literal::Integer(1))),
+                                name: vec!["a".to_string().into()],
+                                metadata: None,
+                            },
+                            // The resolver assigns an alias "2" for the literal.
+                            spec::Expr::Literal(spec::Literal::Integer(2)),
+                        ],
+                        is_distinct: false,
+                        is_user_defined_function: false,
+                    }),
+                    name: vec!["b".to_string().into()],
+                    metadata: None,
+                }),
+                name: vec!["c".to_string().into()],
+                metadata: None,
+            })?,
+            Expr::Alias(Alias {
+                expr: Box::new(Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(Expr::Alias(Alias {
+                        expr: Box::new(Expr::Literal(ScalarValue::Int32(Some(1)))),
+                        relation: None,
+                        name: "a".to_string(),
+                    })),
+                    op: Operator::Plus,
+                    right: Box::new(Expr::Alias(Alias {
+                        expr: Box::new(Expr::Literal(ScalarValue::Int32(Some(2)))),
+                        relation: None,
+                        name: "2".to_string(),
+                    })),
+                })),
+                relation: None,
+                name: "c".to_string(),
+            }),
+        );
+
+        Ok(())
+    }
+}

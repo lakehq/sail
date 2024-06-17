@@ -2,7 +2,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::utils::ItemTaker;
 use framework_common::object::DynObject;
 use framework_common::{impl_dyn_object_traits, spec};
-use std::fmt::{format, Debug, Display};
+use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 
 /// Utilities to format various data structures in the plan specification.

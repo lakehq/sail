@@ -1,4 +1,4 @@
-use crate::error::{PlanError, PlanResult};
+use crate::error::PlanResult;
 use crate::function::common::Function;
 use crate::utils::ItemTaker;
 use datafusion::functions::expr_fn;
