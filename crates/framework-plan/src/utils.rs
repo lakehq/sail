@@ -5,6 +5,7 @@ use std::fmt::Debug;
 pub(crate) trait ItemTaker {
     type Item;
 
+    fn zero(self) -> Result<()>;
     fn one(self) -> Result<Self::Item>;
     fn two(self) -> Result<(Self::Item, Self::Item)>;
     fn three(self) -> Result<(Self::Item, Self::Item, Self::Item)>;
@@ -13,6 +14,13 @@ pub(crate) trait ItemTaker {
 
 impl<T: Debug> ItemTaker for Vec<T> {
     type Item = T;
+
+    fn zero(self) -> Result<()> {
+        if !self.is_empty() {
+            return plan_err!("zero values expected: {:?}", self);
+        }
+        Ok(())
+    }
 
     fn one(mut self) -> Result<T> {
         if self.len() != 1 {

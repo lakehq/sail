@@ -16,9 +16,7 @@ impl FunctionBuilder {
         F: Fn() -> expr::Expr + Send + Sync + 'static,
     {
         Arc::new(move |args| {
-            if args.len() != 0 {
-                return Err(PlanError::invalid("nullary: Zero arguments expected."));
-            }
+            args.zero()?;
             Ok(f())
         })
     }
