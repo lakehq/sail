@@ -91,6 +91,7 @@ impl Session {
                 key: "spark.sql.session.timeZone".to_string(),
                 value: Some(time_zone.clone()),
             },
+            // FIXME: pandas_window_bound_types is not a proper Spark configuration.
             pandas_window_bound_types: ConfigKeyValue {
                 key: "pandas_window_bound_types".to_string(),
                 value: state
