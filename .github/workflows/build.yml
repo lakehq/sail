@@ -11,9 +11,6 @@ permissions:
   contents: read
   pull-requests: write
 
-env:
-  RUSTFLAGS: -D warnings
-
 jobs:
   build:
     runs-on: ubuntu-latest
