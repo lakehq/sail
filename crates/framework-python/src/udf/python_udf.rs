@@ -11,7 +11,11 @@ use pyo3::{
 
 use crate::cereal::partial_python_udf::PartialPythonUDF;
 use crate::pyarrow::{FromPyArrow, ToPyArrow};
-use crate::udf::CommonPythonUDF;
+use crate::udf::{
+    build_pyarrow_module_array_kwargs, get_pyarrow_module_array_function,
+    get_pyarrow_output_data_type, get_python_builtins_list_function, get_python_function,
+    CommonPythonUDF,
+};
 
 #[derive(Debug, Clone)]
 pub struct PythonUDF {
@@ -78,12 +82,12 @@ impl ScalarUDFImpl for PythonUDF {
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(args)?;
 
         let array_data: Result<ArrayData, DataFusionError> = Python::with_gil(|py| {
-            let pyarrow_module_array: Bound<PyAny> = self.get_pyarrow_module_array_function(py)?;
-            let builtins_list: Bound<PyAny> = self.get_python_builtins_list_function(py)?;
-            let python_function: Bound<PyAny> = self.get_python_function(py)?;
-            let pyarrow_output_data_type: Bound<PyAny> = self.get_pyarrow_output_data_type(py)?;
+            let pyarrow_module_array: Bound<PyAny> = get_pyarrow_module_array_function(py)?;
+            let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
+            let python_function: Bound<PyAny> = get_python_function(self, py)?;
+            let pyarrow_output_data_type: Bound<PyAny> = get_pyarrow_output_data_type(self, py)?;
             let output_data_type_kwargs: Bound<PyDict> =
-                self.build_pyarrow_module_array_kwargs(py, pyarrow_output_data_type, false)?;
+                build_pyarrow_module_array_kwargs(py, pyarrow_output_data_type, false)?;
 
             let py_args: Vec<Bound<PyAny>> = args
                 .iter()
