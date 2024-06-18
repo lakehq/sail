@@ -506,7 +506,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                             .collect::<SparkResult<Vec<_>>>()
                     })
                     .transpose()?
-                    .unwrap_or_else(std::vec::Vec::new);
+                    .unwrap_or_else(Vec::new);
                 Ok(spec::PlanNode::Unpivot {
                     input: Box::new((*input).try_into()?),
                     ids,
