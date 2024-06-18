@@ -2775,7 +2775,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Builtin Sum will be removed.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "success": "ok"
       }
     },
     {
@@ -2797,7 +2797,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Builtin Sum will be removed.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "success": "ok"
       }
     },
     {
@@ -2819,7 +2819,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'SUM(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tSUM(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "error in DataFusion: Error during planning: Execution error: User-defined coercion failed with Execution(\"Sum not supported for Utf8\") and No function matches the given name and argument types 'SUM(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tSUM(UserDefined)"
       }
     },
     {
