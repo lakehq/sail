@@ -1,7 +1,8 @@
-use datafusion_common::DFSchemaRef;
-use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use std::fmt::Formatter;
 use std::sync::Arc;
+
+use datafusion_common::DFSchemaRef;
+use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct SortWithinPartitionsNode {

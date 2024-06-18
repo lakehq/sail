@@ -1,5 +1,6 @@
-use crate::error::{PlanError, PlanResult};
 use datafusion_expr::{expr, AggregateFunction, BuiltInWindowFunction};
+
+use crate::error::{PlanError, PlanResult};
 
 pub(crate) fn get_built_in_window_function(
     name: &str,

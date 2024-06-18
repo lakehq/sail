@@ -1,6 +1,7 @@
-use crate::function::common::Function;
 use arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
+
+use crate::function::common::Function;
 
 pub(super) fn list_built_in_conversion_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;

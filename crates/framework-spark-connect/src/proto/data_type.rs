@@ -1,9 +1,11 @@
+use std::collections::HashMap;
+
+use framework_common::spec;
+use framework_sql::data_type::parse_data_type;
+
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type_json::parse_spark_json_data_type;
 use crate::spark::connect::{data_type as sdt, DataType};
-use framework_common::spec;
-use framework_sql::data_type::parse_data_type;
-use std::collections::HashMap;
 
 pub(crate) const DEFAULT_FIELD_NAME: &str = "value";
 
@@ -340,9 +342,10 @@ impl TryFrom<spec::DataType> for DataType {
 
 #[cfg(test)]
 mod tests {
+    use framework_common::tests::test_gold_set;
+
     use super::{parse_spark_data_type, DEFAULT_FIELD_NAME};
     use crate::error::{SparkError, SparkResult};
-    use framework_common::tests::test_gold_set;
 
     #[test]
     fn test_parse_spark_data_type_gold_set() -> SparkResult<()> {

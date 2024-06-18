@@ -1,5 +1,6 @@
-use crate::function::common::Function;
 use datafusion_expr::Operator;
+
+use crate::function::common::Function;
 
 pub(super) fn list_built_in_bitwise_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;

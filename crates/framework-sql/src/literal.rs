@@ -1,16 +1,17 @@
-use crate::data_type::{SQL_DECIMAL_MAX_PRECISION, SQL_DECIMAL_MAX_SCALE};
-use crate::error::{SqlError, SqlResult};
-use crate::parser::{fail_on_extra_token, SparkDialect};
-use chrono;
-use chrono_tz;
+use std::fmt::Debug;
+use std::ops::Neg;
+use std::str::FromStr;
+
 use framework_common::spec;
 use lazy_static::lazy_static;
 use sqlparser::ast;
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::Parser;
-use std::fmt::Debug;
-use std::ops::Neg;
-use std::str::FromStr;
+use {chrono, chrono_tz};
+
+use crate::data_type::{SQL_DECIMAL_MAX_PRECISION, SQL_DECIMAL_MAX_SCALE};
+use crate::error::{SqlError, SqlResult};
+use crate::parser::{fail_on_extra_token, SparkDialect};
 
 lazy_static! {
     static ref BINARY_REGEX: regex::Regex =

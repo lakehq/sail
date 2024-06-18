@@ -1,13 +1,14 @@
+use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
+use std::hash::Hash;
+use std::sync::Arc;
+
 use arrow::array::RecordBatch;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use comfy_table::{Cell, CellAlignment, ColumnConstraint, Table, Width};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
-use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
-use std::hash::Hash;
-use std::sync::Arc;
 
 fn escape_meta_characters(s: &str) -> String {
     s.replace("\n", "\\\\n")

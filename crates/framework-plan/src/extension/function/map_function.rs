@@ -1,13 +1,13 @@
+use std::any::Any;
+use std::sync::Arc;
+
 use arrow::array::StructArray;
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::interleave;
 use datafusion::arrow::array::{ArrayRef, MapArray};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use std::any::Any;
-use std::sync::Arc;
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 trait KeyValue<T>
 where

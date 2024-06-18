@@ -1,14 +1,15 @@
 #[cfg(test)]
 mod tests {
-    use crate::error::{SparkError, SparkResult};
-    use crate::executor::execute_query;
-    use crate::proto::data_type_json::JsonDataType;
-    use crate::session::Session;
     use arrow::array::RecordBatch;
     use arrow::error::ArrowError;
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use framework_common::tests::test_gold_set;
     use serde::{Deserialize, Serialize};
+
+    use crate::error::{SparkError, SparkResult};
+    use crate::executor::execute_query;
+    use crate::proto::data_type_json::JsonDataType;
+    use crate::session::Session;
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     #[serde(rename_all = "camelCase")]

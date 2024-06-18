@@ -1,5 +1,7 @@
+use std::thread;
+use std::time::Duration;
+
 use framework_telemetry::telemetry::init_telemetry;
-use std::{thread, time::Duration};
 use tracing::{debug, error, error_span, info, info_span, instrument, span, trace, warn};
 
 #[instrument]

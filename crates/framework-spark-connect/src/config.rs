@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
+use framework_common::config::ConfigKeyValue;
+
 use crate::error::{SparkError, SparkResult};
 use crate::spark::config::SPARK_CONFIG;
 use crate::spark::connect as sc;
-use framework_common::config::ConfigKeyValue;
-use std::collections::HashMap;
 
 pub(crate) struct ConfigKeyValueList(Vec<ConfigKeyValue>);
 

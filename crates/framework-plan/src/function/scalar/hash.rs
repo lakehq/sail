@@ -1,5 +1,6 @@
-use crate::function::common::Function;
 use datafusion::functions::expr_fn;
+
+use crate::function::common::Function;
 
 pub(super) fn list_built_in_hash_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;

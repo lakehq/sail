@@ -1,5 +1,6 @@
-use crate::spec::DataType;
 use serde::{Deserialize, Serialize};
+
+use crate::spec::DataType;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]

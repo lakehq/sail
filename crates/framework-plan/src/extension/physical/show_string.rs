@@ -1,4 +1,8 @@
-use crate::extension::logical::ShowStringFormat;
+use std::any::Any;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
 use arrow::array::{RecordBatch, StringArray};
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
@@ -9,10 +13,8 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{arrow_datafusion_err, exec_err, internal_err, DataFusionError, Result};
 use futures::{Stream, StreamExt};
-use std::any::Any;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
+
+use crate::extension::logical::ShowStringFormat;
 
 #[derive(Debug)]
 pub(crate) struct ShowStringExec {

@@ -1,11 +1,13 @@
-use crate::error::{SqlError, SqlResult};
-use crate::parser::{fail_on_extra_token, SparkDialect};
+use std::collections::HashMap;
+
 use framework_common::spec;
 use sqlparser::ast;
 use sqlparser::ast::DateTimeField;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Token;
-use std::collections::HashMap;
+
+use crate::error::{SqlError, SqlResult};
+use crate::parser::{fail_on_extra_token, SparkDialect};
 
 pub const SQL_DECIMAL_DEFAULT_PRECISION: u8 = 10;
 pub const SQL_DECIMAL_DEFAULT_SCALE: i8 = 0;

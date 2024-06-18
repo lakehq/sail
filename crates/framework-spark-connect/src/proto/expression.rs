@@ -1,10 +1,15 @@
+use framework_common::spec;
+use framework_sql::data_type::parse_data_type;
+use framework_sql::expression::{
+    parse_object_name, parse_qualified_wildcard, parse_wildcard_expression,
+};
+
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::spark::connect::expression::cast::CastToType;
 use crate::spark::connect::expression::sort_order::{NullOrdering, SortDirection};
-use crate::spark::connect::expression::window::{
-    window_frame::{frame_boundary::Boundary, FrameBoundary, FrameType},
-    WindowFrame,
-};
+use crate::spark::connect::expression::window::window_frame::frame_boundary::Boundary;
+use crate::spark::connect::expression::window::window_frame::{FrameBoundary, FrameType};
+use crate::spark::connect::expression::window::WindowFrame;
 use crate::spark::connect::expression::{
     Alias, Cast, ExprType, ExpressionString, LambdaFunction, SortOrder, UnresolvedAttribute,
     UnresolvedExtractValue, UnresolvedFunction, UnresolvedNamedLambdaVariable, UnresolvedRegex,
@@ -14,11 +19,6 @@ use crate::spark::connect::{
     common_inline_user_defined_function as udf, common_inline_user_defined_table_function as udtf,
     CallFunction, CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
     Expression, JavaUdf, PythonUdf, PythonUdtf, ScalarScalaUdf,
-};
-use framework_common::spec;
-use framework_sql::data_type::parse_data_type;
-use framework_sql::expression::{
-    parse_object_name, parse_qualified_wildcard, parse_wildcard_expression,
 };
 
 impl TryFrom<Expression> for spec::Expr {
@@ -413,10 +413,12 @@ impl TryFrom<UnresolvedNamedLambdaVariable> for spec::UnresolvedNamedLambdaVaria
 
 #[cfg(test)]
 mod tests {
-    use crate::error::SparkError;
+    use std::thread;
+
     use framework_common::tests::test_gold_set;
     use framework_sql::expression::parse_wildcard_expression;
-    use std::thread;
+
+    use crate::error::SparkError;
 
     #[test]
     fn test_sql_to_expression() -> Result<(), Box<dyn std::error::Error>> {

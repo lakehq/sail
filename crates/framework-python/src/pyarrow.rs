@@ -6,19 +6,15 @@ use std::ptr::{addr_of, addr_of_mut};
 
 use arrow::ffi;
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
-
 use datafusion::arrow::array::ArrayData;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::error::ArrowError;
-
-use pyo3::{
-    exceptions::{PyTypeError, PyValueError},
-    ffi::Py_uintptr_t,
-    import_exception,
-    prelude::*,
-    pybacked::PyBackedStr,
-    types::{PyCapsule, PyList, PyTuple},
-};
+use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::ffi::Py_uintptr_t;
+use pyo3::import_exception;
+use pyo3::prelude::*;
+use pyo3::pybacked::PyBackedStr;
+use pyo3::types::{PyCapsule, PyList, PyTuple};
 
 import_exception!(pyarrow, ArrowException);
 pub type PyArrowException = ArrowException;

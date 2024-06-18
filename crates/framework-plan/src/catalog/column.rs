@@ -1,9 +1,10 @@
-use crate::catalog::CatalogManager;
-use crate::error::PlanResult;
-use crate::resolver::PlanResolver;
 use datafusion_common::{exec_datafusion_err, Result, TableReference};
 use framework_common::unwrap_or;
 use serde::{Deserialize, Serialize};
+
+use crate::catalog::CatalogManager;
+use crate::error::PlanResult;
+use crate::resolver::PlanResolver;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TableColumnMetadata {

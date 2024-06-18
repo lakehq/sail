@@ -1,9 +1,10 @@
+use std::sync::Arc;
+
 use datafusion::dataframe::DataFrame;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use datafusion_expr::{Extension, LogicalPlan};
-use std::sync::Arc;
 
 mod catalog;
 pub mod config;

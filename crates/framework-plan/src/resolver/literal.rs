@@ -1,10 +1,12 @@
-use crate::error::{PlanError, PlanResult};
-use crate::resolver::PlanResolver;
+use std::sync::Arc;
+
 use arrow::datatypes::IntervalMonthDayNanoType;
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::ScalarValue;
 use framework_common::spec;
-use std::sync::Arc;
+
+use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub fn resolve_literal(&self, literal: spec::Literal) -> PlanResult<ScalarValue> {

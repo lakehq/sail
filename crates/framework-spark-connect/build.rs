@@ -1,10 +1,8 @@
 use std::path::PathBuf;
 
-use prettyplease;
 use quote::{format_ident, quote};
-use regex;
 use serde::Deserialize;
-use syn;
+use {prettyplease, regex, syn};
 
 fn build_proto() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);

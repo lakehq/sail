@@ -1,14 +1,11 @@
 use std::hash::{Hash, Hasher};
 
-use pyo3::{
-    prelude::*,
-    types::{PyBytes, PyModule},
-};
+use framework_common::config::SparkUdfConfig;
+use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyModule};
 use serde::de::{self, IntoDeserializer, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_bytes::Bytes;
-
-use framework_common::config::SparkUdfConfig;
 
 pub const PY_SPARK_NON_UDF: i32 = 0;
 pub const PY_SPARK_SQL_BATCHED_UDF: i32 = 100;

@@ -1,11 +1,13 @@
-use crate::error::{PlanError, PlanResult};
-use crate::extension::function::contains::Contains;
-use crate::function::common::Function;
+use std::sync::Arc;
+
 use datafusion::functions;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, ScalarFunctionDefinition, ScalarUDF};
-use std::sync::Arc;
+
+use crate::error::{PlanError, PlanResult};
+use crate::extension::function::contains::Contains;
+use crate::function::common::Function;
 
 fn regexp_replace(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     if args.len() != 3 {

@@ -1,14 +1,7 @@
-use arrow::array::{RecordBatch, RecordBatchOptions};
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::catalog::catalog::CatalogMetadata;
-use crate::catalog::column::TableColumnMetadata;
-use crate::catalog::database::DatabaseMetadata;
-use crate::catalog::function::FunctionMetadata;
-use crate::catalog::table::TableMetadata;
-use crate::catalog::{CatalogManager, EmptyMetadata, SingleValueMetadata};
-use crate::config::PlanConfig;
+use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use datafusion::common::{DFSchemaRef, Result};
 use datafusion::datasource::{provider_as_source, MemTable};
@@ -19,6 +12,14 @@ use datafusion_expr::{TableScan, UNNAMED_TABLE};
 use serde::Serialize;
 use serde_arrow::schema::{SchemaLike, TracingOptions};
 use serde_arrow::to_arrow;
+
+use crate::catalog::catalog::CatalogMetadata;
+use crate::catalog::column::TableColumnMetadata;
+use crate::catalog::database::DatabaseMetadata;
+use crate::catalog::function::FunctionMetadata;
+use crate::catalog::table::TableMetadata;
+use crate::catalog::{CatalogManager, EmptyMetadata, SingleValueMetadata};
+use crate::config::PlanConfig;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct CatalogCommandNode {

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
+use framework_plan::resolver::{PlanResolver, PlanResolverState};
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::parse_spark_data_type;
@@ -23,10 +24,8 @@ use crate::spark::connect::analyze_plan_response::{
     SemanticHash as SemanticHashResponse, SparkVersion as SparkVersionResponse,
     TreeString as TreeStringResponse, Unpersist as UnpersistResponse,
 };
-use crate::spark::connect::plan;
-use crate::spark::connect::StorageLevel;
+use crate::spark::connect::{plan, StorageLevel};
 use crate::SPARK_VERSION;
-use framework_plan::resolver::{PlanResolver, PlanResolverState};
 
 pub(crate) async fn handle_analyze_schema(
     session: Arc<Session>,

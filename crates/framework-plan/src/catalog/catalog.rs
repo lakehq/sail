@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use crate::catalog::utils::match_pattern;
-use crate::catalog::{CatalogManager, SessionContextExt};
 use datafusion::catalog::CatalogProviderList;
 use datafusion_common::Result;
 use serde::{Deserialize, Serialize};
+
+use crate::catalog::utils::match_pattern;
+use crate::catalog::{CatalogManager, SessionContextExt};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct CatalogMetadata {

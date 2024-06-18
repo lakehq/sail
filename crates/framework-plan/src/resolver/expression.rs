@@ -1,12 +1,5 @@
 use std::sync::Arc;
 
-use crate::error::{PlanError, PlanResult};
-use crate::extension::function::alias::MultiAlias;
-use crate::function::{
-    get_built_in_aggregate_function, get_built_in_function, get_built_in_window_function,
-    is_built_in_generator_function,
-};
-use crate::resolver::{PlanResolver, PlanResolverState};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DFSchema, Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
@@ -21,6 +14,14 @@ use framework_python::cereal::partial_pyspark_udf::{
 };
 use framework_python::udf::pyspark_udf::PySparkUDF;
 use framework_python::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
+
+use crate::error::{PlanError, PlanResult};
+use crate::extension::function::alias::MultiAlias;
+use crate::function::{
+    get_built_in_aggregate_function, get_built_in_function, get_built_in_window_function,
+    is_built_in_generator_function,
+};
+use crate::resolver::{PlanResolver, PlanResolverState};
 
 impl PlanResolver<'_> {
     pub(crate) fn resolve_sort_order(
@@ -464,15 +465,17 @@ impl PlanResolver<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::PlanConfig;
-    use crate::error::PlanResult;
-    use crate::resolver::{PlanResolver, PlanResolverState};
+    use std::sync::Arc;
+
     use datafusion::prelude::SessionContext;
     use datafusion_common::{DFSchema, ScalarValue};
     use datafusion_expr::expr::{Alias, Expr};
     use datafusion_expr::{BinaryExpr, Operator};
     use framework_common::spec;
-    use std::sync::Arc;
+
+    use crate::config::PlanConfig;
+    use crate::error::PlanResult;
+    use crate::resolver::{PlanResolver, PlanResolverState};
 
     #[test]
     fn test_resolve_expression_with_alias() -> PlanResult<()> {

@@ -1,7 +1,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::extension::logical::Range;
 use datafusion::arrow::array::Int64Array;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
@@ -11,6 +10,8 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionMode, ExecutionPlan, PlanProperties};
 use datafusion_common::{exec_err, internal_err, Result};
 use tokio_stream;
+
+use crate::extension::logical::Range;
 
 const RANGE_BATCH_SIZE: usize = 1024;
 

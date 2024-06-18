@@ -1,8 +1,10 @@
-use crate::error::{PlanError, PlanResult};
+use std::collections::HashMap;
+
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::{expr, AggregateFunction};
 use lazy_static::lazy_static;
-use std::collections::HashMap;
+
+use crate::error::{PlanError, PlanResult};
 
 lazy_static! {
     static ref BUILT_IN_AGGREGATE_FUNCTIONS: HashMap<&'static str, AggregateFunctionDefinition> =

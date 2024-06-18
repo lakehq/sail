@@ -1,8 +1,10 @@
-use crate::formatter::{DefaultPlanFormatter, PlanFormatter};
-use framework_common::config::{ConfigKeyValue, SparkUdfConfig};
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
+
+use framework_common::config::{ConfigKeyValue, SparkUdfConfig};
+
+use crate::formatter::{DefaultPlanFormatter, PlanFormatter};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TimestampType {

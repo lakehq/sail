@@ -1,5 +1,34 @@
 # LakeSail
 
+## Getting Started
+
+### Prerequisites
+
+Please install the protocol buffer compiler (`protoc`) and the Rust toolchain (stable and nightly).
+
+### Building the Project
+
+Run the following commands to verify the code before committing changes.
+
+```bash
+cargo +nightly fmt
+cargo build
+cargo test
+```
+
+The code can be built and tested using the stable toolchain,
+while the nightly toolchain is required for formatting the code.
+
+Please make sure there are no warnings in the build or test output.
+The GitHub Actions workflow has the `RUSTFLAGS="-D warnings"` environment variable set to treat warnings as errors.
+
+If the test fails due to mismatched gold data, use the following command to update the gold data
+and commit the changes.
+
+```bash
+env FRAMEWORK_UPDATE_GOLD_DATA=1 cargo test
+```
+
 ## Development Notes
 
 ### Python Setup
