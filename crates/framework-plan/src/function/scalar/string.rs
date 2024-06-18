@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::functions;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, ScalarFunctionDefinition, ScalarUDF};
+use datafusion_expr::{expr, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::contains::Contains;
@@ -18,9 +18,9 @@ fn regexp_replace(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
         "g".to_string(),
     ))));
     Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-        func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
+        func: Arc::new(ScalarUDF::from(
             functions::regex::regexpreplace::RegexpReplaceFunc::new(),
-        ))),
+        )),
         args,
     }))
 }

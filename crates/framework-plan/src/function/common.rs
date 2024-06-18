@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use datafusion_expr::{
-    expr, BinaryExpr, Operator, ScalarFunctionDefinition, ScalarUDF, ScalarUDFImpl,
-};
+use datafusion_expr::{expr, BinaryExpr, Operator, ScalarUDF, ScalarUDFImpl};
 
 use crate::error::{PlanError, PlanResult};
 use crate::utils::ItemTaker;
@@ -81,10 +79,10 @@ impl FunctionBuilder {
     where
         F: ScalarUDFImpl + Send + Sync + 'static,
     {
-        let func_def = ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(f)));
+        let func = Arc::new(ScalarUDF::from(f));
         Arc::new(move |args| {
             Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func_def: func_def.clone(),
+                func: func.clone(),
                 args,
             }))
         })
@@ -97,9 +95,7 @@ impl FunctionBuilder {
     {
         Arc::new(move |args| {
             Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
-                    f(args.clone())?,
-                ))),
+                func: Arc::new(ScalarUDF::from(f(args.clone())?)),
                 args,
             }))
         })

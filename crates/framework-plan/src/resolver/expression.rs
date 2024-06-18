@@ -3,11 +3,9 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DFSchema, Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
+use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion_common::{Column, DataFusionError};
-use datafusion_expr::{
-    expr, window_frame, ExprSchemable, GetFieldAccess, GetIndexedField, ScalarFunctionDefinition,
-    ScalarUDF,
-};
+use datafusion_expr::{expr, window_frame, ExprSchemable, GetFieldAccess, ScalarUDF};
 use framework_common::spec;
 use framework_python::cereal::partial_pyspark_udf::{
     deserialize_partial_pyspark_udf, PartialPySparkUDF,
@@ -212,7 +210,7 @@ impl PlanResolver<'_> {
                         udf
                     };
                     expr::Expr::ScalarFunction(expr::ScalarFunction {
-                        func_def: ScalarFunctionDefinition::UDF(udf),
+                        func: udf,
                         args: arguments,
                     })
                 }
@@ -228,8 +226,7 @@ impl PlanResolver<'_> {
                     func
                 } else {
                     return Err(PlanError::unsupported(format!(
-                        "Expr::UnresolvedFunction Unknown Function: {}",
-                        function_name
+                        "unknown function: {function_name}",
                     )));
                 };
                 // TODO: udaf and udwf
@@ -277,9 +274,7 @@ impl PlanResolver<'_> {
                 } else {
                     let name: Vec<String> = name.into_iter().map(|x| x.into()).collect();
                     Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                        func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(
-                            MultiAlias::new(name),
-                        ))),
+                        func: Arc::new(ScalarUDF::from(MultiAlias::new(name))),
                         args: vec![expr],
                     }))
                 }
@@ -354,38 +349,14 @@ impl PlanResolver<'_> {
                 }))
             }
             Expr::UnresolvedExtractValue { child, extraction } => {
-                use spec::Literal;
-
                 let literal = match *extraction {
                     Expr::Literal(literal) => literal,
                     _ => {
                         return Err(PlanError::invalid("extraction must be a literal"));
                     }
                 };
-                let field = match literal {
-                    Literal::Byte(x) => GetFieldAccess::ListIndex {
-                        key: Box::new(expr::Expr::Literal(ScalarValue::Int64(Some(x as i64)))),
-                    },
-                    Literal::Short(x) => GetFieldAccess::ListIndex {
-                        key: Box::new(expr::Expr::Literal(ScalarValue::Int64(Some(x as i64)))),
-                    },
-                    Literal::Integer(x) => GetFieldAccess::ListIndex {
-                        key: Box::new(expr::Expr::Literal(ScalarValue::Int64(Some(x as i64)))),
-                    },
-                    Literal::Long(x) => GetFieldAccess::ListIndex {
-                        key: Box::new(expr::Expr::Literal(ScalarValue::Int64(Some(x)))),
-                    },
-                    Literal::String(s) => GetFieldAccess::NamedStructField {
-                        name: ScalarValue::Utf8(Some(s.clone())),
-                    },
-                    _ => {
-                        return Err(PlanError::invalid("invalid extraction value"));
-                    }
-                };
-                Ok(expr::Expr::GetIndexedField(GetIndexedField {
-                    expr: Box::new(self.resolve_expression(*child, schema, state)?),
-                    field,
-                }))
+                let expression = self.resolve_expression(*child, schema, state)?;
+                Ok(expression.field(self.resolve_literal(literal)?))
             }
             Expr::UpdateFields { .. } => Err(PlanError::todo("update fields")),
             Expr::UnresolvedNamedLambdaVariable(_) => {
@@ -450,7 +421,7 @@ impl PlanResolver<'_> {
                 );
 
                 Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                    func_def: ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::from(python_udf))),
+                    func: Arc::new(ScalarUDF::from(python_udf)),
                     args: arguments,
                 }))
             }

@@ -1,8 +1,10 @@
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion_common::DFSchemaRef;
+use datafusion_common::{DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+
+use crate::utils::ItemTaker;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct SortWithinPartitionsNode {
@@ -48,12 +50,11 @@ impl UserDefinedLogicalNodeCore for SortWithinPartitionsNode {
         Ok(())
     }
 
-    fn from_template(&self, exprs: &[Expr], input: &[LogicalPlan]) -> Self {
-        assert_eq!(input.len(), 1);
-        Self {
-            input: Arc::new(input[0].clone()),
-            expr: exprs.to_vec(),
+    fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
+        Ok(Self {
+            input: Arc::new(inputs.one()?),
+            expr: exprs,
             fetch: self.fetch,
-        }
+        })
     }
 }

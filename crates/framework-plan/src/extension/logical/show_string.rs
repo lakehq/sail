@@ -10,6 +10,8 @@ use comfy_table::{Cell, CellAlignment, ColumnConstraint, Table, Width};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 
+use crate::utils::ItemTaker;
+
 fn escape_meta_characters(s: &str) -> String {
     s.replace('\n', "\\\\n")
         .replace('\r', "\\\\r")
@@ -268,13 +270,13 @@ impl UserDefinedLogicalNodeCore for ShowStringNode {
         write!(f, "ShowString")
     }
 
-    fn from_template(&self, _: &[Expr], input: &[LogicalPlan]) -> Self {
-        assert_eq!(input.len(), 1);
-        Self {
-            input: Arc::new(input[0].clone()),
+    fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
+        exprs.zero()?;
+        Ok(Self {
+            input: Arc::new(inputs.one()?),
             limit: self.limit,
             format: self.format.clone(),
             schema: self.schema.clone(),
-        }
+        })
     }
 }

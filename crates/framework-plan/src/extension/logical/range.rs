@@ -7,6 +7,8 @@ use datafusion::common::{DFSchema, DFSchemaRef, Result};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion_common::plan_err;
 
+use crate::utils::ItemTaker;
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct Range {
     pub start: i64,
@@ -127,7 +129,9 @@ impl UserDefinedLogicalNodeCore for RangeNode {
         )
     }
 
-    fn from_template(&self, _: &[Expr], _: &[LogicalPlan]) -> Self {
-        self.clone()
+    fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
+        exprs.zero()?;
+        inputs.zero()?;
+        Ok(self.clone())
     }
 }

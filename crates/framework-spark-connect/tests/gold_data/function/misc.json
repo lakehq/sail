@@ -657,7 +657,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: hll_sketch_agg"
       }
     },
     {
@@ -679,7 +679,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: hll_sketch_agg"
       }
     },
     {
