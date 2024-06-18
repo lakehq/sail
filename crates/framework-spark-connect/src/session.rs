@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use framework_common::config::{ConfigKeyValue, SparkUdfConfig, TimestampType};
-use framework_plan::config::PlanConfig;
+use framework_common::config::{ConfigKeyValue, SparkUdfConfig};
+use framework_plan::config::{PlanConfig, TimestampType};
 use framework_plan::function::BUILT_IN_FUNCTIONS;
 
 use crate::config::{ConfigKeyValueList, SparkRuntimeConfig};

@@ -1,10 +1,16 @@
 use crate::error::{PlanError, PlanResult};
-use framework_common::config::{ConfigKeyValue, SparkUdfConfig, TimestampType};
+use framework_common::config::{ConfigKeyValue, SparkUdfConfig};
 use framework_common::object::DynObject;
 use framework_common::{impl_dyn_object_traits, spec};
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TimestampType {
+    TimestampLtz,
+    TimestampNtz,
+}
 
 pub trait DataTypeFormatter: DynObject + Debug + Send + Sync {
     fn to_simple_string(&self, data_type: spec::DataType) -> PlanResult<String>;

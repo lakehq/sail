@@ -2,12 +2,6 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TimestampType {
-    TimestampLtz,
-    TimestampNtz,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConfigKeyValue {
     pub key: String,
     pub value: Option<String>,
