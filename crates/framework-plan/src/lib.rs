@@ -9,7 +9,7 @@ mod catalog;
 pub mod config;
 pub mod error;
 mod extension;
-mod function;
+pub mod function;
 pub mod resolver;
 
 /// Execute a logical plan.

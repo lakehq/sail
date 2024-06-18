@@ -1,4 +1,5 @@
 use crate::error::{PlanError, PlanResult};
+use framework_common::config::{ConfigKeyValue, SparkUdfConfig};
 use framework_common::object::DynObject;
 use framework_common::{impl_dyn_object_traits, spec};
 use std::fmt::Debug;
@@ -36,6 +37,9 @@ pub struct PlanConfig<F: ?Sized = dyn DataTypeFormatter> {
     pub timestamp_type: TimestampType,
     /// The data type formatter.
     pub data_type_formatter: Arc<F>,
+    // TODO: Revisit how to handle spark_udf_config
+    //  https://github.com/lakehq/framework/pull/53#discussion_r1643683600
+    pub spark_udf_config: SparkUdfConfig,
 }
 
 impl Default for PlanConfig {
@@ -44,6 +48,29 @@ impl Default for PlanConfig {
             time_zone: "UTC".to_string(),
             timestamp_type: TimestampType::TimestampLtz,
             data_type_formatter: Arc::new(DefaultDataTypeFormatter),
+            spark_udf_config: SparkUdfConfig {
+                timezone: ConfigKeyValue {
+                    key: "spark.sql.session.timeZone".to_string(),
+                    value: Some("UTC".to_string()),
+                },
+                pandas_window_bound_types: ConfigKeyValue {
+                    key: "pandas_window_bound_types".to_string(),
+                    value: None,
+                },
+                pandas_grouped_map_assign_columns_by_name: ConfigKeyValue {
+                    key: "spark.sql.legacy.execution.pandas.groupedMap.assignColumnsByName"
+                        .to_string(),
+                    value: None,
+                },
+                pandas_convert_to_arrow_array_safely: ConfigKeyValue {
+                    key: "spark.sql.execution.pandas.convertToArrowArraySafely".to_string(),
+                    value: None,
+                },
+                arrow_max_records_per_batch: ConfigKeyValue {
+                    key: "spark.sql.execution.arrow.maxRecordsPerBatch".to_string(),
+                    value: None,
+                },
+            },
         }
     }
 }

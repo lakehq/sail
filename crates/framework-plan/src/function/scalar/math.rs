@@ -82,9 +82,9 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("pow", F::binary(expr_fn::power)),
         ("power", F::binary(expr_fn::power)),
         ("radians", F::unary(expr_fn::radians)),
-        ("rand", F::unknown("rand")),
+        ("rand", F::nullary(expr_fn::random)), // TODO: Support random(seed)
         ("randn", F::unknown("randn")),
-        ("random", F::unknown("random")),
+        ("random", F::nullary(expr_fn::random)), // TODO: Support random(seed)
         ("rint", F::unknown("rint")),
         ("round", F::var_arg(expr_fn::round)),
         ("sec", F::unknown("sec")),

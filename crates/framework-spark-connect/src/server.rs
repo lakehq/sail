@@ -85,7 +85,7 @@ impl SparkConnectService for SparkConnectServer {
                 let command = command.required("command")?;
                 match command {
                     CommandType::RegisterFunction(udf) => {
-                        service::handle_execute_register_function(session, udf).await?
+                        service::handle_execute_register_function(session, udf, metadata).await?
                     }
                     CommandType::WriteOperation(write) => {
                         service::handle_execute_write_operation(session, write, metadata).await?

@@ -8,12 +8,18 @@ use crate::function::{
 use crate::resolver::PlanResolver;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DFSchema, Result, ScalarValue};
+use datafusion::execution::FunctionRegistry;
 use datafusion_common::{Column, DataFusionError};
 use datafusion_expr::{
     expr, window_frame, ExprSchemable, GetFieldAccess, GetIndexedField, ScalarFunctionDefinition,
     ScalarUDF,
 };
 use framework_common::spec;
+use framework_python::cereal::partial_pyspark_udf::{
+    deserialize_partial_pyspark_udf, PartialPySparkUDF,
+};
+use framework_python::udf::pyspark_udf::PySparkUDF;
+use framework_python::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
 impl PlanResolver<'_> {
     pub(crate) fn resolve_sort_order(
@@ -99,7 +105,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub(crate) fn resolve_expression(
+    pub fn resolve_expression(
         &self,
         expr: spec::Expr,
         schema: &DFSchema,
@@ -122,23 +128,96 @@ impl PlanResolver<'_> {
                 function_name,
                 arguments,
                 is_distinct,
-                is_user_defined_function,
+                is_user_defined_function: _, // FIXME: is_user_defined_function is always false.
             } => {
-                if is_user_defined_function {
-                    return Err(PlanError::unsupported("user defined function"));
-                }
-
-                let args = arguments
+                let arguments = arguments
                     .into_iter()
                     .map(|x| self.resolve_expression(x, schema))
-                    .collect::<PlanResult<Vec<_>>>()?;
-                let func = match get_built_in_function(function_name.as_str()) {
-                    Ok(func) => func(args)?,
-                    Err(_) => {
-                        get_built_in_aggregate_function(function_name.as_str(), args, is_distinct)?
-                    }
-                };
-                Ok(func)
+                    .collect::<PlanResult<Vec<expr::Expr>>>()?;
+                let input_types: Vec<DataType> = arguments
+                    .iter()
+                    .map(|arg| arg.get_type(schema))
+                    .collect::<Result<Vec<DataType>, DataFusionError>>(
+                )?;
+
+                if let Ok(func) = self.ctx.udf(function_name.as_str()) {
+                    // TODO: UnresolvedPythonUDF will likely need to be accounted for as well
+                    //  once we integrate LakeSail Python UDF.
+                    let func = match func.inner().as_any().downcast_ref::<UnresolvedPySparkUDF>() {
+                        Some(f) => {
+                            let deterministic = f.deterministic()?;
+                            let function_definition = f.python_function_definition()?;
+                            let (output_type, eval_type, command, python_version) =
+                                match &function_definition {
+                                    spec::FunctionDefinition::PythonUdf {
+                                        output_type,
+                                        eval_type,
+                                        command,
+                                        python_version,
+                                    } => (output_type, eval_type, command, python_version),
+                                    _ => {
+                                        return Err(PlanError::invalid(
+                                            "UDF function type must be Python UDF",
+                                        ));
+                                    }
+                                };
+                            let output_type: DataType =
+                                self.resolve_data_type(output_type.clone())?;
+
+                            let python_function: PartialPySparkUDF =
+                                deserialize_partial_pyspark_udf(
+                                    &python_version,
+                                    &command,
+                                    &eval_type,
+                                    &(arguments.len() as i32),
+                                    &self.config.spark_udf_config,
+                                )
+                                .map_err(|e| {
+                                    PlanError::invalid(format!(
+                                        "Python UDF deserialization error: {:?}",
+                                        e
+                                    ))
+                                })?;
+
+                            let python_udf: PySparkUDF = PySparkUDF::new(
+                                function_name.to_owned(),
+                                deterministic,
+                                input_types,
+                                eval_type.clone(),
+                                python_function,
+                                output_type,
+                            );
+
+                            Arc::new(ScalarUDF::from(python_udf))
+                        }
+                        None => func,
+                    };
+
+                    return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                        func_def: ScalarFunctionDefinition::UDF(func),
+                        args: arguments,
+                    }));
+                }
+
+                // TODO: udaf and udwf
+
+                // FIXME: is_user_defined_function is always false
+                //  So, we need to check udf's before built-in functions.
+                if let Ok(func) = get_built_in_function(function_name.as_str()) {
+                    return Ok(func(arguments.clone())?);
+                }
+                if let Ok(func) = get_built_in_aggregate_function(
+                    function_name.as_str(),
+                    arguments.clone(),
+                    is_distinct,
+                ) {
+                    return Ok(func);
+                }
+
+                return Err(PlanError::unsupported(format!(
+                    "Expr::UnresolvedFunction Unknown Function: {}",
+                    function_name
+                )));
             }
             Expr::UnresolvedStar { target } => {
                 // FIXME: column reference is parsed as qualifier
@@ -289,7 +368,6 @@ impl PlanResolver<'_> {
                     deserialize_partial_pyspark_udf, PartialPySparkUDF,
                 };
                 use framework_python::udf::pyspark_udf::PySparkUDF;
-                use pyo3::prelude::*;
 
                 let spec::CommonInlineUserDefinedFunction {
                     function_name,
@@ -322,19 +400,12 @@ impl PlanResolver<'_> {
                 };
                 let output_type = self.resolve_data_type(output_type)?;
 
-                let pyo3_python_version: String = Python::with_gil(|py| py.version().to_string());
-                if !pyo3_python_version.starts_with(python_version.as_str()) {
-                    return Err(PlanError::invalid(format!(
-                        "Python version mismatch. Version used to compile the UDF must match the version used to run the UDF. Version used to compile the UDF: {:?}. Version used to run the UDF: {:?}",
-                        python_version,
-                        pyo3_python_version,
-                    )));
-                }
-
                 let python_function: PartialPySparkUDF = deserialize_partial_pyspark_udf(
+                    &python_version,
                     &command,
                     &eval_type,
                     &(arguments.len() as i32),
+                    &self.config.spark_udf_config,
                 )
                 .map_err(|e| {
                     PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
