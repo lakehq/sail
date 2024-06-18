@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::functions_aggregate::{covariance, first_last, median, variance};
+use datafusion::functions_aggregate::{covariance, first_last, median, sum, variance};
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::{expr, AggregateFunction, AggregateUDF};
 use lazy_static::lazy_static;
@@ -89,7 +89,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggregateFunctionDe
         ("stddev", F::agg(AggregateFunction::Stddev)),
         ("stddev_pop", F::agg(AggregateFunction::StddevPop)),
         ("stddev_samp", F::agg(AggregateFunction::Stddev)),
-        ("sum", F::agg(AggregateFunction::Sum)),
+        ("sum", F::udaf(sum::sum_udaf())),
         ("try_avg", F::unknown("try_avg")),
         ("try_sum", F::unknown("try_sum")),
         ("var_pop", F::agg(AggregateFunction::VariancePop)),
