@@ -113,6 +113,7 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "arrow-string",
+ "pyo3",
 ]
 
 [[package]]
@@ -868,6 +869,7 @@ dependencies = [
  "num_cpus",
  "object_store",
  "parquet",
+ "pyo3",
  "sqlparser 0.47.0",
 ]
 

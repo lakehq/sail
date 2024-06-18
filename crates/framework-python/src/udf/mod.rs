@@ -4,6 +4,7 @@ pub mod python_udf;
 pub mod unresolved_pyspark_udf;
 
 use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::pyarrow::ToPyArrow;
 use datafusion::common::Result;
 use datafusion_common::DataFusionError;
 use pyo3::prelude::*;
@@ -11,7 +12,6 @@ use pyo3::types::PyDict;
 
 use crate::cereal::partial_pyspark_udf::PartialPySparkUDF;
 use crate::cereal::partial_python_udf::PartialPythonUDF;
-use crate::pyarrow::ToPyArrow;
 
 pub trait PythonFunction {
     fn get_inner<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny>;

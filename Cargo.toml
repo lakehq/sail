@@ -55,15 +55,15 @@ ryu = "1.0.18"
 #
 # The versions of the following dependencies are managed manually.
 #
-datafusion = { version = "39.0.0", features = ["serde"] }
-datafusion-common = { version = "39.0.0", features = ["object_store"] }
+datafusion = { version = "39.0.0", features = ["serde", "pyarrow"] }
+datafusion-common = { version = "39.0.0", features = ["object_store", "pyarrow"] }
 datafusion-expr = "39.0.0"
 datafusion-functions-array = "39.0.0"
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 # 0.21 breaks when datafusion has pyarrow enabled
 pyo3 = { version = "0.21.2", features = ["auto-initialize", "serde"] }
 # Should be the equivalent of enabling the pyarrow feature in datafusion since we already have pyo3 in the workspace
-arrow = { version = "52.0.0", features = ["ffi"] }
+arrow = { version = "52.0.0", features = ["ffi", "pyarrow"] }
 arrow-cast = { version = "52.0.0" }
 # We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.
 sqlparser = { version = "0.46.0", features = ["serde", "visitor"] }

@@ -8,7 +8,6 @@ use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use datafusion::arrow::array::ArrayData;
 use datafusion::arrow::datatypes as adt;
 use framework_common::error::CommonError;
-use framework_common::spec;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::import_exception;
 use pyo3::prelude::*;
@@ -48,9 +47,8 @@ fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
 #[allow(clippy::diverging_sub_expression)]
 fn pyarrow_bound_and_datatype_to_array_data(
     pyarrow_array: &Bound<PyAny>,
-    data_type: spec::DataType,
+    data_type: adt::DataType,
 ) -> PyResult<ArrayData> {
-    let adt_data_type: adt::DataType = todo!("convert data type using the plan resolver");
     if !pyarrow_array.hasattr("__arrow_c_array__")? {
         return Err(PyTypeError::new_err(
             "The provided PyObject does not have the '__arrow_c_array__' attribute.",
@@ -74,7 +72,7 @@ fn pyarrow_bound_and_datatype_to_array_data(
 
     let _schema_ptr = unsafe { schema_capsule.reference::<FFI_ArrowSchema>() };
     let array = unsafe { FFI_ArrowArray::from_raw(array_capsule.pointer() as _) };
-    unsafe { ffi::from_ffi_and_data_type(array, adt_data_type) }.map_err(arrow_to_py_err)
+    unsafe { ffi::from_ffi_and_data_type(array, data_type) }.map_err(arrow_to_py_err)
 }
 
 #[allow(dead_code)]
