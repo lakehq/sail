@@ -57,7 +57,7 @@ impl SparkError {
         SparkError::InvalidArgument(message.into())
     }
 
-    pub fn send<T>(message: impl Into<String>) -> Self {
+    pub fn send(message: impl Into<String>) -> Self {
         SparkError::SendError(message.into())
     }
 
@@ -148,6 +148,7 @@ where
     }
 }
 
+#[allow(clippy::enum_variant_names)]
 enum SparkThrowable {
     ParseException(String),
     AnalysisException(String),

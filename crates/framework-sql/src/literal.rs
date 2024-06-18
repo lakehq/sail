@@ -300,7 +300,7 @@ impl TryFrom<LiteralValue<Signed<ast::Interval>>> for spec::Literal {
                         let negated = v.1 ^ negated;
                         parse_unqualified_interval_string(s, negated)
                     }
-                    _ => return Err(error()),
+                    _ => Err(error()),
                 }
             }
             Interval::MultiUnit { values } => {
@@ -575,7 +575,7 @@ pub fn parse_decimal_string(s: &str) -> SqlResult<spec::Decimal> {
     };
     let (scale, padding) = {
         let scale = f.checked_sub(e).ok_or_else(error)?;
-        if scale < -SQL_DECIMAL_MAX_SCALE || scale > SQL_DECIMAL_MAX_SCALE {
+        if !(-SQL_DECIMAL_MAX_SCALE..=SQL_DECIMAL_MAX_SCALE).contains(&scale) {
             return Err(error());
         }
         if scale < 0 {
@@ -611,7 +611,7 @@ pub fn parse_date_string(s: &str) -> SqlResult<spec::Literal> {
     let day = extract_match(&captures, "day", error)?.unwrap_or(1);
     let date = chrono::NaiveDate::from_ymd_opt(year, month, day)
         .ok_or_else(|| SqlError::invalid(format!("date: {s}")))?;
-    Ok(spec::Literal::try_from(LiteralValue(date))?)
+    spec::Literal::try_from(LiteralValue(date))
 }
 
 pub fn parse_timestamp_string(s: &str) -> SqlResult<spec::Literal> {
@@ -630,7 +630,7 @@ pub fn parse_timestamp_string(s: &str) -> SqlResult<spec::Literal> {
         .and_then(|d| d.and_hms_opt(hour, minute, second))
         .and_then(|d| d.checked_add_signed(chrono::Duration::microseconds(fraction)))
         .ok_or_else(error)?;
-    Ok(spec::Literal::try_from(LiteralValue((dt, tz)))?)
+    spec::Literal::try_from(LiteralValue((dt, tz)))
 }
 
 #[derive(Debug)]
@@ -651,7 +651,7 @@ impl TimeZoneVariant {
         O: chrono::Offset,
     {
         let dt = tz
-            .from_local_datetime(&dt)
+            .from_local_datetime(dt)
             .single()
             .ok_or_else(|| SqlError::invalid(format!("datetime: {:?} {:?}", dt, tz)))?;
         Ok(dt - chrono::DateTime::UNIX_EPOCH.with_timezone(tz))

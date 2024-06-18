@@ -340,7 +340,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                     num_partitions,
                 } = range;
                 let num_partitions = num_partitions
-                    .map(|x| usize::try_from(x))
+                    .map(usize::try_from)
                     .transpose()
                     .required("range num partitions")?;
                 Ok(spec::PlanNode::Range {
@@ -506,7 +506,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                             .collect::<SparkResult<Vec<_>>>()
                     })
                     .transpose()?
-                    .unwrap_or_else(|| vec![]);
+                    .unwrap_or_else(Vec::new);
                 Ok(spec::PlanNode::Unpivot {
                     input: Box::new((*input).try_into()?),
                     ids,
@@ -538,7 +538,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                     .map(|x| x.try_into())
                     .collect::<SparkResult<Vec<_>>>()?;
                 let num_partitions = num_partitions
-                    .map(|x| usize::try_from(x))
+                    .map(usize::try_from)
                     .transpose()
                     .required("repartition by expression num partitions")?;
                 Ok(spec::PlanNode::RepartitionByExpression {
@@ -785,7 +785,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                 let input = input.required("drop na input")?;
                 let columns = cols.into_iter().map(|x| x.into()).collect();
                 let min_non_nulls = min_non_nulls
-                    .map(|x| usize::try_from(x))
+                    .map(usize::try_from)
                     .transpose()
                     .required("drop na min non nulls")?;
                 Ok(spec::PlanNode::DropNa {
@@ -931,8 +931,8 @@ impl TryFrom<RelType> for spec::PlanNode {
                 })
             }
             RelType::Catalog(catalog) => catalog.try_into(),
-            RelType::Extension(_) => return Err(SparkError::unsupported("extension relation")),
-            RelType::Unknown(_) => return Err(SparkError::unsupported("unknown relation")),
+            RelType::Extension(_) => Err(SparkError::unsupported("extension relation")),
+            RelType::Unknown(_) => Err(SparkError::unsupported("unknown relation")),
         }
     }
 }
@@ -1185,7 +1185,7 @@ mod tests {
                     root: parse_sql_statement(&sql)?,
                 })
             },
-            |e| SparkError::internal(e),
+            SparkError::internal,
         )
     }
 }

@@ -61,7 +61,7 @@ impl Session {
         Self {
             user_id,
             session_id,
-            context: context,
+            context,
             state: Mutex::new(SparkSessionState::new()),
         }
     }
@@ -123,7 +123,7 @@ impl Session {
             },
         };
         Ok(Arc::new(PlanConfig {
-            time_zone: time_zone,
+            time_zone,
             // TODO: get the default timestamp type from configuration
             timestamp_type: TimestampType::TimestampLtz,
             plan_formatter: Arc::new(DefaultPlanFormatter),

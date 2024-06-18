@@ -63,8 +63,8 @@ impl Stream for ExecutePlanResponseStream {
         Pin::new(&mut self.inner).poll_next(cx).map(|poll| {
             poll.map(|item| {
                 let mut response = ExecutePlanResponse::default();
-                response.session_id = self.session_id.clone();
-                response.operation_id = self.operation_id.clone();
+                response.session_id.clone_from(&self.session_id);
+                response.operation_id.clone_from(&self.operation_id.clone());
                 response.response_id = item.id;
                 match item.batch {
                     ExecutorBatch::ArrowBatch(batch) => {
@@ -188,7 +188,7 @@ pub(crate) async fn handle_execute_write_operation(
     if !write.partitioning_columns.is_empty() {
         return Err(SparkError::unsupported("partitioning columns"));
     }
-    if let Some(_) = write.bucket_by {
+    if write.bucket_by.is_some() {
         return Err(SparkError::unsupported("bucketing"));
     }
 
@@ -202,7 +202,7 @@ pub(crate) async fn handle_execute_write_operation(
     let plan = match write.save_type.required("save type")? {
         SaveType::Path(path) => {
             // always write multi-file output
-            let path = if path.ends_with("/") {
+            let path = if path.ends_with('/') {
                 path
             } else {
                 format!("{}/", path)
@@ -239,9 +239,9 @@ pub(crate) async fn handle_execute_write_operation(
                 write.options,
                 write.partitioning_columns,
             )
-            .or_else(|e| Err(SparkError::from(e)))?
+            .map_err(SparkError::from)?
             .build()
-            .or_else(|e| Err(SparkError::from(e)))?
+            .map_err(SparkError::from)?
         }
         SaveType::Table(save) => {
             let table_name = save.table_name.as_str();
@@ -257,14 +257,11 @@ pub(crate) async fn handle_execute_write_operation(
                 }
                 TableSaveMethod::InsertInto => {
                     let arrow_schema = ArrowSchema::from(df.schema());
-                    let overwrite = match save_mode {
-                        SaveMode::Overwrite => true,
-                        _ => false,
-                    };
+                    let overwrite = save_mode == SaveMode::Overwrite;
                     LogicalPlanBuilder::insert_into(plan, table_ref, &arrow_schema, overwrite)
-                        .or_else(|e| Err(SparkError::from(e)))?
+                        .map_err(SparkError::from)?
                         .build()
-                        .or_else(|e| Err(SparkError::from(e)))?
+                        .map_err(SparkError::from)?
                 }
                 _ => {
                     return Err(SparkError::invalid(format!(
@@ -390,7 +387,7 @@ pub(crate) async fn handle_interrupt_operation_id(
     operation_id: String,
 ) -> SparkResult<Vec<String>> {
     let executor = session.remove_executor(operation_id.as_str())?;
-    if let Some(_) = executor {
+    if executor.is_some() {
         Ok(vec![operation_id])
     } else {
         Ok(vec![])

@@ -186,7 +186,7 @@ impl TreeNodeRewriter for ExplodeRewriter {
                     "multi-output explode cannot appear in nested expression".to_string(),
                 ));
             }
-            return Ok(Transformed::yes(nodes[0].clone()));
+            Ok(Transformed::yes(nodes[0].clone()))
         }
     }
 }

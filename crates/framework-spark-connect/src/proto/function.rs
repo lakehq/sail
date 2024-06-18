@@ -61,7 +61,7 @@ mod tests {
                     Err(x) => Err(x),
                 }
             },
-            |e| SparkError::internal(e),
+            SparkError::internal,
         )?)
     }
 }

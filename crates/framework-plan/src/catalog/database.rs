@@ -27,9 +27,8 @@ impl DatabaseMetadata {
 
 impl<'a> CatalogManager<'a> {
     pub(crate) fn default_database(&self) -> Result<String> {
-        Ok(self
-            .ctx
-            .read_state(|state| Ok(state.config().options().catalog.default_schema.clone()))?)
+        self.ctx
+            .read_state(|state| Ok(state.config().options().catalog.default_schema.clone()))
     }
 
     pub(crate) fn set_default_database(&self, database_name: String) -> Result<()> {

@@ -21,7 +21,7 @@ pub fn parse_data_type(sql: &str) -> SqlResult<spec::DataType> {
     }
     let data_type = parser.parse_data_type()?;
     fail_on_extra_token(&mut parser, "data type")?;
-    Ok(from_ast_data_type(&data_type)?)
+    from_ast_data_type(&data_type)
 }
 
 fn from_ast_char_length(length: &Option<ast::CharacterLength>) -> SqlResult<u32> {
@@ -36,7 +36,7 @@ fn from_ast_char_length(length: &Option<ast::CharacterLength>) -> SqlResult<u32>
                 .map_err(|_| SqlError::invalid("char length"))?;
             Ok(length)
         }
-        ast::CharacterLength::Max => return Err(SqlError::unsupported("char length max")),
+        ast::CharacterLength::Max => Err(SqlError::unsupported("char length max")),
     }
 }
 
@@ -44,11 +44,9 @@ fn from_ast_year_month_interval_field(field: &ast::DateTimeField) -> SqlResult<i
     match field {
         DateTimeField::Year => Ok(0),
         DateTimeField::Month => Ok(1),
-        _ => {
-            return Err(SqlError::unsupported(format!(
-                "year month interval field: {field:?}"
-            )))
-        }
+        _ => Err(SqlError::unsupported(format!(
+            "year month interval field: {field:?}"
+        ))),
     }
 }
 
@@ -58,11 +56,9 @@ fn from_ast_date_time_interval_field(field: &ast::DateTimeField) -> SqlResult<i3
         DateTimeField::Hour => Ok(1),
         DateTimeField::Minute => Ok(2),
         DateTimeField::Second => Ok(3),
-        _ => {
-            return Err(SqlError::unsupported(format!(
-                "date time interval field: {field:?}"
-            )))
-        }
+        _ => Err(SqlError::unsupported(format!(
+            "date time interval field: {field:?}"
+        ))),
     }
 }
 

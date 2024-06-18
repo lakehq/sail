@@ -188,7 +188,7 @@ fn from_ast_value(value: ast::Value) -> SqlResult<spec::Expr> {
         | Value::TripleSingleQuotedRawStringLiteral(_)
         | Value::TripleDoubleQuotedRawStringLiteral(_)
         | Value::NationalStringLiteral(_) => {
-            return Err(SqlError::unsupported(format!("value: {:?}", value)))
+            Err(SqlError::unsupported(format!("value: {:?}", value)))
         }
     }
 }
@@ -587,7 +587,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                             .map(from_ast_order_by)
                             .collect::<SqlResult<Vec<_>>>()?;
                         let frame_spec = window_frame
-                            .map(|f| -> SqlResult<_> { Ok(from_ast_window_frame(f)?) })
+                            .map(|f| -> SqlResult<_> { from_ast_window_frame(f) })
                             .transpose()?;
                         Ok(spec::Expr::Window {
                             window_function: Box::new(function),
@@ -597,7 +597,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                         })
                     }
                     WindowType::NamedWindow(_) => {
-                        return Err(SqlError::unsupported("named window function"))
+                        Err(SqlError::unsupported("named window function"))
                     }
                 }
             } else {
@@ -753,7 +753,7 @@ pub fn parse_expression(sql: &str) -> SqlResult<spec::Expr> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
     let expr = parser.parse_expr()?;
     fail_on_extra_token(&mut parser, "expression")?;
-    Ok(from_ast_expression(expr)?)
+    from_ast_expression(expr)
 }
 
 pub fn parse_wildcard_expression(sql: &str) -> SqlResult<spec::Expr> {

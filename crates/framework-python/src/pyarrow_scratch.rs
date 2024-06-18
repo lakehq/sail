@@ -45,6 +45,7 @@ fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
 }
 
 #[allow(unreachable_code, dead_code, unused_variables)]
+#[allow(clippy::diverging_sub_expression)]
 fn pyarrow_bound_and_datatype_to_array_data(
     pyarrow_array: &Bound<PyAny>,
     data_type: spec::DataType,
@@ -73,7 +74,7 @@ fn pyarrow_bound_and_datatype_to_array_data(
 
     let _schema_ptr = unsafe { schema_capsule.reference::<FFI_ArrowSchema>() };
     let array = unsafe { FFI_ArrowArray::from_raw(array_capsule.pointer() as _) };
-    return unsafe { ffi::from_ffi_and_data_type(array, adt_data_type) }.map_err(arrow_to_py_err);
+    unsafe { ffi::from_ffi_and_data_type(array, adt_data_type) }.map_err(arrow_to_py_err)
 }
 
 #[allow(dead_code)]
@@ -92,5 +93,5 @@ fn from_pyspark_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<ArrayData> {
 
     let schema_ptr = unsafe { schema_capsule.reference::<FFI_ArrowSchema>() };
     let array = unsafe { FFI_ArrowArray::from_raw(array_capsule.pointer() as _) };
-    return unsafe { ffi::from_ffi(array, schema_ptr) }.map_err(arrow_to_py_err);
+    unsafe { ffi::from_ffi(array, schema_ptr) }.map_err(arrow_to_py_err)
 }

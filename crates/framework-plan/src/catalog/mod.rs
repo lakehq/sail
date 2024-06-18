@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::PlanConfig;
 
+#[allow(clippy::module_inception)]
 pub(crate) mod catalog;
 pub(crate) mod column;
 pub(crate) mod database;

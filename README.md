@@ -12,6 +12,7 @@ Run the following commands to verify the code before committing changes.
 
 ```bash
 cargo +nightly fmt
+cargo clippy --all-targets --all-features
 cargo build
 cargo test
 ```
@@ -19,8 +20,9 @@ cargo test
 The code can be built and tested using the stable toolchain,
 while the nightly toolchain is required for formatting the code.
 
-Please make sure there are no warnings in the build or test output.
-The GitHub Actions workflow has the `RUSTFLAGS="-D warnings"` environment variable set to treat warnings as errors.
+Please make sure there are no warnings in the output.
+The GitHub Actions workflow runs `cargo clippy` with the `-D warnings` option,
+so that the build will fail if there are any warnings from either the compiler or the linter.
 
 If the test fails due to mismatched gold data, use the following command to update the gold data
 and commit the changes.

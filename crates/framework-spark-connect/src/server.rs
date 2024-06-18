@@ -38,12 +38,11 @@ impl Default for SparkConnectServer {
 }
 
 fn is_reattachable(request_options: &[sc::execute_plan_request::RequestOption]) -> bool {
+    use sc::execute_plan_request::request_option::RequestOption;
+
     for item in request_options {
-        match &item.request_option {
-            Some(sc::execute_plan_request::request_option::RequestOption::ReattachOptions(v)) => {
-                return v.reattachable;
-            }
-            _ => {}
+        if let Some(RequestOption::ReattachOptions(v)) = &item.request_option {
+            return v.reattachable;
         }
     }
     false

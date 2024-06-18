@@ -38,11 +38,9 @@ runs:
           target/**/.fingerprint/
         key: setup-rust-${{ runner.os }}-${{ steps.versions.outputs.rust_release }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
 
-    # 1. Incremental compilation is not beneficial for CI builds.
-    #    So we turn it off to speed up the build and reduce the cache size.
-    # 2. We set the compiler flags to treat warnings as errors by default.
+    # Incremental compilation is not beneficial for CI builds.
+    # So we turn it off to speed up the build and reduce the cache size.
     - name: Set environment variables
       run: |
         echo CARGO_INCREMENTAL=0 >> "$GITHUB_ENV"
-        echo RUSTFLAGS="-D warnings" >> "$GITHUB_ENV"
       shell: bash

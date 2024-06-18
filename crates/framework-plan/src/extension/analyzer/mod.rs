@@ -14,6 +14,6 @@ fn expr_to_udf(expr: &Expr) -> Option<(&Arc<ScalarUDF>, &Vec<Expr>)> {
             func_def: ScalarFunctionDefinition::UDF(udf),
             args,
         }) => Some((udf, args)),
-        _ => return None,
+        _ => None,
     }
 }

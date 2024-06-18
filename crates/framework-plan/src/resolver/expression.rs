@@ -188,9 +188,9 @@ impl PlanResolver<'_> {
                         let output_type: DataType = self.resolve_data_type(output_type.clone())?;
 
                         let python_function: PartialPySparkUDF = deserialize_partial_pyspark_udf(
-                            &python_version,
-                            &command,
-                            &eval_type,
+                            python_version,
+                            command,
+                            eval_type,
                             &(arguments.len() as i32),
                             &self.config.spark_udf_config,
                         )
@@ -202,7 +202,7 @@ impl PlanResolver<'_> {
                             function_name.to_owned(),
                             deterministic,
                             input_types,
-                            eval_type.clone(),
+                            *eval_type,
                             python_function,
                             output_type,
                         );

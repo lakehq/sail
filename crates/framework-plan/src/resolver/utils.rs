@@ -23,9 +23,9 @@ pub(crate) fn cast_record_batch(batch: RecordBatch, schema: SchemaRef) -> Result
 
 pub(crate) fn read_record_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>> {
     let cursor = Cursor::new(data);
-    let mut reader = StreamReader::try_new(cursor, None)?;
+    let reader = StreamReader::try_new(cursor, None)?;
     let mut batches = Vec::new();
-    while let Some(batch) = reader.next() {
+    for batch in reader {
         batches.push(batch?);
     }
     Ok(batches)

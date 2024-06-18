@@ -124,10 +124,10 @@ impl TryFrom<DataType> for spec::DataType {
                 type_variation_reference: _,
             }) => {
                 let start_field = start_field
-                    .map(|f| spec::YearMonthIntervalField::try_from(f))
+                    .map(spec::YearMonthIntervalField::try_from)
                     .transpose()?;
                 let end_field = end_field
-                    .map(|f| spec::YearMonthIntervalField::try_from(f))
+                    .map(spec::YearMonthIntervalField::try_from)
                     .transpose()?;
                 Ok(spec::DataType::YearMonthInterval {
                     start_field,
@@ -140,10 +140,10 @@ impl TryFrom<DataType> for spec::DataType {
                 type_variation_reference: _,
             }) => {
                 let start_field = start_field
-                    .map(|f| spec::DayTimeIntervalField::try_from(f))
+                    .map(spec::DayTimeIntervalField::try_from)
                     .transpose()?;
                 let end_field = end_field
-                    .map(|f| spec::DayTimeIntervalField::try_from(f))
+                    .map(spec::DayTimeIntervalField::try_from)
                     .transpose()?;
                 Ok(spec::DataType::DayTimeInterval {
                     start_field,
@@ -168,7 +168,7 @@ impl TryFrom<DataType> for spec::DataType {
             }) => {
                 let fields = fields
                     .into_iter()
-                    .map(|f| spec::Field::try_from(f))
+                    .map(spec::Field::try_from)
                     .collect::<SparkResult<_>>()?;
                 Ok(spec::DataType::Struct {
                     fields: spec::Fields::new(fields),
@@ -351,7 +351,7 @@ mod tests {
     fn test_parse_spark_data_type_gold_set() -> SparkResult<()> {
         test_gold_set(
             "tests/gold_data/data_type.json",
-            |s: String| Ok(parse_spark_data_type(&s)?),
+            |s: String| parse_spark_data_type(&s),
             |e: String| SparkError::internal(e),
         )
     }

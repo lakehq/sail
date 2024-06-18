@@ -11,13 +11,13 @@ use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 
 fn escape_meta_characters(s: &str) -> String {
-    s.replace("\n", "\\\\n")
-        .replace("\r", "\\\\r")
-        .replace("\t", "\\\\t")
-        .replace("\x07", "\\\\a")
-        .replace("\x08", "\\\\b")
-        .replace("\x0b", "\\\\v")
-        .replace("\x0c", "\\\\f")
+    s.replace('\n', "\\\\n")
+        .replace('\r', "\\\\r")
+        .replace('\t', "\\\\t")
+        .replace('\x07', "\\\\a")
+        .replace('\x08', "\\\\b")
+        .replace('\x0b', "\\\\v")
+        .replace('\x0c', "\\\\f")
 }
 
 fn truncate_string(s: &str, n: usize) -> String {

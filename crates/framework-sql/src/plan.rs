@@ -466,7 +466,7 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::Plan> {
                 .into_iter()
                 .map(|row| {
                     row.into_iter()
-                        .map(|v| from_ast_expression(v))
+                        .map(from_ast_expression)
                         .collect::<SqlResult<Vec<_>>>()
                 })
                 .collect::<SqlResult<Vec<_>>>()?;
