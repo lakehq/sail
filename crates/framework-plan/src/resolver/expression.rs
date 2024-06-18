@@ -5,7 +5,7 @@ use datafusion::common::{DFSchema, Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion_common::{Column, DataFusionError};
-use datafusion_expr::{expr, window_frame, ExprSchemable, GetFieldAccess, ScalarUDF};
+use datafusion_expr::{expr, window_frame, ExprSchemable, ScalarUDF};
 use framework_common::spec;
 use framework_python::cereal::partial_pyspark_udf::{
     deserialize_partial_pyspark_udf, PartialPySparkUDF,

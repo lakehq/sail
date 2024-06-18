@@ -4,7 +4,6 @@ use std::sync::Arc;
 use datafusion::functions_aggregate::{covariance, first_last, median, variance};
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::{expr, AggregateFunction, AggregateUDF};
-use futures::StreamExt;
 use lazy_static::lazy_static;
 
 use crate::error::{PlanError, PlanResult};
