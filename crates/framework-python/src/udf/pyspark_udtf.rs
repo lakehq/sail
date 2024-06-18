@@ -2,6 +2,7 @@
 
 use crate::cereal::partial_pyspark_udf::PartialPySparkUDF;
 use async_trait::async_trait;
+use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::pyarrow::*;
 use datafusion::arrow::record_batch::RecordBatch;
@@ -9,23 +10,23 @@ use datafusion::datasource::function::TableFunctionImpl;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
+use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{Expr, TableType};
+use pyo3::prelude::*;
+use pyo3::types::PyTuple;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct PySparkUDT {
-    output_schema: SchemaRef,
+    schema: SchemaRef,
     batches: Vec<RecordBatch>,
 }
 
 impl PySparkUDT {
-    pub fn new(output_schema: SchemaRef, batches: Vec<RecordBatch>) -> Self {
-        Self {
-            output_schema,
-            batches,
-        }
+    pub fn new(schema: SchemaRef, batches: Vec<RecordBatch>) -> Self {
+        Self { schema, batches }
     }
 }
 
@@ -36,7 +37,7 @@ impl TableProvider for PySparkUDT {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.output_schema.clone()
+        self.schema.clone()
     }
 
     fn table_type(&self) -> TableType {
@@ -50,7 +51,12 @@ impl TableProvider for PySparkUDT {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        unimplemented!()
+        let exec = MemoryExec::try_new(
+            &[self.batches.clone()],
+            TableProvider::schema(self),
+            projection.cloned(),
+        )?;
+        Ok(Arc::new(exec))
     }
 }
 
@@ -58,7 +64,7 @@ impl TableProvider for PySparkUDT {
 pub struct PySparkUDTF {
     function_name: String,
     input_types: Vec<DataType>,
-    output_schema: SchemaRef,
+    schema: SchemaRef,
     python_function: PartialPySparkUDF,
     #[allow(dead_code)]
     deterministic: bool,
@@ -70,7 +76,7 @@ impl PySparkUDTF {
     pub fn new(
         function_name: String,
         input_types: Vec<DataType>,
-        output_schema: SchemaRef,
+        schema: SchemaRef,
         python_function: PartialPySparkUDF,
         deterministic: bool,
         eval_type: i32,
@@ -78,12 +84,17 @@ impl PySparkUDTF {
         Self {
             function_name,
             input_types,
-            output_schema,
+            schema,
             python_function,
             deterministic,
             eval_type,
         }
     }
+
+    // fn apply_python_function(&self, input_arrays: Vec<ArrayRef>) -> Result<RecordBatch> {
+    //     Python::with_gil(|py| {
+    //     })
+    // }
 }
 
 impl TableFunctionImpl for PySparkUDTF {
@@ -130,6 +141,8 @@ impl TableFunctionImpl for PySparkUDTF {
         let record_batch = RecordBatch::try_new(schema_ref.clone(), input_arrays).map_err(|e| {
             DataFusionError::Execution(format!("Failed to create RecordBatch: {:?}", e))
         })?;
+
+        // let transformed_batch = self.apply_python_function(input_arrays)?;
 
         Ok(Arc::new(PySparkUDT::new(schema_ref, vec![record_batch])))
     }
