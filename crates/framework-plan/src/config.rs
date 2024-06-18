@@ -37,6 +37,8 @@ pub struct PlanConfig<F: ?Sized = dyn DataTypeFormatter> {
     pub timestamp_type: TimestampType,
     /// The data type formatter.
     pub data_type_formatter: Arc<F>,
+    // TODO: Revisit how to handle spark_udf_config
+    //  https://github.com/lakehq/framework/pull/53#discussion_r1643683600
     pub spark_udf_config: SparkUdfConfig,
 }
 
