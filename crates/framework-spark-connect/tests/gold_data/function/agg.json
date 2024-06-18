@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: any_value"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: any_value"
       }
     },
     {
@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: any_value"
       }
     },
     {
@@ -151,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: approx_count_distinct"
       }
     },
     {
@@ -173,7 +173,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: approx_percentile"
       }
     },
     {
@@ -195,7 +195,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: approx_percentile"
       }
     },
     {
@@ -221,7 +221,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: approx_percentile"
       }
     },
     {
@@ -247,7 +247,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: approx_percentile"
       }
     },
     {
@@ -567,7 +567,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: collect_set"
       }
     },
     {
@@ -677,7 +677,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: count_if"
       }
     },
     {
@@ -699,7 +699,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: count_if"
       }
     },
     {
@@ -743,7 +743,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "success": "ok"
       }
     },
     {
@@ -875,7 +875,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'FIRST_VALUE(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tFIRST_VALUE(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Boolean] to the signature OneOf([ArraySignature(Array), Numeric(1), Uniform(1, [Utf8])]) failed. and No function matches the given name and argument types 'first_value(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tfirst_value(array)\n\tfirst_value(Numeric(1))\n\tfirst_value(Utf8)"
       }
     },
     {
@@ -941,7 +941,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'FIRST_VALUE(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tFIRST_VALUE(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Boolean] to the signature OneOf([ArraySignature(Array), Numeric(1), Uniform(1, [Utf8])]) failed. and No function matches the given name and argument types 'first_value(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tfirst_value(array)\n\tfirst_value(Numeric(1))\n\tfirst_value(Utf8)"
       }
     },
     {
@@ -963,7 +963,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: count_min_sketch"
       }
     },
     {
@@ -1005,7 +1005,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: histogram_numeric"
       }
     },
     {
@@ -1027,7 +1027,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: hll_sketch_agg"
       }
     },
     {
@@ -1049,7 +1049,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: hll_sketch_agg"
       }
     },
     {
@@ -1071,7 +1071,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: kurtosis"
       }
     },
     {
@@ -1093,7 +1093,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: kurtosis"
       }
     },
     {
@@ -1159,7 +1159,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'LAST_VALUE(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tLAST_VALUE(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Boolean] to the signature OneOf([ArraySignature(Array), Numeric(1), Uniform(1, [Utf8])]) failed. and No function matches the given name and argument types 'last_value(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tlast_value(array)\n\tlast_value(Numeric(1))\n\tlast_value(Utf8)"
       }
     },
     {
@@ -1225,7 +1225,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'LAST_VALUE(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tLAST_VALUE(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Boolean] to the signature OneOf([ArraySignature(Array), Numeric(1), Uniform(1, [Utf8])]) failed. and No function matches the given name and argument types 'last_value(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tlast_value(array)\n\tlast_value(Numeric(1))\n\tlast_value(Utf8)"
       }
     },
     {
@@ -1269,7 +1269,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: max_by"
       }
     },
     {
@@ -1401,7 +1401,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: min_by"
       }
     },
     {
@@ -1423,7 +1423,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: mode"
       }
     },
     {
@@ -1445,7 +1445,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: mode"
       }
     },
     {
@@ -1467,7 +1467,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: mode"
       }
     },
     {
@@ -1571,7 +1571,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: percentile"
       }
     },
     {
@@ -1593,7 +1593,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: percentile"
       }
     },
     {
@@ -1619,7 +1619,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: percentile"
       }
     },
     {
@@ -1645,7 +1645,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: percentile"
       }
     },
     {
@@ -1667,7 +1667,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: percentile_approx"
       }
     },
     {
@@ -1689,7 +1689,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: percentile_approx"
       }
     },
     {
@@ -1715,7 +1715,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: percentile_approx"
       }
     },
     {
@@ -1741,7 +1741,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: percentile_approx"
       }
     },
     {
@@ -2489,7 +2489,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: skewness"
       }
     },
     {
@@ -2511,7 +2511,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: skewness"
       }
     },
     {
@@ -2819,7 +2819,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: No function matches the given name and argument types 'SUM(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tSUM(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "failure": "error in DataFusion: Error during planning: Execution error: User-defined coercion failed with Execution(\"Sum not supported for Utf8\") and No function matches the given name and argument types 'SUM(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tSUM(UserDefined)"
       }
     },
     {
@@ -2841,7 +2841,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: try_avg"
       }
     },
     {
@@ -2863,7 +2863,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: try_avg"
       }
     },
     {
@@ -2885,7 +2885,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: try_avg"
       }
     },
     {
@@ -2907,7 +2907,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: try_sum"
       }
     },
     {
@@ -2929,7 +2929,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: try_sum"
       }
     },
     {
@@ -2951,7 +2951,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: try_sum"
       }
     },
     {
@@ -2973,7 +2973,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Function `Expr` with name should be resolved..\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "not supported: unknown function: try_sum"
       }
     },
     {

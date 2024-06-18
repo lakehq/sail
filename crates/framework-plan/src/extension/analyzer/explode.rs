@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion::common::{Column, DataFusionError, Result, UnnestOptions};
+use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::logical_expr::builder::unnest_with_options;
 use datafusion::logical_expr::{
     col, Expr, ExprSchemable, LogicalPlan, Projection, ScalarUDF, ScalarUDFImpl,

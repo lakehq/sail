@@ -17,7 +17,7 @@ pub(crate) fn rewrite_wildcard(
             Expr::Wildcard {
                 qualifier: Some(qualifier),
             } => projected.extend(expand_qualified_wildcard(&qualifier, schema, None)?),
-            _ => projected.push(columnize_expr(normalize_col(e, &input)?, schema)),
+            _ => projected.push(columnize_expr(normalize_col(e, &input)?, &input)?),
         }
     }
     Ok((input, projected))

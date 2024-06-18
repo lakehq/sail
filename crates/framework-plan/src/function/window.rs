@@ -1,3 +1,4 @@
+use datafusion::functions_aggregate::sum;
 use datafusion_expr::{expr, AggregateFunction, BuiltInWindowFunction};
 
 use crate::error::{PlanError, PlanResult};
@@ -16,9 +17,7 @@ pub(crate) fn get_built_in_window_function(
         "max" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
             AggregateFunction::Max,
         )),
-        "sum" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
-            AggregateFunction::Sum,
-        )),
+        "sum" => Ok(expr::WindowFunctionDefinition::AggregateUDF(sum::sum_udaf())),
         "count" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
             AggregateFunction::Count,
         )),
