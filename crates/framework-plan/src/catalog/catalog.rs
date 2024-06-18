@@ -24,9 +24,8 @@ impl CatalogMetadata {
 
 impl<'a> CatalogManager<'a> {
     pub(crate) fn default_catalog(&self) -> Result<String> {
-        Ok(self
-            .ctx
-            .read_state(|state| Ok(state.config().options().catalog.default_catalog.clone()))?)
+        self.ctx
+            .read_state(|state| Ok(state.config().options().catalog.default_catalog.clone()))
     }
 
     pub(crate) fn set_default_catalog(&self, catalog_name: String) -> Result<()> {
@@ -46,7 +45,7 @@ impl<'a> CatalogManager<'a> {
             .catalog_names()
             .into_iter()
             .filter(|name| match_pattern(name.as_str(), catalog_pattern))
-            .map(|name| CatalogMetadata::new(name))
+            .map(CatalogMetadata::new)
             .collect::<Vec<_>>())
     }
 }

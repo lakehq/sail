@@ -274,7 +274,7 @@ impl PlanResolver<'_> {
     pub fn unresolve_fields(fields: adt::Fields) -> PlanResult<spec::Fields> {
         let fields = fields
             .iter()
-            .map(|f| Ok(Self::unresolve_field(f.as_ref().clone())?))
+            .map(|f| Self::unresolve_field(f.as_ref().clone()))
             .collect::<PlanResult<Vec<_>>>()?;
         Ok(spec::Fields(fields))
     }

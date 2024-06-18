@@ -148,7 +148,7 @@ impl SparkRuntimeConfig {
             .collect()
     }
 
-    pub(crate) fn get_warnings_by_keys(keys: &Vec<String>) -> Vec<String> {
+    pub(crate) fn get_warnings_by_keys(keys: &[String]) -> Vec<String> {
         keys.iter()
             .flat_map(|x| Self::get_warning(x.as_str()))
             .map(|x| x.to_string())

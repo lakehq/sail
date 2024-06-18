@@ -25,6 +25,12 @@ pub struct PlanResolverState {
     next_id: usize,
 }
 
+impl Default for PlanResolverState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PlanResolverState {
     pub fn new() -> Self {
         Self { next_id: 0 }

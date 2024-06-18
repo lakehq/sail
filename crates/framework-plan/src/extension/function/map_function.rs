@@ -35,12 +35,12 @@ fn to_map_array(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("map requires an even number of arguments");
     }
     let num_entries = args.len() / 2;
-    let num_rows = args.get(0).map(|a| a.len()).unwrap_or(0);
+    let num_rows = args.first().map(|a| a.len()).unwrap_or(0);
     if args.iter().any(|a| a.len() != num_rows) {
         return exec_err!("map requires all arrays to have the same length");
     }
     let key_type = args
-        .get(0)
+        .first()
         .map(|a| a.data_type())
         .unwrap_or(&DataType::Null);
     let value_type = args
@@ -106,7 +106,7 @@ impl ScalarUDFImpl for MapFunction {
         if arg_types.len() % 2 != 0 {
             return exec_err!("map requires an even number of arguments");
         }
-        let key_type = arg_types.get(0).unwrap_or(&DataType::Null);
+        let key_type = arg_types.first().unwrap_or(&DataType::Null);
         let value_type = arg_types.get(1).unwrap_or(&DataType::Null);
         // TODO: support type coercion
         if arg_types.keys().any(|dt| dt != key_type) {

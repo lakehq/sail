@@ -132,9 +132,7 @@ impl ShowStringStream {
     }
 
     fn show(&mut self) -> Option<Result<RecordBatch>> {
-        if self.input.is_none() {
-            return None;
-        }
+        self.input.as_ref()?;
         self.input = None;
         let table = concat_batches(&self.input_schema, &self.data)
             .map_err(|e| arrow_datafusion_err!(e))

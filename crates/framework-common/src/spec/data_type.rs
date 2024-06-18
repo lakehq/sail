@@ -96,15 +96,15 @@ impl Fields {
     }
 }
 
-impl Into<Vec<Field>> for Fields {
-    fn into(self) -> Vec<Field> {
-        self.0
+impl From<Fields> for Vec<Field> {
+    fn from(fields: Fields) -> Vec<Field> {
+        fields.0
     }
 }
 
-impl Into<Fields> for Vec<Field> {
-    fn into(self) -> Fields {
-        Fields(self)
+impl From<Vec<Field>> for Fields {
+    fn from(fields: Vec<Field>) -> Fields {
+        Fields(fields)
     }
 }
 

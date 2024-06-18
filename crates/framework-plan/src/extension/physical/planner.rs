@@ -25,10 +25,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let physical_inputs = physical_inputs
-            .iter()
-            .map(|x| x.clone())
-            .collect::<Vec<_>>();
+        let physical_inputs = physical_inputs.to_vec();
         let plan: Arc<dyn ExecutionPlan> =
             if let Some(node) = node.as_any().downcast_ref::<RangeNode>() {
                 Arc::new(RangeExec::new(

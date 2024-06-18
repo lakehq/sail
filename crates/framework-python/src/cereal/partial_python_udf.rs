@@ -44,7 +44,7 @@ impl<'de> Visitor<'de> for PartialPythonUDFVisitor {
             PyModule::import_bound(py, pyo3::intern!(py, "cloudpickle"))
                 .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
                 .and_then(|loads| loads.call1((v,)))
-                .and_then(|py_tuple| Ok(PartialPythonUDF(py_tuple.to_object(py))))
+                .map(|py_tuple| PartialPythonUDF(py_tuple.to_object(py)))
                 .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))
         })
     }

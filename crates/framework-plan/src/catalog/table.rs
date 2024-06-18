@@ -15,19 +15,19 @@ use crate::catalog::CatalogManager;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TableTypeName {
     #[allow(dead_code)]
-    EXTERNAL,
-    MANAGED,
-    VIEW,
-    TEMPORARY,
+    External,
+    Managed,
+    View,
+    Temporary,
 }
 
 impl fmt::Display for TableTypeName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            TableTypeName::EXTERNAL => write!(f, "EXTERNAL"),
-            TableTypeName::MANAGED => write!(f, "MANAGED"),
-            TableTypeName::VIEW => write!(f, "VIEW"),
-            TableTypeName::TEMPORARY => write!(f, "TEMPORARY"),
+            TableTypeName::External => write!(f, "EXTERNAL"),
+            TableTypeName::Managed => write!(f, "MANAGED"),
+            TableTypeName::View => write!(f, "VIEW"),
+            TableTypeName::Temporary => write!(f, "TEMPORARY"),
         }
     }
 }
@@ -35,9 +35,9 @@ impl fmt::Display for TableTypeName {
 impl From<TableType> for TableTypeName {
     fn from(table_type: TableType) -> Self {
         match table_type {
-            TableType::Base => TableTypeName::MANAGED, // TODO: Could also be EXTERNAL
-            TableType::Temporary => TableTypeName::TEMPORARY,
-            TableType::View => TableTypeName::VIEW,
+            TableType::Base => TableTypeName::Managed, // TODO: Could also be EXTERNAL
+            TableType::Temporary => TableTypeName::Temporary,
+            TableType::View => TableTypeName::View,
         }
     }
     // TODO: handle_execute_create_dataframe_view
@@ -49,10 +49,10 @@ impl From<TableType> for TableTypeName {
 impl From<TableTypeName> for TableType {
     fn from(catalog_table_type: TableTypeName) -> Self {
         match catalog_table_type {
-            TableTypeName::EXTERNAL => TableType::Base,
-            TableTypeName::MANAGED => TableType::Base,
-            TableTypeName::VIEW => TableType::View,
-            TableTypeName::TEMPORARY => TableType::Temporary,
+            TableTypeName::External => TableType::Base,
+            TableTypeName::Managed => TableType::Base,
+            TableTypeName::View => TableType::View,
+            TableTypeName::Temporary => TableType::Temporary,
         }
     }
 }
@@ -76,7 +76,7 @@ impl TableMetadata {
     ) -> Self {
         let table_type: TableTypeName = table_provider.table_type().into();
         let (catalog, namespace) =
-            if table_type == TableTypeName::TEMPORARY || table_type == TableTypeName::VIEW {
+            if table_type == TableTypeName::Temporary || table_type == TableTypeName::View {
                 // Temporary views in the Spark session do not have a catalog or namespace
                 (None, None)
             } else {
@@ -91,7 +91,7 @@ impl TableMetadata {
             namespace,
             description: None, // TODO: support description
             table_type: table_type.to_string(),
-            is_temporary: table_type == TableTypeName::TEMPORARY,
+            is_temporary: table_type == TableTypeName::Temporary,
         }
     }
 }

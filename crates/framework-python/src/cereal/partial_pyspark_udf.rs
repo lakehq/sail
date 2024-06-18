@@ -95,7 +95,7 @@ impl<'de> Visitor<'de> for PartialPySparkUDFVisitor {
             PyModule::import_bound(py, pyo3::intern!(py, "pyspark.worker"))
                 .and_then(|worker| worker.getattr(pyo3::intern!(py, "read_udfs")))
                 .and_then(|read_udfs| read_udfs.call1((pickle_ser, infile, eval_type)))
-                .and_then(|py_tuple| Ok(PartialPySparkUDF(py_tuple.to_object(py))))
+                .map(|py_tuple| PartialPySparkUDF(py_tuple.to_object(py)))
                 .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))
         })
     }

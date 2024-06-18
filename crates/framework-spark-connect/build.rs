@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use quote::{format_ident, quote};
 use serde::Deserialize;
-use {prettyplease, regex, syn};
 
 fn build_proto() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);
@@ -74,7 +73,7 @@ fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
     let word_boundary = regex::Regex::new(r"(?P<first>[a-z])(?P<second>[A-Z])")?;
     let key_const_name = |key: &str| -> String {
         let key = word_boundary.replace_all(key, "${first}_${second}");
-        key.replace(".", "_").to_uppercase()
+        key.replace('.', "_").to_uppercase()
     };
 
     let config =
@@ -85,7 +84,11 @@ fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|entry| {
             let key = &entry.key;
-            let doc = &entry.doc;
+            let doc = if !entry.doc.is_empty() {
+                &entry.doc
+            } else {
+                "(Missing documentation)"
+            };
             let const_name = format_ident!("{}", key_const_name(key));
             quote! {
                 #[doc = #doc]

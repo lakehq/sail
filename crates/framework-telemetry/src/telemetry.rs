@@ -14,6 +14,7 @@ use tracing::subscriber::SetGlobalDefaultError;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{fmt, Registry};
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Error)]
 pub enum TelemetryError {
     #[error("Trace error: {0}")]

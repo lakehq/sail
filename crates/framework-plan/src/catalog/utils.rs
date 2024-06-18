@@ -13,7 +13,7 @@ pub(crate) fn filter_pattern(names: Vec<&str>, pattern: Option<&str>) -> Vec<Str
     let patterns: Vec<&str> = pattern.trim().split('|').collect();
 
     for sub_pattern in patterns {
-        let regex_pattern = format!("(?i)^{}$", sub_pattern.replace("*", ".*"));
+        let regex_pattern = format!("(?i)^{}$", sub_pattern.replace('*', ".*"));
         match Regex::new(&regex_pattern) {
             Ok(regex) => {
                 for &name in &names {

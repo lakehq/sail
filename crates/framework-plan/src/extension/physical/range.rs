@@ -9,7 +9,6 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionMode, ExecutionPlan, PlanProperties};
 use datafusion_common::{exec_err, internal_err, Result};
-use tokio_stream;
 
 use crate::extension::logical::Range;
 

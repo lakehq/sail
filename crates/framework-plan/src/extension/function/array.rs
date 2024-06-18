@@ -71,7 +71,7 @@ impl ArrayItemWithPosition {
             )),
             array.offsets().clone(),
             Arc::new(values),
-            array.nulls().map(|x| x.clone()),
+            array.nulls().cloned(),
         )?))
     }
 }
@@ -90,16 +90,16 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let out = match &arg_types {
-            &[DataType::List(f)] => DataType::List(Arc::new(Field::new_list_field(
+        let out = match arg_types {
+            [DataType::List(f)] => DataType::List(Arc::new(Field::new_list_field(
                 Self::item_type::<Int32Type>(f),
                 f.is_nullable(),
             ))),
-            &[DataType::LargeList(f)] => DataType::LargeList(Arc::new(Field::new_list_field(
+            [DataType::LargeList(f)] => DataType::LargeList(Arc::new(Field::new_list_field(
                 Self::item_type::<Int64Type>(f),
                 f.is_nullable(),
             ))),
-            &[DataType::FixedSizeList(f, n)] => DataType::FixedSizeList(
+            [DataType::FixedSizeList(f, n)] => DataType::FixedSizeList(
                 Arc::new(Field::new_list_field(
                     Self::item_type::<Int32Type>(f),
                     f.is_nullable(),
@@ -128,11 +128,11 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
         let out = match arg.data_type() {
             DataType::List(f) => {
                 let array = as_list_array(arg)?;
-                Self::general_array_item_with_position::<Int32Type>(&array, f)?
+                Self::general_array_item_with_position::<Int32Type>(array, f)?
             }
             DataType::LargeList(f) => {
                 let array = as_large_list_array(arg)?;
-                Self::general_array_item_with_position::<Int64Type>(&array, f)?
+                Self::general_array_item_with_position::<Int64Type>(array, f)?
             }
             DataType::FixedSizeList(_, _) => {
                 return Err(DataFusionError::NotImplemented(
@@ -264,12 +264,10 @@ impl MapToArray {
                     .collect::<Vec<_>>();
                 Ok(Fields::from(fields))
             }
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "map entry should be a struct, found: {:?}",
-                    field.data_type(),
-                )));
-            }
+            _ => Err(DataFusionError::Internal(format!(
+                "map entry should be a struct, found: {:?}",
+                field.data_type(),
+            ))),
         }
     }
 
@@ -295,12 +293,10 @@ impl ScalarUDFImpl for MapToArray {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types {
             &[DataType::Map(field, _)] => Ok(DataType::List(self.nullable_map_field(field)?)),
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "{} should only be called with a map",
-                    self.name(),
-                )));
-            }
+            _ => Err(DataFusionError::Internal(format!(
+                "{} should only be called with a map",
+                self.name(),
+            ))),
         }
     }
 
@@ -320,13 +316,13 @@ impl ScalarUDFImpl for MapToArray {
                 let inner = StructArray::new(
                     fields,
                     array.entries().columns().to_vec(),
-                    array.entries().nulls().map(|x| x.clone()),
+                    array.entries().nulls().cloned(),
                 );
                 ListArray::try_new(
                     self.nullable_map_field(field)?,
                     array.offsets().clone(),
                     Arc::new(inner),
-                    array.nulls().map(|x| x.clone()),
+                    array.nulls().cloned(),
                 )?
             }
             _ => {

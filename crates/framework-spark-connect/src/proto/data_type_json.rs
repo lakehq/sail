@@ -181,7 +181,7 @@ mod serde_char {
         let caps = CHAR_LENGTH
             .captures(&s)
             .ok_or_else(|| serde::de::Error::custom(format!("invalid char type: {}", s)))?;
-        Ok(caps[1].parse().map_err(serde::de::Error::custom)?)
+        caps[1].parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -209,7 +209,7 @@ mod serde_varchar {
         let caps = VARCHAR_LENGTH
             .captures(&s)
             .ok_or_else(|| serde::de::Error::custom(format!("invalid varchar type: {}", s)))?;
-        Ok(caps[1].parse().map_err(serde::de::Error::custom)?)
+        caps[1].parse().map_err(serde::de::Error::custom)
     }
 }
 

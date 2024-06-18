@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 
@@ -86,21 +87,19 @@ impl PlanFormatter for DefaultPlanFormatter {
                     ),
                 };
 
-                if start_field == end_field {
-                    Ok(format!(
-                        "interval {}",
-                        Self::year_month_interval_field_to_simple_string(start_field)
-                    ))
-                } else if start_field < end_field {
-                    Ok(format!(
+                match start_field.cmp(&end_field) {
+                    Ordering::Less => Ok(format!(
                         "interval {} to {}",
                         Self::year_month_interval_field_to_simple_string(start_field),
                         Self::year_month_interval_field_to_simple_string(end_field),
-                    ))
-                } else {
-                    Err(PlanError::invalid(
+                    )),
+                    Ordering::Equal => Ok(format!(
+                        "interval {}",
+                        Self::year_month_interval_field_to_simple_string(start_field)
+                    )),
+                    Ordering::Greater => Err(PlanError::invalid(
                         "year-month interval with invalid start and end field order",
-                    ))
+                    )),
                 }
             }
             DataType::DayTimeInterval {
@@ -121,21 +120,19 @@ impl PlanFormatter for DefaultPlanFormatter {
                     ),
                 };
 
-                if start_field == end_field {
-                    Ok(format!(
-                        "interval {}",
-                        Self::day_time_interval_field_to_simple_string(start_field)
-                    ))
-                } else if start_field < end_field {
-                    Ok(format!(
+                match start_field.cmp(&end_field) {
+                    Ordering::Less => Ok(format!(
                         "interval {} to {}",
                         Self::day_time_interval_field_to_simple_string(start_field),
                         Self::day_time_interval_field_to_simple_string(end_field),
-                    ))
-                } else {
-                    Err(PlanError::invalid(
+                    )),
+                    Ordering::Equal => Ok(format!(
+                        "interval {}",
+                        Self::day_time_interval_field_to_simple_string(start_field)
+                    )),
+                    Ordering::Greater => Err(PlanError::invalid(
                         "day-time interval with invalid start and end field order",
-                    ))
+                    )),
                 }
             }
             DataType::Array { element_type, .. } => Ok(format!(
@@ -355,7 +352,7 @@ struct DecimalDisplay<'a>(pub &'a spec::Decimal);
 impl Display for DecimalDisplay<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = format!("{}", self.0.value);
-        let start = if s.starts_with("-") {
+        let start = if s.starts_with('-') {
             write!(f, "-")?;
             1
         } else {

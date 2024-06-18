@@ -201,12 +201,12 @@ impl PlanResolver<'_> {
                     // use inner join type to build the schema for cross join
                     JoinType::Cross => (plan::JoinType::Inner, true),
                 };
-                let schema = build_join_schema(&left.schema(), &right.schema(), &join_type)?;
+                let schema = build_join_schema(left.schema(), right.schema(), &join_type)?;
                 if is_cross_join {
                     if join_condition.is_some() {
                         return Err(PlanError::invalid("cross join with join condition"));
                     }
-                    if using_columns.len() > 0 {
+                    if !using_columns.is_empty() {
                         return Err(PlanError::invalid("cross join with using columns"));
                     }
                     if join_data_type.is_some() {
@@ -346,7 +346,7 @@ impl PlanResolver<'_> {
                 named_arguments,
             } => {
                 let input = self.resolve_plan(*input, state).await?;
-                let input = if positional_arguments.len() > 0 {
+                let input = if !positional_arguments.is_empty() {
                     let params = positional_arguments
                         .into_iter()
                         .map(|arg| self.resolve_literal(arg))
@@ -355,7 +355,7 @@ impl PlanResolver<'_> {
                 } else {
                     input
                 };
-                let input = if named_arguments.len() > 0 {
+                let input = if !named_arguments.is_empty() {
                     let params = named_arguments
                         .into_iter()
                         .map(|(name, arg)| -> PlanResult<(String, ScalarValue)> {
@@ -417,7 +417,7 @@ impl PlanResolver<'_> {
                 if within_watermark {
                     return Err(PlanError::todo("deduplicate within watermark"));
                 }
-                let distinct = if column_names.len() > 0 && !all_columns_as_keys {
+                let distinct = if !column_names.is_empty() && !all_columns_as_keys {
                     let on_expr: Vec<Expr> = column_names
                         .iter()
                         .flat_map(|name| {
@@ -438,7 +438,7 @@ impl PlanResolver<'_> {
                         None,
                         Arc::new(input),
                     )?)
-                } else if column_names.len() == 0 && all_columns_as_keys {
+                } else if column_names.is_empty() && all_columns_as_keys {
                     plan::Distinct::All(Arc::new(input))
                 } else {
                     return Err(PlanError::invalid(
@@ -859,7 +859,7 @@ impl PlanResolver<'_> {
             } => Ok(LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::ListTables {
-                        database: database.map(|x| build_schema_reference(x)).transpose()?,
+                        database: database.map(build_schema_reference).transpose()?,
                         table_pattern,
                     },
                     self.config.clone(),
@@ -871,7 +871,7 @@ impl PlanResolver<'_> {
             } => Ok(LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::ListFunctions {
-                        database: database.map(|x| build_schema_reference(x)).transpose()?,
+                        database: database.map(build_schema_reference).transpose()?,
                         function_pattern,
                     },
                     self.config.clone(),
@@ -1064,10 +1064,7 @@ impl PlanResolver<'_> {
                 location,
                 properties,
             } => {
-                let properties = properties
-                    .into_iter()
-                    .map(|(k, v)| (k, v))
-                    .collect::<Vec<_>>();
+                let properties = properties.into_iter().collect::<Vec<_>>();
                 Ok(LogicalPlan::Extension(Extension {
                     node: Arc::new(CatalogCommandNode::try_new(
                         CatalogCommand::CreateDatabase {

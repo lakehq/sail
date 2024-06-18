@@ -7,7 +7,9 @@ use datafusion::common::{DFSchemaRef, Result};
 use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion::prelude::SessionContext;
-use datafusion_common::{exec_err, not_impl_err, DFSchema, SchemaReference, TableReference};
+use datafusion_common::{
+    exec_datafusion_err, not_impl_err, DFSchema, SchemaReference, TableReference,
+};
 use datafusion_expr::{TableScan, UNNAMED_TABLE};
 use serde::Serialize;
 use serde_arrow::schema::{SchemaLike, TracingOptions};
@@ -130,8 +132,8 @@ fn build_record_batch<T: Serialize>(schema: SchemaRef, items: &[T]) -> Result<Re
         .iter()
         .map(|f| f.as_ref().clone())
         .collect::<Vec<_>>();
-    let arrays =
-        to_arrow(&fields, items).or_else(|e| exec_err!("failed to create record batch: {}", e))?;
+    let arrays = to_arrow(&fields, items)
+        .map_err(|e| exec_datafusion_err!("failed to create record batch: {}", e))?;
     // We must specify the row count if the schema has no fields.
     let options = RecordBatchOptions::new().with_row_count(Some(items.len()));
     Ok(RecordBatch::try_new_with_options(schema, arrays, &options)?)
@@ -202,7 +204,7 @@ impl CatalogCommand {
                 Vec::<FieldRef>::from_type::<SingleValueMetadata<bool>>(TracingOptions::default())
             }
         }
-        .or_else(|e| exec_err!("failed to build catalog command schema: {}", e))?;
+        .map_err(|e| exec_datafusion_err!("failed to build catalog command schema: {}", e))?;
         Ok(Arc::new(Schema::new(fields)))
     }
 

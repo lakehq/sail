@@ -109,7 +109,7 @@ impl FunctionBuilder {
     where
         F: Fn(Vec<expr::Expr>) -> PlanResult<expr::Expr> + Send + Sync + 'static,
     {
-        Arc::new(move |args| f(args))
+        Arc::new(f)
     }
 
     pub fn unknown(name: &str) -> Function {
