@@ -28,6 +28,7 @@ impl PythonFunction for PartialPySparkUDF {
     }
 }
 
+// TODO: return DataFusionError::External for PyErr
 pub trait CommonPythonUDF {
     type PythonFunctionType: PythonFunction;
 
