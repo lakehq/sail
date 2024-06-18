@@ -55,7 +55,7 @@ ryu = "1.0.18"
 #
 # The versions of the following dependencies are managed manually.
 #
-datafusion = { version = "39.0.0", features = ["serde", "backtrace"] }
+datafusion = { version = "39.0.0", features = ["serde"] }
 datafusion-common = { version = "39.0.0", features = ["object_store"] }
 datafusion-expr = "39.0.0"
 datafusion-functions-array = "39.0.0"
