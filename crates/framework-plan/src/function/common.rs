@@ -42,7 +42,12 @@ impl FunctionBuilder {
     where
         F: Fn() -> expr::Expr + Send + Sync + 'static,
     {
-        Arc::new(move |_args| Ok(f()))
+        Arc::new(move |args| {
+            if args.len() != 0 {
+                return Err(PlanError::invalid("nullary: Zero arguments expected."));
+            }
+            Ok(f())
+        })
     }
 
     pub fn unary<F>(f: F) -> Function
