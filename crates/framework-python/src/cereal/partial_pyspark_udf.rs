@@ -76,6 +76,7 @@ impl<'de> Visitor<'de> for PartialPySparkUDFVisitor {
     where
         E: de::Error,
     {
+        // build_pyspark_udf_payload adds eval_type to the beginning of the payload
         let (eval_type_bytes, v) = v.split_at(std::mem::size_of::<i32>());
         let eval_type = i32::from_be_bytes(
             eval_type_bytes
