@@ -1,6 +1,7 @@
 use crate::extension::logical::{RangeNode, ShowStringNode, SortWithinPartitionsNode};
 use crate::extension::physical::range::RangeExec;
 use crate::extension::physical::show_string::ShowStringExec;
+use crate::utils::ItemTaker;
 use async_trait::async_trait;
 use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -9,22 +10,6 @@ use datafusion::physical_planner::{create_physical_sort_exprs, ExtensionPlanner,
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
 use std::sync::Arc;
-
-trait NodeContainer {
-    type Item;
-
-    fn one(&self) -> Result<Self::Item>;
-}
-
-impl NodeContainer for &[Arc<dyn ExecutionPlan>] {
-    type Item = Arc<dyn ExecutionPlan>;
-    fn one(&self) -> Result<Arc<dyn ExecutionPlan>> {
-        if self.len() != 1 {
-            return internal_err!("expecting one execution plan input: {:?}", self);
-        }
-        Ok(self[0].clone())
-    }
-}
 
 pub(crate) struct ExtensionPhysicalPlanner {}
 
@@ -38,6 +23,10 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let physical_inputs = physical_inputs
+            .iter()
+            .map(|x| x.clone())
+            .collect::<Vec<_>>();
         let plan: Arc<dyn ExecutionPlan> =
             if let Some(node) = node.as_any().downcast_ref::<RangeNode>() {
                 Arc::new(RangeExec::new(

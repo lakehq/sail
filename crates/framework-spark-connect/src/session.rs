@@ -8,7 +8,8 @@ use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use framework_common::config::{ConfigKeyValue, SparkUdfConfig};
 use framework_plan::config::{PlanConfig, TimestampType};
-use framework_plan::function::BUILT_IN_FUNCTIONS;
+use framework_plan::formatter::DefaultPlanFormatter;
+use framework_plan::function::BUILT_IN_SCALAR_FUNCTIONS;
 
 use crate::config::{ConfigKeyValueList, SparkRuntimeConfig};
 use crate::error::SparkResult;
@@ -19,7 +20,6 @@ use crate::spark::config::{
     SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME,
     SPARK_SQL_SESSION_TIME_ZONE,
 };
-use crate::utils::SparkDataTypeFormatter;
 use framework_plan::new_query_planner;
 
 const DEFAULT_SPARK_SCHEMA: &str = "default";
@@ -54,7 +54,7 @@ impl Session {
 
         // TODO: This is a temp workaround to deregister all built-in functions that we define.
         //  We should deregister all context.udfs() once we have better coverage of functions.
-        for (&name, _function) in BUILT_IN_FUNCTIONS.iter() {
+        for (&name, _function) in BUILT_IN_SCALAR_FUNCTIONS.iter() {
             context.deregister_udf(name);
         }
 
@@ -126,8 +126,8 @@ impl Session {
             time_zone: time_zone,
             // TODO: get the default timestamp type from configuration
             timestamp_type: TimestampType::TimestampLtz,
-            data_type_formatter: Arc::new(SparkDataTypeFormatter),
-            spark_udf_config: spark_udf_config,
+            plan_formatter: Arc::new(DefaultPlanFormatter),
+            spark_udf_config,
         }))
     }
 

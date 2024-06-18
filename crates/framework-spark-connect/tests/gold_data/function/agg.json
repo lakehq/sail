@@ -1357,7 +1357,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: MedianAccumulator not supported for MEDIAN(tab.col) with Interval(YearMonth)"
+        "failure": "error in DataFusion: This feature is not implemented: MedianAccumulator not supported for median(col) with Interval(YearMonth)"
       }
     },
     {

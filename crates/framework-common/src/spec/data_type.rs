@@ -106,7 +106,7 @@ impl Into<Fields> for Vec<Field> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DayTimeIntervalField {
     Day = 0,
@@ -132,7 +132,7 @@ impl TryFrom<i32> for DayTimeIntervalField {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum YearMonthIntervalField {
     Year = 0,

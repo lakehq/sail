@@ -6,7 +6,6 @@ mod schema;
 pub mod server;
 mod service;
 mod session;
-mod utils;
 
 const SPARK_VERSION: &str = "3.5.1";
 

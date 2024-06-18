@@ -343,13 +343,12 @@ mod tests {
     use super::{parse_spark_data_type, DEFAULT_FIELD_NAME};
     use crate::error::{SparkError, SparkResult};
     use framework_common::tests::test_gold_set;
-    use framework_sql::data_type::parse_data_type;
 
     #[test]
     fn test_parse_spark_data_type_gold_set() -> SparkResult<()> {
         test_gold_set(
             "tests/gold_data/data_type.json",
-            |s: String| Ok(parse_data_type(&s)?),
+            |s: String| Ok(parse_spark_data_type(&s)?),
             |e: String| SparkError::internal(e),
         )
     }

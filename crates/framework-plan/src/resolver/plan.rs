@@ -31,7 +31,7 @@ use crate::extension::logical::{
     ShowStringStyle, SortWithinPartitionsNode,
 };
 use crate::resolver::utils::{cast_record_batch, read_record_batches};
-use crate::resolver::PlanResolver;
+use crate::resolver::{PlanResolver, PlanResolverState};
 
 pub(crate) fn build_schema_reference(name: spec::ObjectName) -> PlanResult<SchemaReference> {
     let names: Vec<String> = name.into();
@@ -68,10 +68,13 @@ fn build_table_reference(name: spec::ObjectName) -> PlanResult<TableReference> {
 
 impl PlanResolver<'_> {
     #[async_recursion]
-    pub async fn resolve_plan(&self, plan: spec::Plan) -> PlanResult<LogicalPlan> {
+    pub async fn resolve_plan(
+        &self,
+        plan: spec::Plan,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
         use spec::PlanNode;
 
-        let state = self.ctx.state();
         match plan.node {
             PlanNode::Read {
                 read_type,
@@ -116,7 +119,7 @@ impl PlanResolver<'_> {
                         };
                         let options = ListingOptions::new(format).with_file_extension(extension);
                         // TODO: use provided schema if available
-                        let schema = options.infer_schema(&state, &urls[0]).await?;
+                        let schema = options.infer_schema(&self.ctx.state(), &urls[0]).await?;
                         let config = ListingTableConfig::new_with_multi_paths(urls)
                             .with_listing_options(options)
                             .with_schema(schema);
@@ -133,7 +136,7 @@ impl PlanResolver<'_> {
             }
             PlanNode::Project { input, expressions } => {
                 let input = match input {
-                    Some(x) => self.resolve_plan(*x).await?,
+                    Some(x) => self.resolve_plan(*x, state).await?,
                     None => LogicalPlan::EmptyRelation(plan::EmptyRelation {
                         // allows literal projection with no input
                         produce_one_row: true,
@@ -143,7 +146,7 @@ impl PlanResolver<'_> {
                 let schema = input.schema();
                 let expr: Vec<Expr> = expressions
                     .into_iter()
-                    .map(|e| self.resolve_expression(e, schema))
+                    .map(|e| self.resolve_expression(e, schema, state))
                     .collect::<PlanResult<_>>()?;
                 let expr = rewrite_multi_alias(expr)?;
                 let (input, expr) = rewrite_wildcard(input, expr)?;
@@ -170,9 +173,9 @@ impl PlanResolver<'_> {
                 }
             }
             PlanNode::Filter { input, condition } => {
-                let input = self.resolve_plan(*input).await?;
+                let input = self.resolve_plan(*input, state).await?;
                 let schema = input.schema();
-                let predicate = self.resolve_expression(condition, schema)?;
+                let predicate = self.resolve_expression(condition, schema, state)?.unalias();
                 let filter = plan::Filter::try_new(predicate, Arc::new(input))?;
                 Ok(LogicalPlan::Filter(filter))
             }
@@ -186,8 +189,8 @@ impl PlanResolver<'_> {
             } => {
                 use spec::JoinType;
 
-                let left = self.resolve_plan(*left).await?;
-                let right = self.resolve_plan(*right).await?;
+                let left = self.resolve_plan(*left, state).await?;
+                let right = self.resolve_plan(*right, state).await?;
                 let (join_type, is_cross_join) = match join_type {
                     JoinType::Inner => (plan::JoinType::Inner, false),
                     JoinType::LeftOuter => (plan::JoinType::Left, false),
@@ -220,7 +223,7 @@ impl PlanResolver<'_> {
                 let (on, filter, join_constraint) =
                     if join_condition.is_some() && using_columns.is_empty() {
                         let condition = join_condition
-                            .map(|c| self.resolve_expression(c, &schema))
+                            .map(|c| self.resolve_expression(c, &schema, state))
                             .transpose()?;
                         (vec![], condition, plan::JoinConstraint::On)
                     } else if join_condition.is_none() && !using_columns.is_empty() {
@@ -259,8 +262,8 @@ impl PlanResolver<'_> {
                 use spec::SetOpType;
 
                 // TODO: support set operation by name
-                let left = self.resolve_plan(*left).await?;
-                let right = self.resolve_plan(*right).await?;
+                let left = self.resolve_plan(*left, state).await?;
+                let right = self.resolve_plan(*right, state).await?;
                 match set_op_type {
                     SetOpType::Intersect => Ok(LogicalPlanBuilder::intersect(left, right, is_all)?),
                     SetOpType::Union => {
@@ -280,11 +283,11 @@ impl PlanResolver<'_> {
                 order,
                 is_global,
             } => {
-                let input = self.resolve_plan(*input).await?;
+                let input = self.resolve_plan(*input, state).await?;
                 let schema = input.schema();
                 let expr = order
                     .into_iter()
-                    .map(|o| self.resolve_sort_order(o, schema))
+                    .map(|o| self.resolve_sort_order(o, schema, state))
                     .collect::<PlanResult<_>>()?;
                 if is_global {
                     Ok(LogicalPlan::Sort(plan::Sort {
@@ -299,7 +302,7 @@ impl PlanResolver<'_> {
                 }
             }
             PlanNode::Limit { input, limit } => {
-                let input = self.resolve_plan(*input).await?;
+                let input = self.resolve_plan(*input, state).await?;
                 Ok(LogicalPlan::Limit(plan::Limit {
                     skip: 0,
                     fetch: Some(limit),
@@ -321,15 +324,15 @@ impl PlanResolver<'_> {
                 if group_type != GroupType::GroupBy {
                     return Err(PlanError::todo("unsupported aggregate group type"));
                 }
-                let input = self.resolve_plan(*input).await?;
+                let input = self.resolve_plan(*input, state).await?;
                 let schema = input.schema();
                 let group_expr = grouping_expressions
                     .into_iter()
-                    .map(|e| self.resolve_expression(e, schema))
+                    .map(|e| self.resolve_expression(e, schema, state))
                     .collect::<PlanResult<_>>()?;
                 let aggr_expr = aggregate_expressions
                     .into_iter()
-                    .map(|e| self.resolve_expression(e, schema))
+                    .map(|e| self.resolve_expression(e, schema, state))
                     .collect::<PlanResult<_>>()?;
                 Ok(LogicalPlan::Aggregate(Aggregate::try_new(
                     Arc::new(input),
@@ -342,7 +345,7 @@ impl PlanResolver<'_> {
                 positional_arguments,
                 named_arguments,
             } => {
-                let input = self.resolve_plan(*input).await?;
+                let input = self.resolve_plan(*input, state).await?;
                 let input = if positional_arguments.len() > 0 {
                     let params = positional_arguments
                         .into_iter()
@@ -396,7 +399,7 @@ impl PlanResolver<'_> {
                 return Err(PlanError::todo("sample"));
             }
             PlanNode::Offset { input, offset } => {
-                let input = self.resolve_plan(*input).await?;
+                let input = self.resolve_plan(*input, state).await?;
                 Ok(LogicalPlan::Limit(plan::Limit {
                     skip: offset,
                     fetch: None,
@@ -409,7 +412,7 @@ impl PlanResolver<'_> {
                 all_columns_as_keys,
                 within_watermark,
             } => {
-                let input = self.resolve_plan(*input).await?;
+                let input = self.resolve_plan(*input, state).await?;
                 let schema = input.schema();
                 if within_watermark {
                     return Err(PlanError::todo("deduplicate within watermark"));
@@ -468,7 +471,7 @@ impl PlanResolver<'_> {
                 alias,
                 qualifier,
             } => Ok(LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
-                Arc::new(self.resolve_plan(*input).await?),
+                Arc::new(self.resolve_plan(*input, state).await?),
                 build_table_reference(spec::ObjectName::new_qualified(alias, qualifier))?,
             )?)),
             PlanNode::Repartition {
@@ -476,7 +479,7 @@ impl PlanResolver<'_> {
                 num_partitions,
                 shuffle: _,
             } => {
-                let input = self.resolve_plan(*input).await?;
+                let input = self.resolve_plan(*input, state).await?;
                 // TODO: handle shuffle partition
                 Ok(LogicalPlan::Repartition(plan::Repartition {
                     input: Arc::new(input),
@@ -487,7 +490,7 @@ impl PlanResolver<'_> {
                 input,
                 column_names,
             } => {
-                let input = self.resolve_plan(*input).await?;
+                let input = self.resolve_plan(*input, state).await?;
                 let schema = input.schema();
                 if column_names.len() != schema.fields().len() {
                     return Err(PlanError::invalid(format!(
@@ -511,7 +514,7 @@ impl PlanResolver<'_> {
                 input,
                 rename_columns_map,
             } => {
-                let input = self.resolve_plan(*input).await?;
+                let input = self.resolve_plan(*input, state).await?;
                 let rename_columns_map: HashMap<String, String> = rename_columns_map
                     .into_iter()
                     .map(|(k, v)| (k.into(), v.into()))
@@ -540,7 +543,7 @@ impl PlanResolver<'_> {
                 truncate,
                 vertical,
             } => {
-                let input = self.resolve_plan(*input).await?;
+                let input = self.resolve_plan(*input, state).await?;
                 let style = match vertical {
                     true => ShowStringStyle::Vertical,
                     false => ShowStringStyle::Default,
@@ -555,7 +558,7 @@ impl PlanResolver<'_> {
                 columns,
                 column_names,
             } => {
-                let input = self.resolve_plan(*input).await?;
+                let input = self.resolve_plan(*input, state).await?;
                 let schema = input.schema();
                 if !columns.is_empty() {
                     return Err(PlanError::todo("drop column expressions"));
@@ -577,7 +580,7 @@ impl PlanResolver<'_> {
                 return Err(PlanError::todo("tail"));
             }
             PlanNode::WithColumns { input, aliases } => {
-                let input = self.resolve_plan(*input).await?;
+                let input = self.resolve_plan(*input, state).await?;
                 let schema = input.schema();
                 let mut aliases: HashMap<String, (Expr, bool)> = aliases
                     .into_iter()
@@ -601,7 +604,7 @@ impl PlanResolver<'_> {
                                 ))
                             }
                         };
-                        let expr = self.resolve_expression(expr, schema)?;
+                        let expr = self.resolve_expression(expr, schema, state)?;
                         Ok((name.into(), (expr, false)))
                     })
                     .collect::<PlanResult<_>>()?;
@@ -641,7 +644,7 @@ impl PlanResolver<'_> {
                 return Err(PlanError::todo("to schema"));
                 // TODO: Close but doesn't quite work.
                 // let input = to_schema.input.as_ref().required("input relation")?;
-                // let input = self.resolve_plan(input).await?;
+                // let input =  self.resolve_plan(input, state).await?;
                 // let schema = to_schema.schema.as_ref().required("schema")?;
                 // let schema: DataType = from_spark_built_in_data_type(schema)?;
                 // let fields = match &schema {
@@ -662,11 +665,11 @@ impl PlanResolver<'_> {
                 partition_expressions,
                 num_partitions,
             } => {
-                let input = self.resolve_plan(*input).await?;
+                let input = self.resolve_plan(*input, state).await?;
                 let schema = input.schema();
                 let expr: Vec<Expr> = partition_expressions
                     .into_iter()
-                    .map(|e| self.resolve_expression(e, schema))
+                    .map(|e| self.resolve_expression(e, schema, state))
                     .collect::<PlanResult<_>>()?;
                 let num_partitions = num_partitions
                     .ok_or_else(|| PlanError::todo("rebalance partitioning by expression"))?;
@@ -701,7 +704,7 @@ impl PlanResolver<'_> {
                 num_rows,
                 truncate,
             } => {
-                let input = self.resolve_plan(*input).await?;
+                let input = self.resolve_plan(*input, state).await?;
                 let format = ShowStringFormat::new(ShowStringStyle::Html, truncate);
                 Ok(LogicalPlan::Extension(Extension {
                     node: Arc::new(ShowStringNode::try_new(Arc::new(input), num_rows, format)?),
@@ -733,7 +736,7 @@ impl PlanResolver<'_> {
                 // let schema = DFSchema::empty(); // UDTF only has schema for return type
                 // let arguments: Vec<Expr> = arguments
                 //     .iter()
-                //     .map(|x| self.resolve_expression(x.clone(), &schema))
+                //     .map(|x|  self.resolve_expression(x.clone(), &schema, state))
                 //     .collect::<PlanResult<Vec<Expr>>>()?;
                 // let input_types: Vec<adt::DataType> = arguments
                 //     .iter()
@@ -939,7 +942,7 @@ impl PlanResolver<'_> {
                 options,
             } => {
                 // TODO: use spark.sql.sources.default to get the default source
-                let read = spec::Plan::new(spec::PlanNode::Read {
+                let read = spec::Plan::new(PlanNode::Read {
                     read_type: spec::ReadType::DataSource {
                         // TODO: is `source` and `format` equivalent?
                         format: source,
@@ -954,7 +957,7 @@ impl PlanResolver<'_> {
                     node: Arc::new(CatalogCommandNode::try_new(
                         CatalogCommand::CreateTable {
                             table: build_table_reference(table)?,
-                            plan: Arc::new(self.resolve_plan(read).await?),
+                            plan: Arc::new(self.resolve_plan(read, state).await?),
                         },
                         self.config.clone(),
                     )?),
@@ -1094,7 +1097,9 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .map(|row| {
                         row.into_iter()
-                            .map(|value| self.resolve_expression(value, &schema))
+                            .map(|value| -> PlanResult<_> {
+                                Ok(self.resolve_expression(value, &schema, state)?.unalias())
+                            })
                             .collect::<PlanResult<Vec<_>>>()
                     })
                     .collect::<PlanResult<Vec<_>>>()?;
@@ -1105,7 +1110,7 @@ impl PlanResolver<'_> {
                 name,
                 columns,
             } => {
-                let input = self.resolve_plan(*input).await?;
+                let input = self.resolve_plan(*input, state).await?;
                 let schema = input.schema();
                 let input = if columns.is_empty() {
                     input

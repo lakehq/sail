@@ -49,7 +49,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Optimizer rule 'common_sub_expression_eliminate' failed\ncaused by\ncommon_sub_expression_eliminate\ncaused by\nInternal error: Failed due to a difference in schemas, original schema: DFSchema { inner: Schema { fields: [Field { name: \"array_append(NULL,Int32(2))\", data_type: List(Field { name: \"element\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, field_qualifiers: [None], functional_dependencies: FunctionalDependencies { deps: [] } }, new schema: DFSchema { inner: Schema { fields: [Field { name: \"array_append(NULL,Int32(2))\", data_type: List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, field_qualifiers: [None], functional_dependencies: FunctionalDependencies { deps: [] } }.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "failure": "error in DataFusion: Arrow error: Invalid argument error: column types must match schema types, expected List(Field { name: \"element\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) but found List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) at column index 0"
       }
     },
     {
@@ -871,7 +871,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: three arguments expected"
+        "failure": "error in DataFusion: Error during planning: three values expected: [Alias(Alias { expr: Literal(Int32(1)), relation: None, name: \"1\" }), Alias(Alias { expr: Literal(Int32(5)), relation: None, name: \"5\" })]"
       }
     },
     {
@@ -897,7 +897,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: three arguments expected"
+        "failure": "error in DataFusion: Error during planning: three values expected: [Alias(Alias { expr: Literal(Int32(5)), relation: None, name: \"5\" }), Alias(Alias { expr: Literal(Int32(1)), relation: None, name: \"1\" })]"
       }
     },
     {
