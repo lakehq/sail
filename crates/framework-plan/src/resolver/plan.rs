@@ -716,7 +716,7 @@ impl PlanResolver<'_> {
             PlanNode::CachedRemoteRelation { .. } => {
                 return Err(PlanError::todo("cached remote relation"));
             }
-            PlanNode::CommonInlineUserDefinedTableFunction(udtf) => {
+            PlanNode::CommonInlineUserDefinedTableFunction(_udtf) => {
                 // TODO: Function arg for if pyspark_udtf or not
                 // TODO: This PR got too big, going to create a new one for the rest of the work
                 return Err(PlanError::todo("CommonInlineUserDefinedTableFunction"));

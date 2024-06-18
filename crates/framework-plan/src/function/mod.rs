@@ -13,9 +13,9 @@ pub(crate) use aggregate::get_built_in_aggregate_function;
 pub(crate) use window::get_built_in_window_function;
 
 lazy_static! {
-    static ref BUILT_IN_SCALAR_FUNCTIONS: HashMap<&'static str, Function> =
+    pub static ref BUILT_IN_SCALAR_FUNCTIONS: HashMap<&'static str, Function> =
         HashMap::from_iter(scalar::list_built_in_scalar_functions());
-    static ref BUILT_IN_GENERATOR_FUNCTIONS: HashMap<&'static str, Function> =
+    pub static ref BUILT_IN_GENERATOR_FUNCTIONS: HashMap<&'static str, Function> =
         HashMap::from_iter(generator::list_built_in_generator_functions());
 }
 

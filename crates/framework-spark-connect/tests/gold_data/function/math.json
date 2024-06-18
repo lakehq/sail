@@ -1559,7 +1559,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rand"
+        "success": "ok"
       }
     },
     {
@@ -1581,7 +1581,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rand"
+        "failure": "invalid argument: nullary: Zero arguments expected."
       }
     },
     {
@@ -1603,7 +1603,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rand"
+        "failure": "invalid argument: nullary: Zero arguments expected."
       }
     },
     {
@@ -1691,7 +1691,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: random"
+        "success": "ok"
       }
     },
     {
@@ -1713,7 +1713,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: random"
+        "failure": "invalid argument: nullary: Zero arguments expected."
       }
     },
     {
@@ -1735,7 +1735,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: random"
+        "failure": "invalid argument: nullary: Zero arguments expected."
       }
     },
     {

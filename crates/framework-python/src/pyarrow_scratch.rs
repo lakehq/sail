@@ -24,6 +24,7 @@ pub type PyArrowException = ArrowException;
 fn arrow_to_py_err(err: ArrowError) -> PyErr {
     PyArrowException::new_err(err.to_string())
 }
+#[allow(dead_code)]
 fn common_to_py_err(err: CommonError) -> PyErr {
     PyArrowException::new_err(err.to_string())
 }
@@ -47,6 +48,7 @@ fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
     Ok(())
 }
 
+#[allow(unreachable_code, dead_code, unused_variables)]
 fn pyarrow_bound_and_datatype_to_array_data(
     pyarrow_array: &Bound<PyAny>,
     data_type: spec::DataType,
@@ -78,6 +80,7 @@ fn pyarrow_bound_and_datatype_to_array_data(
     return unsafe { ffi::from_ffi_and_data_type(array, adt_data_type) }.map_err(arrow_to_py_err);
 }
 
+#[allow(dead_code)]
 fn from_pyspark_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<ArrayData> {
     if !value.is_instance_of::<PyTuple>() {
         return Err(PyValueError::new_err("Expected a tuple."));

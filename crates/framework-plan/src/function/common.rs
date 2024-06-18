@@ -11,6 +11,18 @@ pub(crate) type Function = Arc<dyn Fn(Vec<expr::Expr>) -> PlanResult<expr::Expr>
 pub(crate) struct FunctionBuilder;
 
 impl FunctionBuilder {
+    pub fn nullary<F>(f: F) -> Function
+    where
+        F: Fn() -> expr::Expr + Send + Sync + 'static,
+    {
+        Arc::new(move |args| {
+            if args.len() != 0 {
+                return Err(PlanError::invalid("nullary: Zero arguments expected."));
+            }
+            Ok(f())
+        })
+    }
+
     pub fn unary<F>(f: F) -> Function
     where
         F: Fn(expr::Expr) -> expr::Expr + Send + Sync + 'static,

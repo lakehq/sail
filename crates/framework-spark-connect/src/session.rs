@@ -6,13 +6,20 @@ use std::sync::{Arc, Mutex};
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use framework_common::config::{ConfigKeyValue, SparkUdfConfig};
 use framework_plan::config::{PlanConfig, TimestampType};
 use framework_plan::formatter::DefaultPlanFormatter;
+use framework_plan::function::BUILT_IN_SCALAR_FUNCTIONS;
 
-use crate::config::{ConfigKeyValue, ConfigKeyValueList, SparkRuntimeConfig};
+use crate::config::{ConfigKeyValueList, SparkRuntimeConfig};
 use crate::error::SparkResult;
 use crate::executor::Executor;
-use crate::spark::config::SPARK_SQL_SESSION_TIME_ZONE;
+use crate::spark::config::{
+    SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH,
+    SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY,
+    SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME,
+    SPARK_SQL_SESSION_TIME_ZONE,
+};
 use framework_plan::new_query_planner;
 
 const DEFAULT_SPARK_SCHEMA: &str = "default";
@@ -43,10 +50,18 @@ impl Session {
         let runtime = Arc::new(RuntimeEnv::default());
         let state = SessionState::new_with_config_rt(config, runtime);
         let state = state.with_query_planner(new_query_planner());
+        let context = SessionContext::new_with_state(state);
+
+        // TODO: This is a temp workaround to deregister all built-in functions that we define.
+        //  We should deregister all context.udfs() once we have better coverage of functions.
+        for (&name, _function) in BUILT_IN_SCALAR_FUNCTIONS.iter() {
+            context.deregister_udf(name);
+        }
+
         Self {
             user_id,
             session_id,
-            context: SessionContext::new_with_state(state),
+            context: context,
             state: Mutex::new(SparkSessionState::new()),
         }
     }
@@ -66,15 +81,53 @@ impl Session {
 
     pub(crate) fn plan_config(&self) -> SparkResult<Arc<PlanConfig>> {
         let state = self.state.lock()?;
+        let time_zone = state
+            .config
+            .get(SPARK_SQL_SESSION_TIME_ZONE)?
+            .map(|x| x.to_string())
+            .unwrap_or_else(|| "UTC".into());
+        let spark_udf_config = SparkUdfConfig {
+            timezone: ConfigKeyValue {
+                key: "spark.sql.session.timeZone".to_string(),
+                value: Some(time_zone.clone()),
+            },
+            // FIXME: pandas_window_bound_types is not a proper Spark configuration.
+            pandas_window_bound_types: ConfigKeyValue {
+                key: "pandas_window_bound_types".to_string(),
+                value: state
+                    .config
+                    .get("pandas_window_bound_types")?
+                    .map(|s| s.to_string()),
+            },
+            pandas_grouped_map_assign_columns_by_name: ConfigKeyValue {
+                key: SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME
+                    .to_string(),
+                value: state
+                    .config
+                    .get(SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME)?
+                    .map(|s| s.to_string()),
+            },
+            pandas_convert_to_arrow_array_safely: ConfigKeyValue {
+                key: SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY.to_string(),
+                value: state
+                    .config
+                    .get(SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY)?
+                    .map(|s| s.to_string()),
+            },
+            arrow_max_records_per_batch: ConfigKeyValue {
+                key: SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH.to_string(),
+                value: state
+                    .config
+                    .get(SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH)?
+                    .map(|s| s.to_string()),
+            },
+        };
         Ok(Arc::new(PlanConfig {
-            time_zone: state
-                .config
-                .get(SPARK_SQL_SESSION_TIME_ZONE)?
-                .map(|x| x.to_string())
-                .unwrap_or_else(|| "UTC".into()),
+            time_zone: time_zone,
             // TODO: get the default timestamp type from configuration
             timestamp_type: TimestampType::TimestampLtz,
             plan_formatter: Arc::new(DefaultPlanFormatter),
+            spark_udf_config,
         }))
     }
 

@@ -8,6 +8,8 @@ use serde::de::{self, IntoDeserializer, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_bytes::Bytes;
 
+use framework_common::config::SparkUdfConfig;
+
 pub const PY_SPARK_NON_UDF: i32 = 0;
 pub const PY_SPARK_SQL_BATCHED_UDF: i32 = 100;
 pub const PY_SPARK_SQL_ARROW_BATCHED_UDF: i32 = 101;
@@ -23,21 +25,21 @@ pub const PY_SPARK_SQL_GROUPED_MAP_PANDAS_UDF_WITH_STATE: i32 = 208;
 pub const PY_SPARK_SQL_TABLE_UDF: i32 = 300;
 pub const PY_SPARK_SQL_ARROW_TABLE_UDF: i32 = 301;
 
-pub fn is_pyspark_arrow_udf(udf_type: i32) -> bool {
-    udf_type == PY_SPARK_SQL_ARROW_BATCHED_UDF
-        || udf_type == PY_SPARK_SQL_MAP_ARROW_ITER_UDF
-        || udf_type == PY_SPARK_SQL_ARROW_TABLE_UDF
+pub fn is_pyspark_arrow_udf(udf_type: &i32) -> bool {
+    udf_type == &PY_SPARK_SQL_ARROW_BATCHED_UDF
+        || udf_type == &PY_SPARK_SQL_MAP_ARROW_ITER_UDF
+        || udf_type == &PY_SPARK_SQL_ARROW_TABLE_UDF
 }
 
-pub fn is_pyspark_pandas_udf(udf_type: i32) -> bool {
-    udf_type == PY_SPARK_SQL_SCALAR_PANDAS_UDF
-        || udf_type == PY_SPARK_SQL_GROUPED_MAP_PANDAS_UDF
-        || udf_type == PY_SPARK_SQL_GROUPED_AGG_PANDAS_UDF
-        || udf_type == PY_SPARK_SQL_WINDOW_AGG_PANDAS_UDF
-        || udf_type == PY_SPARK_SQL_SCALAR_PANDAS_ITER_UDF
-        || udf_type == PY_SPARK_SQL_MAP_PANDAS_ITER_UDF
-        || udf_type == PY_SPARK_SQL_COGROUPED_MAP_PANDAS_UDF
-        || udf_type == PY_SPARK_SQL_GROUPED_MAP_PANDAS_UDF_WITH_STATE
+pub fn is_pyspark_pandas_udf(udf_type: &i32) -> bool {
+    udf_type == &PY_SPARK_SQL_SCALAR_PANDAS_UDF
+        || udf_type == &PY_SPARK_SQL_GROUPED_MAP_PANDAS_UDF
+        || udf_type == &PY_SPARK_SQL_GROUPED_AGG_PANDAS_UDF
+        || udf_type == &PY_SPARK_SQL_WINDOW_AGG_PANDAS_UDF
+        || udf_type == &PY_SPARK_SQL_SCALAR_PANDAS_ITER_UDF
+        || udf_type == &PY_SPARK_SQL_MAP_PANDAS_ITER_UDF
+        || udf_type == &PY_SPARK_SQL_COGROUPED_MAP_PANDAS_UDF
+        || udf_type == &PY_SPARK_SQL_GROUPED_MAP_PANDAS_UDF_WITH_STATE
 }
 
 #[derive(Debug, Clone)]
@@ -61,10 +63,7 @@ impl Serialize for PartialPySparkUDF {
     }
 }
 
-struct PartialPySparkUDFVisitor {
-    eval_type: i32,
-    num_args: i32,
-}
+struct PartialPySparkUDFVisitor;
 
 impl<'de> Visitor<'de> for PartialPySparkUDFVisitor {
     type Value = PartialPySparkUDF;
@@ -77,25 +76,17 @@ impl<'de> Visitor<'de> for PartialPySparkUDFVisitor {
     where
         E: de::Error,
     {
-        let mut data: Vec<u8> = Vec::new();
-        if is_pyspark_arrow_udf(self.eval_type) || is_pyspark_pandas_udf(self.eval_type) {
-            // TODO: Fill in conf.
-            data.extend(&0i32.to_be_bytes()); // num_conf
-        }
-        data.extend(&1i32.to_be_bytes()); // num_udfs
-        data.extend(&self.num_args.to_be_bytes()); // num_args
-        for index in 0..self.num_args {
-            data.extend(&index.to_be_bytes()); // arg_offsets
-        }
-        data.extend(&1i32.to_be_bytes()); // num functions
-        data.extend(&(v.len() as i32).to_be_bytes()); // len of the function
-        data.extend_from_slice(v);
-        let data: &[u8] = data.as_slice();
-
+        // build_pyspark_udf_payload adds eval_type to the beginning of the payload
+        let (eval_type_bytes, v) = v.split_at(std::mem::size_of::<i32>());
+        let eval_type = i32::from_be_bytes(
+            eval_type_bytes
+                .try_into()
+                .map_err(|e| E::custom(format!("eval_type from_be_bytes: {:?}", e)))?,
+        );
         Python::with_gil(|py| {
             let infile: Bound<PyAny> = PyModule::import_bound(py, pyo3::intern!(py, "io"))
                 .and_then(|io| io.getattr(pyo3::intern!(py, "BytesIO")))
-                .and_then(|bytes_io| bytes_io.call1((data,)))
+                .and_then(|bytes_io| bytes_io.call1((v,)))
                 .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))?;
             let pickle_ser: Bound<PyAny> =
                 PyModule::import_bound(py, pyo3::intern!(py, "pyspark.serializers"))
@@ -106,10 +97,19 @@ impl<'de> Visitor<'de> for PartialPySparkUDFVisitor {
                     .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))?;
             PyModule::import_bound(py, pyo3::intern!(py, "pyspark.worker"))
                 .and_then(|worker| worker.getattr(pyo3::intern!(py, "read_udfs")))
-                .and_then(|read_udfs| read_udfs.call1((pickle_ser, infile, self.eval_type)))
+                .and_then(|read_udfs| read_udfs.call1((pickle_ser, infile, eval_type)))
                 .and_then(|py_tuple| Ok(PartialPySparkUDF(py_tuple.to_object(py))))
                 .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))
         })
+    }
+}
+
+impl<'de> Deserialize<'de> for PartialPySparkUDF {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_bytes(PartialPySparkUDFVisitor)
     }
 }
 
@@ -132,15 +132,63 @@ impl PartialEq for PartialPySparkUDF {
 impl Eq for PartialPySparkUDF {}
 
 pub fn deserialize_partial_pyspark_udf(
+    python_version: &str,
     command: &[u8],
     eval_type: &i32,
     num_args: &i32,
+    spark_udf_config: &SparkUdfConfig,
 ) -> Result<PartialPySparkUDF, de::value::Error> {
-    let bytes = Bytes::new(command);
-    let visitor = PartialPySparkUDFVisitor {
-        eval_type: *eval_type,
-        num_args: *num_args,
-    };
-    let deserializer = bytes.into_deserializer();
-    deserializer.deserialize_bytes(visitor)
+    let pyo3_python_version: String = Python::with_gil(|py| py.version().to_string());
+    if !pyo3_python_version.starts_with(python_version) {
+        return Err(de::Error::custom(format!(
+            "Python version mismatch. Version used to compile the UDF must match the version used to run the UDF. Version used to compile the UDF: {:?}. Version used to run the UDF: {:?}",
+            python_version,
+            pyo3_python_version,
+        )));
+    }
+    let data: Vec<u8> = build_pyspark_udf_payload(command, eval_type, num_args, spark_udf_config);
+    let bytes = Bytes::new(data.as_slice());
+    PartialPySparkUDF::deserialize(bytes.into_deserializer())
+}
+
+pub fn build_pyspark_udf_payload(
+    command: &[u8],
+    eval_type: &i32,
+    num_args: &i32,
+    spark_udf_config: &SparkUdfConfig,
+) -> Vec<u8> {
+    let mut data: Vec<u8> = Vec::new();
+    data.extend(&eval_type.to_be_bytes()); // Add eval_type for extraction in visit_bytes
+    if is_pyspark_arrow_udf(eval_type) || is_pyspark_pandas_udf(eval_type) {
+        let configs = [
+            &spark_udf_config.timezone,
+            &spark_udf_config.pandas_window_bound_types,
+            &spark_udf_config.pandas_grouped_map_assign_columns_by_name,
+            &spark_udf_config.pandas_convert_to_arrow_array_safely,
+            &spark_udf_config.arrow_max_records_per_batch,
+        ];
+        let mut num_conf: i32 = 0;
+        let mut temp_data: Vec<u8> = Vec::new();
+        for config in configs {
+            if let Some(value) = &config.value {
+                temp_data.extend(&(config.key.len() as i32).to_be_bytes()); // len of the key
+                temp_data.extend(config.key.as_bytes());
+                temp_data.extend(&(value.len() as i32).to_be_bytes()); // len of the value
+                temp_data.extend(value.as_bytes());
+                num_conf += 1;
+            }
+        }
+        data.extend(&num_conf.to_be_bytes()); // num_conf
+        data.extend(&temp_data);
+    }
+    data.extend(&1i32.to_be_bytes()); // num_udfs
+    data.extend(&num_args.to_be_bytes()); // num_args
+    for index in 0..*num_args {
+        data.extend(&index.to_be_bytes()); // arg_offsets
+    }
+    data.extend(&1i32.to_be_bytes()); // num functions
+    data.extend(&(command.len() as i32).to_be_bytes()); // len of the function
+    data.extend_from_slice(command);
+
+    data
 }

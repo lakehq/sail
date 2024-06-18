@@ -1,6 +1,7 @@
+use framework_common::config::ConfigKeyValue;
 use std::sync::Arc;
 
-use crate::config::{ConfigKeyValue, ConfigKeyValueList, SparkRuntimeConfig};
+use crate::config::{ConfigKeyValueList, SparkRuntimeConfig};
 use crate::error::SparkResult;
 use crate::session::Session;
 use crate::spark::connect::{ConfigResponse, KeyValue};

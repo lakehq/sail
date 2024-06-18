@@ -10,7 +10,7 @@ pub mod config;
 pub mod error;
 mod extension;
 pub mod formatter;
-mod function;
+pub mod function;
 pub mod resolver;
 mod utils;
 

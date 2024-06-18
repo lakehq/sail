@@ -2,11 +2,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use datafusion::arrow::datatypes::Schema as ArrowSchema;
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema};
 use datafusion::common::{FileType, TableReference};
 use datafusion::dataframe::DataFrame;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_common::config::{FormatOptions, TableOptions};
+use datafusion_expr::ScalarUDF;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
@@ -22,12 +23,15 @@ use crate::spark::connect::execute_plan_response::{ResponseType, ResultComplete}
 use crate::spark::connect::relation;
 use crate::spark::connect::write_operation::{save_table::TableSaveMethod, SaveMode, SaveType};
 use crate::spark::connect::{
-    CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
+    CommonInlineUserDefinedFunction as SCCommonInlineUserDefinedFunction,
+    CommonInlineUserDefinedTableFunction as SCCommonInlineUserDefinedTableFunction,
     CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, Relation, SqlCommand,
     StreamingQueryCommand, StreamingQueryManagerCommand, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart,
 };
+use framework_common::spec::{CommonInlineUserDefinedFunction, FunctionDefinition};
 use framework_plan::resolver::{PlanResolver, PlanResolverState};
+use framework_python::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
 pub struct ExecutePlanResponseStream {
     session_id: String,
@@ -120,10 +124,54 @@ pub(crate) async fn handle_execute_relation(
 }
 
 pub(crate) async fn handle_execute_register_function(
-    _session: Arc<Session>,
-    _udf: CommonInlineUserDefinedFunction,
+    session: Arc<Session>,
+    udf: SCCommonInlineUserDefinedFunction,
+    metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    Err(SparkError::todo("register function"))
+    // TODO: Call PlanNode::RegisterFunction even though SC implementation registers it directly.
+    let ctx = session.context();
+    let resolver = PlanResolver::new(ctx, session.plan_config()?);
+
+    let udf: CommonInlineUserDefinedFunction = udf.try_into()?;
+    let CommonInlineUserDefinedFunction {
+        function_name,
+        deterministic,
+        arguments: _,
+        function,
+    } = udf;
+    let function_name: &str = function_name.as_str();
+
+    let (output_type, _eval_type, _command, _python_version) = match &function {
+        FunctionDefinition::PythonUdf {
+            output_type,
+            eval_type,
+            command,
+            python_version,
+        } => (output_type, eval_type, command, python_version),
+        _ => {
+            return Err(SparkError::invalid("UDF function type must be Python UDF"));
+        }
+    };
+    let output_type: ArrowDataType = resolver.resolve_data_type(output_type.clone())?;
+
+    let python_udf: UnresolvedPySparkUDF = UnresolvedPySparkUDF::new(
+        function_name.to_owned(),
+        function,
+        output_type,
+        deterministic,
+    );
+
+    let scalar_udf = ScalarUDF::from(python_udf);
+    ctx.register_udf(scalar_udf);
+
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    tx.send(ExecutorOutput::new(ExecutorBatch::Complete))
+        .await?;
+    Ok(ExecutePlanResponseStream::new(
+        session.session_id().to_string(),
+        metadata.operation_id,
+        ReceiverStream::new(rx),
+    ))
 }
 
 pub(crate) async fn handle_execute_write_operation(
@@ -311,7 +359,7 @@ pub(crate) async fn handle_execute_streaming_query_manager_command(
 
 pub(crate) async fn handle_execute_register_table_function(
     _session: Arc<Session>,
-    _udtf: CommonInlineUserDefinedTableFunction,
+    _udtf: SCCommonInlineUserDefinedTableFunction,
 ) -> SparkResult<ExecutePlanResponseStream> {
     Err(SparkError::todo("register table function"))
 }
