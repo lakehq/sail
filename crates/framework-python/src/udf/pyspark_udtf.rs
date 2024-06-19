@@ -1,5 +1,3 @@
-// TODO: This PR got too big, going to create a new one for the rest of the work
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
