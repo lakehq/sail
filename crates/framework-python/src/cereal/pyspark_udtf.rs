@@ -7,7 +7,7 @@ use serde::de::{self, IntoDeserializer, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_bytes::Bytes;
 
-use crate::cereal::{is_pyspark_arrow_udf, is_pyspark_pandas_udf};
+use crate::cereal::is_pyspark_arrow_udf;
 
 #[derive(Debug, Clone)]
 pub struct PySparkUDTF(pub PyObject);

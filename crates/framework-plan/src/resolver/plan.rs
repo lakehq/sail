@@ -22,7 +22,6 @@ use datafusion_common::{
 };
 use datafusion_expr::{build_join_schema, ExprSchemable, LogicalPlanBuilder};
 use framework_common::spec;
-use framework_python::udf::pyspark_udf::PySparkUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::analyzer::alias::rewrite_multi_alias;
@@ -721,12 +720,10 @@ impl PlanResolver<'_> {
             }
             PlanNode::CommonInlineUserDefinedTableFunction(udtf) => {
                 // TODO: Function arg for if pyspark_udtf or not
-                // return Err(PlanError::todo("CommonInlineUserDefinedTableFunction"));
                 use framework_python::cereal::pyspark_udtf::{
                     deserialize_pyspark_udtf, PySparkUDTF as CerealPySparkUDTF,
                 };
-                use framework_python::udf::pyspark_udtf::{PySparkUDT, PySparkUDTF};
-                use pyo3::prelude::*;
+                use framework_python::udf::pyspark_udtf::PySparkUDTF;
 
                 let spec::CommonInlineUserDefinedTableFunction {
                     function_name,
@@ -752,9 +749,6 @@ impl PlanResolver<'_> {
                         command,
                         python_version,
                     } => (return_type, eval_type, command, python_version),
-                    _ => {
-                        return Err(PlanError::invalid("UDF function type must be Python UDF"));
-                    }
                 };
 
                 let return_schema: adt::SchemaRef = match return_type {
