@@ -9,9 +9,8 @@ use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyIterator, PyList, PyTuple, PyType};
 
-use crate::cereal::partial_pyspark_udf::{
-    is_pyspark_arrow_udf, is_pyspark_pandas_udf, PartialPySparkUDF, PY_SPARK_SQL_BATCHED_UDF,
-};
+use crate::cereal::partial_pyspark_udf::PartialPySparkUDF;
+use crate::cereal::{is_pyspark_arrow_udf, is_pyspark_pandas_udf, PY_SPARK_SQL_BATCHED_UDF};
 use crate::udf::{
     build_pyarrow_module_array_kwargs, get_pyarrow_module_array_function,
     get_pyarrow_output_data_type, get_python_builtins_list_function,

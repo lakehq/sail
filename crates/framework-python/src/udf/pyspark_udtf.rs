@@ -96,7 +96,7 @@ impl PySparkUDTF {
         }
     }
 
-    fn apply_python_function(&self, args: &Vec<ArrayRef>) -> Result<RecordBatch> {
+    fn apply_python_function(&self, args: &[ArrayRef]) -> Result<RecordBatch> {
         Python::with_gil(|py| {
             let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let python_function = self
