@@ -1,9 +1,10 @@
 // TODO: This PR got too big, going to create a new one for the rest of the work
 
-use crate::cereal::partial_pyspark_udf::PartialPySparkUDF;
+use std::sync::Arc;
+
 use async_trait::async_trait;
-use datafusion::arrow::array::ArrayRef;
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
+use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::pyarrow::*;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::function::TableFunctionImpl;
@@ -16,7 +17,9 @@ use datafusion_common::DataFusionError;
 use datafusion_expr::{Expr, TableType};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
-use std::sync::Arc;
+
+use crate::cereal::partial_pyspark_udf::PartialPySparkUDF;
+use crate::udf::get_python_builtins_list_function;
 
 #[derive(Debug, Clone)]
 pub struct PySparkUDT {
@@ -46,10 +49,10 @@ impl TableProvider for PySparkUDT {
 
     async fn scan(
         &self,
-        state: &SessionState,
+        _state: &SessionState,
         projection: Option<&Vec<usize>>,
-        filters: &[Expr],
-        limit: Option<usize>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = MemoryExec::try_new(
             &[self.batches.clone()],
@@ -62,7 +65,9 @@ impl TableProvider for PySparkUDT {
 
 #[derive(Debug, Clone)]
 pub struct PySparkUDTF {
+    #[allow(dead_code)]
     function_name: String,
+    #[allow(dead_code)]
     input_types: Vec<DataType>,
     schema: SchemaRef,
     python_function: PartialPySparkUDF,
@@ -91,10 +96,77 @@ impl PySparkUDTF {
         }
     }
 
-    // fn apply_python_function(&self, input_arrays: Vec<ArrayRef>) -> Result<RecordBatch> {
-    //     Python::with_gil(|py| {
-    //     })
-    // }
+    fn apply_python_function(&self, args: &Vec<ArrayRef>) -> Result<RecordBatch> {
+        Python::with_gil(|py| {
+            let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
+            let python_function = self
+                .python_function
+                .0
+                .clone_ref(py)
+                .into_bound(py)
+                .get_item(0)
+                .map_err(|err| DataFusionError::Internal(format!("python_function {}", err)))?;
+
+            let py_args: Vec<Bound<PyAny>> = args
+                .iter()
+                .map(|arg| {
+                    arg.into_data()
+                        .to_pyarrow(py)
+                        .unwrap()
+                        .clone_ref(py)
+                        .into_bound(py)
+                })
+                .collect::<Vec<_>>();
+            let py_args: Bound<PyTuple> = PyTuple::new_bound(py, &py_args);
+
+            let results: Bound<PyAny> =
+                python_function
+                    .call1((py.None(), (py_args,)))
+                    .map_err(|e| {
+                        DataFusionError::Execution(format!("PySpark Arrow UDF Result: {e:?}"))
+                    })?;
+            let results: Bound<PyAny> = builtins_list
+                .call1((results,))
+                .map_err(|err| {
+                    DataFusionError::Internal(format!(
+                        "PySpark Arrow UDF Error calling list(): {:?}",
+                        err
+                    ))
+                })?
+                .get_item(0)
+                .map_err(|err| {
+                    DataFusionError::Internal(format!(
+                        "PySpark Arrow UDF Result list() first get_item(0): {:?}",
+                        err
+                    ))
+                })?;
+
+            let results_data: Bound<PyAny> = results.get_item(0).map_err(|err| {
+                DataFusionError::Internal(format!(
+                    "PySpark Arrow UDF Result list get_item(0): {:?}",
+                    err
+                ))
+            })?;
+            let _results_datatype: Bound<PyAny> = results.get_item(1).map_err(|err| {
+                DataFusionError::Internal(format!(
+                    "PySpark Arrow UDF Result list get_item(0): {:?}",
+                    err
+                ))
+            })?;
+
+            let array_data = ArrayData::from_pyarrow_bound(&results_data).map_err(|err| {
+                DataFusionError::Internal(format!("PySpark Arrow UDF array_data {:?}", err))
+            })?;
+            let array_ref = make_array(array_data);
+
+            let record_batch =
+                RecordBatch::try_new(self.schema.clone(), vec![array_ref]).map_err(|e| {
+                    DataFusionError::Execution(format!("Failed to create RecordBatch: {:?}", e))
+                })?;
+
+            Ok(record_batch)
+        })
+    }
 }
 
 impl TableFunctionImpl for PySparkUDTF {
@@ -126,24 +198,11 @@ impl TableFunctionImpl for PySparkUDTF {
             }
         }
 
-        let schema = Schema::new(
-            input_types
-                .iter()
-                .enumerate()
-                .map(|(i, data_type)| {
-                    // Assuming the columns are named as "col0", "col1", etc.
-                    Field::new(&format!("col{}", i), data_type.clone(), true)
-                })
-                .collect::<Vec<_>>(),
-        );
-        let schema_ref = Arc::new(schema);
+        let batches = self.apply_python_function(&input_arrays)?;
 
-        let record_batch = RecordBatch::try_new(schema_ref.clone(), input_arrays).map_err(|e| {
-            DataFusionError::Execution(format!("Failed to create RecordBatch: {:?}", e))
-        })?;
-
-        // let transformed_batch = self.apply_python_function(input_arrays)?;
-
-        Ok(Arc::new(PySparkUDT::new(schema_ref, vec![record_batch])))
+        Ok(Arc::new(PySparkUDT::new(
+            self.schema.clone(),
+            vec![batches],
+        )))
     }
 }
