@@ -232,6 +232,7 @@ impl PlanResolver<'_> {
                 // TODO: udaf and udwf
 
                 if is_built_in_generator_function(function_name.as_str()) {
+                    // TODO: Table function Alias
                     Ok(func)
                 } else {
                     let name = self.config.plan_formatter.function_to_string(
