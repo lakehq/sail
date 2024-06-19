@@ -170,13 +170,13 @@ impl PySparkUDTF {
 }
 
 impl TableFunctionImpl for PySparkUDTF {
-    // https://spark.apache.org/docs/latest/api/python/user_guide/sql/python_udtf.html
-    // These args can either be scalar exprs or table args that represent entire input tables.
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         let mut input_types = Vec::new();
         let mut input_arrays = Vec::new();
 
         for expr in exprs {
+            // https://spark.apache.org/docs/latest/api/python/user_guide/sql/python_udtf.html
+            // args can either be scalar exprs or table args that represent entire input tables.
             match expr {
                 Expr::Literal(scalar_value) => {
                     let array_ref = scalar_value.to_array().map_err(|e| {
