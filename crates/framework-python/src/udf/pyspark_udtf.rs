@@ -18,7 +18,7 @@ use datafusion_expr::{Expr, TableType};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
-use crate::cereal::partial_pyspark_udf::PartialPySparkUDF;
+use crate::cereal::pyspark_udtf::PySparkUDTF as CerealPySparkUDTF;
 use crate::udf::get_python_builtins_list_function;
 
 #[derive(Debug, Clone)]
@@ -70,7 +70,7 @@ pub struct PySparkUDTF {
     #[allow(dead_code)]
     input_types: Vec<DataType>,
     schema: SchemaRef,
-    python_function: PartialPySparkUDF,
+    python_function: CerealPySparkUDTF,
     #[allow(dead_code)]
     deterministic: bool,
     #[allow(dead_code)]
@@ -82,7 +82,7 @@ impl PySparkUDTF {
         function_name: String,
         input_types: Vec<DataType>,
         schema: SchemaRef,
-        python_function: PartialPySparkUDF,
+        python_function: CerealPySparkUDTF,
         deterministic: bool,
         eval_type: i32,
     ) -> Self {

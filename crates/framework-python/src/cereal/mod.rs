@@ -1,5 +1,6 @@
 pub mod partial_pyspark_udf;
 pub mod partial_python_udf;
+pub mod pyspark_udtf;
 
 pub const PY_SPARK_NON_UDF: i32 = 0;
 pub const PY_SPARK_SQL_BATCHED_UDF: i32 = 100;
