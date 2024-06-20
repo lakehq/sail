@@ -49,10 +49,6 @@ impl CommonPythonUDF for PythonUDF {
     fn python_function(&self) -> &Self::PythonFunctionType {
         &self.python_function
     }
-
-    fn output_type(&self) -> &DataType {
-        &self.output_type
-    }
 }
 
 impl ScalarUDFImpl for PythonUDF {

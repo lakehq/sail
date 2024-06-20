@@ -1,5 +1,7 @@
 use std::hash::{Hash, Hasher};
 
+use arrow::pyarrow::ToPyArrow;
+use datafusion::arrow::datatypes::DataType;
 use framework_common::config::SparkUdfConfig;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyModule};
@@ -108,6 +110,7 @@ pub fn deserialize_pyspark_udtf(
     command: &[u8],
     eval_type: &i32,
     num_args: &i32,
+    return_type: &DataType,
     spark_udf_config: &SparkUdfConfig,
 ) -> Result<PySparkUDTF, de::value::Error> {
     let pyo3_python_version: String = Python::with_gil(|py| py.version().to_string());
@@ -118,7 +121,8 @@ pub fn deserialize_pyspark_udtf(
             pyo3_python_version,
         )));
     }
-    let data: Vec<u8> = build_pyspark_udtf_payload(command, eval_type, num_args, spark_udf_config);
+    let data: Vec<u8> =
+        build_pyspark_udtf_payload(command, eval_type, num_args, return_type, spark_udf_config);
     let bytes = Bytes::new(data.as_slice());
     PySparkUDTF::deserialize(bytes.into_deserializer())
 }
@@ -127,6 +131,7 @@ pub fn build_pyspark_udtf_payload(
     command: &[u8],
     eval_type: &i32,
     num_args: &i32,
+    return_type: &DataType,
     spark_udf_config: &SparkUdfConfig,
 ) -> Vec<u8> {
     let mut data: Vec<u8> = Vec::new();
@@ -156,6 +161,26 @@ pub fn build_pyspark_udtf_payload(
     }
     data.extend(&(command.len() as i32).to_be_bytes()); // len of the function
     data.extend_from_slice(command);
+
+    Python::with_gil(|py| {
+        let return_type: Bound<PyAny> = return_type
+            .to_pyarrow(py)
+            .unwrap()
+            .clone_ref(py)
+            .into_bound(py);
+        let result: Bound<PyAny> =
+            PyModule::import_bound(py, pyo3::intern!(py, "pyspark.sql.pandas.types"))
+                .and_then(|types| types.getattr(pyo3::intern!(py, "from_arrow_type")))
+                .and_then(|from_arrow_type| from_arrow_type.call1((return_type,)))
+                .and_then(|result| result.getattr("json"))
+                .and_then(|json_method| json_method.call0())
+                .unwrap();
+        let json_string: String = result.extract().expect("Failed to extract JSON string");
+        let json_length = json_string.len();
+
+        data.extend(&(json_length as u32).to_be_bytes());
+        data.extend(json_string.as_bytes());
+    });
 
     data
 }

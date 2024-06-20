@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
+use datafusion::arrow::array::{Array, ArrayRef};
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::pyarrow::*;
 use datafusion::arrow::record_batch::RecordBatch;
@@ -68,6 +68,8 @@ pub struct PySparkUDTF {
     #[allow(dead_code)]
     input_types: Vec<DataType>,
     schema: SchemaRef,
+    #[allow(dead_code)]
+    output_type: DataType,
     python_function: CerealPySparkUDTF,
     #[allow(dead_code)]
     deterministic: bool,
@@ -80,6 +82,7 @@ impl PySparkUDTF {
         function_name: String,
         input_types: Vec<DataType>,
         schema: SchemaRef,
+        output_type: DataType,
         python_function: CerealPySparkUDTF,
         deterministic: bool,
         eval_type: i32,
@@ -88,6 +91,7 @@ impl PySparkUDTF {
             function_name,
             input_types,
             schema,
+            output_type,
             python_function,
             deterministic,
             eval_type,
@@ -104,6 +108,23 @@ impl PySparkUDTF {
                 .into_bound(py)
                 .get_item(0)
                 .map_err(|err| DataFusionError::Internal(format!("python_function {}", err)))?;
+
+            let record_batch_from_pandas: Bound<PyAny> =
+                PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
+                    .map_err(|err| {
+                        DataFusionError::Internal(format!("pyarrow import error: {}", err))
+                    })?
+                    .getattr(pyo3::intern!(py, "RecordBatch"))
+                    .map_err(|err| {
+                        DataFusionError::Internal(format!("pyarrow RecordBatch error: {}", err))
+                    })?
+                    .getattr(pyo3::intern!(py, "from_pandas"))
+                    .map_err(|err| {
+                        DataFusionError::Internal(format!(
+                            "pyarrow RecordBatch from_pandas error: {}",
+                            err
+                        ))
+                    })?;
 
             let py_args: Vec<Bound<PyAny>> = args
                 .iter()
@@ -152,14 +173,17 @@ impl PySparkUDTF {
                 ))
             })?;
 
-            let array_data = ArrayData::from_pyarrow_bound(&results_data).map_err(|err| {
-                DataFusionError::Internal(format!("PySpark Arrow UDF array_data {:?}", err))
-            })?;
-            let array_ref = make_array(array_data);
-
-            let record_batch =
-                RecordBatch::try_new(self.schema.clone(), vec![array_ref]).map_err(|e| {
-                    DataFusionError::Execution(format!("Failed to create RecordBatch: {:?}", e))
+            let record_batch: Bound<PyAny> = record_batch_from_pandas
+                .call1((results_data,))
+                .map_err(|err| {
+                    DataFusionError::Internal(format!(
+                        "PySpark Arrow UDTF record_batch_from_pandas {:?}",
+                        err
+                    ))
+                })?;
+            let record_batch: RecordBatch = RecordBatch::from_pyarrow_bound(&record_batch)
+                .map_err(|err| {
+                    DataFusionError::Internal(format!("PySpark Arrow UDTF record_batch {:?}", err))
                 })?;
 
             Ok(record_batch)

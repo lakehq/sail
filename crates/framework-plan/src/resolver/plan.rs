@@ -751,9 +751,10 @@ impl PlanResolver<'_> {
                     } => (return_type, eval_type, command, python_version),
                 };
 
+                let return_type: adt::DataType = self.resolve_data_type(return_type)?;
                 let return_schema: adt::SchemaRef = match return_type {
-                    spec::DataType::Struct { fields } => {
-                        Arc::new(adt::Schema::new(self.resolve_fields(fields)?))
+                    adt::DataType::Struct(ref fields) => {
+                        Arc::new(adt::Schema::new(fields.clone()))
                     },
                     _ => {
                         return Err(PlanError::invalid(format!(
@@ -768,6 +769,7 @@ impl PlanResolver<'_> {
                     &command,
                     &eval_type,
                     &(arguments.len() as i32),
+                    &return_type,
                     &self.config.spark_udf_config,
                 )
                 .map_err(|e| {
@@ -778,6 +780,7 @@ impl PlanResolver<'_> {
                     function_name.clone(),
                     input_types,
                     return_schema,
+                    return_type,
                     python_function,
                     deterministic,
                     eval_type,

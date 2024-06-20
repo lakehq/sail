@@ -34,7 +34,6 @@ pub trait CommonPythonUDF {
     type PythonFunctionType: PythonFunction;
 
     fn python_function(&self) -> &Self::PythonFunctionType;
-    fn output_type(&self) -> &DataType;
 }
 
 pub fn get_python_function<'py, T>(udf: &T, py: Python<'py>) -> Result<Bound<'py, PyAny>>
@@ -49,12 +48,11 @@ where
     Ok(python_function)
 }
 
-pub fn get_pyarrow_output_data_type<'py, T>(udf: &T, py: Python<'py>) -> Result<Bound<'py, PyAny>>
-where
-    T: CommonPythonUDF,
-{
-    let pyarrow_output_data_type: Bound<PyAny> = udf
-        .output_type()
+pub fn get_pyarrow_output_data_type<'py>(
+    output_type: &DataType,
+    py: Python<'py>,
+) -> Result<Bound<'py, PyAny>> {
+    let pyarrow_output_data_type: Bound<PyAny> = output_type
         .to_pyarrow(py)
         .map_err(|err| DataFusionError::Internal(format!("output_type to_pyarrow {}", err)))?
         .clone_ref(py)
