@@ -54,19 +54,24 @@ impl<'de> Visitor<'de> for PySparkUDTFVisitor {
             let infile: Bound<PyAny> = PyModule::import_bound(py, pyo3::intern!(py, "io"))
                 .and_then(|io| io.getattr(pyo3::intern!(py, "BytesIO")))
                 .and_then(|bytes_io| bytes_io.call1((v,)))
-                .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))?;
+                .map_err(|e| E::custom(format!("PySparkUDTFVisitor BytesIO Error: {:?}", e)))?;
             let pickle_ser: Bound<PyAny> =
                 PyModule::import_bound(py, pyo3::intern!(py, "pyspark.serializers"))
                     .and_then(|serializers| {
                         serializers.getattr(pyo3::intern!(py, "CPickleSerializer"))
                     })
                     .and_then(|serializer| serializer.call0())
-                    .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))?;
+                    .map_err(|e| {
+                        E::custom(format!(
+                            "PySparkUDTFVisitor CPickleSerializer Error: {:?}",
+                            e
+                        ))
+                    })?;
             PyModule::import_bound(py, pyo3::intern!(py, "pyspark.worker"))
                 .and_then(|worker| worker.getattr(pyo3::intern!(py, "read_udtf")))
                 .and_then(|read_udtf| read_udtf.call1((pickle_ser, infile, eval_type)))
                 .map(|py_tuple| PySparkUDTF(py_tuple.to_object(py)))
-                .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))
+                .map_err(|e| E::custom(format!("PySparkUDTFVisitor Pickle Error: {:?}", e)))
         })
     }
 }
