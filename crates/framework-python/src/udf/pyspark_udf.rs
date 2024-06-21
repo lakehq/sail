@@ -90,18 +90,32 @@ impl ScalarUDFImpl for PySparkUDF {
                 let pyarrow_output_data_type: Bound<PyAny> =
                     get_pyarrow_output_data_type(&self.output_type, py)?;
                 let pyarrow_array_kwargs: Bound<PyDict> =
-                    build_pyarrow_array_kwargs(py, pyarrow_output_data_type, false)?;
+                    build_pyarrow_array_kwargs(py, pyarrow_output_data_type, true)?;
 
                 let py_args: Vec<Bound<PyAny>> = args
                     .iter()
                     .map(|arg| {
-                        arg.into_data()
+                        let arg = arg
+                            .into_data()
                             .to_pyarrow(py)
-                            .unwrap()
+                            .map_err(|err| {
+                                DataFusionError::Internal(format!(
+                                    "PySpark Arrow UDF arg into_data to_pyarrow: {}",
+                                    err
+                                ))
+                            })?
+                            .call_method0(py, pyo3::intern!(py, "to_pandas"))
+                            .map_err(|err| {
+                                DataFusionError::Internal(format!(
+                                    "PySpark Arrow UDF arg into_data to_pyarrow to_pandas: {}",
+                                    err
+                                ))
+                            })?
                             .clone_ref(py)
-                            .into_bound(py)
+                            .into_bound(py);
+                        Ok(arg)
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<Result<Vec<_>, DataFusionError>>()?;
                 let py_args: Bound<PyTuple> = PyTuple::new_bound(py, &py_args);
 
                 let results: Bound<PyAny> = python_function
@@ -164,15 +178,27 @@ impl ScalarUDFImpl for PySparkUDF {
                 let py_args: Vec<Bound<PyAny>> = args
                     .iter()
                     .map(|arg| {
-                        arg.into_data()
+                        let arg = arg
+                            .into_data()
                             .to_pyarrow(py)
-                            .unwrap()
+                            .map_err(|err| {
+                                DataFusionError::Internal(format!(
+                                    "PySpark Pandas UDF arg into_data to_pyarrow: {}",
+                                    err
+                                ))
+                            })?
                             .call_method0(py, pyo3::intern!(py, "to_pandas"))
-                            .unwrap()
+                            .map_err(|err| {
+                                DataFusionError::Internal(format!(
+                                    "PySpark Pandas UDF arg into_data to_pyarrow to_pandas: {}",
+                                    err
+                                ))
+                            })?
                             .clone_ref(py)
-                            .into_bound(py)
+                            .into_bound(py);
+                        Ok(arg)
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<Result<Vec<_>, DataFusionError>>()?;
                 let py_args: Bound<PyTuple> = PyTuple::new_bound(py, &py_args);
 
                 let results: Bound<PyAny> = python_function
@@ -238,15 +264,27 @@ impl ScalarUDFImpl for PySparkUDF {
             let py_args_columns_list: Vec<Bound<PyAny>> = args
                 .iter()
                 .map(|arg| {
-                    arg.into_data()
+                    let arg = arg
+                        .into_data()
                         .to_pyarrow(py)
-                        .unwrap()
+                        .map_err(|err| {
+                            DataFusionError::Internal(format!(
+                                "PySpark UDF arg into_data to_pyarrow: {}",
+                                err
+                            ))
+                        })?
                         .call_method0(py, pyo3::intern!(py, "to_pylist"))
-                        .unwrap()
+                        .map_err(|err| {
+                            DataFusionError::Internal(format!(
+                                "PySpark UDF arg into_data to_pyarrow to_pylist: {}",
+                                err
+                            ))
+                        })?
                         .clone_ref(py)
-                        .into_bound(py)
+                        .into_bound(py);
+                    Ok(arg)
                 })
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>, DataFusionError>>()?;
             let py_args_tuple: Bound<PyTuple> = PyTuple::new_bound(py, &py_args_columns_list);
             // TODO: Do zip in Rust for performance.
             let py_args_zip: Bound<PyAny> = py
@@ -266,9 +304,11 @@ impl ScalarUDFImpl for PySparkUDF {
             let mut already_str: bool = false;
             let results: Vec<Bound<PyAny>> = py_args
                 .map(|py_arg| -> Result<Bound<PyAny>, DataFusionError> {
-                    let result: Bound<PyAny> = python_function
-                        .call1((py.None(), (py_arg.unwrap(),)))
-                        .map_err(|e| {
+                    let py_arg = py_arg.map_err(|err| {
+                        DataFusionError::Internal(format!("PySpark UDF py_arg: {}", err))
+                    })?;
+                    let result: Bound<PyAny> =
+                        python_function.call1((py.None(), (py_arg,))).map_err(|e| {
                             DataFusionError::Execution(format!("PySpark UDF Result: {e:?}"))
                         })?;
                     let result: Bound<PyAny> = builtins_list
