@@ -12,6 +12,7 @@ use pyo3::types::PyDict;
 
 use crate::cereal::partial_pyspark_udf::PartialPySparkUDF;
 use crate::cereal::partial_python_udf::PartialPythonUDF;
+use crate::cereal::pyspark_udtf::PySparkUDTF as CerealPySparkUDTF;
 
 pub trait PythonFunction {
     fn get_inner<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny>;
@@ -24,6 +25,12 @@ impl PythonFunction for PartialPythonUDF {
 }
 
 impl PythonFunction for PartialPySparkUDF {
+    fn get_inner<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny> {
+        self.0.clone_ref(py).into_bound(py)
+    }
+}
+
+impl PythonFunction for CerealPySparkUDTF {
     fn get_inner<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny> {
         self.0.clone_ref(py).into_bound(py)
     }
