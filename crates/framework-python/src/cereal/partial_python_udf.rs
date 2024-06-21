@@ -22,7 +22,7 @@ impl Serialize for PartialPythonUDF {
                     let bytes = Bytes::new(py_bytes.downcast::<PyBytes>()?.as_bytes());
                     Ok(serializer.serialize_bytes(bytes))
                 })
-                .map_err(|e| serde::ser::Error::custom(format!("Pickle Error: {:?}", e)))?
+                .map_err(|e| serde::ser::Error::custom(format!("Pickle Error: {}", e)))?
         })
     }
 }
@@ -45,7 +45,7 @@ impl<'de> Visitor<'de> for PartialPythonUDFVisitor {
                 .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
                 .and_then(|loads| loads.call1((v,)))
                 .map(|py_tuple| PartialPythonUDF(py_tuple.to_object(py)))
-                .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))
+                .map_err(|e| E::custom(format!("Pickle Error: {}", e)))
         })
     }
 }

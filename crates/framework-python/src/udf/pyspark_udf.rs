@@ -113,41 +113,38 @@ impl ScalarUDFImpl for PySparkUDF {
                     .call1((results,))
                     .map_err(|err| {
                         DataFusionError::Internal(format!(
-                            "PySpark Arrow UDF Error calling list(): {:?}",
+                            "PySpark Arrow UDF Error calling list(): {}",
                             err
                         ))
                     })?
                     .get_item(0)
                     .map_err(|err| {
                         DataFusionError::Internal(format!(
-                            "PySpark Arrow UDF Result list() first get_item(0): {:?}",
+                            "PySpark Arrow UDF Result list() first get_item(0): {}",
                             err
                         ))
                     })?;
 
                 let results_data: Bound<PyAny> = results.get_item(0).map_err(|err| {
                     DataFusionError::Internal(format!(
-                        "PySpark Arrow UDF Result list get_item(0): {:?}",
+                        "PySpark Arrow UDF Result list get_item(0): {}",
                         err
                     ))
                 })?;
                 let _results_datatype: Bound<PyAny> = results.get_item(1).map_err(|err| {
                     DataFusionError::Internal(format!(
-                        "PySpark Arrow UDF Result list get_item(0): {:?}",
+                        "PySpark Arrow UDF Result list get_item(0): {}",
                         err
                     ))
                 })?;
                 let results_data: Bound<PyAny> = pyarrow_module_array
                     .call((results_data,), Some(&output_data_type_kwargs))
                     .map_err(|err| {
-                        DataFusionError::Internal(format!(
-                            "PySpark Arrow UDF Result array {:?}",
-                            err
-                        ))
+                        DataFusionError::Internal(format!("PySpark Arrow UDF Result array {}", err))
                     })?;
 
                 let array_data = ArrayData::from_pyarrow_bound(&results_data).map_err(|err| {
-                    DataFusionError::Internal(format!("PySpark Arrow UDF array_data {:?}", err))
+                    DataFusionError::Internal(format!("PySpark Arrow UDF array_data {}", err))
                 })?;
                 Ok(array_data)
             });
@@ -187,27 +184,27 @@ impl ScalarUDFImpl for PySparkUDF {
                     .call1((results,))
                     .map_err(|err| {
                         DataFusionError::Internal(format!(
-                            "PySpark Pandas UDF Error calling list(): {:?}",
+                            "PySpark Pandas UDF Error calling list(): {}",
                             err
                         ))
                     })?
                     .get_item(0)
                     .map_err(|err| {
                         DataFusionError::Internal(format!(
-                            "PySpark Pandas UDF Result list() first get_item(0): {:?}",
+                            "PySpark Pandas UDF Result list() first get_item(0): {}",
                             err
                         ))
                     })?;
 
                 let results_data: Bound<PyAny> = results.get_item(0).map_err(|err| {
                     DataFusionError::Internal(format!(
-                        "PySpark Pandas UDF Result list get_item(0): {:?}",
+                        "PySpark Pandas UDF Result list get_item(0): {}",
                         err
                     ))
                 })?;
                 let _results_datatype: Bound<PyAny> = results.get_item(1).map_err(|err| {
                     DataFusionError::Internal(format!(
-                        "PySpark Pandas UDF Result list get_item(0): {:?}",
+                        "PySpark Pandas UDF Result list get_item(0): {}",
                         err
                     ))
                 })?;
@@ -215,13 +212,13 @@ impl ScalarUDFImpl for PySparkUDF {
                     .call((results_data,), Some(&output_data_type_kwargs))
                     .map_err(|err| {
                         DataFusionError::Internal(format!(
-                            "PySpark Pandas UDF Result array {:?}",
+                            "PySpark Pandas UDF Result array {}",
                             err
                         ))
                     })?;
 
                 let array_data = ArrayData::from_pyarrow_bound(&results_data).map_err(|err| {
-                    DataFusionError::Internal(format!("PySpark Pandas UDF array_data {:?}", err))
+                    DataFusionError::Internal(format!("PySpark Pandas UDF array_data {}", err))
                 })?;
                 Ok(array_data)
             });
@@ -255,18 +252,15 @@ impl ScalarUDFImpl for PySparkUDF {
             let py_args_zip: Bound<PyAny> = py
                 .eval_bound("zip", None, None)
                 .map_err(|err| {
-                    DataFusionError::Internal(format!(
-                        "PySpark UDF py_args_zip eval_bound{:?}",
-                        err
-                    ))
+                    DataFusionError::Internal(format!("PySpark UDF py_args_zip eval_bound{}", err))
                 })?
                 .call1(&py_args_tuple)
                 .map_err(|err| {
-                    DataFusionError::Internal(format!("PySpark UDF py_args_zip zip{:?}", err))
+                    DataFusionError::Internal(format!("PySpark UDF py_args_zip zip{}", err))
                 })?;
             let py_args: Bound<PyIterator> =
                 PyIterator::from_bound_object(&py_args_zip).map_err(|err| {
-                    DataFusionError::Internal(format!("PySpark UDF py_args_iter {:?}", err))
+                    DataFusionError::Internal(format!("PySpark UDF py_args_iter {}", err))
                 })?;
 
             let mut already_str: bool = false;
@@ -281,14 +275,14 @@ impl ScalarUDFImpl for PySparkUDF {
                         .call1((result,))
                         .map_err(|err| {
                             DataFusionError::Internal(format!(
-                                "PySpark UDF Error calling list(): {:?}",
+                                "PySpark UDF Error calling list(): {}",
                                 err
                             ))
                         })?
                         .get_item(0)
                         .map_err(|err| {
                             DataFusionError::Internal(format!(
-                                "PySpark UDF Result list() first get_item(0): {:?}",
+                                "PySpark UDF Result list() first get_item(0): {}",
                                 err
                             ))
                         })?;
@@ -304,7 +298,7 @@ impl ScalarUDFImpl for PySparkUDF {
                         let result_data_type_name: Cow<str> =
                             result_type.name().map_err(|err| {
                                 DataFusionError::Internal(format!(
-                                    "PySpark UDF Error getting result data type name: {:?}",
+                                    "PySpark UDF Error getting result data type name: {}",
                                     err
                                 ))
                             })?;
@@ -312,7 +306,7 @@ impl ScalarUDFImpl for PySparkUDF {
                             let result: Bound<PyAny> =
                                 builtins_str.call1((result,)).map_err(|err| {
                                     DataFusionError::Internal(format!(
-                                        "PySpark UDF Result Error calling str(): {:?}",
+                                        "PySpark UDF Result Error calling str(): {}",
                                         err
                                     ))
                                 })?;
@@ -325,18 +319,17 @@ impl ScalarUDFImpl for PySparkUDF {
                 })
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|err| {
-                    DataFusionError::Internal(format!("PySpark UDF Results: {:?}", err))
+                    DataFusionError::Internal(format!("PySpark UDF Results: {}", err))
                 })?;
 
             let results: Bound<PyAny> = pyarrow_module_array
                 .call((results,), Some(&output_data_type_kwargs))
                 .map_err(|err| {
-                    DataFusionError::Internal(format!("PySpark UDF Result array {:?}", err))
+                    DataFusionError::Internal(format!("PySpark UDF Result array {}", err))
                 })?;
 
-            ArrayData::from_pyarrow_bound(&results).map_err(|err| {
-                DataFusionError::Internal(format!("PySpark UDF array_data {:?}", err))
-            })
+            ArrayData::from_pyarrow_bound(&results)
+                .map_err(|err| DataFusionError::Internal(format!("PySpark UDF array_data {}", err)))
         });
 
         Ok(ColumnarValue::Array(make_array(array_data?)))
@@ -363,14 +356,14 @@ impl ScalarUDFImpl for PySparkUDF {
                 .call1((result,))
                 .map_err(|err| {
                     DataFusionError::Internal(format!(
-                        "PySpark UDF No Args Error calling list(): {:?}",
+                        "PySpark UDF No Args Error calling list(): {}",
                         err
                     ))
                 })?
                 .get_item(0)
                 .map_err(|err| {
                     DataFusionError::Internal(format!(
-                        "PySpark UDF No Args Result list() first get_item(0): {:?}",
+                        "PySpark UDF No Args Result list() first get_item(0): {}",
                         err
                     ))
                 })?;
@@ -378,7 +371,7 @@ impl ScalarUDFImpl for PySparkUDF {
             let result_type: Bound<PyType> = result.get_type();
             let result_data_type_name: Cow<str> = result_type.name().map_err(|err| {
                 DataFusionError::Internal(format!(
-                    "PySpark UDF  No Args Error getting result data type name: {:?}",
+                    "PySpark UDF  No Args Error getting result data type name: {}",
                     err
                 ))
             })?;
@@ -390,7 +383,7 @@ impl ScalarUDFImpl for PySparkUDF {
             {
                 builtins_str.call1((result,)).map_err(|err| {
                     DataFusionError::Internal(format!(
-                        "PySpark UDF No Args Result Error calling str(): {:?}",
+                        "PySpark UDF No Args Result Error calling str(): {}",
                         err
                     ))
                 })?
@@ -401,11 +394,11 @@ impl ScalarUDFImpl for PySparkUDF {
             let result: Bound<PyAny> = pyarrow_module_array
                 .call(([result],), Some(&output_data_type_kwargs))
                 .map_err(|err| {
-                    DataFusionError::Internal(format!("PySpark UDF No Args Result array {:?}", err))
+                    DataFusionError::Internal(format!("PySpark UDF No Args Result array {}", err))
                 })?;
 
             ArrayData::from_pyarrow_bound(&result).map_err(|err| {
-                DataFusionError::Internal(format!("PySpark UDF No Args array_data {:?}", err))
+                DataFusionError::Internal(format!("PySpark UDF No Args array_data {}", err))
             })
         });
 

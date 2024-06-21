@@ -25,7 +25,7 @@ impl Serialize for PartialPySparkUDF {
                     let bytes = Bytes::new(py_bytes.downcast::<PyBytes>()?.as_bytes());
                     Ok(serializer.serialize_bytes(bytes))
                 })
-                .map_err(|e| serde::ser::Error::custom(format!("Pickle Error: {:?}", e)))?
+                .map_err(|e| serde::ser::Error::custom(format!("Pickle Error: {}", e)))?
         })
     }
 }
@@ -48,15 +48,13 @@ impl<'de> Visitor<'de> for PartialPySparkUDFVisitor {
         let eval_type = i32::from_be_bytes(
             eval_type_bytes
                 .try_into()
-                .map_err(|e| E::custom(format!("eval_type from_be_bytes: {:?}", e)))?,
+                .map_err(|e| E::custom(format!("eval_type from_be_bytes: {}", e)))?,
         );
         Python::with_gil(|py| {
             let infile: Bound<PyAny> = PyModule::import_bound(py, pyo3::intern!(py, "io"))
                 .and_then(|io| io.getattr(pyo3::intern!(py, "BytesIO")))
                 .and_then(|bytes_io| bytes_io.call1((v,)))
-                .map_err(|e| {
-                    E::custom(format!("PartialPySparkUDFVisitor BytesIO Error: {:?}", e))
-                })?;
+                .map_err(|e| E::custom(format!("PartialPySparkUDFVisitor BytesIO Error: {}", e)))?;
             let pickle_ser: Bound<PyAny> =
                 PyModule::import_bound(py, pyo3::intern!(py, "pyspark.serializers"))
                     .and_then(|serializers| {
@@ -65,7 +63,7 @@ impl<'de> Visitor<'de> for PartialPySparkUDFVisitor {
                     .and_then(|serializer| serializer.call0())
                     .map_err(|e| {
                         E::custom(format!(
-                            "PartialPySparkUDFVisitor CPickleSerializer Error: {:?}",
+                            "PartialPySparkUDFVisitor CPickleSerializer Error: {}",
                             e
                         ))
                     })?;
@@ -73,7 +71,7 @@ impl<'de> Visitor<'de> for PartialPySparkUDFVisitor {
                 .and_then(|worker| worker.getattr(pyo3::intern!(py, "read_udfs")))
                 .and_then(|read_udfs| read_udfs.call1((pickle_ser, infile, eval_type)))
                 .map(|py_tuple| PartialPySparkUDF(py_tuple.to_object(py)))
-                .map_err(|e| E::custom(format!("PartialPySparkUDFVisitor Pickle Error: {:?}", e)))
+                .map_err(|e| E::custom(format!("PartialPySparkUDFVisitor Pickle Error: {}", e)))
         })
     }
 }
@@ -115,7 +113,7 @@ pub fn deserialize_partial_pyspark_udf(
     let pyo3_python_version: String = Python::with_gil(|py| py.version().to_string());
     if !pyo3_python_version.starts_with(python_version) {
         return Err(de::Error::custom(format!(
-            "Python version mismatch. Version used to compile the UDF must match the version used to run the UDF. Version used to compile the UDF: {:?}. Version used to run the UDF: {:?}",
+            "Python version mismatch. Version used to compile the UDF must match the version used to run the UDF. Version used to compile the UDF: {}. Version used to run the UDF: {}",
             python_version,
             pyo3_python_version,
         )));
