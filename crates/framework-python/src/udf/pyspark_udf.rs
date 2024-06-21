@@ -12,9 +12,9 @@ use pyo3::types::{PyDict, PyIterator, PyList, PyTuple, PyType};
 use crate::cereal::partial_pyspark_udf::PartialPySparkUDF;
 use crate::cereal::{is_pyspark_arrow_udf, is_pyspark_pandas_udf, PY_SPARK_SQL_BATCHED_UDF};
 use crate::udf::{
-    build_pyarrow_module_array_kwargs, get_pyarrow_module_array_function,
-    get_pyarrow_output_data_type, get_python_builtins_list_function,
-    get_python_builtins_str_function, get_python_function, CommonPythonUDF,
+    build_pyarrow_array_kwargs, get_pyarrow_array_function, get_pyarrow_output_data_type,
+    get_python_builtins_list_function, get_python_builtins_str_function, get_python_function,
+    CommonPythonUDF,
 };
 
 #[derive(Debug, Clone)]
@@ -84,13 +84,13 @@ impl ScalarUDFImpl for PySparkUDF {
 
         if is_pyspark_arrow_udf(&self.eval_type) {
             let array_data: Result<ArrayData, DataFusionError> = Python::with_gil(|py| {
-                let pyarrow_module_array: Bound<PyAny> = get_pyarrow_module_array_function(py)?;
+                let pyarrow_module_array: Bound<PyAny> = get_pyarrow_array_function(py)?;
                 let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
                 let python_function: Bound<PyAny> = get_python_function(self, py)?;
                 let pyarrow_output_data_type: Bound<PyAny> =
                     get_pyarrow_output_data_type(&self.output_type, py)?;
-                let output_data_type_kwargs: Bound<PyDict> =
-                    build_pyarrow_module_array_kwargs(py, pyarrow_output_data_type, false)?;
+                let pyarrow_array_kwargs: Bound<PyDict> =
+                    build_pyarrow_array_kwargs(py, pyarrow_output_data_type, false)?;
 
                 let py_args: Vec<Bound<PyAny>> = args
                     .iter()
@@ -138,7 +138,7 @@ impl ScalarUDFImpl for PySparkUDF {
                     ))
                 })?;
                 let results_data: Bound<PyAny> = pyarrow_module_array
-                    .call((results_data,), Some(&output_data_type_kwargs))
+                    .call((results_data,), Some(&pyarrow_array_kwargs))
                     .map_err(|err| {
                         DataFusionError::Internal(format!("PySpark Arrow UDF Result array {}", err))
                     })?;
@@ -153,13 +153,13 @@ impl ScalarUDFImpl for PySparkUDF {
 
         if is_pyspark_pandas_udf(&self.eval_type) {
             let array_data: Result<ArrayData, DataFusionError> = Python::with_gil(|py| {
-                let pyarrow_module_array: Bound<PyAny> = get_pyarrow_module_array_function(py)?;
+                let pyarrow_module_array: Bound<PyAny> = get_pyarrow_array_function(py)?;
                 let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
                 let python_function: Bound<PyAny> = get_python_function(self, py)?;
                 let pyarrow_output_data_type: Bound<PyAny> =
                     get_pyarrow_output_data_type(&self.output_type, py)?;
-                let output_data_type_kwargs: Bound<PyDict> =
-                    build_pyarrow_module_array_kwargs(py, pyarrow_output_data_type, true)?;
+                let pyarrow_array_kwargs: Bound<PyDict> =
+                    build_pyarrow_array_kwargs(py, pyarrow_output_data_type, true)?;
 
                 let py_args: Vec<Bound<PyAny>> = args
                     .iter()
@@ -209,7 +209,7 @@ impl ScalarUDFImpl for PySparkUDF {
                     ))
                 })?;
                 let results_data: Bound<PyAny> = pyarrow_module_array
-                    .call((results_data,), Some(&output_data_type_kwargs))
+                    .call((results_data,), Some(&pyarrow_array_kwargs))
                     .map_err(|err| {
                         DataFusionError::Internal(format!(
                             "PySpark Pandas UDF Result array {}",
@@ -226,14 +226,14 @@ impl ScalarUDFImpl for PySparkUDF {
         }
 
         let array_data: Result<ArrayData, DataFusionError> = Python::with_gil(|py| {
-            let pyarrow_module_array: Bound<PyAny> = get_pyarrow_module_array_function(py)?;
+            let pyarrow_module_array: Bound<PyAny> = get_pyarrow_array_function(py)?;
             let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let builtins_str: Bound<PyAny> = get_python_builtins_str_function(py)?;
             let python_function: Bound<PyAny> = get_python_function(self, py)?;
             let pyarrow_output_data_type: Bound<PyAny> =
                 get_pyarrow_output_data_type(&self.output_type, py)?;
-            let output_data_type_kwargs: Bound<PyDict> =
-                build_pyarrow_module_array_kwargs(py, pyarrow_output_data_type, false)?;
+            let pyarrow_array_kwargs: Bound<PyDict> =
+                build_pyarrow_array_kwargs(py, pyarrow_output_data_type, false)?;
 
             let py_args_columns_list: Vec<Bound<PyAny>> = args
                 .iter()
@@ -323,7 +323,7 @@ impl ScalarUDFImpl for PySparkUDF {
                 })?;
 
             let results: Bound<PyAny> = pyarrow_module_array
-                .call((results,), Some(&output_data_type_kwargs))
+                .call((results,), Some(&pyarrow_array_kwargs))
                 .map_err(|err| {
                     DataFusionError::Internal(format!("PySpark UDF Result array {}", err))
                 })?;
@@ -337,14 +337,14 @@ impl ScalarUDFImpl for PySparkUDF {
 
     fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
         let array_data: Result<ArrayData, DataFusionError> = Python::with_gil(|py| {
-            let pyarrow_module_array: Bound<PyAny> = get_pyarrow_module_array_function(py)?;
+            let pyarrow_module_array: Bound<PyAny> = get_pyarrow_array_function(py)?;
             let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let builtins_str: Bound<PyAny> = get_python_builtins_str_function(py)?;
             let python_function: Bound<PyAny> = get_python_function(self, py)?;
             let pyarrow_output_data_type: Bound<PyAny> =
                 get_pyarrow_output_data_type(&self.output_type, py)?;
-            let output_data_type_kwargs: Bound<PyDict> =
-                build_pyarrow_module_array_kwargs(py, pyarrow_output_data_type, false)?;
+            let pyarrow_array_kwargs: Bound<PyDict> =
+                build_pyarrow_array_kwargs(py, pyarrow_output_data_type, false)?;
 
             let result: Bound<PyAny> = python_function
                 .call1((py.None(), (PyList::empty_bound(py),)))
@@ -392,7 +392,7 @@ impl ScalarUDFImpl for PySparkUDF {
             };
 
             let result: Bound<PyAny> = pyarrow_module_array
-                .call(([result],), Some(&output_data_type_kwargs))
+                .call(([result],), Some(&pyarrow_array_kwargs))
                 .map_err(|err| {
                     DataFusionError::Internal(format!("PySpark UDF No Args Result array {}", err))
                 })?;

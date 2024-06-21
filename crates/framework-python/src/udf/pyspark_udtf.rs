@@ -14,11 +14,15 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{Expr, TableType};
 use pyo3::prelude::*;
-use pyo3::types::{PyIterator, PyList, PyTuple};
+use pyo3::types::{PyDict, PyIterator, PyList, PyTuple};
 
 use crate::cereal::is_pyspark_arrow_udf;
 use crate::cereal::pyspark_udtf::PySparkUDTF as CerealPySparkUDTF;
-use crate::udf::{get_python_builtins_list_function, get_python_function, CommonPythonUDF};
+use crate::udf::{
+    build_pyarrow_record_batch_kwargs, get_pyarrow_record_batch_from_pandas_function,
+    get_pyarrow_record_batch_from_pylist_function, get_pyarrow_schema,
+    get_python_builtins_list_function, get_python_function, CommonPythonUDF,
+};
 
 #[derive(Debug, Clone)]
 pub struct PySparkUDT {
@@ -109,25 +113,10 @@ impl PySparkUDTF {
 
     fn apply_pyspark_arrow_function(&self, args: &[ArrayRef]) -> Result<RecordBatch> {
         Python::with_gil(|py| {
-            let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let python_function: Bound<PyAny> = get_python_function(self, py)?;
-
+            let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let record_batch_from_pandas: Bound<PyAny> =
-                PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
-                    .map_err(|err| {
-                        DataFusionError::Internal(format!("pyarrow import error: {}", err))
-                    })?
-                    .getattr(pyo3::intern!(py, "RecordBatch"))
-                    .map_err(|err| {
-                        DataFusionError::Internal(format!("pyarrow RecordBatch error: {}", err))
-                    })?
-                    .getattr(pyo3::intern!(py, "from_pandas"))
-                    .map_err(|err| {
-                        DataFusionError::Internal(format!(
-                            "pyarrow RecordBatch from_pandas error: {}",
-                            err
-                        ))
-                    })?;
+                get_pyarrow_record_batch_from_pandas_function(py)?;
 
             let py_args: Vec<Bound<PyAny>> = args
                 .iter()
@@ -175,6 +164,7 @@ impl PySparkUDTF {
                     err
                 ))
             })?;
+            println!("CHECK HERE results: {:?}", results_data);
 
             let record_batch: Bound<PyAny> = record_batch_from_pandas
                 .call1((results_data,))
@@ -195,25 +185,13 @@ impl PySparkUDTF {
 
     fn apply_pyspark_function(&self, args: &[ArrayRef]) -> Result<RecordBatch> {
         Python::with_gil(|py| {
-            let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let python_function: Bound<PyAny> = get_python_function(self, py)?;
-
-            let record_batch_from_pandas: Bound<PyAny> =
-                PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
-                    .map_err(|err| {
-                        DataFusionError::Internal(format!("pyarrow import error: {}", err))
-                    })?
-                    .getattr(pyo3::intern!(py, "RecordBatch"))
-                    .map_err(|err| {
-                        DataFusionError::Internal(format!("pyarrow RecordBatch error: {}", err))
-                    })?
-                    .getattr(pyo3::intern!(py, "from_pandas"))
-                    .map_err(|err| {
-                        DataFusionError::Internal(format!(
-                            "pyarrow RecordBatch from_pandas error: {}",
-                            err
-                        ))
-                    })?;
+            let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
+            let record_batch_from_pylist: Bound<PyAny> =
+                get_pyarrow_record_batch_from_pylist_function(py)?;
+            let pyarrow_schema: Bound<PyAny> = get_pyarrow_schema(&self.schema, py)?;
+            let pyarrow_record_batch_kwargs: Bound<PyDict> =
+                build_pyarrow_record_batch_kwargs(py, pyarrow_schema)?;
 
             let py_args: Vec<Bound<PyAny>> = args
                 .iter()
@@ -273,10 +251,11 @@ impl PySparkUDTF {
                     DataFusionError::Internal(format!("PySpark UDTF Results: {}", err))
                 })?;
 
-            let record_batch: Bound<PyAny> =
-                record_batch_from_pandas.call1((results,)).map_err(|err| {
+            let record_batch: Bound<PyAny> = record_batch_from_pylist
+                .call((results,), Some(&pyarrow_record_batch_kwargs))
+                .map_err(|err| {
                     DataFusionError::Internal(format!(
-                        "PySpark Arrow UDTF record_batch_from_pandas {}",
+                        "PySpark Arrow UDTF record_batch_from_pylist {}",
                         err
                     ))
                 })?;
@@ -291,25 +270,13 @@ impl PySparkUDTF {
 
     fn apply_pyspark_function_no_args(&self) -> Result<RecordBatch> {
         Python::with_gil(|py| {
-            let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let python_function: Bound<PyAny> = get_python_function(self, py)?;
-
+            let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let record_batch_from_pylist: Bound<PyAny> =
-                PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
-                    .map_err(|err| {
-                        DataFusionError::Internal(format!("pyarrow import error: {}", err))
-                    })?
-                    .getattr(pyo3::intern!(py, "RecordBatch"))
-                    .map_err(|err| {
-                        DataFusionError::Internal(format!("pyarrow RecordBatch error: {}", err))
-                    })?
-                    .getattr(pyo3::intern!(py, "from_pylist"))
-                    .map_err(|err| {
-                        DataFusionError::Internal(format!(
-                            "pyarrow RecordBatch from_pylist error: {}",
-                            err
-                        ))
-                    })?;
+                get_pyarrow_record_batch_from_pylist_function(py)?;
+            let pyarrow_schema: Bound<PyAny> = get_pyarrow_schema(&self.schema, py)?;
+            let pyarrow_record_batch_kwargs: Bound<PyDict> =
+                build_pyarrow_record_batch_kwargs(py, pyarrow_schema)?;
 
             let results: Bound<PyAny> = python_function
                 .call1((py.None(), (PyList::empty_bound(py),)))
@@ -348,8 +315,9 @@ impl PySparkUDTF {
             })?;
             println!("CHECK HERE results: {:?}", results);
 
-            let record_batch: Bound<PyAny> =
-                record_batch_from_pylist.call1((results,)).map_err(|err| {
+            let record_batch: Bound<PyAny> = record_batch_from_pylist
+                .call((results,), Some(&pyarrow_record_batch_kwargs))
+                .map_err(|err| {
                     DataFusionError::Internal(format!(
                         "PySpark Arrow UDTF record_batch_from_pylist {}",
                         err
