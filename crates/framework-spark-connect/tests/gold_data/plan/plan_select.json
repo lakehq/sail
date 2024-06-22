@@ -346,7 +346,7 @@
                 "tableAlias": {
                   "input": {
                     "read": {
-                      "uDTF": {
+                      "udtf": {
                         "identifier": [
                           "range"
                         ],
@@ -394,7 +394,7 @@
                 "tableAlias": {
                   "input": {
                     "read": {
-                      "uDTF": {
+                      "udtf": {
                         "identifier": [
                           "range"
                         ],
@@ -1216,7 +1216,7 @@
             "project": {
               "input": {
                 "read": {
-                  "uDTF": {
+                  "udtf": {
                     "identifier": [
                       "default",
                       "range"
@@ -1257,7 +1257,7 @@
             "project": {
               "input": {
                 "read": {
-                  "uDTF": {
+                  "udtf": {
                     "identifier": [
                       "my_tvf"
                     ],
@@ -1303,7 +1303,7 @@
             "project": {
               "input": {
                 "read": {
-                  "uDTF": {
+                  "udtf": {
                     "identifier": [
                       "my_tvf"
                     ],
@@ -1343,7 +1343,7 @@
             "project": {
               "input": {
                 "read": {
-                  "uDTF": {
+                  "udtf": {
                     "identifier": [
                       "my_tvf"
                     ],
@@ -1377,7 +1377,7 @@
             "project": {
               "input": {
                 "read": {
-                  "uDTF": {
+                  "udtf": {
                     "identifier": [
                       "my_tvf"
                     ],
@@ -1429,7 +1429,7 @@
             "project": {
               "input": {
                 "read": {
-                  "uDTF": {
+                  "udtf": {
                     "identifier": [
                       "my_tvf"
                     ],
@@ -1469,7 +1469,7 @@
             "project": {
               "input": {
                 "read": {
-                  "uDTF": {
+                  "udtf": {
                     "identifier": [
                       "range"
                     ],
@@ -1509,7 +1509,7 @@
             "project": {
               "input": {
                 "read": {
-                  "uDTF": {
+                  "udtf": {
                     "identifier": [
                       "spark_catalog",
                       "default",
