@@ -96,7 +96,7 @@ impl PlanResolver<'_> {
                         let df: DataFrame = self.ctx.table(table_reference).await?;
                         Ok(df.into_optimized_plan()?)
                     }
-                    ReadType::UDTF {
+                    ReadType::Udtf {
                         identifier,
                         arguments,
                         options,

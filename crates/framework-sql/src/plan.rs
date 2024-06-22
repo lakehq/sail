@@ -587,7 +587,7 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::Plan> {
                     .collect::<Vec<_>>();
                 spec::Plan::new(spec::PlanNode::Read {
                     is_streaming: false,
-                    read_type: spec::ReadType::UDTF {
+                    read_type: spec::ReadType::Udtf {
                         identifier: from_ast_object_name(name)?,
                         arguments: args,
                         options: Default::default(),

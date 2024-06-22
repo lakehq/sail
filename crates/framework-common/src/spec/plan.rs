@@ -454,7 +454,7 @@ pub enum ReadType {
         identifier: ObjectName,
         options: HashMap<String, String>,
     },
-    UDTF {
+    Udtf {
         identifier: ObjectName,
         arguments: Vec<Expr>,
         options: HashMap<String, String>,
