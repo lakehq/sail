@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, ArrayRef};
-use datafusion::arrow::datatypes::{DataType, SchemaRef};
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::pyarrow::*;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::function::TableFunctionImpl;
@@ -69,17 +69,10 @@ impl TableProvider for PySparkUDT {
 
 #[derive(Debug, Clone)]
 pub struct PySparkUDTF {
-    #[allow(dead_code)]
-    function_name: String,
-    #[allow(dead_code)]
-    input_types: Vec<DataType>,
     schema: SchemaRef,
-    #[allow(dead_code)]
-    output_type: DataType,
     python_function: CerealPySparkUDTF,
     #[allow(dead_code)]
     deterministic: bool,
-    #[allow(dead_code)]
     eval_type: i32,
 }
 
@@ -93,19 +86,13 @@ impl CommonPythonUDF for PySparkUDTF {
 
 impl PySparkUDTF {
     pub fn new(
-        function_name: String,
-        input_types: Vec<DataType>,
         schema: SchemaRef,
-        output_type: DataType,
         python_function: CerealPySparkUDTF,
         deterministic: bool,
         eval_type: i32,
     ) -> Self {
         Self {
-            function_name,
-            input_types,
             schema,
-            output_type,
             python_function,
             deterministic,
             eval_type,

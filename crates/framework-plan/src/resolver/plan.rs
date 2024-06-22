@@ -17,10 +17,9 @@ use datafusion::logical_expr::{
 };
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, DataFusionError, ParamValues, ScalarValue, SchemaReference,
-    TableReference,
+    Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
-use datafusion_expr::{build_join_schema, ExprSchemable, LogicalPlanBuilder};
+use datafusion_expr::{build_join_schema, LogicalPlanBuilder};
 use framework_common::spec;
 
 use crate::error::{PlanError, PlanResult};
@@ -732,15 +731,11 @@ impl PlanResolver<'_> {
                     function,
                 } = udtf;
 
-                let schema = DFSchema::empty(); // UDTF only has schema for return type
+                let schema = DFSchema::empty();
                 let arguments: Vec<Expr> = arguments
                     .iter()
                     .map(|x| self.resolve_expression(x.clone(), &schema, state))
                     .collect::<PlanResult<Vec<Expr>>>()?;
-                let input_types: Vec<adt::DataType> = arguments
-                    .iter()
-                    .map(|arg| arg.get_type(&schema))
-                    .collect::<datafusion_common::Result<Vec<adt::DataType>, DataFusionError>>()?;
 
                 let (return_type, eval_type, command, python_version) = match function {
                     spec::TableFunctionDefinition::PythonUdtf {
@@ -758,7 +753,7 @@ impl PlanResolver<'_> {
                     },
                     _ => {
                         return Err(PlanError::invalid(format!(
-                            "Invalid Python user-defined table function return type. Expect a struct type, but got {:?}",
+                            "Invalid Python user-defined table function return type. Expect a struct type, but got {}",
                             return_type
                         )))
                     }
@@ -773,18 +768,11 @@ impl PlanResolver<'_> {
                     &self.config.spark_udf_config,
                 )
                 .map_err(|e| {
-                    PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
+                    PlanError::invalid(format!("Python UDF deserialization error: {}", e))
                 })?;
 
-                let python_udtf: PySparkUDTF = PySparkUDTF::new(
-                    function_name.clone(),
-                    input_types,
-                    return_schema,
-                    return_type,
-                    python_function,
-                    deterministic,
-                    eval_type,
-                );
+                let python_udtf: PySparkUDTF =
+                    PySparkUDTF::new(return_schema, python_function, deterministic, eval_type);
 
                 let table_function =
                     TableFunction::new(function_name.clone(), Arc::new(python_udtf));

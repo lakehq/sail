@@ -2,13 +2,18 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema};
+use datafusion::arrow::datatypes::{
+    DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+};
 use datafusion::common::{FileType, TableReference};
 use datafusion::dataframe::DataFrame;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_common::config::{FormatOptions, TableOptions};
 use datafusion_expr::ScalarUDF;
-use framework_common::spec::{CommonInlineUserDefinedFunction, FunctionDefinition};
+use framework_common::spec::{
+    CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction, FunctionDefinition,
+    TableFunctionDefinition,
+};
 use framework_plan::resolver::{PlanResolver, PlanResolverState};
 use framework_python::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -32,6 +37,10 @@ use crate::spark::connect::{
     StreamingQueryCommand, StreamingQueryManagerCommand, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart,
 };
+use framework_python::cereal::pyspark_udtf::{
+    deserialize_pyspark_udtf, PySparkUDTF as CerealPySparkUDTF,
+};
+use framework_python::udf::pyspark_udtf::PySparkUDTF;
 
 pub struct ExecutePlanResponseStream {
     session_id: String,
@@ -355,10 +364,66 @@ pub(crate) async fn handle_execute_streaming_query_manager_command(
 }
 
 pub(crate) async fn handle_execute_register_table_function(
-    _session: Arc<Session>,
-    _udtf: SCCommonInlineUserDefinedTableFunction,
+    session: Arc<Session>,
+    udtf: SCCommonInlineUserDefinedTableFunction,
+    metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    Err(SparkError::todo("register table function"))
+    // TODO: Call PlanNode::RegisterTableFunction even though SC implementation registers it directly.
+    let ctx = session.context();
+    let resolver = PlanResolver::new(ctx, session.plan_config()?);
+
+    let udtf: CommonInlineUserDefinedTableFunction = udtf.try_into()?;
+    let CommonInlineUserDefinedTableFunction {
+        function_name,
+        deterministic,
+        arguments,
+        function,
+    } = udtf;
+
+    let (return_type, eval_type, command, python_version) = match function {
+        TableFunctionDefinition::PythonUdtf {
+            return_type,
+            eval_type,
+            command,
+            python_version,
+        } => (return_type, eval_type, command, python_version),
+    };
+
+    let return_type: ArrowDataType = resolver.resolve_data_type(return_type)?;
+    let return_schema: ArrowSchemaRef = match return_type {
+        ArrowDataType::Struct(ref fields) => {
+            Arc::new(ArrowSchema::new(fields.clone()))
+        },
+        _ => {
+            return Err(SparkError::invalid(format!(
+                "Invalid Python user-defined table function return type. Expect a struct type, but got {}",
+                return_type
+            )))
+        }
+    };
+
+    let python_function: CerealPySparkUDTF = deserialize_pyspark_udtf(
+        &python_version,
+        &command,
+        &eval_type,
+        &(arguments.len() as i32),
+        &return_type,
+        &session.plan_config()?.spark_udf_config,
+    )
+    .map_err(|e| SparkError::invalid(format!("Python UDF deserialization error: {:?}", e)))?;
+
+    let python_udtf: PySparkUDTF =
+        PySparkUDTF::new(return_schema, python_function, deterministic, eval_type);
+    ctx.register_udtf(&function_name, Arc::new(python_udtf));
+
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    tx.send(ExecutorOutput::new(ExecutorBatch::Complete))
+        .await?;
+    Ok(ExecutePlanResponseStream::new(
+        session.session_id().to_string(),
+        metadata.operation_id,
+        ReceiverStream::new(rx),
+    ))
 }
 
 pub(crate) async fn handle_interrupt_all(session: Arc<Session>) -> SparkResult<Vec<String>> {

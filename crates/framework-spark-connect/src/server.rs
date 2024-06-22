@@ -111,7 +111,8 @@ impl SparkConnectService for SparkConnectServer {
                             .await?
                     }
                     CommandType::RegisterTableFunction(udtf) => {
-                        service::handle_execute_register_table_function(session, udtf).await?
+                        service::handle_execute_register_table_function(session, udtf, metadata)
+                            .await?
                     }
                     CommandType::Extension(_) => {
                         return Err(Status::unimplemented("unsupported command extension"));
