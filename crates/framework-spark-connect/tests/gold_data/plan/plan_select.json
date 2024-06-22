@@ -339,13 +339,99 @@
     {
       "input": "SELECT * FROM range(10) AS t",
       "output": {
-        "failure": "not supported: table args"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "uDTF": {
+                        "identifier": [
+                          "range"
+                        ],
+                        "arguments": [
+                          {
+                            "literal": {
+                              "integer": 10
+                            }
+                          }
+                        ],
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "name": "t",
+                  "columns": []
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM range(7) AS t(a)",
       "output": {
-        "failure": "not supported: table args"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "uDTF": {
+                        "identifier": [
+                          "range"
+                        ],
+                        "arguments": [
+                          {
+                            "literal": {
+                              "integer": 7
+                            }
+                          }
+                        ],
+                        "options": {}
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "name": "t",
+                  "columns": [
+                    "a"
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -1125,13 +1211,82 @@
     {
       "input": "select * from default.range(2)",
       "output": {
-        "failure": "not supported: table args"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "uDTF": {
+                    "identifier": [
+                      "default",
+                      "range"
+                    ],
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 2
+                        }
+                      }
+                    ],
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from my_tvf(2, arg1 => 'value1', arg2 => true)",
       "output": {
-        "failure": "not supported: table args"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "uDTF": {
+                    "identifier": [
+                      "my_tvf"
+                    ],
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 2
+                        }
+                      }
+                    ],
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -1143,19 +1298,115 @@
     {
       "input": "select * from my_tvf(arg1 => 'value1', 2, arg2 => true)",
       "output": {
-        "failure": "not supported: table args"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "uDTF": {
+                    "identifier": [
+                      "my_tvf"
+                    ],
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 2
+                        }
+                      }
+                    ],
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from my_tvf(arg1 => 'value1', arg2 => true)",
       "output": {
-        "failure": "not supported: table args"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "uDTF": {
+                    "identifier": [
+                      "my_tvf"
+                    ],
+                    "arguments": [],
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table (v1), 2, arg2 => true)",
       "output": {
-        "failure": "not supported: table args"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "uDTF": {
+                    "identifier": [
+                      "my_tvf"
+                    ],
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 2
+                        }
+                      }
+                    ],
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -1173,7 +1424,35 @@
     {
       "input": "select * from my_tvf(group => 'abc')",
       "output": {
-        "failure": "not supported: table args"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "uDTF": {
+                    "identifier": [
+                      "my_tvf"
+                    ],
+                    "arguments": [],
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -1185,13 +1464,83 @@
     {
       "input": "select * from range(2)",
       "output": {
-        "failure": "not supported: table args"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "uDTF": {
+                    "identifier": [
+                      "range"
+                    ],
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 2
+                        }
+                      }
+                    ],
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from spark_catalog.default.range(2)",
       "output": {
-        "failure": "not supported: table args"
+        "success": {
+          "root": {
+            "project": {
+              "input": {
+                "read": {
+                  "uDTF": {
+                    "identifier": [
+                      "spark_catalog",
+                      "default",
+                      "range"
+                    ],
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 2
+                        }
+                      }
+                    ],
+                    "options": {}
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

@@ -20,7 +20,6 @@ use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
-use datafusion_expr::expr::Alias;
 use datafusion_expr::{build_join_schema, LogicalPlanBuilder};
 use framework_common::spec;
 
