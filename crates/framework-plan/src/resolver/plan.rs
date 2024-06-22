@@ -15,10 +15,12 @@ use datafusion::execution::context::DataFilePaths;
 use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
+use datafusion::sql::unparser::expr_to_sql;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
+use datafusion_expr::expr::Alias;
 use datafusion_expr::{build_join_schema, LogicalPlanBuilder};
 use framework_common::spec;
 
@@ -93,6 +95,42 @@ impl PlanResolver<'_> {
                         }
                         let table_reference = build_table_reference(identifier)?;
                         let df: DataFrame = self.ctx.table(table_reference).await?;
+                        Ok(df.into_optimized_plan()?)
+                    }
+                    ReadType::UDTF {
+                        identifier,
+                        arguments,
+                        options,
+                    } => {
+                        if !options.is_empty() {
+                            return Err(PlanError::todo("ReadType::UDTF options"));
+                        }
+
+                        let table = build_table_reference(identifier)?.table().to_string();
+
+                        let schema = DFSchema::empty();
+                        let arguments: Vec<Expr> = arguments
+                            .into_iter()
+                            .map(|x| self.resolve_expression(x, &schema, state))
+                            .collect::<PlanResult<Vec<Expr>>>()?;
+                        println!("CHECK HERE arguments: {:?}", arguments);
+                        let argument_strings: Vec<String> = arguments
+                            .iter()
+                            .map(|arg| {
+                                let sql = expr_to_sql(arg).map_err(|e| {
+                                    PlanError::invalid(format!(
+                                        "Failed to convert expr to SQL: {}",
+                                        e
+                                    ))
+                                })?;
+                                Ok(format!("{}", sql))
+                            })
+                            .collect::<PlanResult<Vec<String>>>()?;
+
+                        let sql_query =
+                            format!("SELECT * FROM {}({});", table, argument_strings.join(", "));
+                        println!("CHECK HERE sql_query: {}", sql_query);
+                        let df: DataFrame = self.ctx.sql(&sql_query).await?;
                         Ok(df.into_optimized_plan()?)
                     }
                     ReadType::DataSource {
@@ -733,8 +771,8 @@ impl PlanResolver<'_> {
 
                 let schema = DFSchema::empty();
                 let arguments: Vec<Expr> = arguments
-                    .iter()
-                    .map(|x| self.resolve_expression(x.clone(), &schema, state))
+                    .into_iter()
+                    .map(|x| self.resolve_expression(x, &schema, state))
                     .collect::<PlanResult<Vec<Expr>>>()?;
 
                 let (return_type, eval_type, command, python_version) = match function {

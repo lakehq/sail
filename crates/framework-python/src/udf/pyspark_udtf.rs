@@ -355,6 +355,7 @@ impl PySparkUDTF {
 
 impl TableFunctionImpl for PySparkUDTF {
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        println!("CHECK HERE EXPRS: {:?}", exprs);
         if exprs.is_empty() {
             let batches: RecordBatch = if is_pyspark_arrow_udf(&self.eval_type) {
                 self.apply_pyspark_arrow_function(&[])?
@@ -367,7 +368,7 @@ impl TableFunctionImpl for PySparkUDTF {
             )));
         }
 
-        let mut input_types = Vec::new();
+        // let mut input_types = Vec::new();
         let mut input_arrays = Vec::new();
 
         for expr in exprs {
@@ -381,7 +382,7 @@ impl TableFunctionImpl for PySparkUDTF {
                             e
                         ))
                     })?;
-                    input_types.push(array_ref.data_type().clone());
+                    // input_types.push(array_ref.data_type().clone());
                     input_arrays.push(array_ref);
                 }
                 Expr::Alias(Alias { ref expr, .. }) => {
@@ -392,7 +393,7 @@ impl TableFunctionImpl for PySparkUDTF {
                                 e
                             ))
                         })?;
-                        input_types.push(array_ref.data_type().clone());
+                        // input_types.push(array_ref.data_type().clone());
                         input_arrays.push(array_ref);
                     } else {
                         return Err(DataFusionError::NotImplemented(format!(
@@ -411,6 +412,7 @@ impl TableFunctionImpl for PySparkUDTF {
             }
         }
 
+        println!("CHECK HERE INPUT_ARRAYS: {:?}", input_arrays);
         let batches: RecordBatch = if is_pyspark_arrow_udf(&self.eval_type) {
             self.apply_pyspark_arrow_function(&input_arrays)?
         } else {
