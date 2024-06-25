@@ -287,11 +287,11 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
             value,
             quote_style: _,
         }) => Ok(spec::Expr::UnresolvedAttribute {
-            identifier: spec::ObjectName::new_unqualified(value.into()),
+            name: spec::ObjectName::new_unqualified(value.into()),
             plan_id: None,
         }),
         Expr::CompoundIdentifier(x) => Ok(spec::Expr::UnresolvedAttribute {
-            identifier: from_ast_object_name(ast::ObjectName(x))?,
+            name: from_ast_object_name(ast::ObjectName(x))?,
             plan_id: None,
         }),
         Expr::IsFalse(e) => Ok(spec::Expr::from(Function {
@@ -678,7 +678,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         } => Ok(spec::Expr::UnresolvedExtractValue {
             child: Box::new(from_ast_expression(*expr)?),
             extraction: Box::new(spec::Expr::UnresolvedAttribute {
-                identifier: spec::ObjectName::new_unqualified(value.into()),
+                name: spec::ObjectName::new_unqualified(value.into()),
                 plan_id: None,
             }),
         }),

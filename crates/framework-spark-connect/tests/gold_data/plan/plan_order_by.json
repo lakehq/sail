@@ -96,7 +96,7 @@
                 {
                   "child": {
                     "unresolvedAttribute": {
-                      "identifier": [
+                      "name": [
                         "a"
                       ],
                       "planId": null
@@ -108,7 +108,7 @@
                 {
                   "child": {
                     "unresolvedAttribute": {
-                      "identifier": [
+                      "name": [
                         "b"
                       ],
                       "planId": null
@@ -164,7 +164,7 @@
                     {
                       "child": {
                         "unresolvedAttribute": {
-                          "identifier": [
+                          "name": [
                             "a"
                           ],
                           "planId": null
@@ -176,7 +176,7 @@
                     {
                       "child": {
                         "unresolvedAttribute": {
-                          "identifier": [
+                          "name": [
                             "b"
                           ],
                           "planId": null

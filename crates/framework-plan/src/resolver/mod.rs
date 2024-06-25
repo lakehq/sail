@@ -8,6 +8,7 @@ mod data_type;
 mod expression;
 mod literal;
 pub mod plan;
+mod tree;
 mod utils;
 
 pub struct PlanResolver<'a> {

@@ -1,33 +1,46 @@
 use std::any::Any;
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion::common::{DataFusionError, Result};
+use datafusion::common::Result;
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::plan_err;
 
 #[derive(Debug)]
 pub(crate) struct Explode {
     signature: Signature,
-    name: String,
+    kind: ExplodeKind,
     output_names: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) enum ExplodeKind {
+    Explode,
+    ExplodeOuter,
+    PosExplode,
+    PosExplodeOuter,
+}
+
 impl Explode {
-    pub(crate) fn new(name: impl Into<String>) -> Self {
+    pub(crate) fn new(kind: ExplodeKind) -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
-            name: name.into(),
+            kind,
             output_names: None,
         }
     }
 
-    pub(crate) fn with_output_names(&self, output_names: Vec<String>) -> Result<Self> {
-        let mut f = Self::new(&self.name);
-        f.output_names = Some(output_names);
-        Ok(f)
+    pub(crate) fn kind(&self) -> &ExplodeKind {
+        &self.kind
     }
 
-    pub(crate) fn output_names(&self) -> Option<&Vec<String>> {
-        self.output_names.as_ref()
+    pub(crate) fn output_names(&self) -> Option<&[String]> {
+        self.output_names.as_deref()
+    }
+
+    pub(crate) fn with_output_names(&self, names: Option<Vec<String>>) -> Self {
+        let mut f = Self::new(self.kind.clone());
+        f.output_names = names;
+        f
     }
 }
 
@@ -37,7 +50,12 @@ impl ScalarUDFImpl for Explode {
     }
 
     fn name(&self) -> &str {
-        self.name.as_str()
+        match self.kind {
+            ExplodeKind::Explode => "explode",
+            ExplodeKind::ExplodeOuter => "explode_outer",
+            ExplodeKind::PosExplode => "posexplode",
+            ExplodeKind::PosExplodeOuter => "posexplode_outer",
+        }
     }
 
     fn signature(&self) -> &Signature {
@@ -50,17 +68,14 @@ impl ScalarUDFImpl for Explode {
             | &[DataType::LargeList(f)]
             | &[DataType::FixedSizeList(f, _)]
             | &[DataType::Map(f, _)] => Ok(f.data_type().clone()),
-            _ => Err(DataFusionError::Internal(format!(
-                "{} should only be called with a list or map",
-                self.name()
-            ))),
+            _ => plan_err!("{} should only be called with a list or map", self.name()),
         }
     }
 
     fn invoke(&self, _: &[ColumnarValue]) -> Result<ColumnarValue> {
-        Err(DataFusionError::Internal(format!(
+        plan_err!(
             "{} should be rewritten during logical plan analysis",
             self.name()
-        )))
+        )
     }
 }

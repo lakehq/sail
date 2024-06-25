@@ -29,3 +29,4 @@ comfy-table = { workspace = true }
 html-escape = { workspace = true }
 chrono = { workspace = true }
 ryu = { workspace = true }
+either = { workspace = true }

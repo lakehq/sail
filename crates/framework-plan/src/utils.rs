@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 
 use datafusion_common::{plan_err, Result};
+use either::Either;
 
 /// A trait for taking items from a container of expected size.
 pub(crate) trait ItemTaker {
@@ -11,6 +12,7 @@ pub(crate) trait ItemTaker {
     fn two(self) -> Result<(Self::Item, Self::Item)>;
     fn three(self) -> Result<(Self::Item, Self::Item, Self::Item)>;
     fn at_least_one(self) -> Result<(Self::Item, Vec<Self::Item>)>;
+    fn one_or_more(self) -> Result<Either<Self::Item, Vec<Self::Item>>>;
 }
 
 impl<T: Debug> ItemTaker for Vec<T> {
@@ -55,5 +57,16 @@ impl<T: Debug> ItemTaker for Vec<T> {
         }
         let first = self.pop().unwrap();
         Ok((first, self))
+    }
+
+    fn one_or_more(mut self) -> Result<Either<T, Vec<T>>> {
+        if self.is_empty() {
+            return plan_err!("one or more values expected: {:?}", self);
+        }
+        if self.len() == 1 {
+            Ok(Either::Left(self.pop().unwrap()))
+        } else {
+            Ok(Either::Right(self))
+        }
     }
 }

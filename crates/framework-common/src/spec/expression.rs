@@ -10,7 +10,7 @@ use crate::spec::literal::Literal;
 pub enum Expr {
     Literal(Literal),
     UnresolvedAttribute {
-        identifier: ObjectName,
+        name: ObjectName,
         plan_id: Option<i64>,
     },
     UnresolvedFunction {
