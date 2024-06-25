@@ -247,7 +247,7 @@ impl PlanResolver<'_> {
                 if let Some(target) = target {
                     let target: Vec<String> = target.into();
                     Ok(expr::Expr::Wildcard {
-                        qualifier: Some(target.join(".")),
+                        qualifier: Some(target.join(".").into()),
                     })
                 } else {
                     Ok(expr::Expr::Wildcard { qualifier: None })

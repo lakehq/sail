@@ -49,6 +49,10 @@ impl DisplayAs for RangeExec {
 }
 
 impl ExecutionPlan for RangeExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

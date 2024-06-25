@@ -1911,7 +1911,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Interval(YearMonth)] to the signature Uniform(1, [Float64, Float32]) failed. and No function matches the given name and argument types 'signum(Interval(YearMonth))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tsignum(Float64/Float32)"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Interval(YearMonth)] to the signature Uniform(1, [Float64, Float32]) failed. No function matches the given name and argument types 'signum(Interval(YearMonth))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tsignum(Float64/Float32)"
       }
     },
     {

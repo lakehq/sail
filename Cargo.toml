@@ -74,3 +74,9 @@ serde_arrow = { version = "0.11", features = ["arrow-52"] }
 # You can use `path = "..."` to temporarily point to your local copy of the crates
 # to speed up local development.
 sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "d83219d" }
+
+# Use this patch until datafusion 40.0.0 is released
+datafusion = { git = "https://github.com/apache/datafusion.git", rev = "49aee89" }
+datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "49aee89" }
+datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "49aee89" }
+datafusion-functions-array = { git = "https://github.com/apache/datafusion.git", rev = "49aee89" }
