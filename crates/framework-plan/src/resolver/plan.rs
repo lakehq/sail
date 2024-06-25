@@ -15,7 +15,6 @@ use datafusion::execution::context::DataFilePaths;
 use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
-use datafusion::sql::unparser::expr_to_sql;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
@@ -107,33 +106,22 @@ impl PlanResolver<'_> {
                         if !options.is_empty() {
                             return Err(PlanError::todo("ReadType::UDTF options"));
                         }
-
-                        let table = build_table_reference(identifier)?.table().to_string();
-
+                        let function_name = build_table_reference(identifier)?;
+                        let function_name = function_name.table();
                         let schema = DFSchema::empty();
                         let arguments: Vec<Expr> = arguments
                             .into_iter()
                             .map(|x| self.resolve_expression(x, &schema, state))
                             .collect::<PlanResult<Vec<Expr>>>()?;
-                        println!("CHECK HERE arguments: {:?}", arguments);
-                        let argument_strings: Vec<String> = arguments
-                            .iter()
-                            .map(|arg| {
-                                let sql = expr_to_sql(arg).map_err(|e| {
-                                    PlanError::invalid(format!(
-                                        "Failed to convert expr to SQL: {}",
-                                        e
-                                    ))
-                                })?;
-                                Ok(format!("{}", sql))
-                            })
-                            .collect::<PlanResult<Vec<String>>>()?;
-
-                        let sql_query =
-                            format!("SELECT * FROM {}({});", table, argument_strings.join(", "));
-                        println!("CHECK HERE sql_query: {}", sql_query);
-                        let df: DataFrame = self.ctx.sql(&sql_query).await?;
-                        Ok(df.into_optimized_plan()?)
+                        let table_function = self.ctx.table_function(function_name)?;
+                        let table_provider = table_function.create_table_provider(&arguments)?;
+                        Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                            function_name,
+                            provider_as_source(table_provider),
+                            None,
+                            vec![],
+                            None,
+                        )?))
                     }
                     ReadType::DataSource {
                         format,
