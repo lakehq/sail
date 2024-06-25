@@ -7,7 +7,7 @@
           "cast": {
             "expr": {
               "unresolvedAttribute": {
-                "identifier": [
+                "name": [
                   "a"
                 ],
                 "planId": null
@@ -30,7 +30,7 @@
           "cast": {
             "expr": {
               "unresolvedAttribute": {
-                "identifier": [
+                "name": [
                   "a"
                 ],
                 "planId": null
@@ -48,7 +48,7 @@
           "cast": {
             "expr": {
               "unresolvedAttribute": {
-                "identifier": [
+                "name": [
                   "a"
                 ],
                 "planId": null
@@ -68,7 +68,7 @@
               "cast": {
                 "expr": {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "planId": null

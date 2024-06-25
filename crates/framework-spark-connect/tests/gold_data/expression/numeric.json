@@ -9,7 +9,7 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "identifier": [
+                  "name": [
                     "a"
                   ],
                   "planId": null
@@ -83,7 +83,7 @@
             "arguments": [
               {
                 "unresolvedAttribute": {
-                  "identifier": [
+                  "name": [
                     "a"
                   ],
                   "planId": null

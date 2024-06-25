@@ -45,7 +45,7 @@
                                 "arguments": [
                                   {
                                     "unresolvedAttribute": {
-                                      "identifier": [
+                                      "name": [
                                         "a"
                                       ],
                                       "planId": null
@@ -53,7 +53,7 @@
                                   },
                                   {
                                     "unresolvedAttribute": {
-                                      "identifier": [
+                                      "name": [
                                         "b"
                                       ],
                                       "planId": null
@@ -86,7 +86,7 @@
                         "arguments": [
                           {
                             "unresolvedAttribute": {
-                              "identifier": [
+                              "name": [
                                 "fake"
                               ],
                               "planId": null
@@ -94,7 +94,7 @@
                           },
                           {
                             "unresolvedAttribute": {
-                              "identifier": [
+                              "name": [
                                 "breaker"
                               ],
                               "planId": null
@@ -109,7 +109,7 @@
                   "aggregateExpressions": [
                     {
                       "unresolvedAttribute": {
-                        "identifier": [
+                        "name": [
                           "a"
                         ],
                         "planId": null
@@ -117,7 +117,7 @@
                     },
                     {
                       "unresolvedAttribute": {
-                        "identifier": [
+                        "name": [
                           "b"
                         ],
                         "planId": null
@@ -133,7 +133,7 @@
                 {
                   "child": {
                     "unresolvedAttribute": {
-                      "identifier": [
+                      "name": [
                         "c"
                       ],
                       "planId": null
