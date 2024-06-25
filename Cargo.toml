@@ -30,11 +30,11 @@ pbjson-types = "0.6"
 pbjson-build = "0.6"
 tower = { version = "0.4", features = ["full"] }
 tower-http = { version = "0.4", features = ["full"] }
-uuid = { version = "1.8.0", features = ["v4"] }
+uuid = { version = "1.9.0", features = ["v4"] }
 async-trait = "0.1.80"
 async-recursion = "1.1.0"
 async-stream = "0.3"
-lazy_static = "1.4.0"
+lazy_static = "1.5.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_bytes = "0.11"
@@ -47,11 +47,12 @@ chrono-tz = "0.9"
 futures = "0.3"
 comfy-table = "7.1"
 html-escape = "0.2"
-syn = "2.0.66"
+syn = "2.0.68"
 quote = "1.0.36"
 prettyplease = "0.2.20"
 phf = { version = "0.11.2", features = ["macros"] }
 ryu = "1.0.18"
+either = "1.12.0"
 #
 # The versions of the following dependencies are managed manually.
 #

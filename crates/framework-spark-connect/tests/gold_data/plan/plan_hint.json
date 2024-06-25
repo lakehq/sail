@@ -633,7 +633,7 @@
                   "groupingExpressions": [
                     {
                       "unresolvedAttribute": {
-                        "identifier": [
+                        "name": [
                           "a"
                         ],
                         "planId": null
@@ -643,7 +643,7 @@
                   "aggregateExpressions": [
                     {
                       "unresolvedAttribute": {
-                        "identifier": [
+                        "name": [
                           "a"
                         ],
                         "planId": null
@@ -659,7 +659,7 @@
                 {
                   "child": {
                     "unresolvedAttribute": {
-                      "identifier": [
+                      "name": [
                         "a"
                       ],
                       "planId": null

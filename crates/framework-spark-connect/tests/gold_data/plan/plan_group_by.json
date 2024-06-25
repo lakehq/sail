@@ -29,7 +29,7 @@
               "groupingExpressions": [
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "planId": null
@@ -37,7 +37,7 @@
                 },
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "b"
                     ],
                     "planId": null
@@ -47,7 +47,7 @@
               "aggregateExpressions": [
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "planId": null
@@ -55,7 +55,7 @@
                 },
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "b"
                     ],
                     "planId": null
@@ -69,7 +69,7 @@
                         "arguments": [
                           {
                             "unresolvedAttribute": {
-                              "identifier": [
+                              "name": [
                                 "c"
                               ],
                               "planId": null

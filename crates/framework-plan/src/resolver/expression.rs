@@ -14,12 +14,13 @@ use framework_python::udf::pyspark_udf::PySparkUDF;
 use framework_python::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::alias::MultiAlias;
+use crate::extension::function::explode::Explode;
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, get_built_in_window_function,
     is_built_in_generator_function,
 };
 use crate::resolver::{PlanResolver, PlanResolverState};
+use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
     pub(crate) fn resolve_sort_order(
@@ -131,12 +132,9 @@ impl PlanResolver<'_> {
                     name,
                 }))
             }
-            Expr::UnresolvedAttribute {
-                identifier,
-                plan_id: _,
-            } => {
+            Expr::UnresolvedAttribute { name, plan_id: _ } => {
                 // FIXME: resolve identifier using schema
-                let column: Vec<String> = identifier.into();
+                let column: Vec<String> = name.into();
                 Ok(expr::Expr::Column(Column::new_unqualified(
                     column.join("."),
                 )))
@@ -264,19 +262,8 @@ impl PlanResolver<'_> {
                     return Err(PlanError::unsupported("alias metadata"));
                 }
                 let expr = self.resolve_expression(*expr, schema, state)?.unalias();
-                if let [name] = name.as_slice() {
-                    Ok(expr::Expr::Alias(expr::Alias {
-                        expr: Box::new(expr),
-                        relation: None,
-                        name: name.clone().into(),
-                    }))
-                } else {
-                    let name: Vec<String> = name.into_iter().map(|x| x.into()).collect();
-                    Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                        func: Arc::new(ScalarUDF::from(MultiAlias::new(name))),
-                        args: vec![expr],
-                    }))
-                }
+                let name = name.into_iter().map(|x| x.into()).collect();
+                self.rewrite_alias(expr, name)
             }
             Expr::Cast { expr, cast_to_type } => {
                 let data_type = self.resolve_data_type(cast_to_type)?;
@@ -429,6 +416,34 @@ impl PlanResolver<'_> {
                 placeholder,
                 None,
             ))),
+        }
+    }
+
+    fn rewrite_alias(&self, expr: expr::Expr, names: Vec<String>) -> PlanResult<expr::Expr> {
+        use expr::{Alias, Expr, ScalarFunction};
+
+        let (func, args) = match &expr {
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                (Some(func.inner()), args.as_slice())
+            }
+            _ => (None, &[] as &[Expr]),
+        };
+        // We have to explicitly handle every UDF type that supports multi-alias, since
+        // we can only downcast from `Any` to concrete types (rather than another trait object).
+        if let Some(explode) = func
+            .as_ref()
+            .and_then(|f| f.as_any().downcast_ref::<Explode>())
+        {
+            let explode = explode.with_output_names(Some(names));
+            Ok(ScalarUDF::from(explode).call(args.to_vec()))
+        } else {
+            Ok(Expr::Alias(Alias {
+                expr: Box::new(expr),
+                relation: None,
+                // By default, only a single alias can be applied to a child expression.
+                // An error will be returned if multiple aliases are specified.
+                name: names.one()?,
+            }))
         }
     }
 }

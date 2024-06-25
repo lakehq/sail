@@ -91,7 +91,7 @@
                           "alias": {
                             "expr": {
                               "unresolvedAttribute": {
-                                "identifier": [
+                                "name": [
                                   "a"
                                 ],
                                 "planId": null
@@ -107,7 +107,7 @@
                           "alias": {
                             "expr": {
                               "unresolvedAttribute": {
-                                "identifier": [
+                                "name": [
                                   "b"
                                 ],
                                 "planId": null
@@ -1031,7 +1031,7 @@
                           "alias": {
                             "expr": {
                               "unresolvedAttribute": {
-                                "identifier": [
+                                "name": [
                                   "a"
                                 ],
                                 "planId": null
@@ -1047,7 +1047,7 @@
                           "alias": {
                             "expr": {
                               "unresolvedAttribute": {
-                                "identifier": [
+                                "name": [
                                   "b"
                                 ],
                                 "planId": null
@@ -1076,7 +1076,7 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "t",
                       "col1"
                     ],
@@ -1085,7 +1085,7 @@
                 },
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "t",
                       "col2"
                     ],
@@ -1834,7 +1834,7 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "planId": null
@@ -1842,7 +1842,7 @@
                 },
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "b"
                     ],
                     "planId": null
@@ -1879,7 +1879,7 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "planId": null
@@ -1887,7 +1887,7 @@
                 },
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "b"
                     ],
                     "planId": null
@@ -1947,7 +1947,7 @@
                       "arguments": [
                         {
                           "unresolvedAttribute": {
-                            "identifier": [
+                            "name": [
                               "x"
                             ],
                             "planId": null
@@ -1970,7 +1970,7 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "planId": null
@@ -1978,7 +1978,7 @@
                 },
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "b"
                     ],
                     "planId": null
@@ -2015,7 +2015,7 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "planId": null
@@ -2023,7 +2023,7 @@
                 },
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "b"
                     ],
                     "planId": null
@@ -2060,7 +2060,7 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "planId": null
@@ -2068,7 +2068,7 @@
                 },
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "b"
                     ],
                     "planId": null
@@ -2098,7 +2098,7 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "planId": null
@@ -2106,7 +2106,7 @@
                 },
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "b"
                     ],
                     "planId": null
@@ -2143,7 +2143,7 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "planId": null
@@ -2151,7 +2151,7 @@
                 },
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "b"
                     ],
                     "planId": null
@@ -2190,7 +2190,7 @@
                   "expressions": [
                     {
                       "unresolvedAttribute": {
-                        "identifier": [
+                        "name": [
                           "a"
                         ],
                         "planId": null
@@ -2198,7 +2198,7 @@
                     },
                     {
                       "unresolvedAttribute": {
-                        "identifier": [
+                        "name": [
                           "b"
                         ],
                         "planId": null
@@ -2237,7 +2237,7 @@
                   "alias": {
                     "expr": {
                       "unresolvedAttribute": {
-                        "identifier": [
+                        "name": [
                           "from"
                         ],
                         "planId": null
@@ -2279,7 +2279,7 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "id"
                     ],
                     "planId": null
@@ -2315,7 +2315,7 @@
               "expressions": [
                 {
                   "unresolvedAttribute": {
-                    "identifier": [
+                    "name": [
                       "id"
                     ],
                     "planId": null

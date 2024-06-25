@@ -16,22 +16,25 @@ use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
 use datafusion::sql::unparser::expr_to_sql;
-use datafusion_common::tree_node::TreeNode;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
+use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr_rewriter::normalize_col;
+use datafusion_expr::utils::{columnize_expr, expand_qualified_wildcard, expand_wildcard};
 use datafusion_expr::{build_join_schema, LogicalPlanBuilder};
 use framework_common::spec;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::analyzer::alias::rewrite_multi_alias;
-use crate::extension::analyzer::explode::rewrite_explode;
-use crate::extension::analyzer::wildcard::rewrite_wildcard;
-use crate::extension::analyzer::window::rewrite_window;
+use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
     CatalogCommand, CatalogCommandNode, RangeNode, ShowStringFormat, ShowStringNode,
     ShowStringStyle, SortWithinPartitionsNode,
 };
+use crate::resolver::tree::explode::ExplodeRewriter;
+use crate::resolver::tree::window::WindowRewriter;
+use crate::resolver::tree::PlanRewriter;
 use crate::resolver::utils::{cast_record_batch, read_record_batches};
 use crate::resolver::{PlanResolver, PlanResolverState};
 
@@ -186,10 +189,10 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .map(|e| self.resolve_expression(e, schema, state))
                     .collect::<PlanResult<_>>()?;
-                let expr = rewrite_multi_alias(expr)?;
-                let (input, expr) = rewrite_wildcard(input, expr)?;
-                let (input, expr) = rewrite_explode(input, expr)?;
-                let (input, expr) = rewrite_window(input, expr)?;
+                let (input, expr) = self.rewrite_wildcard(input, expr)?;
+                let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr)?;
+                let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr)?;
+                let expr = self.rewrite_multi_expr(expr)?;
                 let has_aggregate = expr.iter().any(|e| {
                     e.exists(|e| match e {
                         Expr::AggregateFunction(_) => Ok(true),
@@ -665,8 +668,9 @@ impl PlanResolver<'_> {
                         expr.push(e.clone().alias(name));
                     }
                 }
-                let (input, expr) = rewrite_explode(input, expr)?;
-                let (input, expr) = rewrite_window(input, expr)?;
+                let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr)?;
+                let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr)?;
+                let expr = self.rewrite_multi_expr(expr)?;
                 Ok(LogicalPlan::Projection(plan::Projection::try_new(
                     expr,
                     Arc::new(input),
@@ -1163,5 +1167,59 @@ impl PlanResolver<'_> {
                 )?))
             }
         }
+    }
+
+    fn rewrite_wildcard(
+        &self,
+        input: LogicalPlan,
+        expr: Vec<Expr>,
+    ) -> PlanResult<(LogicalPlan, Vec<Expr>)> {
+        let schema = input.schema();
+        let mut projected = vec![];
+        for e in expr {
+            match e {
+                Expr::Wildcard { qualifier: None } => {
+                    projected.extend(expand_wildcard(schema, &input, None)?)
+                }
+                Expr::Wildcard {
+                    qualifier: Some(qualifier),
+                } => projected.extend(expand_qualified_wildcard(&qualifier, schema, None)?),
+                _ => projected.push(columnize_expr(normalize_col(e, &input)?, &input)?),
+            }
+        }
+        Ok((input, projected))
+    }
+
+    fn rewrite_projection<T>(
+        &self,
+        input: LogicalPlan,
+        expr: Vec<Expr>,
+    ) -> PlanResult<(LogicalPlan, Vec<Expr>)>
+    where
+        T: PlanRewriter + TreeNodeRewriter<Node = Expr>,
+    {
+        let mut rewriter = T::new_from_plan(input);
+        let expr = expr
+            .into_iter()
+            .map(|e| Ok(e.rewrite(&mut rewriter)?.data))
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok((rewriter.into_plan(), expr))
+    }
+
+    fn rewrite_multi_expr(&self, expr: Vec<Expr>) -> PlanResult<Vec<Expr>> {
+        let expr = expr
+            .into_iter()
+            .flat_map(|e| match e {
+                Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                    if func.inner().as_any().is::<MultiExpr>() {
+                        args
+                    } else {
+                        vec![func.call(args)]
+                    }
+                }
+                _ => vec![e],
+            })
+            .collect();
+        Ok(expr)
     }
 }
