@@ -14,7 +14,7 @@ use datafusion::execution::context::DataFilePaths;
 use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
-use datafusion_common::tree_node::TreeNode;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
@@ -32,7 +32,7 @@ use crate::extension::logical::{
 };
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::window::WindowRewriter;
-use crate::resolver::tree::ProjectionRewriter;
+use crate::resolver::tree::PlanRewriter;
 use crate::resolver::utils::{cast_record_batch, read_record_batches};
 use crate::resolver::{PlanResolver, PlanResolverState};
 
@@ -1160,12 +1160,15 @@ impl PlanResolver<'_> {
         Ok((input, projected))
     }
 
-    fn rewrite_projection<T: ProjectionRewriter>(
+    fn rewrite_projection<T>(
         &self,
         input: LogicalPlan,
         expr: Vec<Expr>,
-    ) -> PlanResult<(LogicalPlan, Vec<Expr>)> {
-        let mut rewriter = T::new_from_input(input);
+    ) -> PlanResult<(LogicalPlan, Vec<Expr>)>
+    where
+        T: PlanRewriter + TreeNodeRewriter<Node = Expr>,
+    {
+        let mut rewriter = T::new_from_plan(input);
         let expr = expr
             .into_iter()
             .map(|e| Ok(e.rewrite(&mut rewriter)?.data))

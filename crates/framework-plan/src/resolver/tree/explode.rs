@@ -15,7 +15,7 @@ use either::Either;
 use crate::extension::function::array::{ArrayEmptyToNull, ArrayItemWithPosition, MapToArray};
 use crate::extension::function::explode::{Explode, ExplodeKind};
 use crate::extension::function::multi_expr::MultiExpr;
-use crate::resolver::tree::{empty_logical_plan, ProjectionRewriter};
+use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
 use crate::utils::ItemTaker;
 
 enum ExplodeDataType {
@@ -39,9 +39,9 @@ pub(crate) struct ExplodeRewriter {
     plan: LogicalPlan,
 }
 
-impl ProjectionRewriter for ExplodeRewriter {
-    fn new_from_input(input: LogicalPlan) -> Self {
-        Self { plan: input }
+impl PlanRewriter for ExplodeRewriter {
+    fn new_from_plan(plan: LogicalPlan) -> Self {
+        Self { plan }
     }
 
     fn into_plan(self) -> LogicalPlan {

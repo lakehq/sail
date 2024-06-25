@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use datafusion_common::tree_node::TreeNodeRewriter;
 use datafusion_common::DFSchema;
-use datafusion_expr::{EmptyRelation, Expr, LogicalPlan};
+use datafusion_expr::{EmptyRelation, LogicalPlan};
 
 pub(crate) mod explode;
 pub(crate) mod window;
@@ -14,7 +13,7 @@ fn empty_logical_plan() -> LogicalPlan {
     })
 }
 
-pub(crate) trait ProjectionRewriter: TreeNodeRewriter<Node = Expr> {
-    fn new_from_input(input: LogicalPlan) -> Self;
+pub(crate) trait PlanRewriter {
+    fn new_from_plan(plan: LogicalPlan) -> Self;
     fn into_plan(self) -> LogicalPlan;
 }
