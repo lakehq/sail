@@ -1251,13 +1251,13 @@ dependencies = [
  "glob",
  "lazy_static",
  "monostate",
- "opentelemetry 0.23.0",
+ "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-proto",
  "opentelemetry-resource-detectors",
- "opentelemetry-semantic-conventions 0.15.0",
+ "opentelemetry-semantic-conventions",
  "opentelemetry-stdout",
- "opentelemetry_sdk 0.23.0",
+ "opentelemetry_sdk",
  "pbjson",
  "pbjson-build",
  "pbjson-types",
@@ -1308,13 +1308,13 @@ dependencies = [
 name = "framework-telemetry"
 version = "0.1.0"
 dependencies = [
- "opentelemetry 0.23.0",
+ "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-proto",
  "opentelemetry-resource-detectors",
- "opentelemetry-semantic-conventions 0.15.0",
+ "opentelemetry-semantic-conventions",
  "opentelemetry-stdout",
- "opentelemetry_sdk 0.23.0",
+ "opentelemetry_sdk",
  "prost",
  "prost-types",
  "thiserror",
@@ -2118,21 +2118,6 @@ checksum = "ff011a302c396a5197692431fc1948019154afc178baf7d8e37367442a4601cf"
 
 [[package]]
 name = "opentelemetry"
-version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "900d57987be3f2aeb70d385fff9b27fb74c5723cc9a52d904d4f9c807a0667bf"
-dependencies = [
- "futures-core",
- "futures-sink",
- "js-sys",
- "once_cell",
- "pin-project-lite",
- "thiserror",
- "urlencoding",
-]
-
-[[package]]
-name = "opentelemetry"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b69a91d4893e713e06f724597ad630f1fa76057a5e1026c0ca67054a9032a76"
@@ -2154,9 +2139,9 @@ dependencies = [
  "async-trait",
  "futures-core",
  "http",
- "opentelemetry 0.23.0",
+ "opentelemetry",
  "opentelemetry-proto",
- "opentelemetry_sdk 0.23.0",
+ "opentelemetry_sdk",
  "prost",
  "thiserror",
  "tokio",
@@ -2169,28 +2154,22 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "984806e6cf27f2b49282e2a05e288f30594f3dbc74eb7a6e99422bc48ed78162"
 dependencies = [
- "opentelemetry 0.23.0",
- "opentelemetry_sdk 0.23.0",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "prost",
  "tonic",
 ]
 
 [[package]]
 name = "opentelemetry-resource-detectors"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "252fb66dbe60c1d97272656b8cbcbb00edd36bb8e56ff38566f512300a8ee180"
+checksum = "b5cd98b7277913e22e95b6fd3a5f7413438005471a6e33e8a4ae7b9a20be36ad"
 dependencies = [
- "opentelemetry 0.22.0",
- "opentelemetry-semantic-conventions 0.14.0",
- "opentelemetry_sdk 0.22.1",
+ "opentelemetry",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk",
 ]
-
-[[package]]
-name = "opentelemetry-semantic-conventions"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9ab5bd6c42fb9349dcf28af2ba9a0667f697f9bdcca045d39f2cec5543e2910"
 
 [[package]]
 name = "opentelemetry-semantic-conventions"
@@ -2207,26 +2186,11 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures-util",
- "opentelemetry 0.23.0",
- "opentelemetry_sdk 0.23.0",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "ordered-float 4.2.0",
  "serde",
  "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "opentelemetry_sdk"
-version = "0.22.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e90c7113be649e31e9a0f8b5ee24ed7a16923b322c3c5ab6367469c049d6b7e"
-dependencies = [
- "futures-channel",
- "futures-executor",
- "futures-util",
- "once_cell",
- "opentelemetry 0.22.0",
- "ordered-float 4.2.0",
  "thiserror",
 ]
 
@@ -2243,7 +2207,7 @@ dependencies = [
  "glob",
  "lazy_static",
  "once_cell",
- "opentelemetry 0.23.0",
+ "opentelemetry",
  "ordered-float 4.2.0",
  "percent-encoding",
  "rand",
@@ -3509,8 +3473,8 @@ checksum = "f68803492bf28ab40aeccaecc7021096bd256baf7ca77c3d425d89b35a7be4e4"
 dependencies = [
  "js-sys",
  "once_cell",
- "opentelemetry 0.23.0",
- "opentelemetry_sdk 0.23.0",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "smallvec",
  "tracing",
  "tracing-core",
@@ -3636,12 +3600,6 @@ dependencies = [
  "idna",
  "percent-encoding",
 ]
-
-[[package]]
-name = "urlencoding"
-version = "2.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
 name = "utf8-width"
