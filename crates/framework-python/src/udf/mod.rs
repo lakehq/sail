@@ -171,3 +171,11 @@ pub fn get_pyarrow_schema<'py>(schema: &SchemaRef, py: Python<'py>) -> Result<Bo
         .into_bound(py);
     Ok(pyarrow_schema)
 }
+
+pub fn get_pyarrow_table_function(py: Python) -> Result<Bound<PyAny>> {
+    let pyarrow_table: Bound<PyAny> = PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
+        .map_err(|err| DataFusionError::Internal(format!("pyarrow import error: {}", err)))?
+        .getattr(pyo3::intern!(py, "table"))
+        .map_err(|err| DataFusionError::Internal(format!("pyarrow table error: {}", err)))?;
+    Ok(pyarrow_table)
+}

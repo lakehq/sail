@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, ArrayRef};
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::pyarrow::*;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::function::TableFunctionImpl;
@@ -14,26 +14,31 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::DataFusionError;
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{Expr, TableType};
+use framework_common::config::SparkUdfConfig;
+use framework_common::spec::TableFunctionDefinition;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyIterator, PyList, PyTuple};
 
 use crate::cereal::is_pyspark_arrow_udf;
-use crate::cereal::pyspark_udtf::PySparkUDTF as CerealPySparkUDTF;
+use crate::cereal::pyspark_udtf::{deserialize_pyspark_udtf, PySparkUDTF as CerealPySparkUDTF};
 use crate::udf::{
     build_pyarrow_record_batch_kwargs, get_pyarrow_record_batch_from_pandas_function,
     get_pyarrow_record_batch_from_pylist_function, get_pyarrow_schema,
-    get_python_builtins_list_function, get_python_function, CommonPythonUDF,
+    get_python_builtins_list_function,
 };
 
 #[derive(Debug, Clone)]
 pub struct PySparkUDT {
-    schema: SchemaRef,
+    return_schema: SchemaRef,
     batches: Vec<RecordBatch>,
 }
 
 impl PySparkUDT {
-    pub fn new(schema: SchemaRef, batches: Vec<RecordBatch>) -> Self {
-        Self { schema, batches }
+    pub fn new(return_schema: SchemaRef, batches: Vec<RecordBatch>) -> Self {
+        Self {
+            return_schema,
+            batches,
+        }
     }
 }
 
@@ -44,7 +49,7 @@ impl TableProvider for PySparkUDT {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        self.return_schema.clone()
     }
 
     fn table_type(&self) -> TableType {
@@ -69,39 +74,51 @@ impl TableProvider for PySparkUDT {
 
 #[derive(Debug, Clone)]
 pub struct PySparkUDTF {
-    schema: SchemaRef,
-    python_function: CerealPySparkUDTF,
+    return_type: DataType,
+    return_schema: SchemaRef,
+    table_function_definition: TableFunctionDefinition,
+    spark_udf_config: SparkUdfConfig,
     #[allow(dead_code)]
     deterministic: bool,
-    eval_type: i32,
 }
 
-impl CommonPythonUDF for PySparkUDTF {
-    type PythonFunctionType = CerealPySparkUDTF;
-
-    fn python_function(&self) -> &Self::PythonFunctionType {
-        &self.python_function
-    }
-}
+// impl CommonPythonUDF for PySparkUDTF {
+//     type PythonFunctionType = CerealPySparkUDTF;
+//
+//     fn python_function(&self) -> &Self::PythonFunctionType {
+//         &self.python_function
+//     }
+// }
 
 impl PySparkUDTF {
     pub fn new(
-        schema: SchemaRef,
-        python_function: CerealPySparkUDTF,
+        return_type: DataType,
+        return_schema: SchemaRef,
+        table_function_definition: TableFunctionDefinition,
+        spark_udf_config: SparkUdfConfig,
         deterministic: bool,
-        eval_type: i32,
     ) -> Self {
         Self {
-            schema,
-            python_function,
+            return_type,
+            return_schema,
+            table_function_definition,
+            spark_udf_config,
             deterministic,
-            eval_type,
         }
     }
 
-    fn apply_pyspark_arrow_function(&self, args: &[ArrayRef]) -> Result<RecordBatch> {
+    fn apply_pyspark_arrow_function(
+        &self,
+        args: &[ArrayRef],
+        python_function: CerealPySparkUDTF,
+    ) -> Result<RecordBatch> {
         Python::with_gil(|py| {
-            let python_function: Bound<PyAny> = get_python_function(self, py)?;
+            let python_function: Bound<PyAny> = python_function
+                .0
+                .clone_ref(py)
+                .into_bound(py)
+                .get_item(0)
+                .map_err(|err| DataFusionError::Internal(format!("python_function {}", err)))?;
             let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let record_batch_from_pandas: Bound<PyAny> =
                 get_pyarrow_record_batch_from_pandas_function(py)?;
@@ -130,7 +147,32 @@ impl PySparkUDTF {
                     Ok(arg)
                 })
                 .collect::<Result<Vec<_>, DataFusionError>>()?;
-            let py_args: Bound<PyTuple> = PyTuple::new_bound(py, &py_args);
+            let py_args: Bound<PyList> = PyList::new_bound(py, &py_args);
+
+            // let table_kwargs: Bound<PyDict> = PyDict::new_bound(py);
+            // table_kwargs
+            //     .set_item("schema", pyarrow_schema)
+            //     .map_err(|err| {
+            //         DataFusionError::Internal(format!("PySpark Arrow UDTF table_kwargs {}", err))
+            //     })?;
+            // println!("CHECK HERE TABLE_KWARGS: {:?}", table_kwargs);
+            // println!("CHECK HERE PY_ARGS: {:?}", py_args);
+            // let py_args = get_pyarrow_table_function
+            //     .call((py_args,), Some(&table_kwargs))
+            //     .map_err(|err| {
+            //         DataFusionError::Internal(format!(
+            //             "PySpark Arrow UDTF pyarrow_table_function call: {}",
+            //             err
+            //         ))
+            //     })?
+            //     .call_method0("to_pandas")
+            //     .map_err(|err| {
+            //         DataFusionError::Internal(format!(
+            //             "PySpark Arrow UDTF pyarrow_table_function to_pandas: {}",
+            //             err
+            //         ))
+            //     })?;
+            // println!("CHECK HERE PY_ARGS: {:?}", py_args);
 
             let results: Bound<PyAny> =
                 python_function
@@ -184,13 +226,22 @@ impl PySparkUDTF {
         })
     }
 
-    fn apply_pyspark_function(&self, args: &[ArrayRef]) -> Result<RecordBatch> {
+    fn apply_pyspark_function(
+        &self,
+        args: &[ArrayRef],
+        python_function: CerealPySparkUDTF,
+    ) -> Result<RecordBatch> {
         Python::with_gil(|py| {
-            let python_function: Bound<PyAny> = get_python_function(self, py)?;
+            let python_function: Bound<PyAny> = python_function
+                .0
+                .clone_ref(py)
+                .into_bound(py)
+                .get_item(0)
+                .map_err(|err| DataFusionError::Internal(format!("python_function {}", err)))?;
             let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let record_batch_from_pylist: Bound<PyAny> =
                 get_pyarrow_record_batch_from_pylist_function(py)?;
-            let pyarrow_schema: Bound<PyAny> = get_pyarrow_schema(&self.schema, py)?;
+            let pyarrow_schema: Bound<PyAny> = get_pyarrow_schema(&self.return_schema, py)?;
             let pyarrow_record_batch_kwargs: Bound<PyDict> =
                 build_pyarrow_record_batch_kwargs(py, pyarrow_schema)?;
 
@@ -269,7 +320,7 @@ impl PySparkUDTF {
                     ))
                 })?;
                 let result: Bound<PyList> =
-                    list_of_tuples_to_list_of_dicts(py, &result, &self.schema)?;
+                    list_of_tuples_to_list_of_dicts(py, &result, &self.return_schema)?;
                 for item in result.iter() {
                     results.append(item).map_err(|err| {
                         DataFusionError::Internal(format!(
@@ -296,13 +347,21 @@ impl PySparkUDTF {
         })
     }
 
-    fn apply_pyspark_function_no_args(&self) -> Result<RecordBatch> {
+    fn apply_pyspark_function_no_args(
+        &self,
+        python_function: CerealPySparkUDTF,
+    ) -> Result<RecordBatch> {
         Python::with_gil(|py| {
-            let python_function: Bound<PyAny> = get_python_function(self, py)?;
+            let python_function: Bound<PyAny> = python_function
+                .0
+                .clone_ref(py)
+                .into_bound(py)
+                .get_item(0)
+                .map_err(|err| DataFusionError::Internal(format!("python_function {}", err)))?;
             let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let record_batch_from_pylist: Bound<PyAny> =
                 get_pyarrow_record_batch_from_pylist_function(py)?;
-            let pyarrow_schema: Bound<PyAny> = get_pyarrow_schema(&self.schema, py)?;
+            let pyarrow_schema: Bound<PyAny> = get_pyarrow_schema(&self.return_schema, py)?;
             let pyarrow_record_batch_kwargs: Bound<PyDict> =
                 build_pyarrow_record_batch_kwargs(py, pyarrow_schema)?;
 
@@ -333,7 +392,7 @@ impl PySparkUDTF {
                 ))
             })?;
             let results: Bound<PyList> =
-                list_of_tuples_to_list_of_dicts(py, &results, &self.schema)?;
+                list_of_tuples_to_list_of_dicts(py, &results, &self.return_schema)?;
 
             let record_batch: Bound<PyAny> = record_batch_from_pylist
                 .call((results,), Some(&pyarrow_record_batch_kwargs))
@@ -355,22 +414,46 @@ impl PySparkUDTF {
 
 impl TableFunctionImpl for PySparkUDTF {
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
-        println!("CHECK HERE EXPRS: {:?}", exprs);
+        println!(
+            "CHECK HERE EXPRS: {:?}, and SCHEMA: {:?}",
+            exprs, &self.return_schema
+        );
+
+        let (_return_type, eval_type, command, python_version) =
+            match &self.table_function_definition {
+                TableFunctionDefinition::PythonUdtf {
+                    return_type,
+                    eval_type,
+                    command,
+                    python_version,
+                } => (return_type, eval_type, command, python_version),
+            };
+
+        let python_function: CerealPySparkUDTF = deserialize_pyspark_udtf(
+            python_version,
+            command,
+            eval_type,
+            &(exprs.len() as i32),
+            &self.return_type,
+            &self.spark_udf_config,
+        )
+        .map_err(|e| {
+            DataFusionError::Execution(format!("Python UDTF deserialization error: {:?}", e))
+        })?;
+
         if exprs.is_empty() {
-            let batches: RecordBatch = if is_pyspark_arrow_udf(&self.eval_type) {
-                self.apply_pyspark_arrow_function(&[])?
+            let batches: RecordBatch = if is_pyspark_arrow_udf(eval_type) {
+                self.apply_pyspark_arrow_function(&[], python_function)?
             } else {
-                self.apply_pyspark_function_no_args()?
+                self.apply_pyspark_function_no_args(python_function)?
             };
             return Ok(Arc::new(PySparkUDT::new(
-                self.schema.clone(),
+                self.return_schema.clone(),
                 vec![batches],
             )));
         }
 
-        // let mut input_types = Vec::new();
         let mut input_arrays = Vec::new();
-
         for expr in exprs {
             // https://spark.apache.org/docs/latest/api/python/user_guide/sql/python_udtf.html
             // args can either be scalar exprs or table args that represent entire input tables.
@@ -382,7 +465,6 @@ impl TableFunctionImpl for PySparkUDTF {
                             e
                         ))
                     })?;
-                    // input_types.push(array_ref.data_type().clone());
                     input_arrays.push(array_ref);
                 }
                 Expr::Alias(Alias { ref expr, .. }) => {
@@ -393,7 +475,6 @@ impl TableFunctionImpl for PySparkUDTF {
                                 e
                             ))
                         })?;
-                        // input_types.push(array_ref.data_type().clone());
                         input_arrays.push(array_ref);
                     } else {
                         return Err(DataFusionError::NotImplemented(format!(
@@ -413,14 +494,14 @@ impl TableFunctionImpl for PySparkUDTF {
         }
 
         println!("CHECK HERE INPUT_ARRAYS: {:?}", input_arrays);
-        let batches: RecordBatch = if is_pyspark_arrow_udf(&self.eval_type) {
-            self.apply_pyspark_arrow_function(&input_arrays)?
+        let batches: RecordBatch = if is_pyspark_arrow_udf(eval_type) {
+            self.apply_pyspark_arrow_function(&input_arrays, python_function)?
         } else {
-            self.apply_pyspark_function(&input_arrays)?
+            self.apply_pyspark_function(&input_arrays, python_function)?
         };
 
         Ok(Arc::new(PySparkUDT::new(
-            self.schema.clone(),
+            self.return_schema.clone(),
             vec![batches],
         )))
     }

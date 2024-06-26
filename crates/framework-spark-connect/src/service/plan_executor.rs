@@ -15,9 +15,6 @@ use framework_common::spec::{
     TableFunctionDefinition,
 };
 use framework_plan::resolver::{PlanResolver, PlanResolverState};
-use framework_python::cereal::pyspark_udtf::{
-    deserialize_pyspark_udtf, PySparkUDTF as CerealPySparkUDTF,
-};
 use framework_python::udf::pyspark_udtf::PySparkUDTF;
 use framework_python::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -376,11 +373,11 @@ pub(crate) async fn handle_execute_register_table_function(
     let CommonInlineUserDefinedTableFunction {
         function_name,
         deterministic,
-        arguments,
+        arguments: _,
         function,
     } = udtf;
 
-    let (return_type, eval_type, command, python_version) = match function {
+    let (return_type, _eval_type, _command, _python_version) = match &function {
         TableFunctionDefinition::PythonUdtf {
             return_type,
             eval_type,
@@ -389,7 +386,7 @@ pub(crate) async fn handle_execute_register_table_function(
         } => (return_type, eval_type, command, python_version),
     };
 
-    let return_type: ArrowDataType = resolver.resolve_data_type(return_type)?;
+    let return_type: ArrowDataType = resolver.resolve_data_type(return_type.clone())?;
     let return_schema: ArrowSchemaRef = match return_type {
         ArrowDataType::Struct(ref fields) => {
             Arc::new(ArrowSchema::new(fields.clone()))
@@ -402,18 +399,23 @@ pub(crate) async fn handle_execute_register_table_function(
         }
     };
 
-    let python_function: CerealPySparkUDTF = deserialize_pyspark_udtf(
-        &python_version,
-        &command,
-        &eval_type,
-        &(arguments.len() as i32),
-        &return_type,
-        &session.plan_config()?.spark_udf_config,
-    )
-    .map_err(|e| SparkError::invalid(format!("Python UDF deserialization error: {:?}", e)))?;
+    // let python_function: CerealPySparkUDTF = deserialize_pyspark_udtf(
+    //     &python_version,
+    //     &command,
+    //     &eval_type,
+    //     &(arguments.len() as i32),
+    //     &return_type,
+    //     &session.plan_config()?.spark_udf_config,
+    // )
+    // .map_err(|e| SparkError::invalid(format!("Python UDF deserialization error: {:?}", e)))?;
 
-    let python_udtf: PySparkUDTF =
-        PySparkUDTF::new(return_schema, python_function, deterministic, eval_type);
+    let python_udtf: PySparkUDTF = PySparkUDTF::new(
+        return_type,
+        return_schema,
+        function,
+        session.plan_config()?.spark_udf_config.clone(),
+        deterministic,
+    );
     ctx.register_udtf(&function_name, Arc::new(python_udtf));
 
     let (tx, rx) = tokio::sync::mpsc::channel(1);

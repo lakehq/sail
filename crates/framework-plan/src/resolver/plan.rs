@@ -748,9 +748,6 @@ impl PlanResolver<'_> {
             }
             PlanNode::CommonInlineUserDefinedTableFunction(udtf) => {
                 // TODO: Function arg for if pyspark_udtf or not
-                use framework_python::cereal::pyspark_udtf::{
-                    deserialize_pyspark_udtf, PySparkUDTF as CerealPySparkUDTF,
-                };
                 use framework_python::udf::pyspark_udtf::PySparkUDTF;
 
                 let spec::CommonInlineUserDefinedTableFunction {
@@ -766,7 +763,7 @@ impl PlanResolver<'_> {
                     .map(|x| self.resolve_expression(x, &schema, state))
                     .collect::<PlanResult<Vec<Expr>>>()?;
 
-                let (return_type, eval_type, command, python_version) = match function {
+                let (return_type, _eval_type, _command, _python_version) = match &function {
                     spec::TableFunctionDefinition::PythonUdtf {
                         return_type,
                         eval_type,
@@ -775,7 +772,7 @@ impl PlanResolver<'_> {
                     } => (return_type, eval_type, command, python_version),
                 };
 
-                let return_type: adt::DataType = self.resolve_data_type(return_type)?;
+                let return_type: adt::DataType = self.resolve_data_type(return_type.clone())?;
                 let return_schema: adt::SchemaRef = match return_type {
                     adt::DataType::Struct(ref fields) => {
                         Arc::new(adt::Schema::new(fields.clone()))
@@ -788,20 +785,13 @@ impl PlanResolver<'_> {
                     }
                 };
 
-                let python_function: CerealPySparkUDTF = deserialize_pyspark_udtf(
-                    &python_version,
-                    &command,
-                    &eval_type,
-                    &(arguments.len() as i32),
-                    &return_type,
-                    &self.config.spark_udf_config,
-                )
-                .map_err(|e| {
-                    PlanError::invalid(format!("Python UDF deserialization error: {}", e))
-                })?;
-
-                let python_udtf: PySparkUDTF =
-                    PySparkUDTF::new(return_schema, python_function, deterministic, eval_type);
+                let python_udtf: PySparkUDTF = PySparkUDTF::new(
+                    return_type,
+                    return_schema,
+                    function,
+                    self.config.spark_udf_config.clone(),
+                    deterministic,
+                );
 
                 let table_function =
                     TableFunction::new(function_name.clone(), Arc::new(python_udtf));
