@@ -63,6 +63,7 @@ impl TableProvider for PySparkUDT {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // TODO: Implement Stream
         let exec = MemoryExec::try_new(
             &[self.batches.clone()],
             TableProvider::schema(self),
