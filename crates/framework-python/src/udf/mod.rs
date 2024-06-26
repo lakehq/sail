@@ -12,7 +12,6 @@ use pyo3::types::PyDict;
 
 use crate::cereal::partial_pyspark_udf::PartialPySparkUDF;
 use crate::cereal::partial_python_udf::PartialPythonUDF;
-use crate::cereal::pyspark_udtf::PySparkUDTF as CerealPySparkUDTF;
 
 pub trait PythonFunction {
     fn get_inner<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny>;
@@ -30,13 +29,6 @@ impl PythonFunction for PartialPySparkUDF {
     }
 }
 
-impl PythonFunction for CerealPySparkUDTF {
-    fn get_inner<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny> {
-        self.0.clone_ref(py).into_bound(py)
-    }
-}
-
-// TODO: return DataFusionError::External for PyErr
 pub trait CommonPythonUDF {
     type PythonFunctionType: PythonFunction;
 
@@ -51,45 +43,36 @@ where
         .python_function()
         .get_inner(py)
         .get_item(0)
-        .map_err(|err| DataFusionError::Internal(format!("python_function {}", err)))?;
+        .map_err(|err| DataFusionError::External(err.into()))?;
     Ok(python_function)
 }
 
 pub fn get_python_builtins(py: Python) -> Result<Bound<PyModule>> {
     let builtins: Bound<PyModule> = PyModule::import_bound(py, pyo3::intern!(py, "builtins"))
-        .map_err(|err| {
-            DataFusionError::Internal(format!(
-                "get_python_builtins_list_function Error importing builtins: {}",
-                err
-            ))
-        })?;
+        .map_err(|err| DataFusionError::External(err.into()))?;
     Ok(builtins)
 }
 
 pub fn get_python_builtins_list_function(py: Python) -> Result<Bound<PyAny>> {
     let builtins_list: Bound<PyAny> = get_python_builtins(py)?
         .getattr(pyo3::intern!(py, "list"))
-        .map_err(|err| {
-            DataFusionError::Internal(format!("Error getting builtins list function: {}", err))
-        })?;
+        .map_err(|err| DataFusionError::External(err.into()))?;
     Ok(builtins_list)
 }
 
 pub fn get_python_builtins_str_function(py: Python) -> Result<Bound<PyAny>> {
     let builtins_str: Bound<PyAny> = get_python_builtins(py)?
         .getattr(pyo3::intern!(py, "str"))
-        .map_err(|err| {
-            DataFusionError::Internal(format!("Error getting builtins str function: {}", err))
-        })?;
+        .map_err(|err| DataFusionError::External(err.into()))?;
     Ok(builtins_str)
 }
 
 pub fn get_pyarrow_array_function(py: Python) -> Result<Bound<PyAny>> {
     let pyarrow_module_array: Bound<PyAny> =
         PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
-            .map_err(|err| DataFusionError::Internal(format!("pyarrow import error: {}", err)))?
+            .map_err(|err| DataFusionError::External(err.into()))?
             .getattr(pyo3::intern!(py, "array"))
-            .map_err(|err| DataFusionError::Internal(format!("pyarrow array error: {}", err)))?;
+            .map_err(|err| DataFusionError::External(err.into()))?;
     Ok(pyarrow_module_array)
 }
 
@@ -101,11 +84,11 @@ pub fn build_pyarrow_array_kwargs<'py>(
     let array_kwargs: Bound<PyDict> = PyDict::new_bound(py);
     array_kwargs
         .set_item("type", pyarrow_data_type)
-        .map_err(|err| DataFusionError::Internal(format!("kwargs {}", err)))?;
+        .map_err(|err| DataFusionError::External(err.into()))?;
     if from_pandas {
         array_kwargs
             .set_item("from_pandas", from_pandas)
-            .map_err(|err| DataFusionError::Internal(format!("kwargs from_pandas {}", err)))?;
+            .map_err(|err| DataFusionError::External(err.into()))?;
     }
     Ok(array_kwargs)
 }
@@ -116,7 +99,7 @@ pub fn get_pyarrow_output_data_type<'py>(
 ) -> Result<Bound<'py, PyAny>> {
     let pyarrow_output_data_type: Bound<PyAny> = output_type
         .to_pyarrow(py)
-        .map_err(|err| DataFusionError::Internal(format!("output_type to_pyarrow {}", err)))?
+        .map_err(|err| DataFusionError::External(err.into()))?
         .clone_ref(py)
         .into_bound(py);
     Ok(pyarrow_output_data_type)
@@ -125,30 +108,22 @@ pub fn get_pyarrow_output_data_type<'py>(
 pub fn get_pyarrow_record_batch_from_pandas_function(py: Python) -> Result<Bound<PyAny>> {
     let record_batch_from_pandas: Bound<PyAny> =
         PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
-            .map_err(|err| DataFusionError::Internal(format!("pyarrow import error: {}", err)))?
+            .map_err(|err| DataFusionError::External(err.into()))?
             .getattr(pyo3::intern!(py, "RecordBatch"))
-            .map_err(|err| {
-                DataFusionError::Internal(format!("pyarrow RecordBatch error: {}", err))
-            })?
+            .map_err(|err| DataFusionError::External(err.into()))?
             .getattr(pyo3::intern!(py, "from_pandas"))
-            .map_err(|err| {
-                DataFusionError::Internal(format!("pyarrow RecordBatch from_pandas error: {}", err))
-            })?;
+            .map_err(|err| DataFusionError::External(err.into()))?;
     Ok(record_batch_from_pandas)
 }
 
 pub fn get_pyarrow_record_batch_from_pylist_function(py: Python) -> Result<Bound<PyAny>> {
     let record_batch_from_pylist: Bound<PyAny> =
         PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
-            .map_err(|err| DataFusionError::Internal(format!("pyarrow import error: {}", err)))?
+            .map_err(|err| DataFusionError::External(err.into()))?
             .getattr(pyo3::intern!(py, "RecordBatch"))
-            .map_err(|err| {
-                DataFusionError::Internal(format!("pyarrow RecordBatch error: {}", err))
-            })?
+            .map_err(|err| DataFusionError::External(err.into()))?
             .getattr(pyo3::intern!(py, "from_pylist"))
-            .map_err(|err| {
-                DataFusionError::Internal(format!("pyarrow RecordBatch from_pylist error: {}", err))
-            })?;
+            .map_err(|err| DataFusionError::External(err.into()))?;
     Ok(record_batch_from_pylist)
 }
 
@@ -159,14 +134,14 @@ pub fn build_pyarrow_record_batch_kwargs<'py>(
     let record_batch_kwargs: Bound<PyDict> = PyDict::new_bound(py);
     record_batch_kwargs
         .set_item("schema", pyarrow_schema)
-        .map_err(|err| DataFusionError::Internal(format!("kwargs {}", err)))?;
+        .map_err(|err| DataFusionError::External(err.into()))?;
     Ok(record_batch_kwargs)
 }
 
 pub fn get_pyarrow_schema<'py>(schema: &SchemaRef, py: Python<'py>) -> Result<Bound<'py, PyAny>> {
     let pyarrow_schema: Bound<PyAny> = schema
         .to_pyarrow(py)
-        .map_err(|err| DataFusionError::Internal(format!("schema to_pyarrow {}", err)))?
+        .map_err(|err| DataFusionError::External(err.into()))?
         .clone_ref(py)
         .into_bound(py);
     Ok(pyarrow_schema)
@@ -174,8 +149,8 @@ pub fn get_pyarrow_schema<'py>(schema: &SchemaRef, py: Python<'py>) -> Result<Bo
 
 pub fn get_pyarrow_table_function(py: Python) -> Result<Bound<PyAny>> {
     let pyarrow_table: Bound<PyAny> = PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))
-        .map_err(|err| DataFusionError::Internal(format!("pyarrow import error: {}", err)))?
+        .map_err(|err| DataFusionError::External(err.into()))?
         .getattr(pyo3::intern!(py, "table"))
-        .map_err(|err| DataFusionError::Internal(format!("pyarrow table error: {}", err)))?;
+        .map_err(|err| DataFusionError::External(err.into()))?;
     Ok(pyarrow_table)
 }

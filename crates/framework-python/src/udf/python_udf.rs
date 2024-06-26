@@ -88,10 +88,10 @@ impl ScalarUDFImpl for PythonUDF {
 
             let results: Bound<PyAny> = python_function
                 .call1(py_args)
-                .map_err(|e| DataFusionError::Execution(format!("PySpark UDF Result: {e:?}")))?;
+                .map_err(|err| DataFusionError::External(err.into()))?;
 
             let array_data = ArrayData::from_pyarrow_bound(&results)
-                .map_err(|err| DataFusionError::Internal(format!("array_data {}", err)))?;
+                .map_err(|err| DataFusionError::External(err.into()))?;
             Ok(array_data)
         });
 

@@ -82,14 +82,6 @@ pub struct PySparkUDTF {
     deterministic: bool,
 }
 
-// impl CommonPythonUDF for PySparkUDTF {
-//     type PythonFunctionType = CerealPySparkUDTF;
-//
-//     fn python_function(&self) -> &Self::PythonFunctionType {
-//         &self.python_function
-//     }
-// }
-
 impl PySparkUDTF {
     pub fn new(
         return_type: DataType,
@@ -118,7 +110,7 @@ impl PySparkUDTF {
                 .clone_ref(py)
                 .into_bound(py)
                 .get_item(0)
-                .map_err(|err| DataFusionError::Internal(format!("python_function {}", err)))?;
+                .map_err(|err| DataFusionError::External(err.into()))?;
             let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let record_batch_from_pandas: Bound<PyAny> =
                 get_pyarrow_record_batch_from_pandas_function(py)?;
@@ -129,19 +121,9 @@ impl PySparkUDTF {
                     let arg = arg
                         .into_data()
                         .to_pyarrow(py)
-                        .map_err(|err| {
-                            DataFusionError::Internal(format!(
-                                "PySpark Arrow UDTF arg into_data to_pyarrow: {}",
-                                err
-                            ))
-                        })?
+                        .map_err(|err| DataFusionError::External(err.into()))?
                         .call_method0(py, pyo3::intern!(py, "to_pandas"))
-                        .map_err(|err| {
-                            DataFusionError::Internal(format!(
-                                "PySpark Arrow UDTF arg into_data to_pyarrow to_pandas: {}",
-                                err
-                            ))
-                        })?
+                        .map_err(|err| DataFusionError::External(err.into()))?
                         .clone_ref(py)
                         .into_bound(py);
                     Ok(arg)
@@ -149,78 +131,27 @@ impl PySparkUDTF {
                 .collect::<Result<Vec<_>, DataFusionError>>()?;
             let py_args: Bound<PyList> = PyList::new_bound(py, &py_args);
 
-            // let table_kwargs: Bound<PyDict> = PyDict::new_bound(py);
-            // table_kwargs
-            //     .set_item("schema", pyarrow_schema)
-            //     .map_err(|err| {
-            //         DataFusionError::Internal(format!("PySpark Arrow UDTF table_kwargs {}", err))
-            //     })?;
-            // println!("CHECK HERE TABLE_KWARGS: {:?}", table_kwargs);
-            // println!("CHECK HERE PY_ARGS: {:?}", py_args);
-            // let py_args = get_pyarrow_table_function
-            //     .call((py_args,), Some(&table_kwargs))
-            //     .map_err(|err| {
-            //         DataFusionError::Internal(format!(
-            //             "PySpark Arrow UDTF pyarrow_table_function call: {}",
-            //             err
-            //         ))
-            //     })?
-            //     .call_method0("to_pandas")
-            //     .map_err(|err| {
-            //         DataFusionError::Internal(format!(
-            //             "PySpark Arrow UDTF pyarrow_table_function to_pandas: {}",
-            //             err
-            //         ))
-            //     })?;
-            // println!("CHECK HERE PY_ARGS: {:?}", py_args);
-
-            let results: Bound<PyAny> =
-                python_function
-                    .call1((py.None(), (py_args,)))
-                    .map_err(|e| {
-                        DataFusionError::Execution(format!("PySpark Arrow UDTF Result: {e:?}"))
-                    })?;
+            let results: Bound<PyAny> = python_function
+                .call1((py.None(), (py_args,)))
+                .map_err(|err| DataFusionError::External(err.into()))?;
             let results: Bound<PyAny> = builtins_list
                 .call1((results,))
-                .map_err(|err| {
-                    DataFusionError::Internal(format!(
-                        "PySpark Arrow UDTF Error calling list(): {}",
-                        err
-                    ))
-                })?
+                .map_err(|err| DataFusionError::External(err.into()))?
                 .get_item(0)
-                .map_err(|err| {
-                    DataFusionError::Internal(format!(
-                        "PySpark Arrow UDTF Result list() first get_item(0): {}",
-                        err
-                    ))
-                })?;
+                .map_err(|err| DataFusionError::External(err.into()))?;
 
-            let results_data: Bound<PyAny> = results.get_item(0).map_err(|err| {
-                DataFusionError::Internal(format!(
-                    "PySpark Arrow UDTF Result list get_item(0): {}",
-                    err
-                ))
-            })?;
-            let _results_datatype: Bound<PyAny> = results.get_item(1).map_err(|err| {
-                DataFusionError::Internal(format!(
-                    "PySpark Arrow UDTF Result list get_item(0): {}",
-                    err
-                ))
-            })?;
+            let results_data: Bound<PyAny> = results
+                .get_item(0)
+                .map_err(|err| DataFusionError::External(err.into()))?;
+            let _results_datatype: Bound<PyAny> = results
+                .get_item(1)
+                .map_err(|err| DataFusionError::External(err.into()))?;
 
             let record_batch: Bound<PyAny> = record_batch_from_pandas
                 .call1((results_data,))
-                .map_err(|err| {
-                    DataFusionError::Internal(format!(
-                        "PySpark Arrow UDTF record_batch_from_pandas {}",
-                        err
-                    ))
-                })?;
+                .map_err(|err| DataFusionError::External(err.into()))?;
             let record_batch: RecordBatch = RecordBatch::from_pyarrow_bound(&record_batch)
-                .map_err(|err| {
-                    DataFusionError::Internal(format!("PySpark Arrow UDTF record_batch {}", err))
-                })?;
+                .map_err(|err| DataFusionError::External(err.into()))?;
 
             Ok(record_batch)
         })
@@ -237,7 +168,7 @@ impl PySparkUDTF {
                 .clone_ref(py)
                 .into_bound(py)
                 .get_item(0)
-                .map_err(|err| DataFusionError::Internal(format!("python_function {}", err)))?;
+                .map_err(|err| DataFusionError::External(err.into()))?;
             let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let record_batch_from_pylist: Bound<PyAny> =
                 get_pyarrow_record_batch_from_pylist_function(py)?;
@@ -251,19 +182,9 @@ impl PySparkUDTF {
                     let arg = arg
                         .into_data()
                         .to_pyarrow(py)
-                        .map_err(|err| {
-                            DataFusionError::Internal(format!(
-                                "PySpark UDTF arg into_data to_pyarrow: {}",
-                                err
-                            ))
-                        })?
+                        .map_err(|err| DataFusionError::External(err.into()))?
                         .call_method0(py, pyo3::intern!(py, "to_pylist"))
-                        .map_err(|err| {
-                            DataFusionError::Internal(format!(
-                                "PySpark UDTF arg into_data to_pyarrow to_pylist: {}",
-                                err
-                            ))
-                        })?
+                        .map_err(|err| DataFusionError::External(err.into()))?
                         .clone_ref(py)
                         .into_bound(py);
                     Ok(arg)
@@ -272,76 +193,39 @@ impl PySparkUDTF {
             let py_args: Bound<PyTuple> = PyTuple::new_bound(py, &py_args);
             let py_args: Bound<PyAny> = py
                 .eval_bound("zip", None, None)
-                .map_err(|err| {
-                    DataFusionError::Internal(format!(
-                        "PySpark UDTF py_args_zip eval_bound {}",
-                        err
-                    ))
-                })?
+                .map_err(|err| DataFusionError::External(err.into()))?
                 .call1(&py_args)
-                .map_err(|err| {
-                    DataFusionError::Internal(format!("PySpark UDTF py_args_zip zip {}", err))
-                })?;
-            let py_args: Bound<PyIterator> =
-                PyIterator::from_bound_object(&py_args).map_err(|err| {
-                    DataFusionError::Internal(format!("PySpark UDTF py_args_iter {}", err))
-                })?;
+                .map_err(|err| DataFusionError::External(err.into()))?;
+            let py_args: Bound<PyIterator> = PyIterator::from_bound_object(&py_args)
+                .map_err(|err| DataFusionError::External(err.into()))?;
 
             let results: Bound<PyList> = PyList::empty_bound(py);
             for py_arg in py_args {
-                let py_arg = py_arg.map_err(|err| {
-                    DataFusionError::Internal(format!("PySpark UDTF py_arg: {}", err))
-                })?;
-                let result: Bound<PyAny> =
-                    python_function
-                        .call1((py.None(), (py_arg,)))
-                        .map_err(|err| {
-                            DataFusionError::Execution(format!("PySpark UDTF Result: {}", err))
-                        })?;
+                let py_arg = py_arg.map_err(|err| DataFusionError::External(err.into()))?;
+                let result: Bound<PyAny> = python_function
+                    .call1((py.None(), (py_arg,)))
+                    .map_err(|err| DataFusionError::External(err.into()))?;
                 let result: Bound<PyAny> = builtins_list
                     .call1((result,))
-                    .map_err(|err| {
-                        DataFusionError::Internal(format!(
-                            "PySpark UDTF Error calling list(): {}",
-                            err
-                        ))
-                    })?
+                    .map_err(|err| DataFusionError::External(err.into()))?
                     .get_item(0)
-                    .map_err(|err| {
-                        DataFusionError::Internal(format!(
-                            "PySpark UDTF result list() first get_item(0): {}",
-                            err
-                        ))
-                    })?;
-                let result: Bound<PyAny> = builtins_list.call1((result,)).map_err(|err| {
-                    DataFusionError::Internal(format!(
-                        "PySpark UDTF Error converting tuple to list: {}",
-                        err
-                    ))
-                })?;
+                    .map_err(|err| DataFusionError::External(err.into()))?;
+                let result: Bound<PyAny> = builtins_list
+                    .call1((result,))
+                    .map_err(|err| DataFusionError::External(err.into()))?;
                 let result: Bound<PyList> =
                     list_of_tuples_to_list_of_dicts(py, &result, &self.return_schema)?;
                 for item in result.iter() {
-                    results.append(item).map_err(|err| {
-                        DataFusionError::Internal(format!(
-                            "PySpark UDTF Error appending item to results: {}",
-                            err
-                        ))
-                    })?;
+                    results
+                        .append(item)
+                        .map_err(|err| DataFusionError::External(err.into()))?;
                 }
             }
             let record_batch: Bound<PyAny> = record_batch_from_pylist
                 .call((results,), Some(&pyarrow_record_batch_kwargs))
-                .map_err(|err| {
-                    DataFusionError::Internal(format!(
-                        "PySpark Arrow UDTF record_batch_from_pylist {}",
-                        err
-                    ))
-                })?;
+                .map_err(|err| DataFusionError::External(err.into()))?;
             let record_batch: RecordBatch = RecordBatch::from_pyarrow_bound(&record_batch)
-                .map_err(|err| {
-                    DataFusionError::Internal(format!("PySpark Arrow UDTF record_batch {}", err))
-                })?;
+                .map_err(|err| DataFusionError::External(err.into()))?;
 
             Ok(record_batch)
         })
@@ -357,7 +241,7 @@ impl PySparkUDTF {
                 .clone_ref(py)
                 .into_bound(py)
                 .get_item(0)
-                .map_err(|err| DataFusionError::Internal(format!("python_function {}", err)))?;
+                .map_err(|err| DataFusionError::External(err.into()))?;
             let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let record_batch_from_pylist: Bound<PyAny> =
                 get_pyarrow_record_batch_from_pylist_function(py)?;
@@ -367,45 +251,23 @@ impl PySparkUDTF {
 
             let results: Bound<PyAny> = python_function
                 .call1((py.None(), (PyList::empty_bound(py),)))
-                .map_err(|e| {
-                    DataFusionError::Execution(format!("PySpark UDTF no args Result: {}", e))
-                })?;
+                .map_err(|err| DataFusionError::External(err.into()))?;
             let results: Bound<PyAny> = builtins_list
                 .call1((results,))
-                .map_err(|err| {
-                    DataFusionError::Internal(format!(
-                        "PySpark UDTF no args Error calling list(): {}",
-                        err
-                    ))
-                })?
+                .map_err(|err| DataFusionError::External(err.into()))?
                 .get_item(0)
-                .map_err(|err| {
-                    DataFusionError::Internal(format!(
-                        "PySpark UDTF no args Result list() first get_item(0): {}",
-                        err
-                    ))
-                })?;
-            let results: Bound<PyAny> = builtins_list.call1((results,)).map_err(|err| {
-                DataFusionError::Internal(format!(
-                    "PySpark UDTF no args Error converting tuple to list: {}",
-                    err
-                ))
-            })?;
+                .map_err(|err| DataFusionError::External(err.into()))?;
+            let results: Bound<PyAny> = builtins_list
+                .call1((results,))
+                .map_err(|err| DataFusionError::External(err.into()))?;
             let results: Bound<PyList> =
                 list_of_tuples_to_list_of_dicts(py, &results, &self.return_schema)?;
 
             let record_batch: Bound<PyAny> = record_batch_from_pylist
                 .call((results,), Some(&pyarrow_record_batch_kwargs))
-                .map_err(|err| {
-                    DataFusionError::Internal(format!(
-                        "PySpark Arrow UDTF record_batch_from_pylist {}",
-                        err
-                    ))
-                })?;
+                .map_err(|err| DataFusionError::External(err.into()))?;
             let record_batch: RecordBatch = RecordBatch::from_pyarrow_bound(&record_batch)
-                .map_err(|err| {
-                    DataFusionError::Internal(format!("PySpark Arrow UDTF record_batch {}", err))
-                })?;
+                .map_err(|err| DataFusionError::External(err.into()))?;
 
             Ok(record_batch)
         })
@@ -437,9 +299,7 @@ impl TableFunctionImpl for PySparkUDTF {
             &self.return_type,
             &self.spark_udf_config,
         )
-        .map_err(|e| {
-            DataFusionError::Execution(format!("Python UDTF deserialization error: {:?}", e))
-        })?;
+        .map_err(|err| DataFusionError::External(err.into()))?;
 
         if exprs.is_empty() {
             let batches: RecordBatch = if is_pyspark_arrow_udf(eval_type) {
@@ -459,20 +319,20 @@ impl TableFunctionImpl for PySparkUDTF {
             // args can either be scalar exprs or table args that represent entire input tables.
             match expr {
                 Expr::Literal(scalar_value) => {
-                    let array_ref = scalar_value.to_array().map_err(|e| {
+                    let array_ref = scalar_value.to_array().map_err(|err| {
                         DataFusionError::Execution(format!(
                             "Failed to convert scalar to array: {}",
-                            e
+                            err
                         ))
                     })?;
                     input_arrays.push(array_ref);
                 }
                 Expr::Alias(Alias { ref expr, .. }) => {
                     if let Expr::Literal(ref scalar_value) = **expr {
-                        let array_ref = scalar_value.to_array().map_err(|e| {
+                        let array_ref = scalar_value.to_array().map_err(|err| {
                             DataFusionError::Execution(format!(
                                 "Failed to convert scalar to array: {}",
-                                e
+                                err
                             ))
                         })?;
                         input_arrays.push(array_ref);
@@ -515,23 +375,19 @@ fn list_of_tuples_to_list_of_dicts<'py>(
     let fields = schema.fields();
     let list_of_dicts: Vec<Bound<PyDict>> = results
         .iter()
-        .map_err(|err| DataFusionError::Internal(format!("results iter: {}", err)))?
+        .map_err(|err| DataFusionError::External(err.into()))?
         .map(|result| {
             result
-                .map_err(|err| DataFusionError::Internal(format!("result iter: {}", err)))
+                .map_err(|err| DataFusionError::External(err.into()))
                 .and_then(|result| {
                     let dict: Bound<PyDict> = PyDict::new_bound(py);
                     for (i, field) in fields.iter().enumerate() {
                         let field_name = field.name().as_str();
-                        let value = result.get_item(i).map_err(|err| {
-                            DataFusionError::Internal(format!("result get_item({}): {}", i, err))
-                        })?;
-                        dict.set_item(field_name, value).map_err(|err| {
-                            DataFusionError::Internal(format!(
-                                "dict set_item({}, {}): {}",
-                                field_name, i, err
-                            ))
-                        })?;
+                        let value = result
+                            .get_item(i)
+                            .map_err(|err| DataFusionError::External(err.into()))?;
+                        dict.set_item(field_name, value)
+                            .map_err(|err| DataFusionError::External(err.into()))?;
                     }
                     Ok(dict)
                 })
