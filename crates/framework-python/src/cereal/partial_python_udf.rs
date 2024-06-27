@@ -22,7 +22,7 @@ impl Serialize for PartialPythonUDF {
                     let bytes = Bytes::new(py_bytes.downcast::<PyBytes>()?.as_bytes());
                     Ok(serializer.serialize_bytes(bytes))
                 })
-                .map_err(|e| serde::ser::Error::custom(format!("Pickle Error: {:?}", e)))?
+                .map_err(|e| serde::ser::Error::custom(format!("Pickle Error: {}", e)))?
         })
     }
 }
@@ -41,11 +41,13 @@ impl<'de> Visitor<'de> for PartialPythonUDFVisitor {
         E: de::Error,
     {
         Python::with_gil(|py| {
+            // TODO: Python error is converted to a serde Error,
+            //  so we cannot propagate the original error back to the client.
             PyModule::import_bound(py, pyo3::intern!(py, "cloudpickle"))
                 .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
                 .and_then(|loads| loads.call1((v,)))
                 .map(|py_tuple| PartialPythonUDF(py_tuple.to_object(py)))
-                .map_err(|e| E::custom(format!("Pickle Error: {:?}", e)))
+                .map_err(|e| E::custom(format!("Pickle Error: {}", e)))
         })
     }
 }

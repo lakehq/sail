@@ -1,4 +1,4 @@
-use datafusion::functions_aggregate::sum;
+use datafusion::functions_aggregate::{average, count, sum};
 use datafusion_expr::{expr, AggregateFunction, BuiltInWindowFunction};
 
 use crate::error::{PlanError, PlanResult};
@@ -8,8 +8,8 @@ pub(crate) fn get_built_in_window_function(
 ) -> PlanResult<expr::WindowFunctionDefinition> {
     let name = name.to_lowercase();
     match name.as_str() {
-        "avg" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
-            AggregateFunction::Avg,
+        "avg" => Ok(expr::WindowFunctionDefinition::AggregateUDF(
+            average::avg_udaf(),
         )),
         "min" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
             AggregateFunction::Min,
@@ -18,8 +18,8 @@ pub(crate) fn get_built_in_window_function(
             AggregateFunction::Max,
         )),
         "sum" => Ok(expr::WindowFunctionDefinition::AggregateUDF(sum::sum_udaf())),
-        "count" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
-            AggregateFunction::Count,
+        "count" => Ok(expr::WindowFunctionDefinition::AggregateUDF(
+            count::count_udaf(),
         )),
         "cume_dist" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
             BuiltInWindowFunction::CumeDist,

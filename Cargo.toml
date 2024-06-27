@@ -14,7 +14,7 @@ opentelemetry-semantic-conventions = "0.15.0"
 opentelemetry-otlp = { version = "0.16.0", features = ["trace", "metrics", "grpc-tonic", "tls", "tls-roots"] }
 opentelemetry-proto = { version = "0.6.0" }
 opentelemetry-stdout = { version = "0.4.0", features = ["trace"] }
-opentelemetry-resource-detectors = "0.1.0"
+opentelemetry-resource-detectors = "0.2.0"
 thiserror = { version = "1.0.61" }
 tokio = { version = "1.38.0", features = ["full"] }
 tokio-stream = "0.1.15"
@@ -41,7 +41,6 @@ serde_bytes = "0.11"
 monostate = "0.1"
 regex = "1.10"
 glob = "0.3"
-bincode = "1.3.3"
 chrono = "0.4"
 chrono-tz = "0.9"
 futures = "0.3"
@@ -56,15 +55,15 @@ either = "1.12.0"
 #
 # The versions of the following dependencies are managed manually.
 #
-datafusion = { version = "39.0.0", features = ["serde"] }
-datafusion-common = { version = "39.0.0", features = ["object_store"] }
+datafusion = { version = "39.0.0", features = ["serde", "pyarrow"] }
+datafusion-common = { version = "39.0.0", features = ["object_store", "pyarrow"] }
 datafusion-expr = "39.0.0"
 datafusion-functions-array = "39.0.0"
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 # 0.21 breaks when datafusion has pyarrow enabled
 pyo3 = { version = "0.21.2", features = ["auto-initialize", "serde"] }
 # Should be the equivalent of enabling the pyarrow feature in datafusion since we already have pyo3 in the workspace
-arrow = { version = "52.0.0", features = ["ffi"] }
+arrow = { version = "52.0.0", features = ["ffi", "pyarrow"] }
 arrow-cast = { version = "52.0.0" }
 # We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.
 sqlparser = { version = "0.46.0", features = ["serde", "visitor"] }
@@ -75,3 +74,9 @@ serde_arrow = { version = "0.11", features = ["arrow-52"] }
 # You can use `path = "..."` to temporarily point to your local copy of the crates
 # to speed up local development.
 sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "d83219d" }
+
+# Use this patch until datafusion 40.0.0 is released
+datafusion = { git = "https://github.com/apache/datafusion.git", rev = "49aee89" }
+datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "49aee89" }
+datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "49aee89" }
+datafusion-functions-array = { git = "https://github.com/apache/datafusion.git", rev = "49aee89" }

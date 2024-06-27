@@ -11,10 +11,7 @@ Please install the protocol buffer compiler (`protoc`) and the Rust toolchain (s
 Run the following commands to verify the code before committing changes.
 
 ```bash
-cargo +nightly fmt
-cargo clippy --all-targets --all-features
-cargo build
-cargo test
+cargo +nightly fmt && cargo clippy --all-targets --all-features && cargo build && cargo test
 ```
 
 The code can be built and tested using the stable toolchain,
@@ -60,7 +57,8 @@ Please install OpenJDK 17 on your host.
 You can use any widely-used OpenJDK distribution, such as [Amazon Corretto](https://aws.amazon.com/corretto/).
 
 It is recommended to set `JAVA_HOME` when following the instructions in the next sections.
-If the `JAVA_HOME` environment variable is not set, the Spark build script will try to find the Java installation using either
+If the `JAVA_HOME` environment variable is not set, the Spark build script will try to find the Java installation using
+either
 (1) the location of `javac` (for Linux), or (2) the output of `/usr/libexec/java_home` (for macOS).
 
 ### Spark Setup
@@ -181,19 +179,23 @@ The Spark tests are always run when the pull request is merged into the `main` b
 
 ### Running the Rust Debugger in RustRover
 
-Since we use PyO3 to support Python binding in Rust, we need some additional setup to run the Rust debugger in RustRover.
+Since we use PyO3 to support Python binding in Rust, we need some additional setup to run the Rust debugger in
+RustRover.
 In **Run** > **Edit Configurations**, add a new **Cargo** configuration with the following settings:
 
 1. Name: **Run Spark Connect server** (You can use any name you like.)
 2. Command: `run -p framework-spark-connect`
 3. Environment Variables:
-    - (required) `PYTHONPATH`: `python/.venv/lib/python<version>/site-packages` (Please replace `<version>` with the actual Python version, e.g. `3.11`.)
-    - (required) `PYO3_PYTHON`: `<project>/python/.venv/bin/python` (Please replace `<project>` with the actual project path. **This must be an absolute path.**)
+    - (required) `PYTHONPATH`: `python/.venv/lib/python<version>/site-packages` (Please replace `<version>` with the
+      actual Python version, e.g. `3.11`.)
+    - (required) `PYO3_PYTHON`: `<project>/python/.venv/bin/python` (Please replace `<project>` with the actual project
+      path. **This must be an absolute path.**)
     - (required) `RUST_MIN_STACK`: `8388608`
     - (optional) `RUST_BACKTRACE`: `full`
     - (optional) `RUST_LOG`: `framework_spark_connect=debug`
 
-When entering environment variables, you can click on the button on the right side of the input box to open the dialog and add the environment variables one by one.
+When entering environment variables, you can click on the button on the right side of the input box to open the dialog
+and add the environment variables one by one.
 
 You can leave the other settings as default.
 

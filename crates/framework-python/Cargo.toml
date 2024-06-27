@@ -18,5 +18,4 @@ pyo3 = { workspace = true }
 arrow = { workspace = true }
 arrow-cast = { workspace = true }
 sqlparser = { workspace = true }
-bincode = { workspace = true }
 async-trait = { workspace = true }

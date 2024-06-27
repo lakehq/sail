@@ -51,6 +51,10 @@ impl DisplayAs for ShowStringExec {
 }
 
 impl ExecutionPlan for ShowStringExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

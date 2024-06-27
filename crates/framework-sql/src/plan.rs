@@ -564,9 +564,6 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::Plan> {
             version,
             partitions,
         } => {
-            if args.is_some() {
-                return Err(SqlError::unsupported("table args"));
-            }
             if !with_hints.is_empty() {
                 return Err(SqlError::unsupported("table hints"));
             }
@@ -576,13 +573,35 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::Plan> {
             if !partitions.is_empty() {
                 return Err(SqlError::unsupported("table partitions"));
             }
-            let plan = spec::Plan::new(spec::PlanNode::Read {
-                is_streaming: false,
-                read_type: spec::ReadType::NamedTable {
-                    identifier: from_ast_object_name(name)?,
-                    options: Default::default(),
-                },
-            });
+
+            let plan = if let Some(func_args) = args {
+                let args: Vec<spec::Expr> = func_args
+                    .into_iter()
+                    .map(|arg| {
+                        if let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(expr)) = arg {
+                            from_ast_expression(expr)
+                        } else {
+                            Err(SqlError::invalid("unsupported function argument type"))
+                        }
+                    })
+                    .collect::<SqlResult<Vec<_>>>()?;
+                spec::Plan::new(spec::PlanNode::Read {
+                    is_streaming: false,
+                    read_type: spec::ReadType::Udtf {
+                        identifier: from_ast_object_name(name)?,
+                        arguments: args,
+                        options: Default::default(),
+                    },
+                })
+            } else {
+                spec::Plan::new(spec::PlanNode::Read {
+                    is_streaming: false,
+                    read_type: spec::ReadType::NamedTable {
+                        identifier: from_ast_object_name(name)?,
+                        options: Default::default(),
+                    },
+                })
+            };
             let plan = with_ast_table_alias(plan, alias)?;
             Ok(plan)
         }

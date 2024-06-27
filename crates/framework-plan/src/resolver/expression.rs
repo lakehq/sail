@@ -159,6 +159,8 @@ impl PlanResolver<'_> {
                     .collect::<Result<Vec<DataType>, DataFusionError>>(
                 )?;
 
+                // FIXME: is_user_defined_function is always false
+                //  So, we need to check udf's before built-in functions.
                 let func = if let Ok(udf) = self.ctx.udf(function_name.as_str()) {
                     // TODO: UnresolvedPythonUDF will likely need to be accounted for as well
                     //  once we integrate LakeSail Python UDF.
@@ -211,10 +213,7 @@ impl PlanResolver<'_> {
                         func: udf,
                         args: arguments,
                     })
-                }
-                // FIXME: is_user_defined_function is always false
-                //  So, we need to check udf's before built-in functions.
-                else if let Ok(func) = get_built_in_function(function_name.as_str()) {
+                } else if let Ok(func) = get_built_in_function(function_name.as_str()) {
                     func(arguments.clone())?
                 } else if let Ok(func) = get_built_in_aggregate_function(
                     function_name.as_str(),
@@ -248,7 +247,7 @@ impl PlanResolver<'_> {
                 if let Some(target) = target {
                     let target: Vec<String> = target.into();
                     Ok(expr::Expr::Wildcard {
-                        qualifier: Some(target.join(".")),
+                        qualifier: Some(target.join(".").into()),
                     })
                 } else {
                     Ok(expr::Expr::Wildcard { qualifier: None })
