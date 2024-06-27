@@ -277,11 +277,6 @@ impl PySparkUDTF {
 
 impl TableFunctionImpl for PySparkUDTF {
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
-        println!(
-            "CHECK HERE EXPRS: {:?}, and SCHEMA: {:?}",
-            exprs, &self.return_schema
-        );
-
         let (_return_type, eval_type, command, python_version) =
             match &self.table_function_definition {
                 TableFunctionDefinition::PythonUdtf {
@@ -354,7 +349,6 @@ impl TableFunctionImpl for PySparkUDTF {
             }
         }
 
-        println!("CHECK HERE INPUT_ARRAYS: {:?}", input_arrays);
         let batches: RecordBatch = if is_pyspark_arrow_udf(eval_type) {
             self.apply_pyspark_arrow_function(&input_arrays, python_function)?
         } else {

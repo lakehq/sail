@@ -99,7 +99,9 @@ impl ScalarUDFImpl for PySparkUDF {
                             .into_data()
                             .to_pyarrow(py)
                             .map_err(|err| DataFusionError::External(err.into()))?
-                            .call_method0(py, pyo3::intern!(py, "to_pandas"))
+                            // FIXME: Should be to_pandas here for performance (Zero-Copy),
+                            //  but behavior of results is inconsistent with PySpark's expectations.
+                            .call_method0(py, pyo3::intern!(py, "to_pylist"))
                             .map_err(|err| DataFusionError::External(err.into()))?
                             .clone_ref(py)
                             .into_bound(py);
