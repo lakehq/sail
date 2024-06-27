@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
+use arrow::datatypes::FieldRef;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DFSchema, Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
-use datafusion_common::{Column, DataFusionError};
+use datafusion_common::{Column, DataFusionError, TableReference};
 use datafusion_expr::{expr, window_frame, ExprSchemable, ScalarUDF};
 use framework_common::spec;
 use framework_python::cereal::partial_pyspark_udf::{
@@ -19,11 +20,12 @@ use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, get_built_in_window_function,
     is_built_in_generator_function,
 };
-use crate::resolver::{PlanResolver, PlanResolverState};
+use crate::resolver::state::PlanResolverState;
+use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
-    pub(crate) fn resolve_sort_order(
+    pub(super) fn resolve_sort_order(
         &self,
         sort: spec::SortOrder,
         schema: &DFSchema,
@@ -53,7 +55,7 @@ impl PlanResolver<'_> {
         }))
     }
 
-    pub(crate) fn resolve_window_frame(
+    pub(super) fn resolve_window_frame(
         &self,
         frame: spec::WindowFrame,
         state: &mut PlanResolverState,
@@ -92,7 +94,7 @@ impl PlanResolver<'_> {
         Ok(window_frame::WindowFrame::new_bounds(units, start, end))
     }
 
-    fn resolve_window_boundary_value(
+    pub(super) fn resolve_window_boundary_value(
         &self,
         value: spec::Expr,
         state: &mut PlanResolverState,
@@ -114,7 +116,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub fn resolve_expression(
+    pub(super) fn resolve_expression(
         &self,
         expr: spec::Expr,
         schema: &DFSchema,
@@ -133,11 +135,7 @@ impl PlanResolver<'_> {
                 }))
             }
             Expr::UnresolvedAttribute { name, plan_id: _ } => {
-                // FIXME: resolve identifier using schema
-                let column: Vec<String> = name.into();
-                Ok(expr::Expr::Column(Column::new_unqualified(
-                    column.join("."),
-                )))
+                self.resolve_attribute(name, schema, state)
             }
             Expr::UnresolvedFunction {
                 function_name,
@@ -419,6 +417,51 @@ impl PlanResolver<'_> {
         }
     }
 
+    pub(super) fn resolve_attribute(
+        &self,
+        name: spec::ObjectName,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<expr::Expr> {
+        let name: Vec<String> = name.into();
+        let alias = name
+            .last()
+            .ok_or_else(|| PlanError::invalid("empty attribute"))?
+            .clone();
+        let expr = schema
+            .iter()
+            .filter_map(|(qualifier, field)| self.find_attribute(&name, qualifier, field, state))
+            .collect::<Vec<_>>()
+            .one()
+            .map_err(|_| PlanError::invalid(format!("cannot resolve attribute: {:?}", name)))?;
+        Ok(expr::Expr::Alias(expr::Alias {
+            expr: Box::new(expr),
+            relation: None,
+            name: alias,
+        }))
+    }
+
+    fn find_attribute(
+        &self,
+        name: &[String],
+        qualifier: Option<&TableReference>,
+        field: &FieldRef,
+        state: &PlanResolverState,
+    ) -> Option<expr::Expr> {
+        // TODO: handle qualifier and nested fields
+        if state
+            .field(field.name())
+            .is_some_and(|f| Some(&f.name) == name.last())
+        {
+            Some(expr::Expr::Column(Column::new(
+                qualifier.cloned(),
+                field.name(),
+            )))
+        } else {
+            None
+        }
+    }
+
     fn rewrite_alias(&self, expr: expr::Expr, names: Vec<String>) -> PlanResult<expr::Expr> {
         use expr::{Alias, Expr, ScalarFunction};
 
@@ -460,7 +503,8 @@ mod tests {
 
     use crate::config::PlanConfig;
     use crate::error::PlanResult;
-    use crate::resolver::{PlanResolver, PlanResolverState};
+    use crate::resolver::state::PlanResolverState;
+    use crate::resolver::PlanResolver;
 
     #[test]
     fn test_resolve_expression_with_alias() -> PlanResult<()> {

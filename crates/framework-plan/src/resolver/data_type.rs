@@ -29,13 +29,12 @@ impl PlanResolver<'_> {
                 element_type,
                 contains_null,
             } => {
-                let field = spec::Field {
-                    name: "element".to_string(),
-                    data_type: *element_type,
-                    nullable: contains_null,
-                    metadata: HashMap::new(),
-                };
-                Ok(adt::DataType::List(Arc::new(self.resolve_field(field)?)))
+                let field = adt::Field::new(
+                    "element",
+                    self.resolve_data_type(*element_type)?,
+                    contains_null,
+                );
+                Ok(adt::DataType::List(Arc::new(field)))
             }
             DataType::Struct { fields } => Ok(adt::DataType::Struct(self.resolve_fields(fields)?)),
             DataType::Decimal { scale, precision } => {
@@ -70,23 +69,17 @@ impl PlanResolver<'_> {
                 value_contains_null,
             } => {
                 let fields = vec![
-                    spec::Field {
-                        name: "key".to_string(),
-                        data_type: *key_type,
-                        nullable: false,
-                        metadata: HashMap::new(),
-                    },
-                    spec::Field {
-                        name: "value".to_string(),
-                        data_type: *value_type,
-                        nullable: value_contains_null,
-                        metadata: HashMap::new(),
-                    },
+                    adt::Field::new("key", self.resolve_data_type(*key_type)?, false),
+                    adt::Field::new(
+                        "value",
+                        self.resolve_data_type(*value_type)?,
+                        value_contains_null,
+                    ),
                 ];
                 Ok(adt::DataType::Map(
                     Arc::new(adt::Field::new(
                         "entries",
-                        adt::DataType::Struct(self.resolve_fields(fields.into())?),
+                        adt::DataType::Struct(adt::Fields::from(fields)),
                         false,
                     )),
                     false,

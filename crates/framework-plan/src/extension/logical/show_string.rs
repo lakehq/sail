@@ -47,12 +47,8 @@ pub(crate) struct ShowStringFormat {
 }
 
 impl ShowStringFormat {
-    pub fn new(style: ShowStringStyle, truncate: usize) -> Self {
-        let field_name = match style {
-            ShowStringStyle::Default | ShowStringStyle::Vertical => "show_string",
-            ShowStringStyle::Html => "html_string",
-        };
-        let fields = vec![Field::new(field_name, DataType::Utf8, false)];
+    pub fn new(name: String, style: ShowStringStyle, truncate: usize) -> Self {
+        let fields = vec![Field::new(name, DataType::Utf8, false)];
         let schema = Arc::new(Schema::new(fields));
         Self {
             style,
@@ -76,7 +72,7 @@ impl ShowStringFormat {
     }
 
     fn get_formatters<'a>(&'a self, batch: &'a RecordBatch) -> Result<Vec<ArrayFormatter>> {
-        let options = FormatOptions::default();
+        let options = FormatOptions::default().with_null("NULL");
         Ok(batch
             .columns()
             .iter()
@@ -225,10 +221,10 @@ impl ShowStringFormat {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct ShowStringNode {
-    pub input: Arc<LogicalPlan>,
-    pub limit: usize,
-    pub format: ShowStringFormat,
-    pub schema: DFSchemaRef,
+    input: Arc<LogicalPlan>,
+    schema: DFSchemaRef,
+    limit: usize,
+    format: ShowStringFormat,
 }
 
 impl ShowStringNode {
@@ -246,6 +242,14 @@ impl ShowStringNode {
                 HashMap::new(),
             )?),
         })
+    }
+
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+
+    pub fn format(&self) -> &ShowStringFormat {
+        &self.format
     }
 }
 

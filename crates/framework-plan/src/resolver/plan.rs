@@ -31,11 +31,13 @@ use crate::extension::logical::{
     CatalogCommand, CatalogCommandNode, RangeNode, ShowStringFormat, ShowStringNode,
     ShowStringStyle, SortWithinPartitionsNode,
 };
+use crate::extension::source::rename::RenameTableProvider;
+use crate::resolver::state::{FieldDescriptor, PlanResolverState};
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::tree::PlanRewriter;
 use crate::resolver::utils::{cast_record_batch, read_record_batches};
-use crate::resolver::{PlanResolver, PlanResolverState};
+use crate::resolver::PlanResolver;
 
 pub(crate) fn build_schema_reference(name: spec::ObjectName) -> PlanResult<SchemaReference> {
     let names: Vec<String> = name.into();
@@ -72,14 +74,14 @@ fn build_table_reference(name: spec::ObjectName) -> PlanResult<TableReference> {
 
 impl PlanResolver<'_> {
     #[async_recursion]
-    pub async fn resolve_plan(
+    pub(super) async fn resolve_plan(
         &self,
         plan: spec::Plan,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         use spec::PlanNode;
 
-        match plan.node {
+        let plan = match plan.node {
             PlanNode::Read {
                 read_type,
                 is_streaming: _,
@@ -96,7 +98,7 @@ impl PlanResolver<'_> {
                         }
                         let table_reference = build_table_reference(identifier)?;
                         let df: DataFrame = self.ctx.table(table_reference).await?;
-                        Ok(df.into_optimized_plan()?)
+                        df.into_optimized_plan()?
                     }
                     ReadType::Udtf {
                         identifier,
@@ -116,13 +118,13 @@ impl PlanResolver<'_> {
                             .collect::<PlanResult<Vec<Expr>>>()?;
                         let table_function = self.ctx.table_function(function_name)?;
                         let table_provider = table_function.create_table_provider(&arguments)?;
-                        Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                        LogicalPlan::TableScan(plan::TableScan::try_new(
                             function_name,
                             provider_as_source(table_provider),
                             None,
                             vec![],
                             None,
-                        )?))
+                        )?)
                     }
                     ReadType::DataSource {
                         format,
@@ -154,13 +156,13 @@ impl PlanResolver<'_> {
                             .with_listing_options(options)
                             .with_schema(schema);
                         let provider = Arc::new(ListingTable::try_new(config)?);
-                        Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                        LogicalPlan::TableScan(plan::TableScan::try_new(
                             UNNAMED_TABLE,
                             provider_as_source(provider),
                             None,
                             vec![],
                             None,
-                        )?))
+                        )?)
                     }
                 }
             }
@@ -182,6 +184,7 @@ impl PlanResolver<'_> {
                 let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr)?;
                 let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr)?;
                 let expr = self.rewrite_multi_expr(expr)?;
+                let expr = self.rewrite_expr_field_name(expr, state)?;
                 let has_aggregate = expr.iter().any(|e| {
                     e.exists(|e| match e {
                         Expr::AggregateFunction(_) => Ok(true),
@@ -190,16 +193,9 @@ impl PlanResolver<'_> {
                     .unwrap_or(false)
                 });
                 if has_aggregate {
-                    Ok(LogicalPlan::Aggregate(Aggregate::try_new(
-                        Arc::new(input),
-                        vec![],
-                        expr,
-                    )?))
+                    LogicalPlan::Aggregate(Aggregate::try_new(Arc::new(input), vec![], expr)?)
                 } else {
-                    Ok(LogicalPlan::Projection(plan::Projection::try_new(
-                        expr,
-                        Arc::new(input),
-                    )?))
+                    LogicalPlan::Projection(plan::Projection::try_new(expr, Arc::new(input))?)
                 }
             }
             PlanNode::Filter { input, condition } => {
@@ -207,7 +203,7 @@ impl PlanResolver<'_> {
                 let schema = input.schema();
                 let predicate = self.resolve_expression(condition, schema, state)?.unalias();
                 let filter = plan::Filter::try_new(predicate, Arc::new(input))?;
-                Ok(LogicalPlan::Filter(filter))
+                LogicalPlan::Filter(filter)
             }
             PlanNode::Join {
                 left,
@@ -270,7 +266,7 @@ impl PlanResolver<'_> {
                             "expecting either join condition or using columns",
                         ));
                     };
-                Ok(LogicalPlan::Join(plan::Join {
+                LogicalPlan::Join(plan::Join {
                     left: Arc::new(left),
                     right: Arc::new(right),
                     on,
@@ -279,7 +275,7 @@ impl PlanResolver<'_> {
                     join_constraint,
                     schema: Arc::new(schema),
                     null_equals_null: false,
-                }))
+                })
             }
             PlanNode::SetOperation {
                 left,
@@ -295,17 +291,17 @@ impl PlanResolver<'_> {
                 let left = self.resolve_plan(*left, state).await?;
                 let right = self.resolve_plan(*right, state).await?;
                 match set_op_type {
-                    SetOpType::Intersect => Ok(LogicalPlanBuilder::intersect(left, right, is_all)?),
+                    SetOpType::Intersect => LogicalPlanBuilder::intersect(left, right, is_all)?,
                     SetOpType::Union => {
                         if is_all {
-                            Ok(LogicalPlanBuilder::from(left).union(right)?.build()?)
+                            LogicalPlanBuilder::from(left).union(right)?.build()?
                         } else {
-                            Ok(LogicalPlanBuilder::from(left)
+                            LogicalPlanBuilder::from(left)
                                 .union_distinct(right)?
-                                .build()?)
+                                .build()?
                         }
                     }
-                    SetOpType::Except => Ok(LogicalPlanBuilder::except(left, right, is_all)?),
+                    SetOpType::Except => LogicalPlanBuilder::except(left, right, is_all)?,
                 }
             }
             PlanNode::Sort {
@@ -320,24 +316,24 @@ impl PlanResolver<'_> {
                     .map(|o| self.resolve_sort_order(o, schema, state))
                     .collect::<PlanResult<_>>()?;
                 if is_global {
-                    Ok(LogicalPlan::Sort(plan::Sort {
+                    LogicalPlan::Sort(plan::Sort {
                         expr,
                         input: Arc::new(input),
                         fetch: None,
-                    }))
+                    })
                 } else {
-                    Ok(LogicalPlan::Extension(Extension {
+                    LogicalPlan::Extension(Extension {
                         node: Arc::new(SortWithinPartitionsNode::new(Arc::new(input), expr, None)),
-                    }))
+                    })
                 }
             }
             PlanNode::Limit { input, limit } => {
                 let input = self.resolve_plan(*input, state).await?;
-                Ok(LogicalPlan::Limit(plan::Limit {
+                LogicalPlan::Limit(plan::Limit {
                     skip: 0,
                     fetch: Some(limit),
                     input: Arc::new(input),
-                }))
+                })
             }
             PlanNode::Aggregate {
                 input,
@@ -360,15 +356,13 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .map(|e| self.resolve_expression(e, schema, state))
                     .collect::<PlanResult<_>>()?;
+                let group_expr = self.rewrite_expr_field_name(group_expr, state)?;
                 let aggr_expr = aggregate_expressions
                     .into_iter()
                     .map(|e| self.resolve_expression(e, schema, state))
                     .collect::<PlanResult<_>>()?;
-                Ok(LogicalPlan::Aggregate(Aggregate::try_new(
-                    Arc::new(input),
-                    group_expr,
-                    aggr_expr,
-                )?))
+                let aggr_expr = self.rewrite_expr_field_name(aggr_expr, state)?;
+                LogicalPlan::Aggregate(Aggregate::try_new(Arc::new(input), group_expr, aggr_expr)?)
             }
             PlanNode::WithParameters {
                 input,
@@ -385,7 +379,7 @@ impl PlanResolver<'_> {
                 } else {
                     input
                 };
-                let input = if !named_arguments.is_empty() {
+                if !named_arguments.is_empty() {
                     let params = named_arguments
                         .into_iter()
                         .map(|(name, arg)| -> PlanResult<(String, ScalarValue)> {
@@ -395,8 +389,7 @@ impl PlanResolver<'_> {
                     input.with_param_values(ParamValues::Map(params))?
                 } else {
                     input
-                };
-                Ok(input)
+                }
             }
             PlanNode::LocalRelation { data, schema } => {
                 let batches = if let Some(data) = data {
@@ -416,25 +409,29 @@ impl PlanResolver<'_> {
                 } else {
                     return Err(PlanError::invalid("missing schema for local relation"));
                 };
-                let provider = MemTable::try_new(schema, vec![batches])?;
-                Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                let names = state.register_schema(&schema);
+                let provider = RenameTableProvider::try_new(
+                    Arc::new(MemTable::try_new(schema, vec![batches])?),
+                    names,
+                )?;
+                LogicalPlan::TableScan(plan::TableScan::try_new(
                     UNNAMED_TABLE,
                     provider_as_source(Arc::new(provider)),
                     None,
                     vec![],
                     None,
-                )?))
+                )?)
             }
             PlanNode::Sample { .. } => {
                 return Err(PlanError::todo("sample"));
             }
             PlanNode::Offset { input, offset } => {
                 let input = self.resolve_plan(*input, state).await?;
-                Ok(LogicalPlan::Limit(plan::Limit {
+                LogicalPlan::Limit(plan::Limit {
                     skip: offset,
                     fetch: None,
                     input: Arc::new(input),
-                }))
+                })
             }
             PlanNode::Deduplicate {
                 input,
@@ -475,7 +472,7 @@ impl PlanResolver<'_> {
                         "must either specify deduplicate column names or use all columns as keys",
                     ));
                 };
-                Ok(LogicalPlan::Distinct(distinct))
+                LogicalPlan::Distinct(distinct)
             }
             PlanNode::Range {
                 start,
@@ -492,18 +489,20 @@ impl PlanResolver<'_> {
                         num_partitions
                     )));
                 }
-                Ok(LogicalPlan::Extension(Extension {
-                    node: Arc::new(RangeNode::try_new(start, end, step, num_partitions)?),
-                }))
+                let descriptor = FieldDescriptor::new("id");
+                let name = state.register_field(descriptor);
+                LogicalPlan::Extension(Extension {
+                    node: Arc::new(RangeNode::try_new(name, start, end, step, num_partitions)?),
+                })
             }
             PlanNode::SubqueryAlias {
                 input,
                 alias,
                 qualifier,
-            } => Ok(LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
+            } => LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
                 Arc::new(self.resolve_plan(*input, state).await?),
                 build_table_reference(spec::ObjectName::new_qualified(alias, qualifier))?,
-            )?)),
+            )?),
             PlanNode::Repartition {
                 input,
                 num_partitions,
@@ -511,10 +510,10 @@ impl PlanResolver<'_> {
             } => {
                 let input = self.resolve_plan(*input, state).await?;
                 // TODO: handle shuffle partition
-                Ok(LogicalPlan::Repartition(plan::Repartition {
+                LogicalPlan::Repartition(plan::Repartition {
                     input: Arc::new(input),
                     partitioning_scheme: plan::Partitioning::RoundRobinBatch(num_partitions),
-                }))
+                })
             }
             PlanNode::ToDf {
                 input,
@@ -535,15 +534,14 @@ impl PlanResolver<'_> {
                     .zip(column_names.iter())
                     .map(|(col, name)| Expr::Column(col.clone()).alias(name.clone()))
                     .collect();
-                Ok(LogicalPlan::Projection(plan::Projection::try_new(
-                    expr,
-                    Arc::new(input),
-                )?))
+                let expr = self.rewrite_expr_field_name(expr, state)?;
+                LogicalPlan::Projection(plan::Projection::try_new(expr, Arc::new(input))?)
             }
             PlanNode::WithColumnsRenamed {
                 input,
                 rename_columns_map,
             } => {
+                // FIXME
                 let input = self.resolve_plan(*input, state).await?;
                 let rename_columns_map: HashMap<String, String> = rename_columns_map
                     .into_iter()
@@ -562,10 +560,8 @@ impl PlanResolver<'_> {
                         }
                     })
                     .collect();
-                Ok(LogicalPlan::Projection(plan::Projection::try_new(
-                    expr,
-                    Arc::new(input),
-                )?))
+                let expr = self.rewrite_expr_field_name(expr, state)?;
+                LogicalPlan::Projection(plan::Projection::try_new(expr, Arc::new(input))?)
             }
             PlanNode::ShowString {
                 input,
@@ -578,10 +574,12 @@ impl PlanResolver<'_> {
                     true => ShowStringStyle::Vertical,
                     false => ShowStringStyle::Default,
                 };
-                let format = ShowStringFormat::new(style, truncate);
-                Ok(LogicalPlan::Extension(Extension {
+                let descriptor = FieldDescriptor::new("show_string");
+                let name = state.register_field(descriptor);
+                let format = ShowStringFormat::new(name, style, truncate);
+                LogicalPlan::Extension(Extension {
                     node: Arc::new(ShowStringNode::try_new(Arc::new(input), num_rows, format)?),
-                }))
+                })
             }
             PlanNode::Drop {
                 input,
@@ -601,10 +599,7 @@ impl PlanResolver<'_> {
                     .filter(|column| !column_names.contains(&column.name))
                     .map(|column| Expr::Column(column.clone()))
                     .collect();
-                Ok(LogicalPlan::Projection(plan::Projection::try_new(
-                    expr,
-                    Arc::new(input),
-                )?))
+                LogicalPlan::Projection(plan::Projection::try_new(expr, Arc::new(input))?)
             }
             PlanNode::Tail { .. } => {
                 return Err(PlanError::todo("tail"));
@@ -660,10 +655,8 @@ impl PlanResolver<'_> {
                 let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr)?;
                 let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr)?;
                 let expr = self.rewrite_multi_expr(expr)?;
-                Ok(LogicalPlan::Projection(plan::Projection::try_new(
-                    expr,
-                    Arc::new(input),
-                )?))
+                let expr = self.rewrite_expr_field_name(expr, state)?;
+                LogicalPlan::Projection(plan::Projection::try_new(expr, Arc::new(input))?)
             }
             PlanNode::Hint { .. } => {
                 return Err(PlanError::todo("hint"));
@@ -686,10 +679,10 @@ impl PlanResolver<'_> {
                 //     .iter()
                 //     .map(|field| Expr::Column(Column::from_name(field.name())))
                 //     .collect();
-                // Ok(LogicalPlan::Projection(plan::Projection::try_new(
+                // LogicalPlan::Projection(plan::Projection::try_new(
                 //     expr,
                 //     Arc::new(input),
-                // )?))
+                // )?)
             }
             PlanNode::RepartitionByExpression {
                 input,
@@ -704,10 +697,10 @@ impl PlanResolver<'_> {
                     .collect::<PlanResult<_>>()?;
                 let num_partitions = num_partitions
                     .ok_or_else(|| PlanError::todo("rebalance partitioning by expression"))?;
-                Ok(LogicalPlan::Repartition(plan::Repartition {
+                LogicalPlan::Repartition(plan::Repartition {
                     input: Arc::new(input),
                     partitioning_scheme: plan::Partitioning::Hash(expr, num_partitions),
-                }))
+                })
             }
             PlanNode::MapPartitions { .. } => {
                 return Err(PlanError::todo("map partitions"));
@@ -736,10 +729,12 @@ impl PlanResolver<'_> {
                 truncate,
             } => {
                 let input = self.resolve_plan(*input, state).await?;
-                let format = ShowStringFormat::new(ShowStringStyle::Html, truncate);
-                Ok(LogicalPlan::Extension(Extension {
+                let descriptor = FieldDescriptor::new("html_string");
+                let name = state.register_field(descriptor);
+                let format = ShowStringFormat::new(name, ShowStringStyle::Html, truncate);
+                LogicalPlan::Extension(Extension {
                     node: Arc::new(ShowStringNode::try_new(Arc::new(input), num_rows, format)?),
-                }))
+                })
             }
             PlanNode::CachedLocalRelation { .. } => {
                 return Err(PlanError::todo("cached local relation"));
@@ -797,13 +792,13 @@ impl PlanResolver<'_> {
                 let table_function =
                     TableFunction::new(function_name.clone(), Arc::new(python_udtf));
                 let table_provider = table_function.create_table_provider(&arguments)?;
-                Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                LogicalPlan::TableScan(plan::TableScan::try_new(
                     function_name,
                     provider_as_source(table_provider),
                     None,
                     vec![],
                     None,
-                )?))
+                )?)
             }
             PlanNode::FillNa { .. } => {
                 return Err(PlanError::todo("fill na"));
@@ -838,26 +833,24 @@ impl PlanResolver<'_> {
             PlanNode::StatSampleBy { .. } => {
                 return Err(PlanError::todo("sample by"));
             }
-            PlanNode::CurrentDatabase {} => Ok(LogicalPlan::Extension(Extension {
+            PlanNode::CurrentDatabase {} => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::CurrentDatabase,
                     self.config.clone(),
                 )?),
-            })),
-            PlanNode::SetCurrentDatabase { database_name } => {
-                Ok(LogicalPlan::Extension(Extension {
-                    node: Arc::new(CatalogCommandNode::try_new(
-                        CatalogCommand::SetCurrentDatabase {
-                            database_name: database_name.into(),
-                        },
-                        self.config.clone(),
-                    )?),
-                }))
-            }
+            }),
+            PlanNode::SetCurrentDatabase { database_name } => LogicalPlan::Extension(Extension {
+                node: Arc::new(CatalogCommandNode::try_new(
+                    CatalogCommand::SetCurrentDatabase {
+                        database_name: database_name.into(),
+                    },
+                    self.config.clone(),
+                )?),
+            }),
             PlanNode::ListDatabases {
                 catalog,
                 database_pattern,
-            } => Ok(LogicalPlan::Extension(Extension {
+            } => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::ListDatabases {
                         catalog: catalog.map(|x| x.into()),
@@ -865,11 +858,11 @@ impl PlanResolver<'_> {
                     },
                     self.config.clone(),
                 )?),
-            })),
+            }),
             PlanNode::ListTables {
                 database,
                 table_pattern,
-            } => Ok(LogicalPlan::Extension(Extension {
+            } => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::ListTables {
                         database: database.map(build_schema_reference).transpose()?,
@@ -877,11 +870,11 @@ impl PlanResolver<'_> {
                     },
                     self.config.clone(),
                 )?),
-            })),
+            }),
             PlanNode::ListFunctions {
                 database,
                 function_pattern,
-            } => Ok(LogicalPlan::Extension(Extension {
+            } => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::ListFunctions {
                         database: database.map(build_schema_reference).transpose()?,
@@ -889,63 +882,63 @@ impl PlanResolver<'_> {
                     },
                     self.config.clone(),
                 )?),
-            })),
-            PlanNode::ListColumns { table } => Ok(LogicalPlan::Extension(Extension {
+            }),
+            PlanNode::ListColumns { table } => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::ListColumns {
                         table: build_table_reference(table)?,
                     },
                     self.config.clone(),
                 )?),
-            })),
-            PlanNode::GetDatabase { database } => Ok(LogicalPlan::Extension(Extension {
+            }),
+            PlanNode::GetDatabase { database } => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::GetDatabase {
                         database: build_schema_reference(database)?,
                     },
                     self.config.clone(),
                 )?),
-            })),
-            PlanNode::GetTable { table } => Ok(LogicalPlan::Extension(Extension {
+            }),
+            PlanNode::GetTable { table } => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::GetTable {
                         table: build_table_reference(table)?,
                     },
                     self.config.clone(),
                 )?),
-            })),
-            PlanNode::GetFunction { function } => Ok(LogicalPlan::Extension(Extension {
+            }),
+            PlanNode::GetFunction { function } => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::GetFunction {
                         function: build_table_reference(function)?,
                     },
                     self.config.clone(),
                 )?),
-            })),
-            PlanNode::DatabaseExists { database } => Ok(LogicalPlan::Extension(Extension {
+            }),
+            PlanNode::DatabaseExists { database } => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::DatabaseExists {
                         database: build_schema_reference(database)?,
                     },
                     self.config.clone(),
                 )?),
-            })),
-            PlanNode::TableExists { table } => Ok(LogicalPlan::Extension(Extension {
+            }),
+            PlanNode::TableExists { table } => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::TableExists {
                         table: build_table_reference(table)?,
                     },
                     self.config.clone(),
                 )?),
-            })),
-            PlanNode::FunctionExists { function } => Ok(LogicalPlan::Extension(Extension {
+            }),
+            PlanNode::FunctionExists { function } => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::FunctionExists {
                         function: build_table_reference(function)?,
                     },
                     self.config.clone(),
                 )?),
-            })),
+            }),
             PlanNode::CreateTable {
                 table,
                 path,
@@ -966,7 +959,7 @@ impl PlanResolver<'_> {
                     },
                     is_streaming: false,
                 });
-                Ok(LogicalPlan::Extension(Extension {
+                LogicalPlan::Extension(Extension {
                     node: Arc::new(CatalogCommandNode::try_new(
                         CatalogCommand::CreateTable {
                             table: build_table_reference(table)?,
@@ -974,13 +967,13 @@ impl PlanResolver<'_> {
                         },
                         self.config.clone(),
                     )?),
-                }))
+                })
             }
             PlanNode::DropTemporaryView {
                 view,
                 is_global,
                 if_exists,
-            } => Ok(LogicalPlan::Extension(Extension {
+            } => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::DropTemporaryView {
                         view: build_table_reference(view)?,
@@ -989,12 +982,12 @@ impl PlanResolver<'_> {
                     },
                     self.config.clone(),
                 )?),
-            })),
+            }),
             PlanNode::DropDatabase {
                 database,
                 if_exists,
                 cascade,
-            } => Ok(LogicalPlan::Extension(Extension {
+            } => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::DropDatabase {
                         database: build_schema_reference(database)?,
@@ -1003,12 +996,12 @@ impl PlanResolver<'_> {
                     },
                     self.config.clone(),
                 )?),
-            })),
+            }),
             PlanNode::DropFunction {
                 function,
                 if_exists,
                 is_temporary,
-            } => Ok(LogicalPlan::Extension(Extension {
+            } => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::DropFunction {
                         function: build_table_reference(function)?,
@@ -1017,12 +1010,12 @@ impl PlanResolver<'_> {
                     },
                     self.config.clone(),
                 )?),
-            })),
+            }),
             PlanNode::DropTable {
                 table,
                 if_exists,
                 purge,
-            } => Ok(LogicalPlan::Extension(Extension {
+            } => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::DropTable {
                         table: build_table_reference(table)?,
@@ -1031,8 +1024,8 @@ impl PlanResolver<'_> {
                     },
                     self.config.clone(),
                 )?),
-            })),
-            PlanNode::DropView { view, if_exists } => Ok(LogicalPlan::Extension(Extension {
+            }),
+            PlanNode::DropView { view, if_exists } => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::DropView {
                         view: build_table_reference(view)?,
@@ -1040,36 +1033,38 @@ impl PlanResolver<'_> {
                     },
                     self.config.clone(),
                 )?),
-            })),
+            }),
             PlanNode::RecoverPartitions { .. } => {
-                Err(PlanError::todo("PlanNode::RecoverPartitions"))
+                return Err(PlanError::todo("PlanNode::RecoverPartitions"))
             }
-            PlanNode::IsCached { .. } => Err(PlanError::todo("PlanNode::IsCached")),
-            PlanNode::CacheTable { .. } => Err(PlanError::todo("PlanNode::CacheTable")),
-            PlanNode::UncacheTable { .. } => Err(PlanError::todo("PlanNode::UncacheTable")),
-            PlanNode::ClearCache {} => Err(PlanError::todo("PlanNode::ClearCache")),
-            PlanNode::RefreshTable { .. } => Err(PlanError::todo("PlanNode::RefreshTable")),
-            PlanNode::RefreshByPath { .. } => Err(PlanError::todo("PlanNode::RefreshByPath")),
-            PlanNode::CurrentCatalog => Ok(LogicalPlan::Extension(Extension {
+            PlanNode::IsCached { .. } => return Err(PlanError::todo("PlanNode::IsCached")),
+            PlanNode::CacheTable { .. } => return Err(PlanError::todo("PlanNode::CacheTable")),
+            PlanNode::UncacheTable { .. } => return Err(PlanError::todo("PlanNode::UncacheTable")),
+            PlanNode::ClearCache {} => return Err(PlanError::todo("PlanNode::ClearCache")),
+            PlanNode::RefreshTable { .. } => return Err(PlanError::todo("PlanNode::RefreshTable")),
+            PlanNode::RefreshByPath { .. } => {
+                return Err(PlanError::todo("PlanNode::RefreshByPath"))
+            }
+            PlanNode::CurrentCatalog => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::CurrentCatalog,
                     self.config.clone(),
                 )?),
-            })),
-            PlanNode::SetCurrentCatalog { catalog_name } => Ok(LogicalPlan::Extension(Extension {
+            }),
+            PlanNode::SetCurrentCatalog { catalog_name } => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::SetCurrentCatalog {
                         catalog_name: catalog_name.into(),
                     },
                     self.config.clone(),
                 )?),
-            })),
-            PlanNode::ListCatalogs { catalog_pattern } => Ok(LogicalPlan::Extension(Extension {
+            }),
+            PlanNode::ListCatalogs { catalog_pattern } => LogicalPlan::Extension(Extension {
                 node: Arc::new(CatalogCommandNode::try_new(
                     CatalogCommand::ListCatalogs { catalog_pattern },
                     self.config.clone(),
                 )?),
-            })),
+            }),
             PlanNode::CreateDatabase {
                 database,
                 if_not_exists,
@@ -1078,7 +1073,7 @@ impl PlanResolver<'_> {
                 properties,
             } => {
                 let properties = properties.into_iter().collect::<Vec<_>>();
-                Ok(LogicalPlan::Extension(Extension {
+                LogicalPlan::Extension(Extension {
                     node: Arc::new(CatalogCommandNode::try_new(
                         CatalogCommand::CreateDatabase {
                             database: build_schema_reference(database)?,
@@ -1089,17 +1084,21 @@ impl PlanResolver<'_> {
                         },
                         self.config.clone(),
                     )?),
-                }))
+                })
             }
-            PlanNode::RegisterFunction(_) => Err(PlanError::todo("register function")),
-            PlanNode::RegisterTableFunction(_) => Err(PlanError::todo("register table function")),
-            PlanNode::CreateTemporaryView { .. } => Err(PlanError::todo("create temporary view")),
-            PlanNode::Write { .. } => Err(PlanError::todo("write")),
+            PlanNode::RegisterFunction(_) => return Err(PlanError::todo("register function")),
+            PlanNode::RegisterTableFunction(_) => {
+                return Err(PlanError::todo("register table function"))
+            }
+            PlanNode::CreateTemporaryView { .. } => {
+                return Err(PlanError::todo("create temporary view"))
+            }
+            PlanNode::Write { .. } => return Err(PlanError::todo("write")),
             PlanNode::Empty { produce_one_row } => {
-                Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
+                LogicalPlan::EmptyRelation(plan::EmptyRelation {
                     produce_one_row,
                     schema: DFSchemaRef::new(DFSchema::empty()),
-                }))
+                })
             }
             PlanNode::Values(values) => {
                 let schema = DFSchema::empty();
@@ -1113,7 +1112,7 @@ impl PlanResolver<'_> {
                             .collect::<PlanResult<Vec<_>>>()
                     })
                     .collect::<PlanResult<Vec<_>>>()?;
-                Ok(LogicalPlanBuilder::values(values)?.build()?)
+                LogicalPlanBuilder::values(values)?.build()?
             }
             PlanNode::TableAlias {
                 input,
@@ -1140,11 +1139,106 @@ impl PlanResolver<'_> {
                         .collect();
                     LogicalPlan::Projection(plan::Projection::try_new(expr, Arc::new(input))?)
                 };
-                Ok(LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
+                LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
                     Arc::new(input),
                     build_table_reference(spec::ObjectName::new_unqualified(name))?,
-                )?))
+                )?)
             }
+        };
+        self.verify_internal_plan(&plan, state)?;
+        Ok(plan)
+    }
+
+    pub async fn resolve_external_plan(
+        &self,
+        plan: spec::Plan,
+    ) -> PlanResult<(LogicalPlan, Option<Vec<String>>)> {
+        let mut state = PlanResolverState::new();
+        let plan = self.resolve_plan(plan, &mut state).await?;
+        let names = if self.is_query_plan(&plan) {
+            Some(
+                plan.schema()
+                    .fields()
+                    .iter()
+                    .map(|field| {
+                        let name = field.name();
+                        Ok(state
+                            .field(name)
+                            .ok_or_else(|| {
+                                PlanError::internal(format!(
+                                    "found invalid internal field due to plan resolver bug: {name}"
+                                ))
+                            })?
+                            .name
+                            .to_string())
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?,
+            )
+        } else {
+            None
+        };
+        Ok((plan, names))
+    }
+
+    fn is_query_plan(&self, plan: &LogicalPlan) -> bool {
+        match plan {
+            LogicalPlan::Projection(_)
+            | LogicalPlan::Filter(_)
+            | LogicalPlan::Window(_)
+            | LogicalPlan::Aggregate(_)
+            | LogicalPlan::Sort(_)
+            | LogicalPlan::Join(_)
+            | LogicalPlan::CrossJoin(_)
+            | LogicalPlan::Repartition(_)
+            | LogicalPlan::Union(_)
+            | LogicalPlan::TableScan(_)
+            | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Subquery(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Limit(_)
+            | LogicalPlan::Values(_)
+            | LogicalPlan::Distinct(_)
+            | LogicalPlan::RecursiveQuery(_)
+            | LogicalPlan::Unnest(_) => true,
+            LogicalPlan::Statement(_)
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Prepare(_)
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::Ddl(_)
+            | LogicalPlan::Copy(_)
+            | LogicalPlan::DescribeTable(_) => false,
+            LogicalPlan::Extension(Extension { node }) => !node.as_any().is::<CatalogCommandNode>(),
+        }
+    }
+
+    fn verify_internal_plan(
+        &self,
+        plan: &LogicalPlan,
+        state: &PlanResolverState,
+    ) -> PlanResult<()> {
+        if !self.is_query_plan(plan) {
+            return Ok(());
+        }
+        let invalid = plan
+            .schema()
+            .fields()
+            .iter()
+            .filter_map(|f| {
+                if state.field(f.name()).is_some() {
+                    None
+                } else {
+                    Some(f.name().to_string())
+                }
+            })
+            .collect::<Vec<_>>();
+        if invalid.is_empty() {
+            Ok(())
+        } else {
+            Err(PlanError::internal(format!(
+                "a plan resolver bug has produced invalid fields: {:?}",
+                invalid,
+            )))
         }
     }
 
@@ -1199,6 +1293,22 @@ impl PlanResolver<'_> {
                 _ => vec![e],
             })
             .collect();
+        Ok(expr)
+    }
+
+    fn rewrite_expr_field_name(
+        &self,
+        expr: Vec<Expr>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<Expr>> {
+        let expr = expr
+            .into_iter()
+            .map(|e| {
+                let descriptor = FieldDescriptor::new(e.display_name()?);
+                let name = state.register_field(descriptor);
+                Ok(e.unalias().alias(name))
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
         Ok(expr)
     }
 }

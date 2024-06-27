@@ -14,7 +14,8 @@ use framework_common::spec::{
     CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction, FunctionDefinition,
     TableFunctionDefinition,
 };
-use framework_plan::resolver::{PlanResolver, PlanResolverState};
+use framework_plan::resolver::utils::rename_logical_plan;
+use framework_plan::resolver::PlanResolver;
 use framework_python::udf::pyspark_udtf::PySparkUDTF;
 use framework_python::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -104,11 +105,12 @@ impl Stream for ExecutePlanResponseStream {
 async fn handle_execute_plan(
     session: Arc<Session>,
     plan: LogicalPlan,
+    names: Option<Vec<String>>,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let ctx = session.context();
     let operation_id = metadata.operation_id.clone();
-    let stream = execute_plan(ctx, plan).await?;
+    let stream = execute_plan(ctx, plan, names).await?;
     let mut executor = Executor::new(metadata, ExecutorTaskContext::new(stream));
     let rx = executor.start().await?;
     session.add_executor(executor)?;
@@ -123,10 +125,8 @@ pub(crate) async fn handle_execute_relation(
 ) -> SparkResult<ExecutePlanResponseStream> {
     let ctx = session.context();
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
-    let plan = resolver
-        .resolve_plan(relation.try_into()?, &mut PlanResolverState::new())
-        .await?;
-    handle_execute_plan(session, plan, metadata).await
+    let (plan, names) = resolver.resolve_external_plan(relation.try_into()?).await?;
+    handle_execute_plan(session, plan, names, metadata).await
 }
 
 pub(crate) async fn handle_execute_register_function(
@@ -202,9 +202,12 @@ pub(crate) async fn handle_execute_write_operation(
     let mut table_options = TableOptions::default_from_session_config(ctx.state().config_options());
     table_options.alter_with_string_hash_map(&write.options)?;
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
-    let plan = resolver
-        .resolve_plan(relation.try_into()?, &mut PlanResolverState::new())
-        .await?;
+    let (plan, names) = resolver.resolve_external_plan(relation.try_into()?).await?;
+    let plan = if let Some(names) = names {
+        rename_logical_plan(plan, &names)?
+    } else {
+        plan
+    };
     let plan = match write.save_type.required("save type")? {
         SaveType::Path(path) => {
             // always write multi-file output
@@ -278,7 +281,7 @@ pub(crate) async fn handle_execute_write_operation(
             }
         }
     };
-    handle_execute_plan(session, plan, metadata).await
+    handle_execute_plan(session, plan, None, metadata).await
 }
 
 pub(crate) async fn handle_execute_create_dataframe_view(
@@ -289,9 +292,12 @@ pub(crate) async fn handle_execute_create_dataframe_view(
     let ctx = session.context();
     let relation = view.input.required("input relation")?;
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
-    let plan = resolver
-        .resolve_plan(relation.try_into()?, &mut PlanResolverState::new())
-        .await?;
+    let (plan, names) = resolver.resolve_external_plan(relation.try_into()?).await?;
+    let plan = if let Some(names) = names {
+        rename_logical_plan(plan, &names)?
+    } else {
+        plan
+    };
     let df = DataFrame::new(ctx.state(), plan);
     let table_ref = TableReference::from(view.name.as_str());
     let _ = view.is_global;

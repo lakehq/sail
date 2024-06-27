@@ -78,20 +78,26 @@ impl Iterator for RangeIterator {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct RangeNode {
-    pub range: Range,
-    pub num_partitions: usize,
-    pub schema: DFSchemaRef,
+    range: Range,
+    num_partitions: usize,
+    schema: DFSchemaRef,
 }
 
 impl RangeNode {
-    pub fn try_new(start: i64, end: i64, step: i64, num_partitions: usize) -> Result<Self> {
+    pub fn try_new(
+        name: String,
+        start: i64,
+        end: i64,
+        step: i64,
+        num_partitions: usize,
+    ) -> Result<Self> {
         if step == 0 {
             return plan_err!("the range step must not be 0");
         }
         if num_partitions == 0 {
             return plan_err!("the number of partitions must be greater than 0");
         }
-        let fields = vec![Field::new("id", DataType::Int64, false)];
+        let fields = vec![Field::new(name, DataType::Int64, false)];
         let schema = Arc::new(DFSchema::from_unqualifed_fields(
             fields.into(),
             HashMap::new(),
@@ -101,6 +107,14 @@ impl RangeNode {
             num_partitions,
             schema,
         })
+    }
+
+    pub fn range(&self) -> &Range {
+        &self.range
+    }
+
+    pub fn num_partitions(&self) -> usize {
+        self.num_partitions
     }
 }
 
