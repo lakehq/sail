@@ -12,35 +12,30 @@ use pyo3::types::PyDict;
 
 use crate::cereal::partial_pyspark_udf::PartialPySparkUDF;
 use crate::cereal::partial_python_udf::PartialPythonUDF;
+use crate::cereal::pyspark_udtf::PySparkUDTF;
 
-pub trait PythonFunction {
-    fn get_inner<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny>;
+#[derive(Debug, Clone)]
+pub enum PythonFunctionType {
+    PartialPythonUDF(PartialPythonUDF),
+    PartialPySparkUDF(PartialPySparkUDF),
+    PySparkUDTF(PySparkUDTF),
 }
 
-impl PythonFunction for PartialPythonUDF {
+impl PythonFunctionType {
     fn get_inner<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny> {
-        self.0.clone_ref(py).into_bound(py)
+        match self {
+            PythonFunctionType::PartialPythonUDF(udf) => udf.0.clone_ref(py).into_bound(py),
+            PythonFunctionType::PartialPySparkUDF(udf) => udf.0.clone_ref(py).into_bound(py),
+            PythonFunctionType::PySparkUDTF(udf) => udf.0.clone_ref(py).into_bound(py),
+        }
     }
 }
 
-impl PythonFunction for PartialPySparkUDF {
-    fn get_inner<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny> {
-        self.0.clone_ref(py).into_bound(py)
-    }
-}
-
-pub trait CommonPythonUDF {
-    type PythonFunctionType: PythonFunction;
-
-    fn python_function(&self) -> &Self::PythonFunctionType;
-}
-
-pub fn get_python_function<'py, T>(udf: &T, py: Python<'py>) -> Result<Bound<'py, PyAny>>
-where
-    T: CommonPythonUDF,
-{
-    let python_function: Bound<PyAny> = udf
-        .python_function()
+pub fn get_python_function<'py>(
+    python_function: &PythonFunctionType,
+    py: Python<'py>,
+) -> Result<Bound<'py, PyAny>> {
+    let python_function: Bound<PyAny> = python_function
         .get_inner(py)
         .get_item(0)
         .map_err(|err| DataFusionError::External(err.into()))?;

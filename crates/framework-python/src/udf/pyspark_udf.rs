@@ -14,7 +14,7 @@ use crate::cereal::{is_pyspark_arrow_udf, is_pyspark_pandas_udf, PY_SPARK_SQL_BA
 use crate::udf::{
     build_pyarrow_array_kwargs, get_pyarrow_array_function, get_pyarrow_output_data_type,
     get_python_builtins_list_function, get_python_builtins_str_function, get_python_function,
-    CommonPythonUDF,
+    PythonFunctionType,
 };
 
 #[derive(Debug, Clone)]
@@ -24,7 +24,7 @@ pub struct PySparkUDF {
     deterministic: bool,
     output_type: DataType,
     eval_type: i32,
-    python_function: PartialPySparkUDF,
+    python_function: PythonFunctionType,
 }
 
 impl PySparkUDF {
@@ -49,16 +49,8 @@ impl PySparkUDF {
             deterministic,
             output_type,
             eval_type,
-            python_function,
+            python_function: PythonFunctionType::PartialPySparkUDF(python_function),
         }
-    }
-}
-
-impl CommonPythonUDF for PySparkUDF {
-    type PythonFunctionType = PartialPySparkUDF;
-
-    fn python_function(&self) -> &Self::PythonFunctionType {
-        &self.python_function
     }
 }
 
@@ -86,7 +78,7 @@ impl ScalarUDFImpl for PySparkUDF {
             let array_data: Result<ArrayData, DataFusionError> = Python::with_gil(|py| {
                 let pyarrow_module_array: Bound<PyAny> = get_pyarrow_array_function(py)?;
                 let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
-                let python_function: Bound<PyAny> = get_python_function(self, py)?;
+                let python_function: Bound<PyAny> = get_python_function(&self.python_function, py)?;
                 let pyarrow_output_data_type: Bound<PyAny> =
                     get_pyarrow_output_data_type(&self.output_type, py)?;
                 let pyarrow_array_kwargs: Bound<PyDict> =
@@ -140,7 +132,7 @@ impl ScalarUDFImpl for PySparkUDF {
             let array_data: Result<ArrayData, DataFusionError> = Python::with_gil(|py| {
                 let pyarrow_module_array: Bound<PyAny> = get_pyarrow_array_function(py)?;
                 let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
-                let python_function: Bound<PyAny> = get_python_function(self, py)?;
+                let python_function: Bound<PyAny> = get_python_function(&self.python_function, py)?;
                 let pyarrow_output_data_type: Bound<PyAny> =
                     get_pyarrow_output_data_type(&self.output_type, py)?;
                 let pyarrow_array_kwargs: Bound<PyDict> =
@@ -192,7 +184,7 @@ impl ScalarUDFImpl for PySparkUDF {
             let pyarrow_module_array: Bound<PyAny> = get_pyarrow_array_function(py)?;
             let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let builtins_str: Bound<PyAny> = get_python_builtins_str_function(py)?;
-            let python_function: Bound<PyAny> = get_python_function(self, py)?;
+            let python_function: Bound<PyAny> = get_python_function(&self.python_function, py)?;
             let pyarrow_output_data_type: Bound<PyAny> =
                 get_pyarrow_output_data_type(&self.output_type, py)?;
             let pyarrow_array_kwargs: Bound<PyDict> =
@@ -276,7 +268,7 @@ impl ScalarUDFImpl for PySparkUDF {
             let pyarrow_module_array: Bound<PyAny> = get_pyarrow_array_function(py)?;
             let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let builtins_str: Bound<PyAny> = get_python_builtins_str_function(py)?;
-            let python_function: Bound<PyAny> = get_python_function(self, py)?;
+            let python_function: Bound<PyAny> = get_python_function(&self.python_function, py)?;
             let pyarrow_output_data_type: Bound<PyAny> =
                 get_pyarrow_output_data_type(&self.output_type, py)?;
             let pyarrow_array_kwargs: Bound<PyDict> =

@@ -9,14 +9,14 @@ use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
 use crate::cereal::partial_python_udf::PartialPythonUDF;
-use crate::udf::{get_python_function, CommonPythonUDF};
+use crate::udf::{get_python_function, PythonFunctionType};
 
 #[derive(Debug, Clone)]
 pub struct PythonUDF {
     signature: Signature,
     function_name: String,
     output_type: DataType,
-    python_function: PartialPythonUDF,
+    python_function: PythonFunctionType,
 }
 
 impl PythonUDF {
@@ -38,16 +38,8 @@ impl PythonUDF {
             ),
             function_name,
             output_type,
-            python_function,
+            python_function: PythonFunctionType::PartialPythonUDF(python_function),
         }
-    }
-}
-
-impl CommonPythonUDF for PythonUDF {
-    type PythonFunctionType = PartialPythonUDF;
-
-    fn python_function(&self) -> &Self::PythonFunctionType {
-        &self.python_function
     }
 }
 
@@ -72,7 +64,7 @@ impl ScalarUDFImpl for PythonUDF {
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(args)?;
 
         let array_data: Result<ArrayData, DataFusionError> = Python::with_gil(|py| {
-            let python_function: Bound<PyAny> = get_python_function(self, py)?;
+            let python_function: Bound<PyAny> = get_python_function(&self.python_function, py)?;
 
             let py_args: Vec<Bound<PyAny>> = args
                 .iter()
