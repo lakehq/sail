@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use serde_arrow::_impl::arrow::_raw::schema::SchemaRef;
 
+use crate::error::{PlanError, PlanResult};
+
 #[derive(Debug, Clone)]
 pub(super) struct FieldDescriptor {
     pub name: String,
@@ -58,5 +60,14 @@ impl PlanResolverState {
 
     pub fn field(&self, name: &str) -> Option<&FieldDescriptor> {
         self.fields.get(name)
+    }
+
+    pub fn field_or_err(&self, name: &str) -> PlanResult<&str> {
+        Ok(self
+            .fields
+            .get(name)
+            .ok_or_else(|| PlanError::internal(format!("unknown field: {name}")))?
+            .name
+            .as_str())
     }
 }

@@ -10,7 +10,7 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::function::TableFunction;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion::datasource::{provider_as_source, MemTable};
+use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::execution::context::DataFilePaths;
 use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
@@ -36,8 +36,9 @@ use crate::resolver::state::{FieldDescriptor, PlanResolverState};
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::tree::PlanRewriter;
-use crate::resolver::utils::{cast_record_batch, read_record_batches};
+use crate::resolver::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use crate::resolver::PlanResolver;
+use crate::utils::ItemTaker;
 
 pub(crate) fn build_schema_reference(name: spec::ObjectName) -> PlanResult<SchemaReference> {
     let names: Vec<String> = name.into();
@@ -98,7 +99,9 @@ impl PlanResolver<'_> {
                         }
                         let table_reference = build_table_reference(identifier)?;
                         let df: DataFrame = self.ctx.table(table_reference).await?;
-                        df.into_optimized_plan()?
+                        let plan = df.into_optimized_plan()?;
+                        let names = state.register_schema(plan.schema().inner());
+                        rename_logical_plan(plan, &names)?
                     }
                     ReadType::Udtf {
                         identifier,
@@ -118,9 +121,11 @@ impl PlanResolver<'_> {
                             .collect::<PlanResult<Vec<Expr>>>()?;
                         let table_function = self.ctx.table_function(function_name)?;
                         let table_provider = table_function.create_table_provider(&arguments)?;
+                        let names = state.register_schema(&table_provider.schema());
+                        let table_provider = RenameTableProvider::try_new(table_provider, names)?;
                         LogicalPlan::TableScan(plan::TableScan::try_new(
                             function_name,
-                            provider_as_source(table_provider),
+                            provider_as_source(Arc::new(table_provider)),
                             None,
                             vec![],
                             None,
@@ -156,9 +161,11 @@ impl PlanResolver<'_> {
                             .with_listing_options(options)
                             .with_schema(schema);
                         let provider = Arc::new(ListingTable::try_new(config)?);
+                        let names = state.register_schema(&provider.schema());
+                        let provider = RenameTableProvider::try_new(provider, names)?;
                         LogicalPlan::TableScan(plan::TableScan::try_new(
                             UNNAMED_TABLE,
-                            provider_as_source(provider),
+                            provider_as_source(Arc::new(provider)),
                             None,
                             vec![],
                             None,
@@ -180,7 +187,7 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .map(|e| self.resolve_expression(e, schema, state))
                     .collect::<PlanResult<_>>()?;
-                let (input, expr) = self.rewrite_wildcard(input, expr)?;
+                let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
                 let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr)?;
                 let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr)?;
                 let expr = self.rewrite_multi_expr(expr)?;
@@ -444,6 +451,7 @@ impl PlanResolver<'_> {
                 if within_watermark {
                     return Err(PlanError::todo("deduplicate within watermark"));
                 }
+                // FIXME
                 let distinct = if !column_names.is_empty() && !all_columns_as_keys {
                     let on_expr: Vec<Expr> = column_names
                         .iter()
@@ -530,9 +538,9 @@ impl PlanResolver<'_> {
                 }
                 let expr: Vec<Expr> = schema
                     .columns()
-                    .iter()
-                    .zip(column_names.iter())
-                    .map(|(col, name)| Expr::Column(col.clone()).alias(name.clone()))
+                    .into_iter()
+                    .zip(column_names.into_iter())
+                    .map(|(col, name)| Expr::Column(col).alias(name))
                     .collect();
                 let expr = self.rewrite_expr_field_name(expr, state)?;
                 LogicalPlan::Projection(plan::Projection::try_new(expr, Arc::new(input))?)
@@ -541,7 +549,6 @@ impl PlanResolver<'_> {
                 input,
                 rename_columns_map,
             } => {
-                // FIXME
                 let input = self.resolve_plan(*input, state).await?;
                 let rename_columns_map: HashMap<String, String> = rename_columns_map
                     .into_iter()
@@ -550,16 +557,16 @@ impl PlanResolver<'_> {
                 let schema = input.schema();
                 let expr: Vec<Expr> = schema
                     .columns()
-                    .iter()
+                    .into_iter()
                     .map(|column| {
-                        let name = &column.name;
-                        let expr = Expr::Column(column.clone());
+                        let name = state.field_or_err(column.name())?;
+                        let expr = Expr::Column(column);
                         match rename_columns_map.get(name) {
-                            Some(n) => expr.alias(n),
-                            None => expr,
+                            Some(n) => Ok(expr.alias(n)),
+                            None => Ok(expr.alias(name)),
                         }
                     })
-                    .collect();
+                    .collect::<PlanResult<Vec<_>>>()?;
                 let expr = self.rewrite_expr_field_name(expr, state)?;
                 LogicalPlan::Projection(plan::Projection::try_new(expr, Arc::new(input))?)
             }
@@ -596,7 +603,11 @@ impl PlanResolver<'_> {
                 let expr: Vec<Expr> = schema
                     .columns()
                     .iter()
-                    .filter(|column| !column_names.contains(&column.name))
+                    .filter(|column| {
+                        state
+                            .field(column.name())
+                            .is_some_and(|x| !column_names.contains(&x.name))
+                    })
                     .map(|column| Expr::Column(column.clone()))
                     .collect();
                 LogicalPlan::Projection(plan::Projection::try_new(expr, Arc::new(input))?)
@@ -605,53 +616,9 @@ impl PlanResolver<'_> {
                 return Err(PlanError::todo("tail"));
             }
             PlanNode::WithColumns { input, aliases } => {
-                let input = self.resolve_plan(*input, state).await?;
-                let schema = input.schema();
-                let mut aliases: HashMap<String, (Expr, bool)> = aliases
-                    .into_iter()
-                    .map(|expr| {
-                        let (name, expr) = match expr {
-                            // TODO: handle alias metadata
-                            spec::Expr::Alias {
-                                mut name,
-                                expr,
-                                metadata: _,
-                            } => {
-                                if name.len() == 1 {
-                                    (name.pop().unwrap(), *expr)
-                                } else {
-                                    return Err(PlanError::invalid("multi-alias for column"));
-                                }
-                            }
-                            _ => {
-                                return Err(PlanError::invalid(
-                                    "alias expression expected for column",
-                                ))
-                            }
-                        };
-                        let expr = self.resolve_expression(expr, schema, state)?;
-                        Ok((name.into(), (expr, false)))
-                    })
-                    .collect::<PlanResult<_>>()?;
-                let mut expr: Vec<Expr> = schema
-                    .columns()
-                    .iter()
-                    .map(|column| {
-                        let name = &column.name;
-                        match aliases.get_mut(name) {
-                            Some((e, exists)) => {
-                                *exists = true;
-                                e.clone().alias(name)
-                            }
-                            None => Expr::Column(column.clone()),
-                        }
-                    })
-                    .collect();
-                for (name, (e, exists)) in &aliases {
-                    if !exists {
-                        expr.push(e.clone().alias(name));
-                    }
-                }
+                let (input, expr) = self
+                    .resolve_plan_with_columns(*input, aliases, state)
+                    .await?;
                 let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr)?;
                 let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr)?;
                 let expr = self.rewrite_multi_expr(expr)?;
@@ -792,9 +759,11 @@ impl PlanResolver<'_> {
                 let table_function =
                     TableFunction::new(function_name.clone(), Arc::new(python_udtf));
                 let table_provider = table_function.create_table_provider(&arguments)?;
+                let names = state.register_schema(&table_provider.schema());
+                let table_provider = RenameTableProvider::try_new(table_provider, names)?;
                 LogicalPlan::TableScan(plan::TableScan::try_new(
                     function_name,
-                    provider_as_source(table_provider),
+                    provider_as_source(Arc::new(table_provider)),
                     None,
                     vec![],
                     None,
@@ -1112,7 +1081,16 @@ impl PlanResolver<'_> {
                             .collect::<PlanResult<Vec<_>>>()
                     })
                     .collect::<PlanResult<Vec<_>>>()?;
-                LogicalPlanBuilder::values(values)?.build()?
+                let plan = LogicalPlanBuilder::values(values)?.build()?;
+                let expr = plan
+                    .schema()
+                    .columns()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, col)| Expr::Column(col).alias(format!("col{i}")))
+                    .collect::<Vec<_>>();
+                let expr = self.rewrite_expr_field_name(expr, state)?;
+                LogicalPlan::Projection(plan::Projection::try_new(expr, Arc::new(plan))?)
             }
             PlanNode::TableAlias {
                 input,
@@ -1133,15 +1111,21 @@ impl PlanResolver<'_> {
                     }
                     let expr: Vec<Expr> = schema
                         .columns()
-                        .iter()
-                        .zip(columns.iter())
-                        .map(|(col, name)| Expr::Column(col.clone()).alias(name.clone()))
+                        .into_iter()
+                        .zip(columns.into_iter())
+                        .map(|(col, name)| {
+                            let descriptor = FieldDescriptor::new(name);
+                            let name = state.register_field(descriptor);
+                            Expr::Column(col.clone()).alias(name)
+                        })
                         .collect();
                     LogicalPlan::Projection(plan::Projection::try_new(expr, Arc::new(input))?)
                 };
                 LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
                     Arc::new(input),
-                    build_table_reference(spec::ObjectName::new_unqualified(name))?,
+                    TableReference::Bare {
+                        table: Arc::from(String::from(name)),
+                    },
                 )?)
             }
         };
@@ -1246,6 +1230,7 @@ impl PlanResolver<'_> {
         &self,
         input: LogicalPlan,
         expr: Vec<Expr>,
+        state: &PlanResolverState,
     ) -> PlanResult<(LogicalPlan, Vec<Expr>)> {
         let schema = input.schema();
         let mut projected = vec![];
@@ -1260,6 +1245,7 @@ impl PlanResolver<'_> {
                 _ => projected.push(columnize_expr(normalize_col(e, &input)?, &input)?),
             }
         }
+        let projected = self.rewrite_column_name(projected, state)?;
         Ok((input, projected))
     }
 
@@ -1296,6 +1282,22 @@ impl PlanResolver<'_> {
         Ok(expr)
     }
 
+    fn rewrite_column_name(
+        &self,
+        expr: Vec<Expr>,
+        state: &PlanResolverState,
+    ) -> PlanResult<Vec<Expr>> {
+        expr.into_iter()
+            .map(|e| match e {
+                Expr::Column(column) => {
+                    let name = state.field_or_err(column.name())?;
+                    Ok(Expr::Column(column).alias(name))
+                }
+                x => Ok(x),
+            })
+            .collect::<PlanResult<Vec<_>>>()
+    }
+
     fn rewrite_expr_field_name(
         &self,
         expr: Vec<Expr>,
@@ -1310,5 +1312,56 @@ impl PlanResolver<'_> {
             })
             .collect::<PlanResult<Vec<_>>>()?;
         Ok(expr)
+    }
+
+    async fn resolve_plan_with_columns(
+        &self,
+        input: spec::Plan,
+        aliases: Vec<spec::Expr>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<Expr>)> {
+        let input = self.resolve_plan(input, state).await?;
+        let schema = input.schema();
+        let mut aliases: HashMap<String, (Expr, bool)> = aliases
+            .into_iter()
+            .map(|expr| {
+                let (name, expr) = match expr {
+                    // TODO: handle alias metadata
+                    spec::Expr::Alias {
+                        name,
+                        expr,
+                        metadata: _,
+                    } => {
+                        let name = name
+                            .one()
+                            .map_err(|_| PlanError::invalid("multi-alias for column"))?;
+                        (name, *expr)
+                    }
+                    _ => return Err(PlanError::invalid("alias expression expected for column")),
+                };
+                let expr = self.resolve_expression(expr, schema, state)?;
+                Ok((name.into(), (expr, false)))
+            })
+            .collect::<PlanResult<_>>()?;
+        let mut expr: Vec<Expr> = schema
+            .columns()
+            .into_iter()
+            .map(|column| {
+                let name = state.field_or_err(column.name())?;
+                match aliases.get_mut(name) {
+                    Some((e, exists)) => {
+                        *exists = true;
+                        Ok(e.clone().alias(name))
+                    }
+                    None => Ok(Expr::Column(column).alias(name)),
+                }
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        for (name, (e, exists)) in &aliases {
+            if !exists {
+                expr.push(e.clone().alias(name));
+            }
+        }
+        Ok((input, expr))
     }
 }
