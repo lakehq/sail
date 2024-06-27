@@ -70,4 +70,12 @@ impl PlanResolverState {
             .name
             .as_str())
     }
+
+    pub fn schema_field_names(&self, schema: &SchemaRef) -> PlanResult<Vec<String>> {
+        schema
+            .fields()
+            .iter()
+            .map(|field| Ok(self.field_or_err(field.name())?.to_string()))
+            .collect::<PlanResult<Vec<_>>>()
+    }
 }

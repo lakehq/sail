@@ -584,8 +584,14 @@ impl PlanResolver<'_> {
                 let descriptor = FieldDescriptor::new("show_string");
                 let name = state.register_field(descriptor);
                 let format = ShowStringFormat::new(name, style, truncate);
+                let names = state.schema_field_names(input.schema().inner())?;
                 LogicalPlan::Extension(Extension {
-                    node: Arc::new(ShowStringNode::try_new(Arc::new(input), num_rows, format)?),
+                    node: Arc::new(ShowStringNode::try_new(
+                        Arc::new(input),
+                        names,
+                        num_rows,
+                        format,
+                    )?),
                 })
             }
             PlanNode::Drop {
@@ -699,8 +705,14 @@ impl PlanResolver<'_> {
                 let descriptor = FieldDescriptor::new("html_string");
                 let name = state.register_field(descriptor);
                 let format = ShowStringFormat::new(name, ShowStringStyle::Html, truncate);
+                let names = state.schema_field_names(input.schema().inner())?;
                 LogicalPlan::Extension(Extension {
-                    node: Arc::new(ShowStringNode::try_new(Arc::new(input), num_rows, format)?),
+                    node: Arc::new(ShowStringNode::try_new(
+                        Arc::new(input),
+                        names,
+                        num_rows,
+                        format,
+                    )?),
                 })
             }
             PlanNode::CachedLocalRelation { .. } => {
@@ -1140,24 +1152,7 @@ impl PlanResolver<'_> {
         let mut state = PlanResolverState::new();
         let plan = self.resolve_plan(plan, &mut state).await?;
         let names = if self.is_query_plan(&plan) {
-            Some(
-                plan.schema()
-                    .fields()
-                    .iter()
-                    .map(|field| {
-                        let name = field.name();
-                        Ok(state
-                            .field(name)
-                            .ok_or_else(|| {
-                                PlanError::internal(format!(
-                                    "found invalid internal field due to plan resolver bug: {name}"
-                                ))
-                            })?
-                            .name
-                            .to_string())
-                    })
-                    .collect::<PlanResult<Vec<_>>>()?,
-            )
+            Some(state.schema_field_names(plan.schema().inner())?)
         } else {
             None
         };

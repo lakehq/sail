@@ -36,6 +36,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             } else if let Some(node) = node.as_any().downcast_ref::<ShowStringNode>() {
                 Arc::new(ShowStringExec::new(
                     physical_inputs.one()?,
+                    node.names().to_vec(),
                     node.limit(),
                     node.format().clone(),
                 ))

@@ -15,17 +15,24 @@ use datafusion_common::{arrow_datafusion_err, exec_err, internal_err, DataFusion
 use futures::{Stream, StreamExt};
 
 use crate::extension::logical::ShowStringFormat;
+use crate::resolver::utils::rename_physical_plan;
 
 #[derive(Debug)]
 pub(crate) struct ShowStringExec {
     input: Arc<dyn ExecutionPlan>,
+    names: Vec<String>,
     limit: usize,
     format: ShowStringFormat,
     cache: PlanProperties,
 }
 
 impl ShowStringExec {
-    pub fn new(input: Arc<dyn ExecutionPlan>, limit: usize, format: ShowStringFormat) -> Self {
+    pub fn new(
+        input: Arc<dyn ExecutionPlan>,
+        names: Vec<String>,
+        limit: usize,
+        format: ShowStringFormat,
+    ) -> Self {
         let cache = PlanProperties::new(
             EquivalenceProperties::new(format.schema().clone()),
             Partitioning::UnknownPartitioning(1),
@@ -33,6 +40,7 @@ impl ShowStringExec {
         );
         Self {
             input,
+            names,
             limit,
             format,
             cache,
@@ -88,6 +96,7 @@ impl ExecutionPlan for ShowStringExec {
         }
         Ok(Arc::new(ShowStringExec::new(
             children[0].clone(),
+            self.names.clone(),
             self.limit,
             self.format.clone(),
         )))
@@ -104,7 +113,8 @@ impl ExecutionPlan for ShowStringExec {
         if self.input.output_partitioning().partition_count() != 1 {
             return exec_err!("ShowStringExec should have one input partition");
         }
-        let stream = self.input.execute(partition, context)?;
+        let input = rename_physical_plan(self.input.clone(), &self.names)?;
+        let stream = input.execute(partition, context)?;
         Ok(Box::pin(ShowStringStream::new(
             stream,
             self.limit,

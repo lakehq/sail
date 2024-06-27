@@ -222,6 +222,7 @@ impl ShowStringFormat {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct ShowStringNode {
     input: Arc<LogicalPlan>,
+    names: Vec<String>,
     schema: DFSchemaRef,
     limit: usize,
     format: ShowStringFormat,
@@ -230,11 +231,13 @@ pub(crate) struct ShowStringNode {
 impl ShowStringNode {
     pub fn try_new(
         input: Arc<LogicalPlan>,
+        names: Vec<String>,
         limit: usize,
         format: ShowStringFormat,
     ) -> Result<Self> {
         Ok(Self {
             input,
+            names,
             limit,
             format: format.clone(),
             schema: Arc::new(DFSchema::from_unqualifed_fields(
@@ -242,6 +245,10 @@ impl ShowStringNode {
                 HashMap::new(),
             )?),
         })
+    }
+
+    pub fn names(&self) -> &[String] {
+        &self.names
     }
 
     pub fn limit(&self) -> usize {
@@ -278,6 +285,7 @@ impl UserDefinedLogicalNodeCore for ShowStringNode {
         exprs.zero()?;
         Ok(Self {
             input: Arc::new(inputs.one()?),
+            names: self.names.clone(),
             limit: self.limit,
             format: self.format.clone(),
             schema: self.schema.clone(),
