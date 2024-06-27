@@ -575,16 +575,16 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::Plan> {
             }
 
             let plan = if let Some(func_args) = args {
-                let args = func_args
+                let args: Vec<spec::Expr> = func_args
                     .into_iter()
-                    .flat_map(|arg| {
+                    .map(|arg| {
                         if let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(expr)) = arg {
-                            Ok(from_ast_expression(expr)?)
+                            from_ast_expression(expr)
                         } else {
                             Err(SqlError::invalid("unsupported function argument type"))
                         }
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<SqlResult<Vec<_>>>()?;
                 spec::Plan::new(spec::PlanNode::Read {
                     is_streaming: false,
                     read_type: spec::ReadType::Udtf {

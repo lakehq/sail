@@ -51,6 +51,8 @@ impl<'de> Visitor<'de> for PartialPySparkUDFVisitor {
                 .map_err(|e| E::custom(format!("eval_type from_be_bytes: {}", e)))?,
         );
         Python::with_gil(|py| {
+            // TODO: Python error is converted to a serde Error,
+            //  so we cannot propagate the original error back to the client.
             let infile: Bound<PyAny> = PyModule::import_bound(py, pyo3::intern!(py, "io"))
                 .and_then(|io| io.getattr(pyo3::intern!(py, "BytesIO")))
                 .and_then(|bytes_io| bytes_io.call1((v,)))

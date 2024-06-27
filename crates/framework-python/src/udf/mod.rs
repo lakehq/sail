@@ -29,17 +29,14 @@ impl PythonFunctionType {
             PythonFunctionType::PySparkUDTF(udf) => udf.0.clone_ref(py).into_bound(py),
         }
     }
-}
 
-pub fn get_python_function<'py>(
-    python_function: &PythonFunctionType,
-    py: Python<'py>,
-) -> Result<Bound<'py, PyAny>> {
-    let python_function: Bound<PyAny> = python_function
-        .get_inner(py)
-        .get_item(0)
-        .map_err(|err| DataFusionError::External(err.into()))?;
-    Ok(python_function)
+    pub fn get_python_function<'py>(&self, py: Python<'py>) -> Result<Bound<'py, PyAny>> {
+        let python_function: Bound<PyAny> = self
+            .get_inner(py)
+            .get_item(0)
+            .map_err(|err| DataFusionError::External(err.into()))?;
+        Ok(python_function)
+    }
 }
 
 pub fn get_python_builtins(py: Python) -> Result<Bound<PyModule>> {

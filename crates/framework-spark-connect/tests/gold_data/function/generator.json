@@ -20,7 +20,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Table function 'explode' not found"
+        "failure": "invalid argument: unsupported function argument type"
       }
     },
     {
@@ -43,7 +43,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Table function 'explode_outer' not found"
+        "failure": "invalid argument: unsupported function argument type"
       }
     },
     {

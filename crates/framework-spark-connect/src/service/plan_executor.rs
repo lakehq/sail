@@ -399,16 +399,6 @@ pub(crate) async fn handle_execute_register_table_function(
         }
     };
 
-    // let python_function: CerealPySparkUDTF = deserialize_pyspark_udtf(
-    //     &python_version,
-    //     &command,
-    //     &eval_type,
-    //     &(arguments.len() as i32),
-    //     &return_type,
-    //     &session.plan_config()?.spark_udf_config,
-    // )
-    // .map_err(|e| SparkError::invalid(format!("Python UDF deserialization error: {:?}", e)))?;
-
     let python_udtf: PySparkUDTF = PySparkUDTF::new(
         return_type,
         return_schema,

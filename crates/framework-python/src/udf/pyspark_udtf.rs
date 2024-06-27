@@ -24,16 +24,16 @@ use crate::cereal::pyspark_udtf::{deserialize_pyspark_udtf, PySparkUDTF as Cerea
 use crate::udf::{
     build_pyarrow_record_batch_kwargs, get_pyarrow_record_batch_from_pandas_function,
     get_pyarrow_record_batch_from_pylist_function, get_pyarrow_schema,
-    get_python_builtins_list_function, get_python_function, PythonFunctionType,
+    get_python_builtins_list_function, PythonFunctionType,
 };
 
 #[derive(Debug, Clone)]
-pub struct PySparkUDT {
+pub struct PySparkUserDefinedTable {
     return_schema: SchemaRef,
     batches: Vec<RecordBatch>,
 }
 
-impl PySparkUDT {
+impl PySparkUserDefinedTable {
     pub fn new(return_schema: SchemaRef, batches: Vec<RecordBatch>) -> Self {
         Self {
             return_schema,
@@ -43,7 +43,7 @@ impl PySparkUDT {
 }
 
 #[async_trait]
-impl TableProvider for PySparkUDT {
+impl TableProvider for PySparkUserDefinedTable {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -106,7 +106,7 @@ impl PySparkUDTF {
         python_function: PythonFunctionType,
     ) -> Result<RecordBatch> {
         Python::with_gil(|py| {
-            let python_function: Bound<PyAny> = get_python_function(&python_function, py)?;
+            let python_function: Bound<PyAny> = python_function.get_python_function(py)?;
             let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let record_batch_from_pandas: Bound<PyAny> =
                 get_pyarrow_record_batch_from_pandas_function(py)?;
@@ -159,7 +159,7 @@ impl PySparkUDTF {
         python_function: PythonFunctionType,
     ) -> Result<RecordBatch> {
         Python::with_gil(|py| {
-            let python_function: Bound<PyAny> = get_python_function(&python_function, py)?;
+            let python_function: Bound<PyAny> = python_function.get_python_function(py)?;
             let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let record_batch_from_pylist: Bound<PyAny> =
                 get_pyarrow_record_batch_from_pylist_function(py)?;
@@ -227,7 +227,7 @@ impl PySparkUDTF {
         python_function: PythonFunctionType,
     ) -> Result<RecordBatch> {
         Python::with_gil(|py| {
-            let python_function: Bound<PyAny> = get_python_function(&python_function, py)?;
+            let python_function: Bound<PyAny> = python_function.get_python_function(py)?;
             let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
             let record_batch_from_pylist: Bound<PyAny> =
                 get_pyarrow_record_batch_from_pylist_function(py)?;
@@ -289,7 +289,7 @@ impl TableFunctionImpl for PySparkUDTF {
             } else {
                 self.apply_pyspark_function_no_args(python_function)?
             };
-            return Ok(Arc::new(PySparkUDT::new(
+            return Ok(Arc::new(PySparkUserDefinedTable::new(
                 self.return_schema.clone(),
                 vec![batches],
             )));
@@ -341,7 +341,7 @@ impl TableFunctionImpl for PySparkUDTF {
             self.apply_pyspark_function(&input_arrays, python_function)?
         };
 
-        Ok(Arc::new(PySparkUDT::new(
+        Ok(Arc::new(PySparkUserDefinedTable::new(
             self.return_schema.clone(),
             vec![batches],
         )))

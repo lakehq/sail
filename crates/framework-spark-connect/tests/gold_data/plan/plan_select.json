@@ -1252,41 +1252,7 @@
     {
       "input": "select * from my_tvf(2, arg1 => 'value1', arg2 => true)",
       "output": {
-        "success": {
-          "root": {
-            "project": {
-              "input": {
-                "read": {
-                  "udtf": {
-                    "identifier": [
-                      "my_tvf"
-                    ],
-                    "arguments": [
-                      {
-                        "literal": {
-                          "integer": 2
-                        }
-                      }
-                    ],
-                    "options": {}
-                  },
-                  "isStreaming": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null
-                  }
-                }
-              ]
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: unsupported function argument type"
       }
     },
     {
@@ -1298,115 +1264,19 @@
     {
       "input": "select * from my_tvf(arg1 => 'value1', 2, arg2 => true)",
       "output": {
-        "success": {
-          "root": {
-            "project": {
-              "input": {
-                "read": {
-                  "udtf": {
-                    "identifier": [
-                      "my_tvf"
-                    ],
-                    "arguments": [
-                      {
-                        "literal": {
-                          "integer": 2
-                        }
-                      }
-                    ],
-                    "options": {}
-                  },
-                  "isStreaming": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null
-                  }
-                }
-              ]
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: unsupported function argument type"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => 'value1', arg2 => true)",
       "output": {
-        "success": {
-          "root": {
-            "project": {
-              "input": {
-                "read": {
-                  "udtf": {
-                    "identifier": [
-                      "my_tvf"
-                    ],
-                    "arguments": [],
-                    "options": {}
-                  },
-                  "isStreaming": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null
-                  }
-                }
-              ]
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: unsupported function argument type"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table (v1), 2, arg2 => true)",
       "output": {
-        "success": {
-          "root": {
-            "project": {
-              "input": {
-                "read": {
-                  "udtf": {
-                    "identifier": [
-                      "my_tvf"
-                    ],
-                    "arguments": [
-                      {
-                        "literal": {
-                          "integer": 2
-                        }
-                      }
-                    ],
-                    "options": {}
-                  },
-                  "isStreaming": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null
-                  }
-                }
-              ]
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: unsupported function argument type"
       }
     },
     {
@@ -1424,35 +1294,7 @@
     {
       "input": "select * from my_tvf(group => 'abc')",
       "output": {
-        "success": {
-          "root": {
-            "project": {
-              "input": {
-                "read": {
-                  "udtf": {
-                    "identifier": [
-                      "my_tvf"
-                    ],
-                    "arguments": [],
-                    "options": {}
-                  },
-                  "isStreaming": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null
-                  }
-                }
-              ]
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: unsupported function argument type"
       }
     },
     {

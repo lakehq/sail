@@ -41,6 +41,8 @@ impl<'de> Visitor<'de> for PartialPythonUDFVisitor {
         E: de::Error,
     {
         Python::with_gil(|py| {
+            // TODO: Python error is converted to a serde Error,
+            //  so we cannot propagate the original error back to the client.
             PyModule::import_bound(py, pyo3::intern!(py, "cloudpickle"))
                 .and_then(|cloudpickle| cloudpickle.getattr(pyo3::intern!(py, "loads")))
                 .and_then(|loads| loads.call1((v,)))

@@ -106,6 +106,7 @@ impl PlanResolver<'_> {
                         if !options.is_empty() {
                             return Err(PlanError::todo("ReadType::UDTF options"));
                         }
+                        // TODO: Handle qualified table reference.
                         let function_name = build_table_reference(identifier)?;
                         let function_name = function_name.table();
                         let schema = DFSchema::empty();

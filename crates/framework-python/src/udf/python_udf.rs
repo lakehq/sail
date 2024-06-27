@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
 use crate::cereal::partial_python_udf::PartialPythonUDF;
-use crate::udf::{get_python_function, PythonFunctionType};
+use crate::udf::PythonFunctionType;
 
 #[derive(Debug, Clone)]
 pub struct PythonUDF {
@@ -64,7 +64,7 @@ impl ScalarUDFImpl for PythonUDF {
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(args)?;
 
         let array_data: Result<ArrayData, DataFusionError> = Python::with_gil(|py| {
-            let python_function: Bound<PyAny> = get_python_function(&self.python_function, py)?;
+            let python_function: Bound<PyAny> = self.python_function.get_python_function(py)?;
 
             let py_args: Vec<Bound<PyAny>> = args
                 .iter()
