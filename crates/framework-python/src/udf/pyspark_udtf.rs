@@ -18,6 +18,7 @@ use framework_common::config::SparkUdfConfig;
 use framework_common::spec::TableFunctionDefinition;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyIterator, PyList, PyTuple};
+use framework_common::utils::cast_record_batch;
 
 use crate::cereal::is_pyspark_arrow_udf;
 use crate::cereal::pyspark_udtf::{deserialize_pyspark_udtf, PySparkUDTF as CerealPySparkUDTF};
@@ -34,11 +35,17 @@ pub struct PySparkUserDefinedTable {
 }
 
 impl PySparkUserDefinedTable {
-    pub fn new(return_schema: SchemaRef, batches: Vec<RecordBatch>) -> Self {
-        Self {
+    pub fn try_new(return_schema: SchemaRef, batches: Vec<RecordBatch>) -> Result<Self> {
+        let batches = batches
+            .into_iter()
+            .map(|batch| {
+                cast_record_batch(batch, return_schema.clone())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
             return_schema,
             batches,
-        }
+        })
     }
 }
 
@@ -289,10 +296,10 @@ impl TableFunctionImpl for PySparkUDTF {
             } else {
                 self.apply_pyspark_function_no_args(python_function)?
             };
-            return Ok(Arc::new(PySparkUserDefinedTable::new(
+            return Ok(Arc::new(PySparkUserDefinedTable::try_new(
                 self.return_schema.clone(),
                 vec![batches],
-            )));
+            )?));
         }
 
         let mut input_arrays = Vec::new();
@@ -341,10 +348,10 @@ impl TableFunctionImpl for PySparkUDTF {
             self.apply_pyspark_function(&input_arrays, python_function)?
         };
 
-        Ok(Arc::new(PySparkUserDefinedTable::new(
+        Ok(Arc::new(PySparkUserDefinedTable::try_new(
             self.return_schema.clone(),
             vec![batches],
-        )))
+        )?))
     }
 }
 

@@ -14,7 +14,7 @@ use framework_common::spec::{
     CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction, FunctionDefinition,
     TableFunctionDefinition,
 };
-use framework_plan::resolver::utils::rename_logical_plan;
+use framework_common::utils::rename_logical_plan;
 use framework_plan::resolver::PlanResolver;
 use framework_python::udf::pyspark_udtf::PySparkUDTF;
 use framework_python::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;

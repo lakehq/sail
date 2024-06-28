@@ -24,7 +24,7 @@ pub fn cast_record_batch(batch: RecordBatch, schema: SchemaRef) -> Result<Record
             Ok(column)
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok(RecordBatch::try_new(schema.clone(), columns)?)
+    Ok(RecordBatch::try_new(schema, columns)?)
 }
 
 pub fn read_record_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>> {

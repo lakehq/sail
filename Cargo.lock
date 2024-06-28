@@ -1171,7 +1171,10 @@ name = "framework-common"
 version = "0.1.0"
 dependencies = [
  "arrow",
+ "arrow-cast",
  "datafusion",
+ "datafusion-common",
+ "datafusion-expr",
  "glob",
  "serde",
  "serde_json",

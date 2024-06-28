@@ -12,10 +12,10 @@ use datafusion::physical_plan::{
     DisplayAs, ExecutionMode, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use datafusion_common::{arrow_datafusion_err, exec_err, internal_err, DataFusionError, Result};
+use framework_common::utils::rename_physical_plan;
 use futures::{Stream, StreamExt};
 
 use crate::extension::logical::ShowStringFormat;
-use crate::resolver::utils::rename_physical_plan;
 
 #[derive(Debug)]
 pub(crate) struct ShowStringExec {

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use framework_plan::resolver::utils::rename_schema;
+use framework_common::utils::rename_schema;
 use framework_plan::resolver::PlanResolver;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};

@@ -10,7 +10,6 @@ mod literal;
 pub mod plan;
 mod state;
 mod tree;
-pub mod utils;
 
 pub struct PlanResolver<'a> {
     ctx: &'a SessionContext,

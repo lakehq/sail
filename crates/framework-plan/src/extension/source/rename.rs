@@ -9,8 +9,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_expr::{Expr, LogicalPlan, TableProviderFilterPushDown, TableType};
-
-use crate::resolver::utils::{rename_physical_plan, rename_schema};
+use framework_common::utils::{rename_physical_plan, rename_schema};
 
 #[derive(Clone)]
 pub(crate) struct RenameTableProvider {

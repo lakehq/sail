@@ -24,6 +24,7 @@ use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::{columnize_expr, expand_qualified_wildcard, expand_wildcard};
 use datafusion_expr::{build_join_schema, LogicalPlanBuilder};
 use framework_common::spec;
+use framework_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::multi_expr::MultiExpr;
@@ -36,7 +37,6 @@ use crate::resolver::state::{FieldDescriptor, PlanResolverState};
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::tree::PlanRewriter;
-use crate::resolver::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
