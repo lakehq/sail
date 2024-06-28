@@ -127,12 +127,8 @@ jobs:
         name: Set up Rust
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
-        name: Build
-        run: cargo build
-
-      - if: steps.cache-logs.outputs.cache-hit != 'true'
         name: Run Spark Connect server
-        run: nohup scripts/spark-tests/run-server.sh > /dev/null 2>&1 < /dev/null &
+        run: scripts/spark-tests/run-server.sh
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         name: Wait for Spark Connect server to start
