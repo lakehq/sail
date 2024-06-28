@@ -15,7 +15,7 @@
     {
       "input": "CREATE TABLE test (attri-bute INT)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected a data type name, found: - at Line: 1, Column 25"
+        "failure": "invalid argument: sql parser error: Expected: a data type name, found: - at Line: 1, Column: 25"
       }
     }
   ]

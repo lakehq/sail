@@ -3,7 +3,7 @@
     {
       "input": "\nSELECT * FROM tab\nWINDOW hyphen-window AS\n  (PARTITION BY a, b ORDER BY c rows BETWEEN 1 PRECEDING AND 1 FOLLOWING)\n        ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected AS, found: - at Line: 3, Column 14"
+        "failure": "invalid argument: sql parser error: Expected: AS, found: - at Line: 3, Column: 14"
       }
     },
     {

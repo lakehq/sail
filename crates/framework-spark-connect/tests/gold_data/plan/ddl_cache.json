@@ -9,7 +9,7 @@
     {
       "input": "CACHE LAZY TABLE a.b.c OPTIONS('storageLevel' 'DISK_ONLY')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected =, found: 'DISK_ONLY' at Line: 1, Column 47"
+        "failure": "invalid argument: sql parser error: Expected: =, found: 'DISK_ONLY' at Line: 1, Column: 47"
       }
     },
     {

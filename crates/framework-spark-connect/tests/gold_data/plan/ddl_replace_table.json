@@ -3,241 +3,241 @@
     {
       "input": "\nREPLACE TABLE my_tab (a INT, b STRING, ts TIMESTAMP) USING parquet\nPARTITIONED BY (\n    a,\n    bucket(16, b),\n    years(ts),\n    months(ts),\n    days(ts),\n    hours(ts),\n    foo(a, \"bar\", 34))\n      ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 2, Column 25"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 2, Column: 25"
       }
     },
     {
       "input": "\nREPLACE TABLE mydb.page_view\nUSING parquet\nCOMMENT 'This is the staging page view table'\nLOCATION '/user/external/page_view'\nTBLPROPERTIES ('p1'='v1', 'p2'='v2')\nAS SELECT * FROM src\n      ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: USING at Line: 3, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: SELECT, VALUES, or a subquery in the query body, found: USING at Line: 3, Column: 1"
       }
     },
     {
       "input": "\nREPLACE TABLE table_name USING json\nOPTIONS (a 1, b 0.1, c TRUE)\n      ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: USING at Line: 2, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: SELECT, VALUES, or a subquery in the query body, found: USING at Line: 2, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE 1m.2g(a INT) USING parquet",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: 1m at Line: 1, Column 15"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: 1m at Line: 1, Column: 15"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS INPUTFORMAT 'inFormat' OUTPUTFORMAT 'outFormat'\n        ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS INPUTFORMAT 'inFormat' OUTPUTFORMAT 'outFormat'\nROW FORMAT SERDE 'customSerde'\n        ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS otherFormat\nROW FORMAT DELIMITED\nFIELDS TERMINATED BY ','",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS otherFormat\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS parquet\n        ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS rcfile\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n        ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS sequencefile\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n        ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS textfile\nROW FORMAT DELIMITED\nFIELDS TERMINATED BY ',' ESCAPED BY '\\\\' -- double escape for Scala and for SQL\nCOLLECTION ITEMS TERMINATED BY '#'\nMAP KEYS TERMINATED BY '='\nLINES TERMINATED BY '\\n'\n      ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS textfile\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n        ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint) PARTITIONED BY (part string)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint) USING parquet PARTITIONED BY (part string)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint, p1 string)\nSTORED BY 'handler'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p1, p2 string)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint, part string)\nUSING parquet\nROW FORMAT DELIMITED FIELDS TERMINATED BY ','",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint, part string)\nUSING parquet\nROW FORMAT SERDE 'customSerde'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint, part string)\nUSING parquet\nSTORED AS parquet",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: bigint at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: bigint at Line: 1, Column: 26"
       }
     },
     {
       "input": "REPLACE TABLE my_tab PARTITIONED BY (part string)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected SELECT, VALUES, or a subquery in the query body, found: PARTITIONED at Line: 1, Column 22"
+        "failure": "invalid argument: sql parser error: Expected: SELECT, VALUES, or a subquery in the query body, found: PARTITIONED at Line: 1, Column: 22"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT COMMENT 'test', b STRING NOT NULL) USING parquet",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 1, Column: 24"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT comment 'test', b STRING) USING parquet PARTITIONED BY (a)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 1, Column: 24"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b INT NOT NULL GENERATED ALWAYS AS (a+1)) USING parquet",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 1, Column: 24"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING NOT NULL DEFAULT \"abc\") USING parquet",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 1, Column: 24"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) CLUSTERED BY(b) INTO 256 BUCKETS CLUSTERED BY(b) INTO 256 BUCKETS",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 1, Column: 24"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) COMMENT 'a table' COMMENT 'a table'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 1, Column: 24"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) LOCATION '/tmp/file' LOCATION '/tmp/file'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 1, Column: 24"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) PARTITIONED BY (b) PARTITIONED BY (b)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 1, Column: 24"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) PARTITIONED BY (c int) PARTITIONED BY (c int)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 1, Column: 24"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) ROW FORMAT SERDE 'serde' ROW FORMAT SERDE 'serde'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 1, Column: 24"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out' STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 1, Column: 24"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) STORED AS parquet STORED AS parquet",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 1, Column: 24"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) TBLPROPERTIES('test' = 'test2') TBLPROPERTIES('test' = 'test2')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 1, Column: 24"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) USING parquet CLUSTERED BY (a) SORTED BY (b) INTO 5 BUCKETS",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 1, Column: 24"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) USING parquet COMMENT 'abc'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 1, Column: 24"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) USING parquet LOCATION '/tmp/file'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 1, Column: 24"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) USING parquet TBLPROPERTIES('test' = 'test')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INT at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INT at Line: 1, Column: 24"
       }
     }
   ]

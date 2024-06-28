@@ -186,9 +186,9 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
                         contains_null: true,
                     })
                 }
-                ArrayElemTypeDef::SquareBracket(_, _) | ArrayElemTypeDef::None => {
-                    Err(SqlError::unsupported("array data type"))
-                }
+                ArrayElemTypeDef::SquareBracket(_, _)
+                | ArrayElemTypeDef::Parenthesis(_)
+                | ArrayElemTypeDef::None => Err(SqlError::unsupported("array data type")),
             }
         }
         ast::DataType::Struct(fields) => {
@@ -228,6 +228,11 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
         ast::DataType::Int2(_)
         | ast::DataType::Int4(_)
         | ast::DataType::Int8(_)
+        | ast::DataType::Int16
+        | ast::DataType::Int32
+        | ast::DataType::Int64
+        | ast::DataType::Int128
+        | ast::DataType::Int256
         | ast::DataType::MediumInt(_)
         | ast::DataType::UnsignedTinyInt(_)
         | ast::DataType::UnsignedSmallInt(_)
@@ -258,11 +263,25 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
         | ast::DataType::BigDecimal(_)
         | ast::DataType::Clob(_)
         | ast::DataType::Bytes(_)
-        | ast::DataType::Int64
         | ast::DataType::Float64
         | ast::DataType::JSONB
         | ast::DataType::Custom(_, _)
-        | ast::DataType::Unspecified => {
+        | ast::DataType::Unspecified
+        | ast::DataType::UInt8
+        | ast::DataType::UInt16
+        | ast::DataType::UInt32
+        | ast::DataType::UInt64
+        | ast::DataType::UInt128
+        | ast::DataType::UInt256
+        | ast::DataType::Float32
+        | ast::DataType::Date32
+        | ast::DataType::Datetime64(_, _)
+        | ast::DataType::FixedString(_)
+        | ast::DataType::Tuple(_)
+        | ast::DataType::Nested(_)
+        | ast::DataType::Union(_)
+        | ast::DataType::Nullable(_)
+        | ast::DataType::LowCardinality(_) => {
             Err(SqlError::unsupported(format!("SQL type {sql_type:?}")))
         }
     }

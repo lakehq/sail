@@ -521,6 +521,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         }
         Expr::Function(ast::Function {
             name,
+            parameters,
             args,
             filter,
             null_treatment,
@@ -529,6 +530,9 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         }) => {
             use ast::FunctionArguments;
 
+            if !matches!(parameters, FunctionArguments::None) {
+                return Err(SqlError::unsupported("function parameters"));
+            }
             if filter.is_some() {
                 return Err(SqlError::unsupported("function filter"));
             }
@@ -682,15 +686,22 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                 plan_id: None,
             }),
         }),
-        Expr::ArrayIndex { obj, indexes } => {
-            let mut obj = from_ast_expression(*obj)?;
-            for index in indexes {
-                obj = spec::Expr::UnresolvedExtractValue {
-                    child: Box::new(obj),
+        Expr::Subscript { expr, subscript } => {
+            let mut expr = from_ast_expression(*expr)?;
+            expr = match *subscript {
+                ast::Subscript::Index { index } => spec::Expr::UnresolvedExtractValue {
+                    child: Box::new(expr),
                     extraction: Box::new(from_ast_expression(index)?),
-                };
-            }
-            Ok(obj)
+                },
+                ast::Subscript::Slice {
+                    lower_bound: _,
+                    upper_bound: _,
+                    stride: _,
+                } => {
+                    return Err(SqlError::unsupported("Expr::Subscript::Slice"));
+                }
+            };
+            Ok(expr)
         }
         Expr::IsDistinctFrom(a, b) => {
             let result = spec::Expr::from(Function {

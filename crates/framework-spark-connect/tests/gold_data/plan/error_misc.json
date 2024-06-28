@@ -3,13 +3,13 @@
     {
       "input": "\nALTER DATABASE my-database\nSET DBPROPERTIES ('p1'='v1')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected one of VIEW or TABLE or INDEX or ROLE, found: DATABASE at Line: 2, Column 7"
+        "failure": "invalid argument: sql parser error: Expected: one of VIEW or TABLE or INDEX or ROLE, found: DATABASE at Line: 2, Column: 7"
       }
     },
     {
       "input": "\nFROM test-table\nSELECT a\nSELECT b\n        ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: FROM at Line: 2, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: FROM at Line: 2, Column: 1"
       }
     },
     {
@@ -21,7 +21,7 @@
     {
       "input": "CREATE FUNCTION test-func as org.test.func",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected (, found: - at Line: 1, Column 21"
+        "failure": "invalid argument: sql parser error: Expected: (, found: - at Line: 1, Column: 21"
       }
     },
     {

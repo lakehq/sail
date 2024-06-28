@@ -60,6 +60,7 @@ impl SparkDialect {
         parser.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
             name: ObjectName(vec![Ident::new("struct")]),
+            parameters: FunctionArguments::None,
             args: FunctionArguments::List(FunctionArgumentList {
                 duplicate_treatment: None,
                 args,

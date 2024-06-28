@@ -31,7 +31,7 @@
     {
       "input": "'''",
       "output": {
-        "failure": "invalid argument: sql parser error: Unterminated string literal at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Unterminated string literal at Line: 1, Column: 1"
       }
     },
     {
@@ -47,7 +47,7 @@
     {
       "input": "'\\''",
       "output": {
-        "failure": "invalid argument: sql parser error: Unterminated string literal at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Unterminated string literal at Line: 1, Column: 1"
       }
     },
     {

@@ -657,7 +657,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: , at Line: 1, Column 19"
+        "failure": "invalid argument: sql parser error: Expected: ), found: , at Line: 1, Column: 19"
       }
     },
     {
@@ -679,7 +679,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: , at Line: 1, Column 19"
+        "failure": "invalid argument: sql parser error: Expected: ), found: , at Line: 1, Column: 19"
       }
     },
     {
@@ -1097,7 +1097,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: , at Line: 1, Column 20"
+        "failure": "invalid argument: sql parser error: Expected: ), found: , at Line: 1, Column: 20"
       }
     },
     {
@@ -1119,7 +1119,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: , at Line: 1, Column 20"
+        "failure": "invalid argument: sql parser error: Expected: ), found: , at Line: 1, Column: 20"
       }
     },
     {

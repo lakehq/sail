@@ -15,19 +15,19 @@
     {
       "input": "with cte1 (select 1) select * from cte1",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: 1 at Line: 1, Column 19"
+        "failure": "invalid argument: sql parser error: Expected: ), found: 1 at Line: 1, Column: 19"
       }
     },
     {
       "input": "with cte1 (select 1), cte1 as (select 1 from cte1) select * from cte1",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: 1 at Line: 1, Column 19"
+        "failure": "invalid argument: sql parser error: Expected: ), found: 1 at Line: 1, Column: 19"
       }
     },
     {
       "input": "with cte1 (select 1), cte2 as (select * from cte1) select * from cte2",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: 1 at Line: 1, Column 19"
+        "failure": "invalid argument: sql parser error: Expected: ), found: 1 at Line: 1, Column: 19"
       }
     },
     {

@@ -135,19 +135,19 @@
     {
       "input": "\n/*/**/*/\nSELECT * FROM a\n      ",
       "output": {
-        "failure": "invalid argument: sql parser error: Unexpected EOF while in a multi-line comment at Line: 4, Column 7"
+        "failure": "invalid argument: sql parser error: Unexpected EOF while in a multi-line comment at Line: 4, Column: 7"
       }
     },
     {
       "input": "\n/*/*abc*/*/\nSELECT * FROM a\n      ",
       "output": {
-        "failure": "invalid argument: sql parser error: Unexpected EOF while in a multi-line comment at Line: 4, Column 7"
+        "failure": "invalid argument: sql parser error: Unexpected EOF while in a multi-line comment at Line: 4, Column: 7"
       }
     },
     {
       "input": "\n/*/*foo*//*bar*/*/\nSELECT * FROM a\n      ",
       "output": {
-        "failure": "invalid argument: sql parser error: Unexpected EOF while in a multi-line comment at Line: 4, Column 7"
+        "failure": "invalid argument: sql parser error: Unexpected EOF while in a multi-line comment at Line: 4, Column: 7"
       }
     },
     {
@@ -257,103 +257,103 @@
     {
       "input": "-- single comment\\\nwith line continuity\nSELECT * FROM a",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected AS, found: continuity at Line: 2, Column 11"
+        "failure": "invalid argument: sql parser error: Expected: AS, found: continuity at Line: 2, Column: 11"
       }
     },
     {
       "input": "/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Unexpected EOF while in a multi-line comment at Line: 10, Column 1"
+        "failure": "invalid argument: sql parser error: Unexpected EOF while in a multi-line comment at Line: 10, Column: 1"
       }
     },
     {
       "input": "/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\nselect 4 as d\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Unexpected EOF while in a multi-line comment at Line: 11, Column 1"
+        "failure": "invalid argument: sql parser error: Unexpected EOF while in a multi-line comment at Line: 11, Column: 1"
       }
     },
     {
       "input": "TABLE testcat.db.tab",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: TABLE at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: TABLE at Line: 1, Column: 1"
       }
     },
     {
       "input": "from (from a union all from b) c select *",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: from at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
       }
     },
     {
       "input": "from a",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: from at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
       }
     },
     {
       "input": "from a insert into tbl1 select * insert into tbl2 select * where s < 10",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: from at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
       }
     },
     {
       "input": "from a select * from b",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: from at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
       }
     },
     {
       "input": "from a select * select * from x where a.s < 10",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: from at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
       }
     },
     {
       "input": "from a select * select * where s < 10",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: from at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
       }
     },
     {
       "input": "from a select b, c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: from at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
       }
     },
     {
       "input": "from a select distinct b, c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: from at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
       }
     },
     {
       "input": "from db.a select b, c where d < 1",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: from at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
       }
     },
     {
       "input": "from t insert into s select * limit 1 insert into u select * where x > 5",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: from at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
       }
     },
     {
       "input": "from t1\nlateral view explode(x) expl as x\ninsert into t2\nselect *\nlateral view json_tuple(x, y) jtup q, z\ninsert into t3\nselect *\nwhere s < 10\n      ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: from at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
       }
     },
     {
       "input": "table d.t",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: table at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: table at Line: 1, Column: 1"
       }
     },
     {
       "input": "table t",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: table at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: table at Line: 1, Column: 1"
       }
     },
     {
@@ -365,7 +365,7 @@
     {
       "input": "values 1, 2, 3, 4",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected (, found: 1 at Line: 1, Column 8"
+        "failure": "invalid argument: sql parser error: Expected: (, found: 1 at Line: 1, Column: 8"
       }
     }
   ]

@@ -39,7 +39,7 @@
     {
       "input": "select * from t\nwindow w1 as (partition by a, b order by c rows between 1 preceding and 1 following),\n       w2 as w1,\n       w3 as w1",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected (, found: w1 at Line: 3, Column 14"
+        "failure": "invalid argument: sql parser error: Expected: (, found: w1 at Line: 3, Column: 14"
       }
     },
     {

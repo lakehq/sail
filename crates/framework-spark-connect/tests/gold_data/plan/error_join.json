@@ -3,7 +3,7 @@
     {
       "input": "\nSELECT a, b\nFROM t1 JOIN t2\nUSING (a, b, at-tr)\n        ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: - at Line: 4, Column 16"
+        "failure": "invalid argument: sql parser error: Expected: ), found: - at Line: 4, Column: 16"
       }
     },
     {

@@ -150,7 +150,7 @@
     {
       "input": "SELECT * FROM S WHERE C1 IN (INSERT INTO T VALUES (2))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: INTO at Line: 1, Column 37"
+        "failure": "invalid argument: sql parser error: Expected: ), found: INTO at Line: 1, Column: 37"
       }
     },
     {
@@ -201,61 +201,61 @@
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_TIME AS OF '2019-01-29 00:37:58'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected one of UPDATE or SHARE, found: SYSTEM_TIME at Line: 1, Column 25"
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: SYSTEM_TIME at Line: 1, Column: 25"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_TIME AS OF (SELECT current_date())",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected one of UPDATE or SHARE, found: SYSTEM_TIME at Line: 1, Column 25"
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: SYSTEM_TIME at Line: 1, Column: 25"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_TIME AS OF current_date()",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected one of UPDATE or SHARE, found: SYSTEM_TIME at Line: 1, Column 25"
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: SYSTEM_TIME at Line: 1, Column: 25"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_VERSION AS OF 'Snapshot123456789'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected one of UPDATE or SHARE, found: SYSTEM_VERSION at Line: 1, Column 25"
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: SYSTEM_VERSION at Line: 1, Column: 25"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_VERSION AS OF 123456789",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected one of UPDATE or SHARE, found: SYSTEM_VERSION at Line: 1, Column 25"
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: SYSTEM_VERSION at Line: 1, Column: 25"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR TIMESTAMP AS OF '2019-01-29 00:37:58'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected one of UPDATE or SHARE, found: TIMESTAMP at Line: 1, Column 25"
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: TIMESTAMP at Line: 1, Column: 25"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR TIMESTAMP AS OF (SELECT current_date())",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected one of UPDATE or SHARE, found: TIMESTAMP at Line: 1, Column 25"
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: TIMESTAMP at Line: 1, Column: 25"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR TIMESTAMP AS OF current_date()",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected one of UPDATE or SHARE, found: TIMESTAMP at Line: 1, Column 25"
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: TIMESTAMP at Line: 1, Column: 25"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR VERSION AS OF 'Snapshot123456789'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected one of UPDATE or SHARE, found: VERSION at Line: 1, Column 25"
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: VERSION at Line: 1, Column: 25"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR VERSION AS OF 123456789",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected one of UPDATE or SHARE, found: VERSION at Line: 1, Column 25"
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: VERSION at Line: 1, Column: 25"
       }
     },
     {
@@ -327,13 +327,13 @@
     {
       "input": "SELECT * FROM parquet_t0 TABLESAMPLE(300M) s",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: 300M at Line: 1, Column 38"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: 300M at Line: 1, Column: 38"
       }
     },
     {
       "input": "SELECT * FROM parquet_t0 TABLESAMPLE(BUCKET 3 OUT OF 32 ON rand()) s",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: 3 at Line: 1, Column 45"
+        "failure": "invalid argument: sql parser error: Expected: ), found: 3 at Line: 1, Column: 45"
       }
     },
     {
@@ -516,13 +516,13 @@
     {
       "input": "SELECT :",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected placeholder, found: EOF"
+        "failure": "invalid argument: sql parser error: Expected: placeholder, found: EOF"
       }
     },
     {
       "input": "SELECT :-",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected placeholder, found: - at Line: 1, Column 9"
+        "failure": "invalid argument: sql parser error: Expected: placeholder, found: - at Line: 1, Column: 9"
       }
     },
     {
@@ -860,7 +860,7 @@
     {
       "input": "SELECT TRIM(BOTH FROM '  bunch o blanks  ')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: '  bunch o blanks  ' at Line: 1, Column 23"
+        "failure": "invalid argument: sql parser error: Expected: ), found: '  bunch o blanks  ' at Line: 1, Column: 23"
       }
     },
     {
@@ -907,7 +907,7 @@
     {
       "input": "SELECT TRIM(LEADING FROM '  bunch o blanks  ')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: '  bunch o blanks  ' at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: ), found: '  bunch o blanks  ' at Line: 1, Column: 26"
       }
     },
     {
@@ -954,13 +954,13 @@
     {
       "input": "SELECT TRIM(TRAILING FROM '  bunch o blanks  ')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: '  bunch o blanks  ' at Line: 1, Column 27"
+        "failure": "invalid argument: sql parser error: Expected: ), found: '  bunch o blanks  ' at Line: 1, Column: 27"
       }
     },
     {
       "input": "SELECT abs(:1Abc)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected placeholder, found: 1Abc at Line: 1, Column 13"
+        "failure": "invalid argument: sql parser error: Expected: placeholder, found: 1Abc at Line: 1, Column: 13"
       }
     },
     {
@@ -1136,7 +1136,7 @@
     {
       "input": "select (select max(b) from s) ss from t",
       "output": {
-        "failure": "not supported: expression: Subquery(Query { with: None, body: Select(Select { distinct: None, top: None, projection: [UnnamedExpr(Function(Function { name: ObjectName([Ident { value: \"max\", quote_style: None }]), args: List(FunctionArgumentList { duplicate_treatment: None, args: [Unnamed(Expr(Identifier(Ident { value: \"b\", quote_style: None })))], clauses: [] }), filter: None, null_treatment: None, over: None, within_group: [] }))], into: None, from: [TableWithJoins { relation: Table { name: ObjectName([Ident { value: \"s\", quote_style: None }]), alias: None, args: None, with_hints: [], version: None, partitions: [] }, joins: [] }], lateral_views: [], selection: None, group_by: Expressions([]), cluster_by: [], distribute_by: [], sort_by: [], having: None, named_window: [], qualify: None, window_before_qualify: false, value_table_mode: None, connect_by: None }), order_by: [], limit: None, limit_by: [], offset: None, fetch: None, locks: [], for_clause: None })"
+        "failure": "not supported: expression: Subquery(Query { with: None, body: Select(Select { distinct: None, top: None, projection: [UnnamedExpr(Function(Function { name: ObjectName([Ident { value: \"max\", quote_style: None }]), parameters: None, args: List(FunctionArgumentList { duplicate_treatment: None, args: [Unnamed(Expr(Identifier(Ident { value: \"b\", quote_style: None })))], clauses: [] }), filter: None, null_treatment: None, over: None, within_group: [] }))], into: None, from: [TableWithJoins { relation: Table { name: ObjectName([Ident { value: \"s\", quote_style: None }]), alias: None, args: None, with_hints: [], version: None, partitions: [] }, joins: [] }], lateral_views: [], selection: None, group_by: Expressions([]), cluster_by: [], distribute_by: [], sort_by: [], having: None, named_window: [], qualify: None, window_before_qualify: false, value_table_mode: None, connect_by: None }), order_by: [], limit: None, limit_by: [], offset: None, fetch: None, locks: [], for_clause: None })"
       }
     },
     {
@@ -1199,7 +1199,7 @@
     {
       "input": "select * from (from a select * select *)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: select at Line: 1, Column 23"
+        "failure": "invalid argument: sql parser error: Expected: ), found: select at Line: 1, Column: 23"
       }
     },
     {
@@ -1258,7 +1258,7 @@
     {
       "input": "select * from my_tvf(2, table (v1), arg1 => table (select 1))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: 1 at Line: 1, Column 59"
+        "failure": "invalid argument: sql parser error: Expected: ), found: 1 at Line: 1, Column: 59"
       }
     },
     {
@@ -1282,13 +1282,13 @@
     {
       "input": "select * from my_tvf(arg1 => table (v1), arg2 => table (select 1))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: 1 at Line: 1, Column 64"
+        "failure": "invalid argument: sql parser error: Expected: ), found: 1 at Line: 1, Column: 64"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table v1)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: v1 at Line: 1, Column 36"
+        "failure": "invalid argument: sql parser error: Expected: ), found: v1 at Line: 1, Column: 36"
       }
     },
     {
@@ -1300,7 +1300,7 @@
     {
       "input": "select * from my_tvf(table (v1), table (select 1))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: 1 at Line: 1, Column 48"
+        "failure": "invalid argument: sql parser error: Expected: ), found: 1 at Line: 1, Column: 48"
       }
     },
     {
@@ -1555,31 +1555,31 @@
     {
       "input": "select * from t tablesample(100 rows)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: 100 at Line: 1, Column 29"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: 100 at Line: 1, Column: 29"
       }
     },
     {
       "input": "select * from t tablesample(43 percent) as x",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: 43 at Line: 1, Column 29"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: 43 at Line: 1, Column: 29"
       }
     },
     {
       "input": "select * from t tablesample(bucket 11 out of 10) as x",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: 11 at Line: 1, Column 36"
+        "failure": "invalid argument: sql parser error: Expected: ), found: 11 at Line: 1, Column: 36"
       }
     },
     {
       "input": "select * from t tablesample(bucket 4 out of 10 on x) as x",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: 4 at Line: 1, Column 36"
+        "failure": "invalid argument: sql parser error: Expected: ), found: 4 at Line: 1, Column: 36"
       }
     },
     {
       "input": "select * from t tablesample(bucket 4 out of 10) as x",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: 4 at Line: 1, Column 36"
+        "failure": "invalid argument: sql parser error: Expected: ), found: 4 at Line: 1, Column: 36"
       }
     },
     {
@@ -1657,7 +1657,7 @@
     {
       "input": "select a from 1k.2m",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: 1k at Line: 1, Column 15"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: 1k at Line: 1, Column: 15"
       }
     },
     {
@@ -2064,39 +2064,7 @@
     {
       "input": "select from tbl",
       "output": {
-        "success": {
-          "root": {
-            "project": {
-              "input": {
-                "empty": {
-                  "produceOneRow": true
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "alias": {
-                    "expr": {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "from"
-                        ],
-                        "planId": null
-                      }
-                    },
-                    "name": [
-                      "tbl"
-                    ],
-                    "metadata": null
-                  }
-                }
-              ]
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: sql parser error: Expected an expression, found: from at Line: 1, Column: 13"
       }
     },
     {
@@ -2174,13 +2142,13 @@
     {
       "input": "select ltrim(both 'S' from 'SS abc S'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: 'S' at Line: 1, Column 19"
+        "failure": "invalid argument: sql parser error: Expected: ), found: 'S' at Line: 1, Column: 19"
       }
     },
     {
       "input": "select rtrim(trailing 'S' from 'SS abc S'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: 'S' at Line: 1, Column 23"
+        "failure": "invalid argument: sql parser error: Expected: ), found: 'S' at Line: 1, Column: 23"
       }
     }
   ]
