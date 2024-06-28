@@ -199,6 +199,29 @@ and add the environment variables one by one.
 
 You can leave the other settings as default.
 
+### Reducing Build Time
+
+The PyO3 package will be rebuilt when the Python interpreter changes.
+This will cause all downstream packages to be rebuilt, resulting in a long build time for development.
+The issue gets more complicated when you use both command line tools and IDEs, which share the same Cargo build cache.
+(For example, RustRover may run `cargo check` in the background.)
+
+To reduce the build time, you need to make sure the Python interpreter used by PyO3 is configured in the same way
+across environments. Please consider the following items.
+
+1. The `scripts/spark-tests/run-server.sh` script internally sets the `PYO3_PYTHON` environment variable to the
+   absolute path of the Python interpreter in the project virtual environment.
+2. The RustRover debugger configuration in the previous section sets the `PYO3_PYTHON` environment variable to the
+   same value as above.
+3. For RustRover, in "**Preferences**" > "**Rust**" > "**External Linters**", set the `PYO3_PYTHON` environment variable
+   to the same value as above.
+4. If you need to run Cargo commands such as `cargo build`, set the `PYO3_PYTHON` environment variable in the terminal
+   session to the same value as above.
+   ```bash
+   # Run the following command in the project root directory.
+   export PYO3_PYTHON="$(git rev-parse --show-toplevel)/python/.venv/bin/python"
+   ```
+
 ### Updating the Spark Patch
 
 You can use the following commands to update the Spark patch with your local modification.

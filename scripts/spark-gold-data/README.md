@@ -22,7 +22,7 @@ This will rewrite the gold data files with only the test input.
 You should then use the command in the next section to save the test output.
 
 ```bash
-scripts/spark-tests/gold-data/bootstrap.sh
+scripts/spark-gold-data/bootstrap.sh
 ```
 
 This is not part of the daily developer workflow.

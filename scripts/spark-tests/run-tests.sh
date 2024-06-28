@@ -2,7 +2,7 @@
 
 set -euo 'pipefail'
 
-project_path="$(dirname "$0")/../.."
+project_path="$(git rev-parse --show-toplevel)"
 
 cd "${project_path}"/opt/spark
 
