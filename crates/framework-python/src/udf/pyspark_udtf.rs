@@ -16,9 +16,9 @@ use datafusion_expr::expr::Alias;
 use datafusion_expr::{Expr, TableType};
 use framework_common::config::SparkUdfConfig;
 use framework_common::spec::TableFunctionDefinition;
+use framework_common::utils::cast_record_batch;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyIterator, PyList, PyTuple};
-use framework_common::utils::cast_record_batch;
 
 use crate::cereal::is_pyspark_arrow_udf;
 use crate::cereal::pyspark_udtf::{deserialize_pyspark_udtf, PySparkUDTF as CerealPySparkUDTF};
@@ -38,9 +38,7 @@ impl PySparkUserDefinedTable {
     pub fn try_new(return_schema: SchemaRef, batches: Vec<RecordBatch>) -> Result<Self> {
         let batches = batches
             .into_iter()
-            .map(|batch| {
-                cast_record_batch(batch, return_schema.clone())
-            })
+            .map(|batch| cast_record_batch(batch, return_schema.clone()))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             return_schema,
