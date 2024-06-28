@@ -10,7 +10,7 @@ fi
 head_dir="$1"
 base_dir="$2"
 
-project_path="$(dirname "$0")/../.."
+project_path="$(git rev-parse --show-toplevel)"
 tmp_dir="$(mktemp -d)"
 
 trap clean_up EXIT
@@ -129,7 +129,7 @@ jq -r -f "${project_path}/scripts/spark-tests/show-passed-tests.jq" \
   "${tmp_dir}/head.jsonl" > "${tmp_dir}/passed-tests/head"
 
 pushd "${tmp_dir}/passed-tests" > /dev/null
-diff -u base head > ../passed-tests.diff || true
+diff -U 0 base head > ../passed-tests.diff || true
 popd > /dev/null
 
 printf '<details>\n'

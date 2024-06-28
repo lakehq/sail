@@ -5,12 +5,12 @@ on:
     branches:
       - main
     paths:
-      - "scripts/spark-tests/gold-data/**"
+      - "scripts/spark-gold-data/**"
   pull_request:
     branches:
       - main
     paths:
-      - "scripts/spark-tests/gold-data/**"
+      - "scripts/spark-gold-data/**"
 
 jobs:
   validate:
@@ -36,7 +36,7 @@ jobs:
 
       - name: Bootstrap gold data
         run: |
-          scripts/spark-tests/gold-data/bootstrap.sh
+          scripts/spark-gold-data/bootstrap.sh
 
       - name: Update gold data
         run: |
