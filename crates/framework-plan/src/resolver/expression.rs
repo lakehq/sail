@@ -5,7 +5,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DFSchema, Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
-use datafusion_common::{Column, DataFusionError, TableReference};
+use datafusion_common::{plan_datafusion_err, Column, DataFusionError, TableReference};
 use datafusion_expr::{expr, window_frame, ExprSchemable, ScalarUDF};
 use framework_common::spec;
 use framework_python::cereal::partial_pyspark_udf::{
@@ -426,14 +426,14 @@ impl PlanResolver<'_> {
         let name: Vec<String> = name.into();
         let alias = name
             .last()
-            .ok_or_else(|| PlanError::invalid("empty attribute"))?
+            .ok_or_else(|| plan_datafusion_err!("empty attribute"))?
             .clone();
         let expr = schema
             .iter()
             .filter_map(|(qualifier, field)| self.find_attribute(&name, qualifier, field, state))
             .collect::<Vec<_>>()
             .one()
-            .map_err(|_| PlanError::invalid(format!("cannot resolve attribute: {:?}", name)))?;
+            .map_err(|_| plan_datafusion_err!("cannot resolve attribute: {:?}", name))?;
         Ok(expr::Expr::Alias(expr::Alias {
             expr: Box::new(expr),
             relation: None,
