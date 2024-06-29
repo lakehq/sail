@@ -55,7 +55,73 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
         Statement::CreateFunction { .. } => Err(SqlError::todo("SQL create function")),
         Statement::CreateIndex { .. } => Err(SqlError::todo("SQL create index")),
         Statement::CreateSchema { .. } => Err(SqlError::todo("SQL create schema")),
-        Statement::CreateTable { .. } => Err(SqlError::todo("SQL create table")),
+        Statement::CreateTable(create_table) => {
+            return Err(SqlError::todo("SQL create table"));
+
+            let ast::CreateTable {
+                or_replace,
+                temporary: _,
+                external: _,
+                global: _,
+                if_not_exists,
+                transient: _,
+                volatile: _,
+                name,
+                columns,
+                constraints,
+                hive_distribution: _,
+                hive_formats: _,
+                table_properties,
+                with_options,
+                file_format: _,
+                location: _,
+                query,
+                without_rowid: _,
+                like: _,
+                clone: _,
+                engine: _,
+                comment: _,
+                auto_increment_offset: _,
+                default_charset: _,
+                collation: _,
+                on_commit: _,
+                on_cluster: _,
+                primary_key: _,
+                order_by: _,
+                partition_by: _,
+                cluster_by: _,
+                options: _,
+                strict: _,
+                copy_grants: _,
+                enable_schema_evolution: _,
+                change_tracking: _,
+                data_retention_time_in_days: _,
+                max_data_extension_time_in_days: _,
+                default_ddl_collation: _,
+                with_aggregation_policy: _,
+                with_row_access_policy: _,
+                with_tags: _,
+            } = create_table;
+
+            if !table_properties.is_empty() {
+                return Err(SqlError::todo("Statement::CreateTable table_properties"));
+            }
+            if !with_options.is_empty() {
+                return Err(SqlError::todo("Statement::CreateTable with_options"));
+            }
+
+            Err(SqlError::todo("SQL create table"))
+
+            // let node = spec::PlanNode::CreateTable {
+            //     table: from_ast_object_name(name)?,
+            //     path,
+            //     source,
+            //     description: None, // TODO: Use comment?
+            //     schema,
+            //     options: Default::default(), // TODO: Support options
+            // };
+            // Ok(spec::Plan::new(node))
+        }
         Statement::CreateView { .. } => Err(SqlError::todo("SQL create view")),
         Statement::Delete(_) => Err(SqlError::todo("SQL delete")),
         Statement::Drop {
