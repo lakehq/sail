@@ -527,6 +527,9 @@ fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::Plan
                 JoinOperator::CrossApply | JoinOperator::OuterApply => {
                     return Err(SqlError::unsupported("APPLY join"))
                 }
+                JoinOperator::AsOf { .. } => {
+                    return Err(SqlError::unsupported("AS OF join"));
+                }
             };
             let (join_condition, using_columns) = match constraint {
                 Some(JoinConstraint::On(expr)) => {

@@ -3,7 +3,7 @@
     {
       "input": "\nALTER TABLE t\nCHANGE COLUMN\ntest-col TYPE BIGINT\n        ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: - at Line: 4, Column 5"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: - at Line: 4, Column: 5"
       }
     },
     {
@@ -21,7 +21,7 @@
     {
       "input": "\nALTER TABLE t\nRENAME COLUMN\ntest-col TO test\n        ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected TO, found: - at Line: 4, Column 5"
+        "failure": "invalid argument: sql parser error: Expected: TO, found: - at Line: 4, Column: 5"
       }
     }
   ]

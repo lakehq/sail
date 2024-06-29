@@ -3,7 +3,7 @@
     {
       "input": "\nANALYZE TABLE a.b.c PARTITION(ds='2017-06-10')\nCOMPUTE STATISTICS FOR ALL COLUMNS\n         ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected COLUMNS, found: ALL at Line: 3, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: COLUMNS, found: ALL at Line: 3, Column: 24"
       }
     },
     {
@@ -15,13 +15,13 @@
     {
       "input": "ANALYZE TABLE a.b.c COMPUTE STATISTICS FOR ALL",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected COLUMNS, found: ALL at Line: 1, Column 44"
+        "failure": "invalid argument: sql parser error: Expected: COLUMNS, found: ALL at Line: 1, Column: 44"
       }
     },
     {
       "input": "ANALYZE TABLE a.b.c COMPUTE STATISTICS FOR ALL COLUMNS key, value",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected COLUMNS, found: ALL at Line: 1, Column 44"
+        "failure": "invalid argument: sql parser error: Expected: COLUMNS, found: ALL at Line: 1, Column: 44"
       }
     },
     {
@@ -87,19 +87,19 @@
     {
       "input": "ANALYZE TABLES FROM a COMPUTE STATISTICS NOSCAN",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected TABLE, found: TABLES at Line: 1, Column 9"
+        "failure": "invalid argument: sql parser error: Expected: TABLE, found: TABLES at Line: 1, Column: 9"
       }
     },
     {
       "input": "ANALYZE TABLES IN a.b.c COMPUTE STATISTICS",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected TABLE, found: TABLES at Line: 1, Column 9"
+        "failure": "invalid argument: sql parser error: Expected: TABLE, found: TABLES at Line: 1, Column: 9"
       }
     },
     {
       "input": "ANALYZE TABLES IN a.b.c COMPUTE STATISTICS xxxx",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected TABLE, found: TABLES at Line: 1, Column 9"
+        "failure": "invalid argument: sql parser error: Expected: TABLE, found: TABLES at Line: 1, Column: 9"
       }
     },
     {

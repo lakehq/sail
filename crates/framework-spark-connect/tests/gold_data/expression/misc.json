@@ -67,7 +67,7 @@
     {
       "input": "(a as b, b as c)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: as at Line: 1, Column 4"
+        "failure": "invalid argument: sql parser error: Expected: ), found: as at Line: 1, Column: 4"
       }
     },
     {
@@ -116,7 +116,7 @@
     {
       "input": "(select max(val) from tbl) > current",
       "output": {
-        "failure": "not supported: expression: Subquery(Query { with: None, body: Select(Select { distinct: None, top: None, projection: [UnnamedExpr(Function(Function { name: ObjectName([Ident { value: \"max\", quote_style: None }]), args: List(FunctionArgumentList { duplicate_treatment: None, args: [Unnamed(Expr(Identifier(Ident { value: \"val\", quote_style: None })))], clauses: [] }), filter: None, null_treatment: None, over: None, within_group: [] }))], into: None, from: [TableWithJoins { relation: Table { name: ObjectName([Ident { value: \"tbl\", quote_style: None }]), alias: None, args: None, with_hints: [], version: None, partitions: [] }, joins: [] }], lateral_views: [], selection: None, group_by: Expressions([]), cluster_by: [], distribute_by: [], sort_by: [], having: None, named_window: [], qualify: None, window_before_qualify: false, value_table_mode: None, connect_by: None }), order_by: [], limit: None, limit_by: [], offset: None, fetch: None, locks: [], for_clause: None })"
+        "failure": "not supported: expression: Subquery(Query { with: None, body: Select(Select { distinct: None, top: None, projection: [UnnamedExpr(Function(Function { name: ObjectName([Ident { value: \"max\", quote_style: None }]), parameters: None, args: List(FunctionArgumentList { duplicate_treatment: None, args: [Unnamed(Expr(Identifier(Ident { value: \"val\", quote_style: None })))], clauses: [] }), filter: None, null_treatment: None, over: None, within_group: [] }))], into: None, from: [TableWithJoins { relation: Table { name: ObjectName([Ident { value: \"tbl\", quote_style: None }]), alias: None, args: None, with_hints: [], version: None, partitions: [] }, joins: [] }], lateral_views: [], selection: None, group_by: Expressions([]), cluster_by: [], distribute_by: [], sort_by: [], having: None, named_window: [], qualify: None, window_before_qualify: false, value_table_mode: None, connect_by: None }), order_by: [], limit: None, limit_by: [], offset: None, fetch: None, locks: [], for_clause: None })"
       }
     },
     {
@@ -168,7 +168,7 @@
     {
       "input": "-+~~a",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an expression:, found: ~~ at Line: 1, Column 3"
+        "failure": "invalid argument: sql parser error: Expected: an expression:, found: ~~ at Line: 1, Column: 3"
       }
     },
     {
@@ -1438,7 +1438,7 @@
     {
       "input": "a as (b, c)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an identifier after AS, found: ( at Line: 1, Column 6"
+        "failure": "invalid argument: sql parser error: Expected: an identifier after AS, found: ( at Line: 1, Column: 6"
       }
     },
     {
@@ -2146,7 +2146,7 @@
     {
       "input": "a() (b, c)",
       "output": {
-        "failure": "invalid argument: extra tokens after wildcard expression: ("
+        "failure": "not supported: function parameters"
       }
     },
     {
@@ -2338,7 +2338,7 @@
     {
       "input": "first(a ignore nulls)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: ignore at Line: 1, Column 9"
+        "failure": "invalid argument: sql parser error: Expected: ), found: ignore at Line: 1, Column: 9"
       }
     },
     {
@@ -2398,7 +2398,7 @@
     {
       "input": "foo(a x)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: x at Line: 1, Column 7"
+        "failure": "invalid argument: sql parser error: Expected: ), found: x at Line: 1, Column: 7"
       }
     },
     {
@@ -2537,7 +2537,7 @@
     {
       "input": "last(a ignore nulls)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: ignore at Line: 1, Column 8"
+        "failure": "invalid argument: sql parser error: Expected: ), found: ignore at Line: 1, Column: 8"
       }
     },
     {
@@ -2748,7 +2748,7 @@
     {
       "input": "~a",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an expression:, found: ~ at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an expression:, found: ~ at Line: 1, Column: 1"
       }
     }
   ]

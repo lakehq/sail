@@ -27,13 +27,13 @@
     {
       "input": "CREATE TABLE 1m.2g(a INT)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: 1m at Line: 1, Column 14"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: 1m at Line: 1, Column: 14"
       }
     },
     {
       "input": "CREATE TABLE 1m.2g(a INT) USING parquet",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: 1m at Line: 1, Column 14"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: 1m at Line: 1, Column: 14"
       }
     },
     {
@@ -57,13 +57,13 @@
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS otherFormat\nROW FORMAT DELIMITED\nFIELDS TERMINATED BY ','",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected fileformat, found: otherFormat at Line: 3, Column 11"
+        "failure": "invalid argument: sql parser error: Expected: fileformat, found: otherFormat at Line: 3, Column: 11"
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS otherFormat\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected fileformat, found: otherFormat at Line: 3, Column 11"
+        "failure": "invalid argument: sql parser error: Expected: fileformat, found: otherFormat at Line: 3, Column: 11"
       }
     },
     {
@@ -117,19 +117,19 @@
     {
       "input": "CREATE TABLE my_tab (id bigint, p1 string)\nSTORED BY 'handler'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected AS, found: BY at Line: 2, Column 8"
+        "failure": "invalid argument: sql parser error: Expected: AS, found: BY at Line: 2, Column: 8"
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p1, p2 string)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected a data type name, found: , at Line: 1, Column 62"
+        "failure": "invalid argument: sql parser error: Expected: a data type name, found: , at Line: 1, Column: 62"
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected a data type name, found: ( at Line: 1, Column 79"
+        "failure": "invalid argument: sql parser error: Expected: a data type name, found: ( at Line: 1, Column: 79"
       }
     },
     {
@@ -165,7 +165,7 @@
     {
       "input": "CREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS ()) USING PARQUET",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an expression:, found: ) at Line: 1, Column 55"
+        "failure": "invalid argument: sql parser error: Expected: an expression:, found: ) at Line: 1, Column: 55"
       }
     },
     {
@@ -177,7 +177,7 @@
     {
       "input": "CREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS a + 1) USING PARQUET",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ',' or ')' after column definition, found: a at Line: 1, Column 54"
+        "failure": "invalid argument: sql parser error: Expected: ',' or ')' after column definition, found: a at Line: 1, Column: 54"
       }
     },
     {
@@ -189,7 +189,7 @@
     {
       "input": "CREATE TABLE my_tab(a INT, b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\")",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected string, found: \"abc\" at Line: 1, Column 45"
+        "failure": "invalid argument: sql parser error: Expected: string, found: \"abc\" at Line: 1, Column: 45"
       }
     },
     {
@@ -237,7 +237,7 @@
     {
       "input": "CREATE TABLE my_tab(a INT, b STRING) PARTITIONED BY (b) PARTITIONED BY (b)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected a data type name, found: ) at Line: 1, Column 55"
+        "failure": "invalid argument: sql parser error: Expected: a data type name, found: ) at Line: 1, Column: 55"
       }
     },
     {
@@ -297,7 +297,7 @@
     {
       "input": "CREATE TABLE my_tab(a: INT COMMENT 'test', b: STRING) USING parquet",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected a data type name, found: : at Line: 1, Column 22"
+        "failure": "invalid argument: sql parser error: Expected: a data type name, found: : at Line: 1, Column: 22"
       }
     },
     {

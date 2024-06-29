@@ -3,67 +3,67 @@
     {
       "input": "SELECT * FROM t UNPIVOT (() FOR col in ((a, b), (c, d)))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: ( at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: ( at Line: 1, Column: 26"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in (()))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: ( at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: ( at Line: 1, Column: 26"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a A, b), (c, d)))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: ( at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: ( at Line: 1, Column: 26"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a AS A, b), (c, d)))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: ( at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: ( at Line: 1, Column: 26"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a, b) AS first, (c, d)))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: ( at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: ( at Line: 1, Column: 26"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a, b) first, (c, d)))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: ( at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: ( at Line: 1, Column: 26"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a, b), (c, d)))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: ( at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: ( at Line: 1, Column: 26"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ())",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: ( at Line: 1, Column 26"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: ( at Line: 1, Column: 26"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT (val FOR col in ())",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: ) at Line: 1, Column 42"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: ) at Line: 1, Column: 42"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT (val FOR col in (a A, b))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: A at Line: 1, Column 44"
+        "failure": "invalid argument: sql parser error: Expected: ), found: A at Line: 1, Column: 44"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT (val FOR col in (a AS A, b))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: AS at Line: 1, Column 44"
+        "failure": "invalid argument: sql parser error: Expected: ), found: AS at Line: 1, Column: 44"
       }
     },
     {
@@ -75,13 +75,13 @@
     {
       "input": "SELECT * FROM t UNPIVOT EXCLUDE NULLS (val FOR col in (a, b))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected (, found: EXCLUDE at Line: 1, Column 25"
+        "failure": "invalid argument: sql parser error: Expected: (, found: EXCLUDE at Line: 1, Column: 25"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT INCLUDE NULLS (val FOR col in (a, b))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected (, found: INCLUDE at Line: 1, Column 25"
+        "failure": "invalid argument: sql parser error: Expected: (, found: INCLUDE at Line: 1, Column: 25"
       }
     },
     {

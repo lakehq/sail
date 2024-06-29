@@ -3,7 +3,7 @@
     {
       "input": "SELECT a, b, count(distinct a, distinct b) as c FROM d GROUP BY a, b",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ), found: b at Line: 1, Column 41"
+        "failure": "invalid argument: sql parser error: Expected: ), found: b at Line: 1, Column: 41"
       }
     },
     {

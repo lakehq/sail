@@ -3,49 +3,49 @@
     {
       "input": "COMMENT ON DATABASE a.b.c IS 'NULL'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: COMMENT at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: COMMENT at Line: 1, Column: 1"
       }
     },
     {
       "input": "COMMENT ON DATABASE a.b.c IS NULL",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: COMMENT at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: COMMENT at Line: 1, Column: 1"
       }
     },
     {
       "input": "COMMENT ON NAMESPACE a.b.c IS ''",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: COMMENT at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: COMMENT at Line: 1, Column: 1"
       }
     },
     {
       "input": "COMMENT ON TABLE a.b.c IS 'xYz'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: COMMENT at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: COMMENT at Line: 1, Column: 1"
       }
     },
     {
       "input": "REFRESH FUNCTION a.b.c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: REFRESH at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: REFRESH at Line: 1, Column: 1"
       }
     },
     {
       "input": "REFRESH FUNCTION b.c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: REFRESH at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: REFRESH at Line: 1, Column: 1"
       }
     },
     {
       "input": "REFRESH FUNCTION c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: REFRESH at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: REFRESH at Line: 1, Column: 1"
       }
     },
     {
       "input": "REFRESH TABLE a.b.c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an SQL statement, found: REFRESH at Line: 1, Column 1"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: REFRESH at Line: 1, Column: 1"
       }
     },
     {

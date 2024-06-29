@@ -3,7 +3,7 @@
     {
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\"",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected string, found: \"abc\" at Line: 1, Column 48"
+        "failure": "invalid argument: sql parser error: Expected: string, found: \"abc\" at Line: 1, Column: 48"
       }
     },
     {
@@ -27,49 +27,49 @@
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" DEFAULT 'abc' FIRST NOT NULL",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected string, found: \"a\" at Line: 1, Column 48"
+        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 48"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" DEFAULT 'abc' NOT NULL FIRST",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected string, found: \"a\" at Line: 1, Column 48"
+        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 48"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" FIRST DEFAULT 'abc' NOT NULL",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected string, found: \"a\" at Line: 1, Column 48"
+        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 48"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" FIRST NOT NULL DEFAULT 'abc'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected string, found: \"a\" at Line: 1, Column 48"
+        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 48"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" NOT NULL DEFAULT 'abc' FIRST",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected string, found: \"a\" at Line: 1, Column 48"
+        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 48"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" NOT NULL FIRST DEFAULT 'abc'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected string, found: \"a\" at Line: 1, Column 48"
+        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 48"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING DEFAULT 'abc' COMMENT \"a\" FIRST NOT NULL",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected string, found: \"a\" at Line: 1, Column 62"
+        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 62"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING DEFAULT 'abc' COMMENT \"a\" NOT NULL FIRST",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected string, found: \"a\" at Line: 1, Column 62"
+        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 62"
       }
     },
     {
@@ -87,7 +87,7 @@
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING DEFAULT 'abc' NOT NULL COMMENT \"a\" FIRST",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected string, found: \"a\" at Line: 1, Column 71"
+        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 71"
       }
     },
     {
@@ -135,19 +135,19 @@
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING NOT NULL COMMENT \"a\" DEFAULT 'abc' FIRST",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected string, found: \"a\" at Line: 1, Column 57"
+        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 57"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING NOT NULL COMMENT \"a\" FIRST DEFAULT 'abc'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected string, found: \"a\" at Line: 1, Column 57"
+        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 57"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING NOT NULL DEFAULT 'abc' COMMENT \"a\" FIRST",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected string, found: \"a\" at Line: 1, Column 71"
+        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 71"
       }
     },
     {
@@ -177,31 +177,31 @@
     {
       "input": "ALTER TABLE t1 ALTER COLUMN a.b.c DROP DEFAULT",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column 30"
+        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 30"
       }
     },
     {
       "input": "ALTER TABLE t1 ALTER COLUMN a.b.c DROP DEFAULT SET DEFAULT 42",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column 30"
+        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 30"
       }
     },
     {
       "input": "ALTER TABLE t1 ALTER COLUMN a.b.c SET DEFAULT ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column 30"
+        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 30"
       }
     },
     {
       "input": "ALTER TABLE t1 ALTER COLUMN a.b.c SET DEFAULT ''",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column 30"
+        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 30"
       }
     },
     {
       "input": "ALTER TABLE t1 ALTER COLUMN a.b.c SET DEFAULT 42",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column 30"
+        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 30"
       }
     },
     {
@@ -237,25 +237,25 @@
     {
       "input": "ALTER TABLE table_name ADD COLUMN x.y.z int COMMENT 'doc'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected a data type name, found: . at Line: 1, Column 36"
+        "failure": "invalid argument: sql parser error: Expected: a data type name, found: . at Line: 1, Column: 36"
       }
     },
     {
       "input": "ALTER TABLE table_name ADD COLUMN x.y.z int COMMENT 'doc', a.b string FIRST",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected a data type name, found: . at Line: 1, Column 36"
+        "failure": "invalid argument: sql parser error: Expected: a data type name, found: . at Line: 1, Column: 36"
       }
     },
     {
       "input": "ALTER TABLE table_name ADD COLUMNS (x int COMMENT 'doc')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected a data type name, found: ( at Line: 1, Column 36"
+        "failure": "invalid argument: sql parser error: Expected: a data type name, found: ( at Line: 1, Column: 36"
       }
     },
     {
       "input": "ALTER TABLE table_name ADD COLUMNS (x int)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected a data type name, found: ( at Line: 1, Column 36"
+        "failure": "invalid argument: sql parser error: Expected: a data type name, found: ( at Line: 1, Column: 36"
       }
     },
     {
@@ -273,85 +273,85 @@
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c DROP NOT NULL",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column 38"
+        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c SET NOT NULL",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column 38"
+        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bad_type",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column 38"
+        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column 38"
+        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column 38"
+        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment' AFTER d",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column 38"
+        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT AFTER d",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column 38"
+        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
       }
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c COMMENT 'new comment'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: . at Line: 1, Column 39"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: . at Line: 1, Column: 39"
       }
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c FIRST",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: . at Line: 1, Column 39"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: . at Line: 1, Column: 39"
       }
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c TYPE bigint",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: . at Line: 1, Column 39"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: . at Line: 1, Column: 39"
       }
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c c INT",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: . at Line: 1, Column 39"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: . at Line: 1, Column: 39"
       }
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c c INT AFTER other_col",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: . at Line: 1, Column 39"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: . at Line: 1, Column: 39"
       }
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c c INT COMMENT 'new_comment'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: . at Line: 1, Column 39"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: . at Line: 1, Column: 39"
       }
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c new_name INT",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected identifier, found: . at Line: 1, Column 39"
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: . at Line: 1, Column: 39"
       }
     },
     {
@@ -363,7 +363,7 @@
     {
       "input": "ALTER TABLE table_name DROP COLUMN IF EXISTS x, y, a.b.c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: y at Line: 1, Column 49"
+        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: y at Line: 1, Column: 49"
       }
     },
     {
@@ -375,7 +375,7 @@
     {
       "input": "ALTER TABLE table_name DROP COLUMN x, y, a.b.c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: y at Line: 1, Column 39"
+        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: y at Line: 1, Column: 39"
       }
     },
     {
@@ -393,67 +393,67 @@
     {
       "input": "ALTER TABLE table_name PARTITION (a='1') CHANGE COLUMN a.b.c c INT",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected RENAME, found: CHANGE at Line: 1, Column 42"
+        "failure": "invalid argument: sql parser error: Expected: RENAME, found: CHANGE at Line: 1, Column: 42"
       }
     },
     {
       "input": "ALTER TABLE table_name PARTITION (a='1') REPLACE COLUMNS (x string)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected RENAME, found: REPLACE at Line: 1, Column 42"
+        "failure": "invalid argument: sql parser error: Expected: RENAME, found: REPLACE at Line: 1, Column: 42"
       }
     },
     {
       "input": "ALTER TABLE table_name RENAME COLUMN a.b.c TO d",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected TO, found: . at Line: 1, Column 39"
+        "failure": "invalid argument: sql parser error: Expected: TO, found: . at Line: 1, Column: 39"
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (a STRING COMMENT 'x' COMMENT 'y')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (a.b.c string)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (x string COMMENT 'x1')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (x string COMMENT 'x1', y int COMMENT 'y1')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (x string COMMENT 'x1', y int)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (x string FIRST)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (x string NOT NULL)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (x string)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
       }
     },
     {
@@ -465,13 +465,13 @@
     {
       "input": "ALTER TABLE table_name UNSET TBLPROPERTIES ('comment', 'test')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: UNSET at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: UNSET at Line: 1, Column: 24"
       }
     },
     {
       "input": "ALTER TABLE table_name UNSET TBLPROPERTIES IF EXISTS ('comment', 'test')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: UNSET at Line: 1, Column 24"
+        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: UNSET at Line: 1, Column: 24"
       }
     }
   ]
