@@ -85,8 +85,9 @@ pub enum PlanNode {
         is_global: bool,
     },
     Limit {
-        input: Box<Plan>,
+        skip: usize,
         limit: usize,
+        input: Box<Plan>,
     },
     Aggregate {
         input: Box<Plan>,
@@ -444,6 +445,16 @@ pub enum PlanNode {
         input: Box<Plan>,
         name: Identifier,
         columns: Vec<Identifier>,
+    },
+    Analyze {
+        verbose: bool,
+        input: Box<Plan>,
+    },
+    Explain {
+        // TODO: Support stringified_plans
+        verbose: bool,
+        input: Box<Plan>,
+        logical_optimization_succeeded: bool,
     },
 }
 

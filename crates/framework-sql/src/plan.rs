@@ -28,7 +28,36 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
         Statement::Insert(_) => Err(SqlError::todo("SQL insert")),
         Statement::Call(_) => Err(SqlError::todo("SQL call")),
         Statement::Copy { .. } => Err(SqlError::todo("SQL copy")),
-        Statement::Explain { .. } => Err(SqlError::todo("SQL explain")),
+        Statement::Explain {
+            describe_alias: _,
+            analyze,
+            verbose,
+            statement,
+            format,
+        } => {
+            if format.is_some() {
+                return Err(SqlError::unsupported("Statement::Explain: FORMAT clause"));
+            }
+            let plan = from_ast_statement(*statement)?;
+            if matches!(plan.node, spec::PlanNode::Explain { .. }) {
+                return Err(SqlError::unsupported(
+                    "Statement::Explain: Nested EXPLAINs not supported",
+                ));
+            }
+            let node = if analyze {
+                spec::PlanNode::Analyze {
+                    verbose,
+                    input: Box::new(plan),
+                }
+            } else {
+                spec::PlanNode::Explain {
+                    verbose,
+                    input: Box::new(plan),
+                    logical_optimization_succeeded: false,
+                }
+            };
+            Ok(spec::Plan::new(node))
+        }
         Statement::AlterTable { .. } => Err(SqlError::todo("SQL alter table")),
         Statement::AlterView { .. } => Err(SqlError::todo("SQL alter view")),
         Statement::Analyze { .. } => Err(SqlError::todo("SQL analyze")),
@@ -55,63 +84,65 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
         Statement::CreateFunction { .. } => Err(SqlError::todo("SQL create function")),
         Statement::CreateIndex { .. } => Err(SqlError::todo("SQL create index")),
         Statement::CreateSchema { .. } => Err(SqlError::todo("SQL create schema")),
-        Statement::CreateTable(create_table) => {
-            return Err(SqlError::todo("SQL create table"));
-
-            let ast::CreateTable {
-                or_replace,
-                temporary: _,
-                external: _,
-                global: _,
-                if_not_exists,
-                transient: _,
-                volatile: _,
-                name,
-                columns,
-                constraints,
-                hive_distribution: _,
-                hive_formats: _,
-                table_properties,
-                with_options,
-                file_format: _,
-                location: _,
-                query,
-                without_rowid: _,
-                like: _,
-                clone: _,
-                engine: _,
-                comment: _,
-                auto_increment_offset: _,
-                default_charset: _,
-                collation: _,
-                on_commit: _,
-                on_cluster: _,
-                primary_key: _,
-                order_by: _,
-                partition_by: _,
-                cluster_by: _,
-                options: _,
-                strict: _,
-                copy_grants: _,
-                enable_schema_evolution: _,
-                change_tracking: _,
-                data_retention_time_in_days: _,
-                max_data_extension_time_in_days: _,
-                default_ddl_collation: _,
-                with_aggregation_policy: _,
-                with_row_access_policy: _,
-                with_tags: _,
-            } = create_table;
-
-            if !table_properties.is_empty() {
-                return Err(SqlError::todo("Statement::CreateTable table_properties"));
-            }
-            if !with_options.is_empty() {
-                return Err(SqlError::todo("Statement::CreateTable with_options"));
-            }
-
-            Err(SqlError::todo("SQL create table"))
-
+        Statement::CreateTable(_create_table) => {
+            // let ast::CreateTable {
+            //     or_replace,
+            //     temporary: _,
+            //     external: _,
+            //     global: _,
+            //     if_not_exists,
+            //     transient: _,
+            //     volatile: _,
+            //     name,
+            //     columns,
+            //     constraints,
+            //     hive_distribution: _,
+            //     hive_formats: _,
+            //     table_properties,
+            //     with_options,
+            //     file_format: _,
+            //     location: _,
+            //     query,
+            //     without_rowid: _,
+            //     like: _,
+            //     clone: _,
+            //     engine: _,
+            //     comment: _,
+            //     auto_increment_offset: _,
+            //     default_charset: _,
+            //     collation: _,
+            //     on_commit: _,
+            //     on_cluster: _,
+            //     primary_key: _,
+            //     order_by: _,
+            //     partition_by: _,
+            //     cluster_by: _,
+            //     options: _,
+            //     strict: _,
+            //     copy_grants: _,
+            //     enable_schema_evolution: _,
+            //     change_tracking: _,
+            //     data_retention_time_in_days: _,
+            //     max_data_extension_time_in_days: _,
+            //     default_ddl_collation: _,
+            //     with_aggregation_policy: _,
+            //     with_row_access_policy: _,
+            //     with_tags: _,
+            // } = create_table;
+            //
+            // if !table_properties.is_empty() {
+            //     return Err(SqlError::todo(format!(
+            //         "Statement::CreateTable table_properties: {:?}",
+            //         table_properties
+            //     )));
+            // }
+            // if !with_options.is_empty() {
+            //     return Err(SqlError::todo(format!(
+            //         "Statement::CreateTable with_options: {:?}",
+            //         with_options
+            //     )));
+            // }
+            //
             // let node = spec::PlanNode::CreateTable {
             //     table: from_ast_object_name(name)?,
             //     path,
@@ -121,6 +152,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             //     options: Default::default(), // TODO: Support options
             // };
             // Ok(spec::Plan::new(node))
+            Err(SqlError::todo("SQL create table"))
         }
         Statement::CreateView { .. } => Err(SqlError::todo("SQL create view")),
         Statement::Delete(_) => Err(SqlError::todo("SQL delete")),
@@ -302,8 +334,9 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::Plan> {
         let limit = LiteralValue::<i128>::try_from(limit)?.0;
         let limit = usize::try_from(limit).map_err(|e| SqlError::invalid(e.to_string()))?;
         spec::Plan::new(spec::PlanNode::Limit {
-            input: Box::new(plan),
+            skip: 0,
             limit,
+            input: Box::new(plan),
         })
     } else {
         plan

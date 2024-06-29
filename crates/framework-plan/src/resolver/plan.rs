@@ -15,9 +15,11 @@ use datafusion::execution::context::DataFilePaths;
 use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
+use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
+    ToDFSchema,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::normalize_col;
@@ -331,10 +333,10 @@ impl PlanResolver<'_> {
                     }))
                 }
             }
-            PlanNode::Limit { input, limit } => {
+            PlanNode::Limit { skip, limit, input } => {
                 let input = self.resolve_plan(*input, state).await?;
                 Ok(LogicalPlan::Limit(plan::Limit {
-                    skip: 0,
+                    skip,
                     fetch: Some(limit),
                     input: Arc::new(input),
                 }))
@@ -1144,6 +1146,34 @@ impl PlanResolver<'_> {
                     Arc::new(input),
                     build_table_reference(spec::ObjectName::new_unqualified(name))?,
                 )?))
+            }
+            PlanNode::Analyze { verbose, input } => {
+                let input = Arc::new(self.resolve_plan(*input, state).await?);
+                let schema = LogicalPlan::explain_schema();
+                let schema = schema.to_dfschema_ref()?;
+                Ok(LogicalPlan::Analyze(plan::Analyze {
+                    verbose,
+                    input,
+                    schema,
+                }))
+            }
+            PlanNode::Explain {
+                verbose,
+                input,
+                logical_optimization_succeeded,
+            } => {
+                let input = self.resolve_plan(*input, state).await?;
+                let stringified_plans: Vec<StringifiedPlan> =
+                    vec![input.to_stringified(PlanType::InitialLogicalPlan)];
+                let schema = LogicalPlan::explain_schema();
+                let schema = schema.to_dfschema_ref()?;
+                Ok(LogicalPlan::Explain(plan::Explain {
+                    verbose,
+                    plan: Arc::new(input),
+                    stringified_plans,
+                    schema,
+                    logical_optimization_succeeded,
+                }))
             }
         }
     }

@@ -132,6 +132,8 @@
         "success": {
           "root": {
             "limit": {
+              "skip": 0,
+              "limit": 10,
               "input": {
                 "sort": {
                   "input": {
@@ -190,8 +192,7 @@
                 },
                 "planId": null,
                 "sourceInfo": null
-              },
-              "limit": 10
+              }
             },
             "planId": null,
             "sourceInfo": null

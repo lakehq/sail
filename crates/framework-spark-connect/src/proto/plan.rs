@@ -205,8 +205,9 @@ impl TryFrom<RelType> for spec::PlanNode {
                 let input = input.required("limit input")?;
                 let limit = usize::try_from(limit).required("limit value")?;
                 Ok(spec::PlanNode::Limit {
-                    input: Box::new((*input).try_into()?),
+                    skip: 0,
                     limit,
+                    input: Box::new((*input).try_into()?),
                 })
             }
             RelType::Aggregate(aggregate) => {
