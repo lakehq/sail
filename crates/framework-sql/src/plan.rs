@@ -1,5 +1,6 @@
 use framework_common::spec;
 use sqlparser::ast;
+use sqlparser::keywords::Keyword;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Token;
 
@@ -10,7 +11,32 @@ use crate::parser::{fail_on_extra_token, SparkDialect};
 
 pub fn parse_sql_statement(sql: &str) -> SqlResult<spec::Plan> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
-    let statement = parser.parse_statement()?;
+    let statement = match parser.peek_token().token {
+        Token::Word(w) => {
+            match w.keyword {
+                Keyword::EXPLAIN => {
+                    // TODO: parse all supported statements and Spark SQL specific EXPLAIN options:
+                    //  https://spark.apache.org/docs/latest/sql-ref-syntax-qry-explain.html
+                    parser.next_token(); // EXPLAIN
+                                         // TODO: Support CODEGEN and COST and actually use the parsed options
+                                         //  https://github.com/apache/spark/blob/master/sql/core/src/main/scala/org/apache/spark/sql/execution/SparkSqlParser.scala#L236
+                    let _ = parser.parse_one_of_keywords(&[Keyword::EXTENDED, Keyword::FORMATTED]);
+                    let analyze = parser.parse_keyword(Keyword::ANALYZE);
+                    let verbose = parser.parse_keyword(Keyword::VERBOSE);
+                    let statement = parser.parse_statement()?;
+                    ast::Statement::Explain {
+                        describe_alias: ast::DescribeAlias::Explain,
+                        analyze,
+                        verbose,
+                        statement: Box::new(statement),
+                        format: None,
+                    }
+                }
+                _ => parser.parse_statement()?,
+            }
+        }
+        _ => parser.parse_statement()?,
+    };
     loop {
         if !parser.consume_token(&Token::SemiColon) {
             break;
