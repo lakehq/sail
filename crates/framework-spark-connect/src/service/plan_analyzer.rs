@@ -48,9 +48,27 @@ pub(crate) async fn handle_analyze_schema(
 }
 
 pub(crate) async fn handle_analyze_explain(
-    _session: Arc<Session>,
-    _request: ExplainRequest,
+    session: Arc<Session>,
+    request: ExplainRequest,
 ) -> SparkResult<ExplainResponse> {
+    // https://github.com/apache/spark/blob/master/connector/connect/server/src/main/scala/org/apache/spark/sql/connect/service/SparkConnectAnalyzeHandler.scala#L74
+    println!("CHECK HERE handle_analyze_explain REQUEST: {:?}", request);
+    let ctx = session.context();
+    let sc::Plan { op_type: op } = request.plan.required("plan")?;
+    let relation = match op.required("plan op")? {
+        plan::OpType::Root(relation) => relation,
+        plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
+    };
+    println!("CHECK HERE handle_analyze_explain RELATION: {:?}", relation);
+    let _explain_mode = &request.explain_mode;
+    let resolver = PlanResolver::new(ctx, session.plan_config()?);
+    let plan = resolver
+        .resolve_plan(relation.try_into()?, &mut PlanResolverState::new())
+        .await?;
+    println!("CHECK HERE handle_analyze_explain plan: {:?}", plan);
+    // Ok(ExplainResponse {
+    //     explain_string: explain_string,
+    // })
     Err(SparkError::todo("handle analyze explain"))
 }
 
