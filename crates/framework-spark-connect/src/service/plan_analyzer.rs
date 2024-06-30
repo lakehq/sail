@@ -10,6 +10,7 @@ use crate::proto::data_type::parse_spark_data_type;
 use crate::schema::to_spark_schema;
 use crate::session::Session;
 use crate::spark::connect as sc;
+use crate::spark::connect::analyze_plan_request::explain::ExplainMode;
 use crate::spark::connect::analyze_plan_request::{
     DdlParse as DdlParseRequest, Explain as ExplainRequest,
     GetStorageLevel as GetStorageLevelRequest, InputFiles as InputFilesRequest,
@@ -53,27 +54,44 @@ pub(crate) async fn handle_analyze_explain(
     session: Arc<Session>,
     request: ExplainRequest,
 ) -> SparkResult<ExplainResponse> {
-    // https://github.com/apache/spark/blob/master/connector/connect/server/src/main/scala/org/apache/spark/sql/connect/service/SparkConnectAnalyzeHandler.scala#L74
     let ctx = session.context();
     let sc::Plan { op_type: op } = request.plan.required("plan")?;
     let relation = match op.required("plan op")? {
         plan::OpType::Root(relation) => relation,
         plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
     };
-    let _explain_mode = &request.explain_mode; // TODO: use explain mode
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
     let plan = resolver
         .resolve_plan(relation.try_into()?, &mut PlanResolverState::new())
         .await?;
+    let explain_mode: i32 = request.explain_mode;
+    let (verbose, analyze) = match ExplainMode::try_from(explain_mode) {
+        Ok(ExplainMode::Unspecified) | Ok(ExplainMode::Simple) => (false, false),
+        Ok(ExplainMode::Extended) => (true, false),
+        Ok(ExplainMode::Codegen) => (false, false),
+        Ok(ExplainMode::Cost) => (true, true),
+        Ok(ExplainMode::Formatted) => (false, false),
+        Err(_) => {
+            return Err(SparkError::invalid(format!(
+                "Invalid Explain Mode: {}",
+                &explain_mode
+            )))
+        }
+    };
     let df = DataFrame::new(ctx.state(), plan.clone())
-        .explain(true, false)?
+        .explain(verbose, analyze)?
         .collect()
         .await?;
     Ok(ExplainResponse {
-        // TODO: Format the explain output for what Spark expects:
-        //  https://spark.apache.org/docs/latest/sql-ref-syntax-qry-explain.html
         explain_string: pretty_format_batches(&df)?.to_string(),
     })
+    // TODO: Properly implement each explain mode:
+    //  1. Format the explain output the way Spark does
+    //  2. Implement each ExplainMode, Verbose/Analyze don't accurately reflect Spark's behavior.
+    //      Output for each pair of Verbose and Analyze should for `test_simple_explain_string`:
+    //          https://github.com/lakehq/framework/pull/72/files#r1660104742
+    //      Spark's documentation for each ExplainMode:
+    //          https://spark.apache.org/docs/latest/sql-ref-syntax-qry-explain.html
 }
 
 pub(crate) async fn handle_analyze_tree_string(
