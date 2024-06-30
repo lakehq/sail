@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::util::pretty::pretty_format_batches;
+use datafusion::dataframe::DataFrame;
 use framework_plan::resolver::{PlanResolver, PlanResolverState};
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
@@ -52,24 +54,26 @@ pub(crate) async fn handle_analyze_explain(
     request: ExplainRequest,
 ) -> SparkResult<ExplainResponse> {
     // https://github.com/apache/spark/blob/master/connector/connect/server/src/main/scala/org/apache/spark/sql/connect/service/SparkConnectAnalyzeHandler.scala#L74
-    println!("CHECK HERE handle_analyze_explain REQUEST: {:?}", request);
     let ctx = session.context();
     let sc::Plan { op_type: op } = request.plan.required("plan")?;
     let relation = match op.required("plan op")? {
         plan::OpType::Root(relation) => relation,
         plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
     };
-    println!("CHECK HERE handle_analyze_explain RELATION: {:?}", relation);
-    let _explain_mode = &request.explain_mode;
+    let _explain_mode = &request.explain_mode; // TODO: use explain mode
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
     let plan = resolver
         .resolve_plan(relation.try_into()?, &mut PlanResolverState::new())
         .await?;
-    println!("CHECK HERE handle_analyze_explain plan: {:?}", plan);
-    // Ok(ExplainResponse {
-    //     explain_string: explain_string,
-    // })
-    Err(SparkError::todo("handle analyze explain"))
+    let df = DataFrame::new(ctx.state(), plan.clone())
+        .explain(true, false)?
+        .collect()
+        .await?;
+    Ok(ExplainResponse {
+        // TODO: Format the explain output for what Spark expects:
+        //  https://spark.apache.org/docs/latest/sql-ref-syntax-qry-explain.html
+        explain_string: pretty_format_batches(&df)?.to_string(),
+    })
 }
 
 pub(crate) async fn handle_analyze_tree_string(
