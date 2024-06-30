@@ -17,7 +17,7 @@ pub fn parse_sql_statement(sql: &str) -> SqlResult<spec::Plan> {
                 Keyword::EXPLAIN => {
                     parser.next_token(); // consume EXPLAIN
 
-                    let mut analyze = parser.parse_keyword(Keyword::ANALYZE);
+                    let mut analyze = parser.parse_keyword(Keyword::ANALYZE); // Must be parsed first.
                     let mut verbose = false;
                     let mut _extended = false;
                     let mut _formatted = false;
