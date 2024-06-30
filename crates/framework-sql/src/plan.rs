@@ -15,14 +15,54 @@ pub fn parse_sql_statement(sql: &str) -> SqlResult<spec::Plan> {
         Token::Word(w) => {
             match w.keyword {
                 Keyword::EXPLAIN => {
-                    // TODO: parse all supported statements and Spark SQL specific EXPLAIN options:
-                    //  https://spark.apache.org/docs/latest/sql-ref-syntax-qry-explain.html
-                    parser.next_token(); // EXPLAIN
-                                         // TODO: Support CODEGEN and COST and actually use the parsed options
-                                         //  https://github.com/apache/spark/blob/master/sql/core/src/main/scala/org/apache/spark/sql/execution/SparkSqlParser.scala#L236
-                    let _ = parser.parse_one_of_keywords(&[Keyword::EXTENDED, Keyword::FORMATTED]);
-                    let analyze = parser.parse_keyword(Keyword::ANALYZE);
-                    let verbose = parser.parse_keyword(Keyword::VERBOSE);
+                    parser.next_token(); // consume EXPLAIN
+
+                    let mut analyze = parser.parse_keyword(Keyword::ANALYZE);
+                    let mut verbose = false;
+                    let mut _extended = false;
+                    let mut _formatted = false;
+                    let mut _codegen = false;
+                    let mut _cost = false;
+                    if let Token::Word(word) = parser.peek_token().token {
+                        match word.keyword {
+                            Keyword::VERBOSE => {
+                                verbose = true;
+                                parser.next_token(); // consume VERBOSE
+                            }
+                            Keyword::EXTENDED => {
+                                _extended = true;
+                                verbose = true; // Temp until we actually implement EXTENDED
+                                parser.next_token(); // consume EXTENDED
+                            }
+                            Keyword::FORMATTED => {
+                                _formatted = true;
+                                parser.next_token(); // consume FORMATTED
+                            }
+                            _ => {
+                                match word.value.to_uppercase().as_str() {
+                                    "CODEGEN" => {
+                                        _codegen = true;
+                                        parser.next_token(); // consume CODEGEN
+                                    }
+                                    "COST" => {
+                                        _cost = true;
+                                        verbose = true; // Temp until we actually implement COST
+                                        analyze = true; // Temp until we actually implement COST
+                                        parser.next_token(); // consume COST
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    // TODO: Properly implement each explain mode:
+                    //  1. Format the explain output the way Spark does
+                    //  2. Implement each ExplainMode, Verbose/Analyze don't accurately reflect Spark's behavior.
+                    //      Output for each pair of Verbose and Analyze should for `test_simple_explain_string`:
+                    //          https://github.com/lakehq/framework/pull/72/files#r1660104742
+                    //      Spark's documentation for each ExplainMode:
+                    //          https://spark.apache.org/docs/latest/sql-ref-syntax-qry-explain.html
+
                     let statement = parser.parse_statement()?;
                     ast::Statement::Explain {
                         describe_alias: ast::DescribeAlias::Explain,
