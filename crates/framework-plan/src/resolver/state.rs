@@ -19,6 +19,7 @@ impl FieldDescriptor {
 pub(super) struct PlanResolverState {
     next_id: usize,
     fields: HashMap<String, FieldDescriptor>,
+    tables: HashMap<i64, String>,
 }
 
 impl Default for PlanResolverState {
@@ -32,6 +33,7 @@ impl PlanResolverState {
         Self {
             next_id: 0,
             fields: HashMap::new(),
+            tables: HashMap::new(),
         }
     }
 
@@ -50,12 +52,26 @@ impl PlanResolverState {
         name
     }
 
+    pub fn register_anonymous_field(&mut self) -> String {
+        format!("#{}", self.next_id())
+    }
+
     pub fn register_schema(&mut self, schema: &SchemaRef) -> Vec<String> {
         schema
             .fields()
             .iter()
             .map(|field| self.register_field(FieldDescriptor::new(field.name())))
             .collect()
+    }
+
+    pub fn register_anonymous_table(&mut self) -> String {
+        format!("#{}", self.next_id())
+    }
+
+    pub fn register_table(&mut self, plan_id: i64) -> String {
+        let name = format!("#{}", self.next_id());
+        self.tables.insert(plan_id, name.clone());
+        name
     }
 
     pub fn field(&self, name: &str) -> Option<&FieldDescriptor> {
@@ -77,5 +93,9 @@ impl PlanResolverState {
             .iter()
             .map(|field| Ok(self.field_or_err(field.name())?.to_string()))
             .collect::<PlanResult<Vec<_>>>()
+    }
+
+    pub fn table(&self, plan_id: i64) -> Option<&str> {
+        self.tables.get(&plan_id).map(|s| s.as_str())
     }
 }

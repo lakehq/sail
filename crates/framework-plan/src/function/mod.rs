@@ -29,7 +29,3 @@ pub(crate) fn get_built_in_function(name: &str) -> PlanResult<Function> {
         .ok_or_else(|| PlanError::unsupported(format!("unknown function: {name}")))?
         .clone())
 }
-
-pub(crate) fn is_built_in_generator_function(name: &str) -> bool {
-    BUILT_IN_GENERATOR_FUNCTIONS.contains_key(name)
-}

@@ -15,6 +15,7 @@ use either::Either;
 use crate::extension::function::array::{ArrayEmptyToNull, ArrayItemWithPosition, MapToArray};
 use crate::extension::function::explode::{Explode, ExplodeKind};
 use crate::extension::function::multi_expr::MultiExpr;
+use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
 use crate::utils::ItemTaker;
 
@@ -35,13 +36,14 @@ impl ExplodeDataType {
     }
 }
 
-pub(crate) struct ExplodeRewriter {
+pub(crate) struct ExplodeRewriter<'s> {
     plan: LogicalPlan,
+    state: &'s mut PlanResolverState,
 }
 
-impl PlanRewriter for ExplodeRewriter {
-    fn new_from_plan(plan: LogicalPlan) -> Self {
-        Self { plan }
+impl<'s> PlanRewriter<'s> for ExplodeRewriter<'s> {
+    fn new_from_plan(plan: LogicalPlan, state: &'s mut PlanResolverState) -> Self {
+        Self { plan, state }
     }
 
     fn into_plan(self) -> LogicalPlan {
@@ -49,28 +51,7 @@ impl PlanRewriter for ExplodeRewriter {
     }
 }
 
-impl ExplodeRewriter {
-    fn get_named_output(out: Vec<Expr>, names: Option<&[String]>) -> Result<Vec<Expr>> {
-        if let Some(names) = names {
-            if names.len() != out.len() {
-                return plan_err!(
-                    "expected {} explode output names, found {}",
-                    out.len(),
-                    names.len()
-                );
-            }
-            Ok(out
-                .into_iter()
-                .zip(names.iter())
-                .map(|(e, n)| e.alias(n))
-                .collect::<Vec<Expr>>())
-        } else {
-            Ok(out)
-        }
-    }
-}
-
-impl TreeNodeRewriter for ExplodeRewriter {
+impl<'s> TreeNodeRewriter for ExplodeRewriter<'s> {
     type Node = Expr;
 
     fn f_up(&mut self, node: Expr) -> Result<Transformed<Expr>> {
@@ -109,32 +90,35 @@ impl TreeNodeRewriter for ExplodeRewriter {
             false => arg,
         };
 
-        // TODO: handle column name conflict
-        let name = format!("explode({})", arg.display_name()?);
-
+        let name = self.state.register_anonymous_field();
         let out = match (data_type, with_position) {
-            (ExplodeDataType::List, false) => vec![ident(&name)],
+            (ExplodeDataType::List, false) => vec![ident(&name).alias("col")],
             (ExplodeDataType::List, true) => {
-                vec![ident(&name).field("pos"), ident(&name).field("col")]
+                vec![
+                    ident(&name).field("pos").alias("pos"),
+                    ident(&name).field("col").alias("col"),
+                ]
             }
             (ExplodeDataType::Map, false) => {
-                vec![ident(&name).field("key"), ident(&name).field("value")]
+                vec![
+                    ident(&name).field("key").alias("key"),
+                    ident(&name).field("value").alias("value"),
+                ]
             }
             (ExplodeDataType::Map, true) => vec![
-                ident(&name).field("pos"),
-                ident(&name).field("col").field("key"),
-                ident(&name).field("col").field("value"),
+                ident(&name).field("pos").alias("pos"),
+                ident(&name).field("col").field("key").alias("key"),
+                ident(&name).field("col").field("value").alias("value"),
             ],
         };
-        let out = Self::get_named_output(out, explode.output_names())?;
 
         let mut projections = self
             .plan
             .schema()
             .columns()
-            .iter()
-            .map(|x| Expr::Column(x.clone()))
-            .collect::<Vec<Expr>>();
+            .into_iter()
+            .map(|x| Expr::Column(x))
+            .collect::<Vec<_>>();
         projections.push(arg.alias(&name));
 
         let plan = mem::replace(&mut self.plan, empty_logical_plan());
