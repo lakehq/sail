@@ -74,58 +74,11 @@ fn build_table_reference(name: spec::ObjectName) -> PlanResult<TableReference> {
     }
 }
 
-#[allow(dead_code)]
-pub(super) struct NamedField {
-    pub name: String,
-    pub metadata: HashMap<String, String>,
-}
-
-#[allow(dead_code)]
-impl NamedField {
-    pub fn new(name: String) -> Self {
-        Self {
-            name,
-            metadata: HashMap::new(),
-        }
-    }
-
-    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
-        self.metadata = metadata;
-        self
-    }
-}
-
-#[allow(dead_code)]
-pub(super) struct NamedPlan {
+pub struct NamedPlan {
     pub plan: LogicalPlan,
-    pub name: Option<String>,
     /// The user-facing fields for query plan,
     /// or `None` for a non-query plan (e.g. a DDL statement).
-    pub fields: Option<Vec<NamedField>>,
-}
-
-#[allow(dead_code)]
-impl NamedPlan {
-    pub fn new(plan: LogicalPlan, name: String) -> Self {
-        Self {
-            plan,
-            name: Some(name),
-            fields: None,
-        }
-    }
-
-    pub fn new_unnamed(plan: LogicalPlan) -> Self {
-        Self {
-            plan,
-            name: None,
-            fields: None,
-        }
-    }
-
-    pub fn with_fields(mut self, fields: Vec<NamedField>) -> Self {
-        self.fields = Some(fields);
-        self
-    }
+    pub fields: Option<Vec<String>>,
 }
 
 impl PlanResolver<'_> {
@@ -1242,18 +1195,15 @@ impl PlanResolver<'_> {
         Ok(plan)
     }
 
-    pub async fn resolve_external_plan(
-        &self,
-        plan: spec::Plan,
-    ) -> PlanResult<(LogicalPlan, Option<Vec<String>>)> {
+    pub async fn resolve_named_plan(&self, plan: spec::Plan) -> PlanResult<NamedPlan> {
         let mut state = PlanResolverState::new();
         let plan = self.resolve_plan(plan, &mut state).await?;
-        let names = if self.is_query_plan(&plan) {
+        let fields = if self.is_query_plan(&plan) {
             Some(state.get_field_names(plan.schema().inner())?)
         } else {
             None
         };
-        Ok((plan, names))
+        Ok(NamedPlan { plan, fields })
     }
 
     fn is_query_plan(&self, plan: &LogicalPlan) -> bool {

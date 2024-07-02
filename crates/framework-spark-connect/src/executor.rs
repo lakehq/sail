@@ -6,11 +6,11 @@ use std::sync::Arc;
 use arrow::ipc::writer::StreamWriter;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::SessionContext;
 use framework_common::utils::rename_physical_plan;
 use framework_plan::execute_logical_plan;
+use framework_plan::resolver::plan::NamedPlan;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -230,13 +230,13 @@ impl Drop for Executor {
 
 pub(crate) async fn execute_plan(
     ctx: &SessionContext,
-    plan: LogicalPlan,
-    names: Option<Vec<String>>,
+    plan: NamedPlan,
 ) -> SparkResult<SendableRecordBatchStream> {
+    let NamedPlan { plan, fields } = plan;
     let df = execute_logical_plan(ctx, plan).await?;
     let plan = df.create_physical_plan().await?;
-    let plan = if let Some(names) = names {
-        rename_physical_plan(plan, names.as_slice())?
+    let plan = if let Some(fields) = fields {
+        rename_physical_plan(plan, fields.as_slice())?
     } else {
         plan
     };
@@ -276,10 +276,10 @@ pub(crate) async fn execute_query(
             },
         )),
     };
-    let (plan, names) = PlanResolver::new(ctx, Arc::new(config))
-        .resolve_external_plan(relation.try_into()?)
+    let plan = PlanResolver::new(ctx, Arc::new(config))
+        .resolve_named_plan(relation.try_into()?)
         .await?;
-    let mut stream = execute_plan(ctx, plan, names).await?;
+    let mut stream = execute_plan(ctx, plan).await?;
     let mut output = vec![];
     while let Some(batch) = stream.next().await {
         let batch = batch?;

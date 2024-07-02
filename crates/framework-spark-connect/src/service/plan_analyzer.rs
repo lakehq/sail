@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use framework_common::utils::rename_schema;
+use framework_plan::resolver::plan::NamedPlan;
 use framework_plan::resolver::PlanResolver;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
@@ -38,9 +39,9 @@ pub(crate) async fn handle_analyze_schema(
         plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
     };
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
-    let (plan, names) = resolver.resolve_external_plan(relation.try_into()?).await?;
-    let schema = if let Some(names) = names {
-        rename_schema(plan.schema().inner(), names.as_slice())?
+    let NamedPlan { plan, fields } = resolver.resolve_named_plan(relation.try_into()?).await?;
+    let schema = if let Some(fields) = fields {
+        rename_schema(plan.schema().inner(), fields.as_slice())?
     } else {
         plan.schema().inner().clone()
     };
