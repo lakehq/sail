@@ -1291,7 +1291,6 @@ impl PlanResolver<'_> {
                 expr,
                 metadata,
             } = e;
-            // FIXME: name lookup is not correct
             match expr {
                 Expr::Wildcard { qualifier: None } => {
                     for e in expand_wildcard(schema, &input, None)? {
