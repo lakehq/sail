@@ -74,10 +74,16 @@ impl NamedExpr {
 
     pub fn into_alias_expr(self) -> PlanResult<expr::Expr> {
         match &self.expr {
+            // TODO: This seems hacky. Is there a better way to handle this?
+            // There is no need to add alias to an alias expression.
+            expr::Expr::Alias(_)
+            // We do not add alias for literal when it is used as function arguments,
+            // since some function (e.g. `struct()`) may need to determine struct field names
+            // for literals.
+            | expr::Expr::Literal(_)
             // We should not add alias to expressions that will be rewritten in logical plans.
             // Otherwise, some logical plan optimizers may not work correctly.
-            // TODO: This seems hacky. Is there a better way to handle this?
-            expr::Expr::Wildcard { .. }
+            | expr::Expr::Wildcard { .. }
             | expr::Expr::GroupingSet(_)
             | expr::Expr::Placeholder(_)
             | expr::Expr::Unnest(_) => return Ok(self.expr),
@@ -91,11 +97,7 @@ impl NamedExpr {
             .name
             .one()
             .map_err(|_| PlanError::invalid("named expression must have a single name"))?;
-        Ok(expr::Expr::Alias(expr::Alias {
-            expr: Box::new(self.expr),
-            relation,
-            name,
-        }))
+        Ok(self.expr.alias_qualified(relation, name))
     }
 }
 
@@ -332,7 +334,12 @@ impl PlanResolver<'_> {
                 metadata,
             } => {
                 let expr = self.resolve_expression(*expr, schema, state)?;
-                let name = name.into_iter().map(|x| x.into()).collect();
+                let name = name.into_iter().map(|x| x.into()).collect::<Vec<String>>();
+                let expr = if let [n] = name.as_slice() {
+                    expr.alias(n)
+                } else {
+                    expr
+                };
                 if let Some(metadata) = metadata {
                     Ok(NamedExpr::new(name, expr).with_metadata(metadata))
                 } else {
@@ -629,11 +636,7 @@ mod tests {
             })?,
             NamedExpr {
                 name: vec!["(NOT true)".to_string()],
-                expr: Expr::Not(Box::new(Expr::Alias(Alias {
-                    expr: Box::new(Expr::Literal(ScalarValue::Boolean(Some(true)))),
-                    name: "true".to_string(),
-                    relation: None,
-                }))),
+                expr: Expr::Not(Box::new(Expr::Literal(ScalarValue::Boolean(Some(true))))),
                 metadata: Default::default(),
             }
         );
@@ -668,18 +671,22 @@ mod tests {
             })?,
             NamedExpr {
                 name: vec!["c".to_string()],
-                expr: Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(Expr::Alias(Alias {
-                        expr: Box::new(Expr::Literal(ScalarValue::Int32(Some(1)))),
-                        name: "a".to_string(),
+                expr: Expr::Alias(Alias {
+                    expr: Box::new(Expr::Alias(Alias {
+                        expr: Box::new(Expr::BinaryExpr(BinaryExpr {
+                            left: Box::new(Expr::Alias(Alias {
+                                expr: Box::new(Expr::Literal(ScalarValue::Int32(Some(1)))),
+                                name: "a".to_string(),
+                                relation: None,
+                            })),
+                            op: Operator::Plus,
+                            right: Box::new(Expr::Literal(ScalarValue::Int32(Some(2)))),
+                        })),
                         relation: None,
+                        name: "b".to_string(),
                     })),
-                    op: Operator::Plus,
-                    right: Box::new(Expr::Alias(Alias {
-                        expr: Box::new(Expr::Literal(ScalarValue::Int32(Some(2)))),
-                        name: "2".to_string(),
-                        relation: None,
-                    })),
+                    relation: None,
+                    name: "c".to_string(),
                 }),
                 metadata: Default::default(),
             },

@@ -657,18 +657,38 @@ impl PlanResolver<'_> {
             } => {
                 let input = self.resolve_plan(*input, state).await?;
                 let schema = input.schema();
-                if !columns.is_empty() {
-                    return Err(PlanError::todo("drop column expressions"));
+                let mut excluded_names = vec![];
+                let mut excluded_fields = vec![];
+                for col in column_names {
+                    excluded_names.push(col.into());
                 }
-                let column_names: Vec<String> =
-                    column_names.into_iter().map(|x| x.into()).collect();
+                for col in columns {
+                    if let spec::Expr::UnresolvedAttribute { name, plan_id } = col {
+                        let name: Vec<String> = name.into();
+                        let name = name.one().map_err(|_| {
+                            PlanError::invalid("expecting a single column name to drop")
+                        })?;
+                        if let Some(plan_id) = plan_id {
+                            let field = state
+                                .get_resolved_field_name_in_plan(plan_id, &name)?
+                                .clone();
+                            excluded_fields.push(field)
+                        } else {
+                            excluded_names.push(name);
+                        }
+                    } else {
+                        return Err(PlanError::invalid("expecting column name to drop"));
+                    }
+                }
                 let expr: Vec<Expr> = schema
                     .columns()
                     .into_iter()
                     .filter(|column| {
-                        state
-                            .get_field_name(column.name())
-                            .is_ok_and(|x| !column_names.contains(x))
+                        let name = column.name().to_string();
+                        !excluded_fields.contains(&name)
+                            && state
+                                .get_field_name(&name)
+                                .is_ok_and(|x| !excluded_names.contains(x))
                     })
                     .map(Expr::Column)
                     .collect();

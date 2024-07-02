@@ -35,6 +35,9 @@ if __name__ == "__main__":
     print(spark.createDataFrame([1, 2, 3], schema="long").toPandas())
     print(spark.createDataFrame([(1, "a"), (2, "b")], schema="a integer, t string").toPandas())
 
+    df = spark.range(1).selectExpr("struct(id, 1, 2 AS foo, id) as struct")
+    print(df.schema.simpleString())
+
     df = spark.createDataFrame(
         [Row(a=1, b=Row(foo="hello")), Row(a=2, b=Row(foo="world"))],
         schema="a integer, b struct<foo: string>",
@@ -51,8 +54,6 @@ if __name__ == "__main__":
     print(df.orderBy(F.col("a").desc_nulls_first()).toPandas())
     print(df.withColumnsRenamed({"a": "c", "missing": "d"}).toPandas())
     print(df.toDF("c", "d").toPandas())
-    print(spark.sql("SELECT 1 AS text WHERE $1 > 'a'", ["b"]).toPandas())
-    print(spark.sql("SELECT 1 AS text WHERE $foo > 'a'", {"foo": "b"}).toPandas())
     print(spark.sql("SELECT 1").alias("a").select("a.*").toPandas())
     print(spark.sql("SELECT 1").alias("a").selectExpr("a.*").toPandas())
     df.createOrReplaceTempView("df")
@@ -92,6 +93,8 @@ if __name__ == "__main__":
     print(df.select(add(F.col("a"), F.col("a"))).toPandas())
 
     # FIXME: not working
+    # print(spark.sql("SELECT 1 AS text WHERE $1 > 'a'", ["b"]).toPandas())
+    # print(spark.sql("SELECT 1 AS text WHERE $foo > 'a'", {"foo": "b"}).toPandas())
     # print(df.selectExpr("b.foo").toPandas())
     # print(df.selectExpr("b.*").toPandas())
     # spark.readStream.format("rate").load().writeStream.format("console").start()
