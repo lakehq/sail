@@ -117,7 +117,7 @@ impl<'s> TreeNodeRewriter for ExplodeRewriter<'s> {
             .schema()
             .columns()
             .into_iter()
-            .map(|x| Expr::Column(x))
+            .map(Expr::Column)
             .collect::<Vec<_>>();
         projections.push(arg.alias(&name));
 

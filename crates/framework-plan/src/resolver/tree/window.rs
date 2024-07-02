@@ -11,6 +11,7 @@ use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
 
 pub(crate) struct WindowRewriter<'s> {
     plan: LogicalPlan,
+    #[allow(dead_code)]
     state: &'s mut PlanResolverState,
 }
 

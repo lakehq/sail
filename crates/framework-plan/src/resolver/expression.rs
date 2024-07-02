@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::FieldRef;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DFSchema, Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
-use datafusion_common::{plan_datafusion_err, plan_err, Column, DataFusionError, TableReference};
+use datafusion_common::{plan_datafusion_err, plan_err, Column, DataFusionError};
 use datafusion_expr::{expr, window_frame, ExprSchemable, ScalarUDF};
 use framework_common::spec;
 use framework_python::cereal::partial_pyspark_udf::{
@@ -53,12 +52,15 @@ impl NamedExpr {
         }
     }
 
-    pub fn try_from_column_expr(expr: expr::Expr) -> PlanResult<Self> {
+    pub fn try_from_column_expr(
+        expr: expr::Expr,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Self> {
         match expr {
-            expr::Expr::Column(column) => Ok(Self::new(
-                vec![column.name.clone()],
-                expr::Expr::Column(column),
-            )),
+            expr::Expr::Column(column) => {
+                let name = state.get_field_name(column.name())?;
+                Ok(Self::new(vec![name.clone()], expr::Expr::Column(column)))
+            }
             _ => Err(PlanError::invalid(
                 "column expected to create named expression",
             )),
@@ -71,6 +73,16 @@ impl NamedExpr {
     }
 
     pub fn into_alias_expr(self) -> PlanResult<expr::Expr> {
+        match &self.expr {
+            // We should not add alias to expressions that will be rewritten in logical plans.
+            // Otherwise, some logical plan optimizers may not work correctly.
+            // TODO: This seems hacky. Is there a better way to handle this?
+            expr::Expr::Wildcard { .. }
+            | expr::Expr::GroupingSet(_)
+            | expr::Expr::Placeholder(_)
+            | expr::Expr::Unnest(_) => return Ok(self.expr),
+            _ => (),
+        };
         let relation = match &self.expr {
             expr::Expr::Column(Column { relation, .. }) => relation.clone(),
             _ => None,
@@ -220,7 +232,7 @@ impl PlanResolver<'_> {
                 is_user_defined_function: _, // FIXME: is_user_defined_function is always false.
             } => {
                 let (argument_names, arguments) =
-                    self.resolve_expressions_and_names(arguments, schema, state)?;
+                    self.resolve_alias_expressions_and_names(arguments, schema, state)?;
                 let input_types: Vec<DataType> = arguments
                     .iter()
                     .map(|arg| arg.get_type(schema))
@@ -312,7 +324,7 @@ impl PlanResolver<'_> {
                 } else {
                     expr::Expr::Wildcard { qualifier: None }
                 };
-                Ok(NamedExpr::new(vec![], expr))
+                Ok(NamedExpr::new(vec!["*".to_string()], expr))
             }
             Expr::Alias {
                 expr,
@@ -363,7 +375,7 @@ impl PlanResolver<'_> {
                             return Err(PlanError::unsupported("distinct window function"));
                         }
                         let (argument_names, arguments) =
-                            self.resolve_expressions_and_names(arguments, schema, state)?;
+                            self.resolve_alias_expressions_and_names(arguments, schema, state)?;
                         (function_name, argument_names, arguments)
                     }
                     Expr::CommonInlineUserDefinedFunction(_) => {
@@ -433,7 +445,7 @@ impl PlanResolver<'_> {
 
                 let function_name: &str = function_name.as_str();
                 let (argument_names, arguments) =
-                    self.resolve_expressions_and_names(arguments, schema, state)?;
+                    self.resolve_alias_expressions_and_names(arguments, schema, state)?;
                 let input_types: Vec<DataType> = arguments
                     .iter()
                     .map(|arg| arg.get_type(schema))
@@ -525,7 +537,7 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<_>>>()
     }
 
-    pub(super) fn resolve_expressions_and_names(
+    pub(super) fn resolve_alias_expressions_and_names(
         &self,
         expressions: Vec<spec::Expr>,
         schema: &DFSchema,
@@ -534,9 +546,10 @@ impl PlanResolver<'_> {
         Ok(expressions
             .into_iter()
             .map(|x| {
-                let NamedExpr { expr, name, .. } =
-                    self.resolve_named_expression(x, schema, state)?;
-                Ok((name.one()?, expr))
+                let expr = self.resolve_named_expression(x, schema, state)?;
+                let name = expr.name.clone().one()?;
+                let expr = expr.into_alias_expr()?;
+                Ok((name, expr))
             })
             .collect::<PlanResult<Vec<(String, expr::Expr)>>>()?
             .into_iter()
@@ -550,30 +563,24 @@ impl PlanResolver<'_> {
         schema: &DFSchema,
         state: &mut PlanResolverState,
     ) -> PlanResult<expr::Expr> {
-        let relation = if let Some(plan_id) = plan_id {
-            let table = Arc::from(state.table(plan_id).ok_or_else(|| {
-                plan_datafusion_err!("cannot resolve table reference for plan ID: {:?}", plan_id)
-            })?);
-            Some(TableReference::Bare { table })
-        } else {
-            None
-        };
         // TODO: handle qualifier and nested fields
-        let column = schema
-            .iter()
-            .filter_map(|(qualifier, field)| {
-                self.find_attribute(&name, &relation, qualifier, field, state)
-            })
-            .collect::<Vec<_>>();
-        let column = if column.is_empty() {
+        let first = name
+            .first()
+            .ok_or_else(|| plan_datafusion_err!("empty attribute: {:?}", name))?;
+        let column = if let Some(plan_id) = plan_id {
+            let field = state.get_resolved_field_name_in_plan(plan_id, first)?;
+            schema.columns_with_unqualified_name(field)
+        } else {
             schema
                 .iter()
                 .filter_map(|(qualifier, field)| {
-                    self.find_unqualified_attribute(&name, qualifier, field, state)
+                    if state.get_field_name(field.name()).is_ok_and(|f| f == first) {
+                        Some(Column::new(qualifier.cloned(), field.name()))
+                    } else {
+                        None
+                    }
                 })
                 .collect::<Vec<_>>()
-        } else {
-            column
         };
         if column.len() > 1 {
             return plan_err!("ambiguous attribute: {:?}", name)?;
@@ -583,38 +590,6 @@ impl PlanResolver<'_> {
             .map_err(|_| plan_datafusion_err!("cannot resolve attribute: {:?}", name))?;
         Ok(expr::Expr::Column(column))
     }
-
-    fn find_attribute(
-        &self,
-        name: &[String],
-        relation: &Option<TableReference>,
-        qualifier: Option<&TableReference>,
-        field: &FieldRef,
-        state: &PlanResolverState,
-    ) -> Option<Column> {
-        if relation.is_some() && relation.as_ref() != qualifier {
-            None
-        } else {
-            self.find_unqualified_attribute(name, qualifier, field, state)
-        }
-    }
-
-    fn find_unqualified_attribute(
-        &self,
-        name: &[String],
-        qualifier: Option<&TableReference>,
-        field: &FieldRef,
-        state: &PlanResolverState,
-    ) -> Option<Column> {
-        if state
-            .field(field.name())
-            .is_some_and(|f| Some(&f.name) == name.last())
-        {
-            Some(Column::new(qualifier.cloned(), field.name()))
-        } else {
-            None
-        }
-    }
 }
 
 #[cfg(test)]
@@ -623,7 +598,7 @@ mod tests {
 
     use datafusion::prelude::SessionContext;
     use datafusion_common::{DFSchema, ScalarValue};
-    use datafusion_expr::expr::Expr;
+    use datafusion_expr::expr::{Alias, Expr};
     use datafusion_expr::{BinaryExpr, Operator};
     use framework_common::spec;
 
@@ -654,7 +629,11 @@ mod tests {
             })?,
             NamedExpr {
                 name: vec!["(NOT true)".to_string()],
-                expr: Expr::Not(Box::new(Expr::Literal(ScalarValue::Boolean(Some(true))),)),
+                expr: Expr::Not(Box::new(Expr::Alias(Alias {
+                    expr: Box::new(Expr::Literal(ScalarValue::Boolean(Some(true)))),
+                    name: "true".to_string(),
+                    relation: None,
+                }))),
                 metadata: Default::default(),
             }
         );
@@ -690,9 +669,17 @@ mod tests {
             NamedExpr {
                 name: vec!["c".to_string()],
                 expr: Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(Expr::Literal(ScalarValue::Int32(Some(1)))),
+                    left: Box::new(Expr::Alias(Alias {
+                        expr: Box::new(Expr::Literal(ScalarValue::Int32(Some(1)))),
+                        name: "a".to_string(),
+                        relation: None,
+                    })),
                     op: Operator::Plus,
-                    right: Box::new(Expr::Literal(ScalarValue::Int32(Some(2)))),
+                    right: Box::new(Expr::Alias(Alias {
+                        expr: Box::new(Expr::Literal(ScalarValue::Int32(Some(2)))),
+                        name: "2".to_string(),
+                        relation: None,
+                    })),
                 }),
                 metadata: Default::default(),
             },

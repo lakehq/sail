@@ -34,7 +34,7 @@ use crate::extension::logical::{
 };
 use crate::extension::source::rename::RenameTableProvider;
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::state::{FieldDescriptor, PlanResolverState};
+use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::tree::PlanRewriter;
@@ -74,11 +74,13 @@ fn build_table_reference(name: spec::ObjectName) -> PlanResult<TableReference> {
     }
 }
 
+#[allow(dead_code)]
 pub(super) struct NamedField {
     pub name: String,
     pub metadata: HashMap<String, String>,
 }
 
+#[allow(dead_code)]
 impl NamedField {
     pub fn new(name: String) -> Self {
         Self {
@@ -93,6 +95,7 @@ impl NamedField {
     }
 }
 
+#[allow(dead_code)]
 pub(super) struct NamedPlan {
     pub plan: LogicalPlan,
     pub name: Option<String>,
@@ -101,6 +104,7 @@ pub(super) struct NamedPlan {
     pub fields: Option<Vec<NamedField>>,
 }
 
+#[allow(dead_code)]
 impl NamedPlan {
     pub fn new(plan: LogicalPlan, name: String) -> Self {
         Self {
@@ -152,7 +156,7 @@ impl PlanResolver<'_> {
                         let table_reference = build_table_reference(identifier)?;
                         let df: DataFrame = self.ctx.table(table_reference).await?;
                         let plan = df.into_optimized_plan()?;
-                        let names = state.register_schema(plan.schema().inner());
+                        let names = state.register_fields(plan.schema().inner());
                         rename_logical_plan(plan, &names)?
                     }
                     ReadType::Udtf {
@@ -168,10 +172,10 @@ impl PlanResolver<'_> {
                         let function_name = function_name.table();
                         let schema = DFSchema::empty();
                         let (_, arguments) =
-                            self.resolve_expressions_and_names(arguments, &schema, state)?;
+                            self.resolve_alias_expressions_and_names(arguments, &schema, state)?;
                         let table_function = self.ctx.table_function(function_name)?;
                         let table_provider = table_function.create_table_provider(&arguments)?;
-                        let names = state.register_schema(&table_provider.schema());
+                        let names = state.register_fields(&table_provider.schema());
                         let table_provider = RenameTableProvider::try_new(table_provider, names)?;
                         LogicalPlan::TableScan(plan::TableScan::try_new(
                             function_name,
@@ -211,7 +215,7 @@ impl PlanResolver<'_> {
                             .with_listing_options(options)
                             .with_schema(schema);
                         let provider = Arc::new(ListingTable::try_new(config)?);
-                        let names = state.register_schema(&provider.schema());
+                        let names = state.register_fields(&provider.schema());
                         let provider = RenameTableProvider::try_new(provider, names)?;
                         LogicalPlan::TableScan(plan::TableScan::try_new(
                             UNNAMED_TABLE,
@@ -234,7 +238,7 @@ impl PlanResolver<'_> {
                 };
                 let schema = input.schema();
                 let expr = self.resolve_named_expressions(expressions, schema, state)?;
-                let (input, expr) = self.rewrite_wildcard(input, expr)?;
+                let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
                 let (input, expr) =
                     self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
                 let (input, expr) =
@@ -465,7 +469,7 @@ impl PlanResolver<'_> {
                 } else {
                     return Err(PlanError::invalid("missing schema for local relation"));
                 };
-                let names = state.register_schema(&schema);
+                let names = state.register_fields(&schema);
                 let provider = RenameTableProvider::try_new(
                     Arc::new(MemTable::try_new(schema, vec![batches])?),
                     names,
@@ -508,16 +512,13 @@ impl PlanResolver<'_> {
                         .into_iter()
                         .filter(|column| {
                             state
-                                .field(column.name())
-                                .is_some_and(|x| column_names.contains(&x.name))
+                                .get_field_name(column.name())
+                                .is_ok_and(|x| column_names.contains(x))
                         })
-                        .map(|column| Expr::Column(column))
+                        .map(Expr::Column)
                         .collect();
-                    let select_expr: Vec<Expr> = schema
-                        .columns()
-                        .into_iter()
-                        .map(|column| Expr::Column(column))
-                        .collect();
+                    let select_expr: Vec<Expr> =
+                        schema.columns().into_iter().map(Expr::Column).collect();
                     LogicalPlan::Distinct(plan::Distinct::On(plan::DistinctOn::try_new(
                         on_expr,
                         select_expr,
@@ -547,10 +548,15 @@ impl PlanResolver<'_> {
                         num_partitions
                     )));
                 }
-                let descriptor = FieldDescriptor::new("id");
-                let name = state.register_field(descriptor);
+                let resolved = state.register_field("id");
                 LogicalPlan::Extension(Extension {
-                    node: Arc::new(RangeNode::try_new(name, start, end, step, num_partitions)?),
+                    node: Arc::new(RangeNode::try_new(
+                        resolved,
+                        start,
+                        end,
+                        step,
+                        num_partitions,
+                    )?),
                 })
             }
             PlanNode::SubqueryAlias {
@@ -609,7 +615,7 @@ impl PlanResolver<'_> {
                     .columns()
                     .into_iter()
                     .map(|column| {
-                        let name = state.field_or_err(column.name())?;
+                        let name = state.get_field_name(column.name())?;
                         match rename_columns_map.get(name) {
                             Some(n) => Ok(NamedExpr::new(vec![n.clone()], Expr::Column(column))),
                             None => {
@@ -632,10 +638,9 @@ impl PlanResolver<'_> {
                     true => ShowStringStyle::Vertical,
                     false => ShowStringStyle::Default,
                 };
-                let descriptor = FieldDescriptor::new("show_string");
-                let name = state.register_field(descriptor);
-                let format = ShowStringFormat::new(name, style, truncate);
-                let names = state.schema_field_names(input.schema().inner())?;
+                let format =
+                    ShowStringFormat::new(state.register_field("show_string"), style, truncate);
+                let names = state.get_field_names(input.schema().inner())?;
                 LogicalPlan::Extension(Extension {
                     node: Arc::new(ShowStringNode::try_new(
                         Arc::new(input),
@@ -662,10 +667,10 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .filter(|column| {
                         state
-                            .field(column.name())
-                            .is_some_and(|x| !column_names.contains(&x.name))
+                            .get_field_name(column.name())
+                            .is_ok_and(|x| !column_names.contains(x))
                     })
-                    .map(|column| Expr::Column(column))
+                    .map(Expr::Column)
                     .collect();
                 LogicalPlan::Projection(plan::Projection::try_new(expr, Arc::new(input))?)
             }
@@ -704,7 +709,7 @@ impl PlanResolver<'_> {
                     .columns()
                     .into_iter()
                     .map(|column| {
-                        let name = state.field_or_err(column.name())?;
+                        let name = state.get_field_name(column.name())?;
                         match aliases.get_mut(name) {
                             Some((e, exists)) => {
                                 *exists = true;
@@ -780,10 +785,12 @@ impl PlanResolver<'_> {
                 truncate,
             } => {
                 let input = self.resolve_plan(*input, state).await?;
-                let descriptor = FieldDescriptor::new("html_string");
-                let name = state.register_field(descriptor);
-                let format = ShowStringFormat::new(name, ShowStringStyle::Html, truncate);
-                let names = state.schema_field_names(input.schema().inner())?;
+                let format = ShowStringFormat::new(
+                    state.register_field("html_string"),
+                    ShowStringStyle::Html,
+                    truncate,
+                );
+                let names = state.get_field_names(input.schema().inner())?;
                 LogicalPlan::Extension(Extension {
                     node: Arc::new(ShowStringNode::try_new(
                         Arc::new(input),
@@ -846,7 +853,7 @@ impl PlanResolver<'_> {
                 let table_function =
                     TableFunction::new(function_name.clone(), Arc::new(python_udtf));
                 let table_provider = table_function.create_table_provider(&arguments)?;
-                let names = state.register_schema(&table_provider.schema());
+                let names = state.register_fields(&table_provider.schema());
                 let table_provider = RenameTableProvider::try_new(table_provider, names)?;
                 LogicalPlan::TableScan(plan::TableScan::try_new(
                     function_name,
@@ -1195,9 +1202,7 @@ impl PlanResolver<'_> {
                         .into_iter()
                         .zip(columns.into_iter())
                         .map(|(col, name)| {
-                            let descriptor = FieldDescriptor::new(name);
-                            let name = state.register_field(descriptor);
-                            Expr::Column(col.clone()).alias(name)
+                            Expr::Column(col.clone()).alias(state.register_field(name))
                         })
                         .collect();
                     LogicalPlan::Projection(plan::Projection::try_new(expr, Arc::new(input))?)
@@ -1210,11 +1215,9 @@ impl PlanResolver<'_> {
                 )?)
             }
         };
-        let plan = if self.is_query_plan(&plan) {
+        if self.is_query_plan(&plan) {
             self.verify_query_plan(&plan, state)?;
-            self.rewrite_schema_with_plan_id(plan, plan_id, state)?
-        } else {
-            plan
+            self.register_schema_with_plan_id(&plan, plan_id, state)?;
         };
         Ok(plan)
     }
@@ -1226,7 +1229,7 @@ impl PlanResolver<'_> {
         let mut state = PlanResolverState::new();
         let plan = self.resolve_plan(plan, &mut state).await?;
         let names = if self.is_query_plan(&plan) {
-            Some(state.schema_field_names(plan.schema().inner())?)
+            Some(state.get_field_names(plan.schema().inner())?)
         } else {
             None
         };
@@ -1271,7 +1274,7 @@ impl PlanResolver<'_> {
             .fields()
             .iter()
             .filter_map(|f| {
-                if state.field(f.name()).is_some() {
+                if state.get_field_name(f.name()).is_ok() {
                     None
                 } else {
                     Some(f.name().to_string())
@@ -1288,51 +1291,27 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn rewrite_schema_with_plan_id(
+    fn register_schema_with_plan_id(
         &self,
-        plan: LogicalPlan,
+        plan: &LogicalPlan,
         plan_id: Option<i64>,
         state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        let table = if let Some(plan_id) = plan_id {
-            state.register_table(plan_id)
-        } else {
-            state.register_anonymous_table()
-        };
-        let table = TableReference::Bare {
-            table: Arc::from(table),
-        };
-        if plan
-            .schema()
-            .iter()
-            .any(|(qualifier, _)| qualifier.is_none())
-        {
-            let expr = plan
-                .schema()
-                .columns()
-                .into_iter()
-                .map(|column| {
-                    if column.relation.is_some() {
-                        Expr::Column(column)
-                    } else {
-                        let name = column.name.clone();
-                        Expr::Column(column).alias_qualified(Some(table.clone()), name)
-                    }
-                })
-                .collect();
-            Ok(LogicalPlan::Projection(plan::Projection::try_new(
-                expr,
-                Arc::new(plan),
-            )?))
-        } else {
-            Ok(plan)
+    ) -> PlanResult<()> {
+        if let Some(plan_id) = plan_id {
+            for field in plan.schema().fields() {
+                let resolved = field.name().clone();
+                let name = state.get_field_name(&resolved)?.clone();
+                state.register_attribute(plan_id, name, resolved);
+            }
         }
+        Ok(())
     }
 
     fn rewrite_wildcard(
         &self,
         input: LogicalPlan,
         expr: Vec<NamedExpr>,
+        state: &mut PlanResolverState,
     ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)> {
         let schema = input.schema();
         let mut projected = vec![];
@@ -1342,17 +1321,18 @@ impl PlanResolver<'_> {
                 expr,
                 metadata,
             } = e;
+            // FIXME: name lookup is not correct
             match expr {
                 Expr::Wildcard { qualifier: None } => {
                     for e in expand_wildcard(schema, &input, None)? {
-                        projected.push(NamedExpr::try_from_column_expr(e)?)
+                        projected.push(NamedExpr::try_from_column_expr(e, state)?)
                     }
                 }
                 Expr::Wildcard {
                     qualifier: Some(qualifier),
                 } => {
                     for e in expand_qualified_wildcard(&qualifier, schema, None)? {
-                        projected.push(NamedExpr::try_from_column_expr(e)?)
+                        projected.push(NamedExpr::try_from_column_expr(e, state)?)
                     }
                 }
                 _ => projected.push(NamedExpr {
@@ -1449,19 +1429,15 @@ impl PlanResolver<'_> {
                 let name = name
                     .one()
                     .map_err(|_| PlanError::invalid("one name expected for expression"))?;
-                match &expr {
-                    Expr::Column(Column {
-                        name: column_name, ..
-                    }) => {
-                        if state.field(column_name).map(|x| &x.name) == Some(&name) {
-                            return Ok(expr);
-                        }
+                if let Expr::Column(Column {
+                    name: column_name, ..
+                }) = &expr
+                {
+                    if state.get_field_name(column_name).ok() == Some(&name) {
+                        return Ok(expr);
                     }
-                    _ => {}
                 }
-                let descriptor = FieldDescriptor::new(name);
-                let name = state.register_field(descriptor);
-                Ok(expr.alias(name))
+                Ok(expr.alias(state.register_field(name)))
             })
             .collect()
     }
