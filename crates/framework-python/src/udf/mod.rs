@@ -39,6 +39,14 @@ impl PythonFunctionType {
     }
 }
 
+/// Generates a unique function name with the memory address of the Python function.
+/// Without this, lambda functions with the name `<lambda>` will be treated as the same function
+/// by logical plan optimization rules (e.g. common sub-expression elimination), resulting in
+/// incorrect logical plans.
+pub fn get_udf_name(function_name: &str, function: &PyObject) -> String {
+    format!("{}@0x{:x}", function_name, function.as_ptr() as usize)
+}
+
 pub fn get_python_builtins(py: Python) -> Result<Bound<PyModule>> {
     let builtins: Bound<PyModule> = PyModule::import_bound(py, pyo3::intern!(py, "builtins"))
         .map_err(|err| DataFusionError::External(err.into()))?;

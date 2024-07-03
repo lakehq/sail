@@ -13,7 +13,8 @@ use crate::cereal::partial_pyspark_udf::PartialPySparkUDF;
 use crate::cereal::{is_pyspark_arrow_udf, is_pyspark_pandas_udf, PY_SPARK_SQL_BATCHED_UDF};
 use crate::udf::{
     build_pyarrow_array_kwargs, get_pyarrow_array_function, get_pyarrow_output_data_type,
-    get_python_builtins_list_function, get_python_builtins_str_function, PythonFunctionType,
+    get_python_builtins_list_function, get_python_builtins_str_function, get_udf_name,
+    PythonFunctionType,
 };
 
 #[derive(Debug, Clone)]
@@ -35,6 +36,7 @@ impl PySparkUDF {
         python_function: PartialPySparkUDF,
         output_type: DataType,
     ) -> Self {
+        let function_name = get_udf_name(&function_name, &python_function.0);
         Self {
             signature: Signature::exact(
                 input_types,

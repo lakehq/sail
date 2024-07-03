@@ -3,6 +3,8 @@ use std::sync::Arc;
 use datafusion_common::DFSchema;
 use datafusion_expr::{EmptyRelation, LogicalPlan};
 
+use crate::resolver::state::PlanResolverState;
+
 pub(crate) mod explode;
 pub(crate) mod window;
 
@@ -13,7 +15,7 @@ fn empty_logical_plan() -> LogicalPlan {
     })
 }
 
-pub(crate) trait PlanRewriter {
-    fn new_from_plan(plan: LogicalPlan) -> Self;
+pub(crate) trait PlanRewriter<'s> {
+    fn new_from_plan(plan: LogicalPlan, state: &'s mut PlanResolverState) -> Self;
     fn into_plan(self) -> LogicalPlan;
 }

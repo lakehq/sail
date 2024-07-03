@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DFSchema, Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
-use datafusion_common::{Column, DataFusionError};
+use datafusion_common::{plan_datafusion_err, plan_err, Column, DataFusionError};
 use datafusion_expr::{expr, window_frame, ExprSchemable, ScalarUDF};
 use framework_common::spec;
 use framework_python::cereal::partial_pyspark_udf::{
@@ -14,16 +15,94 @@ use framework_python::udf::pyspark_udf::PySparkUDF;
 use framework_python::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::explode::Explode;
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, get_built_in_window_function,
-    is_built_in_generator_function,
 };
-use crate::resolver::{PlanResolver, PlanResolverState};
+use crate::resolver::state::PlanResolverState;
+use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct NamedExpr {
+    /// The name of the expression to be used in projection.
+    /// The name can be empty if the expression is not supposed to exist in the resolved
+    /// projection (a wildcard expression, a sort expression, etc.).
+    /// A list of names may be present for multi-expression (a temporary expression
+    /// to be expanded into multiple ones in the projection).
+    pub name: Vec<String>,
+    pub expr: expr::Expr,
+    pub metadata: HashMap<String, String>,
+}
+
+impl NamedExpr {
+    pub fn new(name: Vec<String>, expr: expr::Expr) -> Self {
+        Self {
+            name,
+            expr,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn try_from_alias_expr(expr: expr::Expr) -> PlanResult<Self> {
+        match expr {
+            expr::Expr::Alias(alias) => Ok(Self::new(vec![alias.name], *alias.expr)),
+            _ => Err(PlanError::invalid(
+                "alias expected to create named expression",
+            )),
+        }
+    }
+
+    pub fn try_from_column_expr(
+        expr: expr::Expr,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Self> {
+        match expr {
+            expr::Expr::Column(column) => {
+                let name = state.get_field_name(column.name())?;
+                Ok(Self::new(vec![name.clone()], expr::Expr::Column(column)))
+            }
+            _ => Err(PlanError::invalid(
+                "column expected to create named expression",
+            )),
+        }
+    }
+
+    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    pub fn into_alias_expr(self) -> PlanResult<expr::Expr> {
+        match &self.expr {
+            // TODO: This seems hacky. Is there a better way to handle this?
+            // There is no need to add alias to an alias expression.
+            expr::Expr::Alias(_)
+            // We do not add alias for literal when it is used as function arguments,
+            // since some function (e.g. `struct()`) may need to determine struct field names
+            // for literals.
+            | expr::Expr::Literal(_)
+            // We should not add alias to expressions that will be rewritten in logical plans.
+            // Otherwise, some logical plan optimizers may not work correctly.
+            | expr::Expr::Wildcard { .. }
+            | expr::Expr::GroupingSet(_)
+            | expr::Expr::Placeholder(_)
+            | expr::Expr::Unnest(_) => return Ok(self.expr),
+            _ => (),
+        };
+        let relation = match &self.expr {
+            expr::Expr::Column(Column { relation, .. }) => relation.clone(),
+            _ => None,
+        };
+        let name = self
+            .name
+            .one()
+            .map_err(|_| PlanError::invalid("named expression must have a single name"))?;
+        Ok(self.expr.alias_qualified(relation, name))
+    }
+}
+
 impl PlanResolver<'_> {
-    pub(crate) fn resolve_sort_order(
+    pub(super) fn resolve_sort_order(
         &self,
         sort: spec::SortOrder,
         schema: &DFSchema,
@@ -53,7 +132,18 @@ impl PlanResolver<'_> {
         }))
     }
 
-    pub(crate) fn resolve_window_frame(
+    pub(super) fn resolve_sort_orders(
+        &self,
+        sort: Vec<spec::SortOrder>,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<expr::Expr>> {
+        sort.into_iter()
+            .map(|x| self.resolve_sort_order(x, schema, state))
+            .collect::<PlanResult<Vec<_>>>()
+    }
+
+    pub(super) fn resolve_window_frame(
         &self,
         frame: spec::WindowFrame,
         state: &mut PlanResolverState,
@@ -92,14 +182,12 @@ impl PlanResolver<'_> {
         Ok(window_frame::WindowFrame::new_bounds(units, start, end))
     }
 
-    fn resolve_window_boundary_value(
+    pub(super) fn resolve_window_boundary_value(
         &self,
         value: spec::Expr,
         state: &mut PlanResolverState,
     ) -> PlanResult<ScalarValue> {
-        let value = self
-            .resolve_expression(value, &DFSchema::empty(), state)?
-            .unalias();
+        let value = self.resolve_expression(value, &DFSchema::empty(), state)?;
         match value {
             expr::Expr::Literal(
                 v @ (ScalarValue::UInt32(_)
@@ -114,30 +202,30 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub fn resolve_expression(
+    pub(super) fn resolve_named_expression(
         &self,
         expr: spec::Expr,
         schema: &DFSchema,
         state: &mut PlanResolverState,
-    ) -> PlanResult<expr::Expr> {
+    ) -> PlanResult<NamedExpr> {
         use spec::Expr;
 
         match expr {
             Expr::Literal(literal) => {
                 let name = self.config.plan_formatter.literal_to_string(&literal)?;
                 let literal = self.resolve_literal(literal)?;
-                Ok(expr::Expr::Alias(expr::Alias {
-                    expr: Box::new(expr::Expr::Literal(literal)),
-                    relation: None,
-                    name,
-                }))
+                Ok(NamedExpr::new(vec![name], expr::Expr::Literal(literal)))
             }
-            Expr::UnresolvedAttribute { name, plan_id: _ } => {
-                // FIXME: resolve identifier using schema
-                let column: Vec<String> = name.into();
-                Ok(expr::Expr::Column(Column::new_unqualified(
-                    column.join("."),
-                )))
+            Expr::UnresolvedAttribute { name, plan_id } => {
+                let name: Vec<String> = name.into();
+                let last = name
+                    .last()
+                    .ok_or_else(|| PlanError::invalid("empty attribute name"))?
+                    .clone();
+                Ok(NamedExpr::new(
+                    vec![last],
+                    self.resolve_attribute(name, plan_id, schema, state)?,
+                ))
             }
             Expr::UnresolvedFunction {
                 function_name,
@@ -145,14 +233,8 @@ impl PlanResolver<'_> {
                 is_distinct,
                 is_user_defined_function: _, // FIXME: is_user_defined_function is always false.
             } => {
-                let arguments = arguments
-                    .into_iter()
-                    .map(|x| self.resolve_expression(x, schema, state))
-                    .collect::<PlanResult<Vec<expr::Expr>>>()?;
-                let argument_names = arguments
-                    .iter()
-                    .map(|arg| -> PlanResult<_> { Ok(arg.display_name()?) })
-                    .collect::<PlanResult<Vec<_>>>()?;
+                let (argument_names, arguments) =
+                    self.resolve_alias_expressions_and_names(arguments, schema, state)?;
                 let input_types: Vec<DataType> = arguments
                     .iter()
                     .map(|arg| arg.get_type(schema))
@@ -228,52 +310,57 @@ impl PlanResolver<'_> {
                 };
                 // TODO: udaf and udwf
 
-                if is_built_in_generator_function(function_name.as_str()) {
-                    Ok(func)
-                } else {
-                    let name = self.config.plan_formatter.function_to_string(
-                        function_name.as_str(),
-                        argument_names.iter().map(|x| x.as_str()).collect(),
-                    )?;
-                    Ok(expr::Expr::Alias(expr::Alias {
-                        expr: Box::new(func),
-                        relation: None,
-                        name,
-                    }))
-                }
+                let name = self.config.plan_formatter.function_to_string(
+                    function_name.as_str(),
+                    argument_names.iter().map(|x| x.as_str()).collect(),
+                )?;
+                Ok(NamedExpr::new(vec![name], func))
             }
             Expr::UnresolvedStar { target } => {
                 // FIXME: column reference is parsed as qualifier
-                if let Some(target) = target {
+                let expr = if let Some(target) = target {
                     let target: Vec<String> = target.into();
-                    Ok(expr::Expr::Wildcard {
+                    expr::Expr::Wildcard {
                         qualifier: Some(target.join(".").into()),
-                    })
+                    }
                 } else {
-                    Ok(expr::Expr::Wildcard { qualifier: None })
-                }
+                    expr::Expr::Wildcard { qualifier: None }
+                };
+                Ok(NamedExpr::new(vec!["*".to_string()], expr))
             }
             Expr::Alias {
                 expr,
                 name,
                 metadata,
             } => {
-                if metadata.is_some() {
-                    return Err(PlanError::unsupported("alias metadata"));
+                let expr = self.resolve_expression(*expr, schema, state)?;
+                let name = name.into_iter().map(|x| x.into()).collect::<Vec<String>>();
+                let expr = if let [n] = name.as_slice() {
+                    expr.alias(n)
+                } else {
+                    expr
+                };
+                if let Some(metadata) = metadata {
+                    Ok(NamedExpr::new(name, expr).with_metadata(metadata))
+                } else {
+                    Ok(NamedExpr::new(name, expr))
                 }
-                let expr = self.resolve_expression(*expr, schema, state)?.unalias();
-                let name = name.into_iter().map(|x| x.into()).collect();
-                self.rewrite_alias(expr, name)
             }
             Expr::Cast { expr, cast_to_type } => {
                 let data_type = self.resolve_data_type(cast_to_type)?;
-                Ok(expr::Expr::Cast(expr::Cast {
-                    expr: Box::new(self.resolve_expression(*expr, schema, state)?),
+                let NamedExpr { expr, name, .. } =
+                    self.resolve_named_expression(*expr, schema, state)?;
+                let expr = expr::Expr::Cast(expr::Cast {
+                    expr: Box::new(expr),
                     data_type,
-                }))
+                });
+                Ok(NamedExpr::new(name, expr))
             }
             Expr::UnresolvedRegex { .. } => Err(PlanError::todo("unresolved regex")),
-            Expr::SortOrder(sort) => self.resolve_sort_order(sort, schema, state),
+            Expr::SortOrder(sort) => {
+                let sort = self.resolve_sort_order(sort, schema, state);
+                Ok(NamedExpr::new(vec![], sort?))
+            }
             Expr::LambdaFunction { .. } => Err(PlanError::todo("lambda function")),
             Expr::Window {
                 window_function,
@@ -281,7 +368,7 @@ impl PlanResolver<'_> {
                 order_spec,
                 frame_spec,
             } => {
-                let (func_name, args) = match *window_function {
+                let (function_name, argument_names, arguments) = match *window_function {
                     Expr::UnresolvedFunction {
                         function_name,
                         arguments,
@@ -294,11 +381,9 @@ impl PlanResolver<'_> {
                         if is_distinct {
                             return Err(PlanError::unsupported("distinct window function"));
                         }
-                        let args = arguments
-                            .into_iter()
-                            .map(|x| self.resolve_expression(x, schema, state))
-                            .collect::<PlanResult<Vec<_>>>()?;
-                        (function_name, args)
+                        let (argument_names, arguments) =
+                            self.resolve_alias_expressions_and_names(arguments, schema, state)?;
+                        (function_name, argument_names, arguments)
                     }
                     Expr::CommonInlineUserDefinedFunction(_) => {
                         return Err(PlanError::unsupported(
@@ -312,37 +397,40 @@ impl PlanResolver<'_> {
                         )));
                     }
                 };
-                let partition_by = partition_spec
-                    .into_iter()
-                    .map(|x| self.resolve_expression(x, schema, state))
-                    .collect::<PlanResult<Vec<_>>>()?;
-                let order_by = order_spec
-                    .into_iter()
-                    .map(|x| self.resolve_sort_order(x, schema, state))
-                    .collect::<PlanResult<Vec<_>>>()?;
+                let partition_by = self.resolve_expressions(partition_spec, schema, state)?;
+                let order_by = self.resolve_sort_orders(order_spec, schema, state)?;
                 let window_frame = if let Some(frame) = frame_spec {
                     self.resolve_window_frame(frame, state)?
                 } else {
                     window_frame::WindowFrame::new(None)
                 };
-                Ok(expr::Expr::WindowFunction(expr::WindowFunction {
-                    fun: get_built_in_window_function(func_name.as_str())?,
-                    args,
+                let window = expr::Expr::WindowFunction(expr::WindowFunction {
+                    fun: get_built_in_window_function(function_name.as_str())?,
+                    args: arguments,
                     partition_by,
                     order_by,
                     window_frame,
                     null_treatment: None,
-                }))
+                });
+                let name = self.config.plan_formatter.function_to_string(
+                    function_name.as_str(),
+                    argument_names.iter().map(|x| x.as_str()).collect(),
+                )?;
+                Ok(NamedExpr::new(vec![name], window))
             }
             Expr::UnresolvedExtractValue { child, extraction } => {
-                let literal = match *extraction {
+                let extraction = match *extraction {
                     Expr::Literal(literal) => literal,
                     _ => {
                         return Err(PlanError::invalid("extraction must be a literal"));
                     }
                 };
-                let expression = self.resolve_expression(*child, schema, state)?;
-                Ok(expression.field(self.resolve_literal(literal)?))
+                let extraction_name = self.config.plan_formatter.literal_to_string(&extraction)?;
+                let extraction = self.resolve_literal(extraction)?;
+                let NamedExpr { name, expr, .. } =
+                    self.resolve_named_expression(*child, schema, state)?;
+                let name = format!("{}[{}]", name.one()?, extraction_name);
+                Ok(NamedExpr::new(vec![name], expr.field(extraction)))
             }
             Expr::UpdateFields { .. } => Err(PlanError::todo("update fields")),
             Expr::UnresolvedNamedLambdaVariable(_) => {
@@ -363,10 +451,8 @@ impl PlanResolver<'_> {
                 } = function;
 
                 let function_name: &str = function_name.as_str();
-                let arguments: Vec<expr::Expr> = arguments
-                    .into_iter()
-                    .map(|x| self.resolve_expression(x, schema, state))
-                    .collect::<PlanResult<Vec<expr::Expr>>>()?;
+                let (argument_names, arguments) =
+                    self.resolve_alias_expressions_and_names(arguments, schema, state)?;
                 let input_types: Vec<DataType> = arguments
                     .iter()
                     .map(|arg| arg.get_type(schema))
@@ -405,46 +491,111 @@ impl PlanResolver<'_> {
                     python_function,
                     output_type,
                 );
-
-                Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                let name = self.config.plan_formatter.function_to_string(
+                    function_name,
+                    argument_names.iter().map(|x| x.as_str()).collect(),
+                )?;
+                let func = expr::Expr::ScalarFunction(expr::ScalarFunction {
                     func: Arc::new(ScalarUDF::from(python_udf)),
                     args: arguments,
-                }))
+                });
+                Ok(NamedExpr::new(vec![name], func))
             }
             Expr::CallFunction { .. } => Err(PlanError::todo("call function")),
-            Expr::Placeholder(placeholder) => Ok(expr::Expr::Placeholder(expr::Placeholder::new(
-                placeholder,
-                None,
-            ))),
+            Expr::Placeholder(placeholder) => {
+                let name = placeholder.clone();
+                let expr = expr::Expr::Placeholder(expr::Placeholder::new(placeholder, None));
+                Ok(NamedExpr::new(vec![name], expr))
+            }
         }
     }
 
-    fn rewrite_alias(&self, expr: expr::Expr, names: Vec<String>) -> PlanResult<expr::Expr> {
-        use expr::{Alias, Expr, ScalarFunction};
+    pub(super) fn resolve_named_expressions(
+        &self,
+        expressions: Vec<spec::Expr>,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<NamedExpr>> {
+        expressions
+            .into_iter()
+            .map(|x| self.resolve_named_expression(x, schema, state))
+            .collect::<PlanResult<Vec<_>>>()
+    }
 
-        let (func, args) = match &expr {
-            Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                (Some(func.inner()), args.as_slice())
-            }
-            _ => (None, &[] as &[Expr]),
-        };
-        // We have to explicitly handle every UDF type that supports multi-alias, since
-        // we can only downcast from `Any` to concrete types (rather than another trait object).
-        if let Some(explode) = func
-            .as_ref()
-            .and_then(|f| f.as_any().downcast_ref::<Explode>())
-        {
-            let explode = explode.with_output_names(Some(names));
-            Ok(ScalarUDF::from(explode).call(args.to_vec()))
+    pub(super) fn resolve_expression(
+        &self,
+        expressions: spec::Expr,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<expr::Expr> {
+        let NamedExpr { expr, .. } = self.resolve_named_expression(expressions, schema, state)?;
+        Ok(expr)
+    }
+
+    pub(super) fn resolve_expressions(
+        &self,
+        expressions: Vec<spec::Expr>,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<expr::Expr>> {
+        expressions
+            .into_iter()
+            .map(|x| self.resolve_expression(x, schema, state))
+            .collect::<PlanResult<Vec<_>>>()
+    }
+
+    pub(super) fn resolve_alias_expressions_and_names(
+        &self,
+        expressions: Vec<spec::Expr>,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(Vec<String>, Vec<expr::Expr>)> {
+        Ok(expressions
+            .into_iter()
+            .map(|x| {
+                let expr = self.resolve_named_expression(x, schema, state)?;
+                let name = expr.name.clone().one()?;
+                let expr = expr.into_alias_expr()?;
+                Ok((name, expr))
+            })
+            .collect::<PlanResult<Vec<(String, expr::Expr)>>>()?
+            .into_iter()
+            .unzip())
+    }
+
+    fn resolve_attribute(
+        &self,
+        name: Vec<String>,
+        plan_id: Option<i64>,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<expr::Expr> {
+        // TODO: handle qualifier and nested fields
+        let first = name
+            .first()
+            .ok_or_else(|| plan_datafusion_err!("empty attribute: {:?}", name))?;
+        let column = if let Some(plan_id) = plan_id {
+            let field = state.get_resolved_field_name_in_plan(plan_id, first)?;
+            schema.columns_with_unqualified_name(field)
         } else {
-            Ok(Expr::Alias(Alias {
-                expr: Box::new(expr),
-                relation: None,
-                // By default, only a single alias can be applied to a child expression.
-                // An error will be returned if multiple aliases are specified.
-                name: names.one()?,
-            }))
+            schema
+                .iter()
+                .filter_map(|(qualifier, field)| {
+                    if state.get_field_name(field.name()).is_ok_and(|f| f == first) {
+                        Some(Column::new(qualifier.cloned(), field.name()))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        if column.len() > 1 {
+            return plan_err!("ambiguous attribute: {:?}", name)?;
         }
+        let column = column
+            .one()
+            .map_err(|_| plan_datafusion_err!("cannot resolve attribute: {:?}", name))?;
+        Ok(expr::Expr::Column(column))
     }
 }
 
@@ -460,14 +611,20 @@ mod tests {
 
     use crate::config::PlanConfig;
     use crate::error::PlanResult;
-    use crate::resolver::{PlanResolver, PlanResolverState};
+    use crate::resolver::expression::NamedExpr;
+    use crate::resolver::state::PlanResolverState;
+    use crate::resolver::PlanResolver;
 
     #[test]
-    fn test_resolve_expression_with_alias() -> PlanResult<()> {
+    fn test_resolve_expression_with_name() -> PlanResult<()> {
         let ctx = SessionContext::default();
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::default()));
-        let resolve = |expr: spec::Expr| {
-            resolver.resolve_expression(expr, &DFSchema::empty(), &mut PlanResolverState::new())
+        let resolve = |expr| {
+            resolver.resolve_named_expression(
+                expr,
+                &DFSchema::empty(),
+                &mut PlanResolverState::new(),
+            )
         };
 
         assert_eq!(
@@ -477,37 +634,30 @@ mod tests {
                 is_distinct: false,
                 is_user_defined_function: false,
             })?,
-            Expr::Alias(Alias {
-                expr: Box::new(Expr::Not(Box::new(Expr::Alias(Alias {
-                    expr: Box::new(Expr::Literal(ScalarValue::Boolean(Some(true)))),
-                    relation: None,
-                    name: "true".to_string(),
-                })))),
-                relation: None,
-                name: "(NOT true)".to_string(),
-            })
+            NamedExpr {
+                name: vec!["(NOT true)".to_string()],
+                expr: Expr::Not(Box::new(Expr::Literal(ScalarValue::Boolean(Some(true))))),
+                metadata: Default::default(),
+            }
         );
 
-        // We need to make sure there is no nested alias in the resolved logical expression.
-        // This is because many DataFusion functions (e.g. `Expr::unalias()`) can only work with
-        // a single level of alias.
         assert_eq!(
             resolve(spec::Expr::Alias {
-                // This alias "b" is overridden by the outer alias "c".
+                // This name "b" is overridden by the outer name "c".
                 expr: Box::new(spec::Expr::Alias {
-                    // The resolver assigns an alias (a human-readable string) for the function,
-                    // and is then overridden by the explicitly specified outer alias.
+                    // The resolver assigns a name (a human-readable string) for the function,
+                    // and is then overridden by the explicitly specified outer name.
                     expr: Box::new(spec::Expr::UnresolvedFunction {
                         function_name: "+".to_string(),
                         arguments: vec![
                             spec::Expr::Alias {
-                                // The resolver assigns an alias "1" for the literal,
-                                // and is then overridden by the explicitly specified alias.
+                                // The resolver assigns a name "1" for the literal,
+                                // and is then overridden by the explicitly specified name.
                                 expr: Box::new(spec::Expr::Literal(spec::Literal::Integer(1))),
                                 name: vec!["a".to_string().into()],
                                 metadata: None,
                             },
-                            // The resolver assigns an alias "2" for the literal.
+                            // The resolver assigns a name "2" for the literal.
                             spec::Expr::Literal(spec::Literal::Integer(2)),
                         ],
                         is_distinct: false,
@@ -519,23 +669,27 @@ mod tests {
                 name: vec!["c".to_string().into()],
                 metadata: None,
             })?,
-            Expr::Alias(Alias {
-                expr: Box::new(Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(Expr::Alias(Alias {
-                        expr: Box::new(Expr::Literal(ScalarValue::Int32(Some(1)))),
+            NamedExpr {
+                name: vec!["c".to_string()],
+                expr: Expr::Alias(Alias {
+                    expr: Box::new(Expr::Alias(Alias {
+                        expr: Box::new(Expr::BinaryExpr(BinaryExpr {
+                            left: Box::new(Expr::Alias(Alias {
+                                expr: Box::new(Expr::Literal(ScalarValue::Int32(Some(1)))),
+                                name: "a".to_string(),
+                                relation: None,
+                            })),
+                            op: Operator::Plus,
+                            right: Box::new(Expr::Literal(ScalarValue::Int32(Some(2)))),
+                        })),
                         relation: None,
-                        name: "a".to_string(),
+                        name: "b".to_string(),
                     })),
-                    op: Operator::Plus,
-                    right: Box::new(Expr::Alias(Alias {
-                        expr: Box::new(Expr::Literal(ScalarValue::Int32(Some(2)))),
-                        relation: None,
-                        name: "2".to_string(),
-                    })),
-                })),
-                relation: None,
-                name: "c".to_string(),
-            }),
+                    relation: None,
+                    name: "c".to_string(),
+                }),
+                metadata: Default::default(),
+            },
         );
 
         Ok(())

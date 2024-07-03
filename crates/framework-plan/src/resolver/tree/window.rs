@@ -6,15 +6,18 @@ use datafusion::logical_expr::logical_plan::Window;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_expr::{ident, Expr, LogicalPlan};
 
+use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
 
-pub(crate) struct WindowRewriter {
+pub(crate) struct WindowRewriter<'s> {
     plan: LogicalPlan,
+    #[allow(dead_code)]
+    state: &'s mut PlanResolverState,
 }
 
-impl PlanRewriter for WindowRewriter {
-    fn new_from_plan(plan: LogicalPlan) -> Self {
-        Self { plan }
+impl<'s> PlanRewriter<'s> for WindowRewriter<'s> {
+    fn new_from_plan(plan: LogicalPlan, state: &'s mut PlanResolverState) -> Self {
+        Self { plan, state }
     }
 
     fn into_plan(self) -> LogicalPlan {
@@ -22,7 +25,7 @@ impl PlanRewriter for WindowRewriter {
     }
 }
 
-impl TreeNodeRewriter for WindowRewriter {
+impl<'s> TreeNodeRewriter for WindowRewriter<'s> {
     type Node = Expr;
 
     fn f_up(&mut self, node: Expr) -> Result<Transformed<Expr>> {

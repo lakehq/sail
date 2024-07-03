@@ -6,10 +6,11 @@ use std::sync::Arc;
 use arrow::ipc::writer::StreamWriter;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::SessionContext;
+use framework_common::utils::rename_physical_plan;
 use framework_plan::execute_logical_plan;
+use framework_plan::resolver::plan::NamedPlan;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -229,10 +230,16 @@ impl Drop for Executor {
 
 pub(crate) async fn execute_plan(
     ctx: &SessionContext,
-    plan: LogicalPlan,
+    plan: NamedPlan,
 ) -> SparkResult<SendableRecordBatchStream> {
+    let NamedPlan { plan, fields } = plan;
     let df = execute_logical_plan(ctx, plan).await?;
     let plan = df.create_physical_plan().await?;
+    let plan = if let Some(fields) = fields {
+        rename_physical_plan(plan, fields.as_slice())?
+    } else {
+        plan
+    };
     Ok(execute_stream(plan, Arc::new(TaskContext::default()))?)
 }
 
@@ -256,7 +263,7 @@ pub(crate) async fn execute_query(
     use std::collections::HashMap;
 
     use framework_plan::config::PlanConfig;
-    use framework_plan::resolver::{PlanResolver, PlanResolverState};
+    use framework_plan::resolver::PlanResolver;
 
     let config = PlanConfig::default();
     let relation = crate::spark::connect::Relation {
@@ -270,7 +277,7 @@ pub(crate) async fn execute_query(
         )),
     };
     let plan = PlanResolver::new(ctx, Arc::new(config))
-        .resolve_plan(relation.try_into()?, &mut PlanResolverState::new())
+        .resolve_named_plan(relation.try_into()?)
         .await?;
     let mut stream = execute_plan(ctx, plan).await?;
     let mut output = vec![];
