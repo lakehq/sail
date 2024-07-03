@@ -34,7 +34,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
 
       - name: Format check
-        run: cargo +nightly fmt -- --check
+        run: cargo fmt -- --check
 
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
