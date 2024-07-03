@@ -20,6 +20,7 @@ runs:
       run: |
         rustup toolchain install stable
         rustup toolchain install nightly
+      shell: bash
 
     - name: Show versions
       id: versions
