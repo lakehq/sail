@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use framework_common::spec;
 use framework_sql::expression::{parse_expression, parse_object_name};
-use framework_sql::plan::parse_sql_statement;
+use framework_sql::statement::parse_sql_statement;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::{parse_spark_data_type, DEFAULT_FIELD_NAME};
@@ -1167,7 +1167,7 @@ impl TryFrom<Catalog> for spec::PlanNode {
 mod tests {
     use framework_common::spec;
     use framework_common::tests::test_gold_set;
-    use framework_sql::plan::parse_sql_statement;
+    use framework_sql::statement::parse_sql_statement;
     use serde::{Deserialize, Serialize};
 
     use crate::error::{SparkError, SparkResult};
