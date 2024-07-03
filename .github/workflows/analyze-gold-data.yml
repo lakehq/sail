@@ -1,0 +1,40 @@
+name: Analyze gold data
+
+on:
+  workflow_call:
+    inputs:
+      head_ref:
+        description: The Git head ref for the gold data
+        type: string
+        required: true
+      base_ref:
+        description: The Git base ref for the gold data
+        type: string
+        required: true
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.head_ref }}
+
+      - uses: actions/checkout@v4
+        with:
+          path: tmp/base
+          ref: ${{ inputs.base_ref }}
+
+      - name: Generate gold data report
+        run: |
+          scripts/common-gold-data/report.sh . tmp/base > tmp/report.md
+          cat tmp/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish gold data report
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: gold-data-report
+          path: tmp/report.md
