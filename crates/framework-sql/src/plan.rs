@@ -520,9 +520,9 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::Plan> {
         let limit = LiteralValue::<i128>::try_from(limit)?.0;
         let limit = usize::try_from(limit).map_err(|e| SqlError::invalid(e.to_string()))?;
         spec::Plan::new(spec::PlanNode::Limit {
+            input: Box::new(plan),
             skip: 0,
             limit,
-            input: Box::new(plan),
         })
     } else {
         plan

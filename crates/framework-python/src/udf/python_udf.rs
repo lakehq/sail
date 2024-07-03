@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
 use crate::cereal::partial_python_udf::PartialPythonUDF;
-use crate::udf::PythonFunctionType;
+use crate::udf::{get_udf_name, PythonFunctionType};
 
 #[derive(Debug, Clone)]
 pub struct PythonUDF {
@@ -27,6 +27,7 @@ impl PythonUDF {
         python_function: PartialPythonUDF,
         output_type: DataType,
     ) -> Self {
+        let function_name = get_udf_name(&function_name, &python_function.0);
         Self {
             signature: Signature::exact(
                 input_types,

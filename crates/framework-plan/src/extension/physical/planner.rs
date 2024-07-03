@@ -29,24 +29,25 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         let plan: Arc<dyn ExecutionPlan> =
             if let Some(node) = node.as_any().downcast_ref::<RangeNode>() {
                 Arc::new(RangeExec::new(
-                    node.range.clone(),
-                    node.num_partitions,
+                    node.range().clone(),
+                    node.num_partitions(),
                     node.schema().inner().clone(),
                 ))
             } else if let Some(node) = node.as_any().downcast_ref::<ShowStringNode>() {
                 Arc::new(ShowStringExec::new(
                     physical_inputs.one()?,
-                    node.limit,
-                    node.format.clone(),
+                    node.names().to_vec(),
+                    node.limit(),
+                    node.format().clone(),
                 ))
             } else if let Some(node) = node.as_any().downcast_ref::<SortWithinPartitionsNode>() {
                 let expr = create_physical_sort_exprs(
-                    node.expr.as_slice(),
-                    node.input.schema(),
+                    node.expr(),
+                    node.schema(),
                     session_state.execution_props(),
                 )?;
                 let sort = SortExec::new(expr, physical_inputs.one()?)
-                    .with_fetch(node.fetch)
+                    .with_fetch(node.fetch())
                     .with_preserve_partitioning(true);
                 Arc::new(sort)
             } else {

@@ -871,7 +871,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: three values expected: [Alias(Alias { expr: Literal(Int32(1)), relation: None, name: \"1\" }), Alias(Alias { expr: Literal(Int32(5)), relation: None, name: \"5\" })]"
+        "failure": "error in DataFusion: Error during planning: three values expected: [Literal(Int32(1)), Literal(Int32(5))]"
       }
     },
     {
@@ -897,7 +897,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: three values expected: [Alias(Alias { expr: Literal(Int32(5)), relation: None, name: \"5\" }), Alias(Alias { expr: Literal(Int32(1)), relation: None, name: \"1\" })]"
+        "failure": "error in DataFusion: Error during planning: three values expected: [Literal(Int32(5)), Literal(Int32(1))]"
       }
     },
     {

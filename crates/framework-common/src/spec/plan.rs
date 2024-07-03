@@ -85,9 +85,9 @@ pub enum PlanNode {
         is_global: bool,
     },
     Limit {
+        input: Box<Plan>,
         skip: usize,
         limit: usize,
-        input: Box<Plan>,
     },
     Aggregate {
         input: Box<Plan>,

@@ -238,6 +238,7 @@ impl From<SparkThrowable> for Status {
 
 impl From<SparkError> for Status {
     fn from(error: SparkError) -> Self {
+        // TODO: extract nested error from `DataFusionError::Context`
         match error {
             SparkError::ArrowError(ArrowError::ExternalError(e))
             | SparkError::DataFusionError(DataFusionError::ArrowError(

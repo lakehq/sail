@@ -7,14 +7,16 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::common::{FileType, TableReference};
 use datafusion::dataframe::DataFrame;
-use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
+use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion_common::config::{FormatOptions, TableOptions};
 use datafusion_expr::ScalarUDF;
 use framework_common::spec::{
     CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction, FunctionDefinition,
     TableFunctionDefinition,
 };
-use framework_plan::resolver::{PlanResolver, PlanResolverState};
+use framework_common::utils::rename_logical_plan;
+use framework_plan::resolver::plan::NamedPlan;
+use framework_plan::resolver::PlanResolver;
 use framework_python::udf::pyspark_udtf::PySparkUDTF;
 use framework_python::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -103,7 +105,7 @@ impl Stream for ExecutePlanResponseStream {
 
 async fn handle_execute_plan(
     session: Arc<Session>,
-    plan: LogicalPlan,
+    plan: NamedPlan,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let ctx = session.context();
@@ -123,9 +125,7 @@ pub(crate) async fn handle_execute_relation(
 ) -> SparkResult<ExecutePlanResponseStream> {
     let ctx = session.context();
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
-    let plan = resolver
-        .resolve_plan(relation.try_into()?, &mut PlanResolverState::new())
-        .await?;
+    let plan = resolver.resolve_named_plan(relation.try_into()?).await?;
     handle_execute_plan(session, plan, metadata).await
 }
 
@@ -202,9 +202,12 @@ pub(crate) async fn handle_execute_write_operation(
     let mut table_options = TableOptions::default_from_session_config(ctx.state().config_options());
     table_options.alter_with_string_hash_map(&write.options)?;
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
-    let plan = resolver
-        .resolve_plan(relation.try_into()?, &mut PlanResolverState::new())
-        .await?;
+    let NamedPlan { plan, fields } = resolver.resolve_named_plan(relation.try_into()?).await?;
+    let plan = if let Some(fields) = fields {
+        rename_logical_plan(plan, &fields)?
+    } else {
+        plan
+    };
     let plan = match write.save_type.required("save type")? {
         SaveType::Path(path) => {
             // always write multi-file output
@@ -278,7 +281,7 @@ pub(crate) async fn handle_execute_write_operation(
             }
         }
     };
-    handle_execute_plan(session, plan, metadata).await
+    handle_execute_plan(session, NamedPlan { plan, fields: None }, metadata).await
 }
 
 pub(crate) async fn handle_execute_create_dataframe_view(
@@ -289,9 +292,12 @@ pub(crate) async fn handle_execute_create_dataframe_view(
     let ctx = session.context();
     let relation = view.input.required("input relation")?;
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
-    let plan = resolver
-        .resolve_plan(relation.try_into()?, &mut PlanResolverState::new())
-        .await?;
+    let NamedPlan { plan, fields } = resolver.resolve_named_plan(relation.try_into()?).await?;
+    let plan = if let Some(fields) = fields {
+        rename_logical_plan(plan, &fields)?
+    } else {
+        plan
+    };
     let df = DataFrame::new(ctx.state(), plan);
     let table_ref = TableReference::from(view.name.as_str());
     let _ = view.is_global;

@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::dataframe::DataFrame;
-use framework_plan::resolver::{PlanResolver, PlanResolverState};
+use framework_common::utils::{rename_logical_plan, rename_schema};
+use framework_plan::resolver::plan::NamedPlan;
+use framework_plan::resolver::PlanResolver;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::parse_spark_data_type;
@@ -41,10 +42,12 @@ pub(crate) async fn handle_analyze_schema(
         plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
     };
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
-    let plan = resolver
-        .resolve_plan(relation.try_into()?, &mut PlanResolverState::new())
-        .await?;
-    let schema: SchemaRef = Arc::new(plan.schema().as_ref().into());
+    let NamedPlan { plan, fields } = resolver.resolve_named_plan(relation.try_into()?).await?;
+    let schema = if let Some(fields) = fields {
+        rename_schema(plan.schema().inner(), fields.as_slice())?
+    } else {
+        plan.schema().inner().clone()
+    };
     Ok(SchemaResponse {
         schema: Some(to_spark_schema(schema)?),
     })
@@ -61,9 +64,13 @@ pub(crate) async fn handle_analyze_explain(
         plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
     };
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
-    let plan = resolver
-        .resolve_plan(relation.try_into()?, &mut PlanResolverState::new())
-        .await?;
+    let NamedPlan { plan, fields } = resolver.resolve_named_plan(relation.try_into()?).await?;
+    let plan = if let Some(fields) = fields {
+        rename_logical_plan(plan, &fields)?
+    } else {
+        plan
+    };
+
     let explain_mode: i32 = request.explain_mode;
     let (verbose, analyze) = match ExplainMode::try_from(explain_mode) {
         Ok(ExplainMode::Unspecified) | Ok(ExplainMode::Simple) => (false, false),

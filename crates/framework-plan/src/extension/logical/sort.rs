@@ -8,14 +8,22 @@ use crate::utils::ItemTaker;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct SortWithinPartitionsNode {
-    pub input: Arc<LogicalPlan>,
-    pub expr: Vec<Expr>,
-    pub fetch: Option<usize>,
+    input: Arc<LogicalPlan>,
+    expr: Vec<Expr>,
+    fetch: Option<usize>,
 }
 
 impl SortWithinPartitionsNode {
     pub fn new(input: Arc<LogicalPlan>, expr: Vec<Expr>, fetch: Option<usize>) -> Self {
         Self { input, expr, fetch }
+    }
+
+    pub fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+
+    pub fn expr(&self) -> &[Expr] {
+        &self.expr
     }
 }
 

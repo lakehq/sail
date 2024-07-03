@@ -9,7 +9,6 @@ use datafusion_common::plan_err;
 pub(crate) struct Explode {
     signature: Signature,
     kind: ExplodeKind,
-    output_names: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -25,22 +24,11 @@ impl Explode {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
             kind,
-            output_names: None,
         }
     }
 
     pub(crate) fn kind(&self) -> &ExplodeKind {
         &self.kind
-    }
-
-    pub(crate) fn output_names(&self) -> Option<&[String]> {
-        self.output_names.as_deref()
-    }
-
-    pub(crate) fn with_output_names(&self, names: Option<Vec<String>>) -> Self {
-        let mut f = Self::new(self.kind.clone());
-        f.output_names = names;
-        f
     }
 }
 
