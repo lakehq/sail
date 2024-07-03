@@ -31,7 +31,8 @@ function collect_metrics() {
     -name '*.json' \
     -exec \
     jq -f "${project_path}/scripts/common-gold-data/metrics.jq" '{}' '+' \
-    | jq --arg name "${name}" '"\($name)\t\(.file)\t\(.tp)\t\(.tn)\t\(.fp)\t\(.fn)"' -r
+    | jq -r --arg name "${name}" \
+    '"\($name)\t\(.group)\t\(.file)\t\(.tp)\t\(.tn)\t\(.fp)\t\(.fn)"'
 }
 
 function show_summary_header() {
@@ -50,10 +51,10 @@ function show_summary() {
       fn = 0
     }
     $1 == name {
-      tp += $3
-      tn += $4
-      fp += $5
-      fn += $6
+      tp += $4
+      tn += $5
+      fp += $6
+      fn += $7
     }
     END {
       total = tp + tn + fp + fn
@@ -63,27 +64,20 @@ function show_summary() {
 }
 
 function show_details() {
-  sort -t$'\t' -k2,2 -k1,1r | awk -F$'\t' '
+  sort -t$'\t' -k2,3 -k1,1r | awk -F$'\t' '
     BEGIN {
       printf "| Group | File | Commit | TP | TN | FP | FN | Total |\n"
       printf "| :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: |\n"
-      previous_group = ""
-      previous_file = ""
+      group = ""
+      file = ""
     }
     {
-      if (match($2, "\/crates\/framework-spark-connect\/tests\/gold_data\/")) {
-        group = "spark"
-        file = substr($2, RSTART + RLENGTH)
-      } else {
-        group = "unknown"
-        file = "unknown"
-      }
-      printf "| %s ", (previous_group == group ? "" : sprintf("`%s`", group))
-      printf "| %s ", (previous_file == file ? "" : sprintf("`%s`", file))
-      printf "| **%s** | %d | %d | %d | %d ", $1, $3, $4, $5, $6
-      printf "| %d |\n", $3 + $4 + $5 + $6
-      previous_group = group
-      previous_file = file
+      printf "| %s ", (group == $2 ? "" : sprintf("`%s`", $2))
+      printf "| %s ", (file == $3 ? "" : sprintf("`%s`", $3))
+      printf "| **%s** | %d | %d | %d | %d ", $1, $4, $5, $6, $7
+      printf "| %d |\n", $4 + $5 + $6 + $7
+      group = $2
+      file = $3
     }
     END {
       printf "\n"
