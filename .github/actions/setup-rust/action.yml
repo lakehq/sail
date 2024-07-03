@@ -14,6 +14,14 @@ runs:
         rm /tmp/protoc.zip
       shell: bash
 
+    # The Rust stable toolchain is likely installed already, but we need to check for updates.
+    # The Rust nightly toolchain is needed for features used in e.g. code formatting.
+    - name: Install Rust toolchains
+      run: |
+        rustup toolchain install stable --component rustfmt clippy
+        rustup toolchain install nightly --component rustfmt
+      shell: bash
+
     - name: Show versions
       id: versions
       run: |

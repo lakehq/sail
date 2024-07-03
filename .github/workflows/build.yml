@@ -15,7 +15,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     outputs:
-      run_spark_tests: ${{ steps.info.outputs.run_spark_tests }}
+      test_marker: ${{ steps.info.outputs.test_marker }}
+      test_head_ref: ${{ steps.info.outputs.test_head_ref }}
+      test_base_ref: ${{ steps.info.outputs.test_base_ref }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,13 +30,17 @@ jobs:
         run: |
           commit="${{ github.event.pull_request.head.sha || github.sha }}"
           commit_message="$(git show --pretty='format:%s' -s "${commit}")"
-          run_spark_tests="$(printf '%s' "${commit_message}" | grep -q -i '\[spark tests\]' && printf 'true' || printf 'false')"
-          echo "run_spark_tests=${run_spark_tests}" >> "$GITHUB_OUTPUT"
+          test_marker="$(printf '%s' "${commit_message}" | grep -q -i '\[\(spark tests\|tests\)\]' && printf 'true' || printf 'false')"
+          test_head_ref="${{ github.event_name == 'pull_request' && github.ref || github.event.after || github.sha }}"
+          test_base_ref="${{ github.event_name == 'pull_request' && github.base_ref || github.event.before || github.sha }}"
+          echo "test_marker=${test_marker}" >> "$GITHUB_OUTPUT"
+          echo "test_head_ref=${test_head_ref}" >> "$GITHUB_OUTPUT"
+          echo "test_base_ref=${test_base_ref}" >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/setup-rust
 
       - name: Format check
-        run: cargo fmt -- --check
+        run: cargo +nightly fmt -- --check
 
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -49,10 +55,22 @@ jobs:
     uses: ./.github/workflows/run-spark-tests.yml
     if: |
       (github.event_name == 'pull_request' && github.event.action == 'opened') ||
-      (github.event_name == 'pull_request' && needs.build.outputs.run_spark_tests == 'true') ||
+      (github.event_name == 'pull_request' && needs.build.outputs.test_marker == 'true') ||
       github.event_name == 'push'
     needs:
       - build
     with:
-      head_ref: ${{ github.event_name == 'pull_request' && github.ref || github.event.after || github.sha }}
-      base_ref: ${{ github.event_name == 'pull_request' && github.base_ref || github.event.before || github.sha }}
+      head_ref: ${{ needs.build.outputs.test_head_ref }}
+      base_ref: ${{ needs.build.outputs.test_base_ref }}
+
+  analyze-gold-data:
+    uses: ./.github/workflows/analyze-gold-data.yml
+    if: |
+      (github.event_name == 'pull_request' && github.event.action == 'opened') ||
+      (github.event_name == 'pull_request' && needs.build.outputs.test_marker == 'true') ||
+      github.event_name == 'push'
+    needs:
+      - build
+    with:
+      head_ref: ${{ needs.build.outputs.test_head_ref }}
+      base_ref: ${{ needs.build.outputs.test_base_ref }}

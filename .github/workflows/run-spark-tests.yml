@@ -68,4 +68,5 @@ jobs:
       - name: Publish test report
         uses: marocchino/sticky-pull-request-comment@v2
         with:
+          header: spark-test-report
           path: /tmp/test-report.md
