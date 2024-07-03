@@ -1061,6 +1061,9 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     description: None,
                     schema,
                     options,
+                    if_not_exists: false,    // TODO: Check if exists in options
+                    or_replace: false,       // TODO: Check if exists in options
+                    column_defaults: vec![], // TODO: Check if exists in options
                 })
             }
             CatType::CreateTable(x) => {
@@ -1081,6 +1084,9 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     description,
                     schema,
                     options,
+                    if_not_exists: false,    // TODO: Check if exists in options
+                    or_replace: false,       // TODO: Check if exists in options
+                    column_defaults: vec![], // TODO: Check if exists in options
                 })
             }
             CatType::DropTempView(x) => {

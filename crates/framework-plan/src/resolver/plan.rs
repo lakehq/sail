@@ -18,8 +18,8 @@ use datafusion::logical_expr::{
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
-    ToDFSchema,
+    Column, Constraints, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference,
+    TableReference, ToDFSchema,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::normalize_col;
@@ -984,6 +984,10 @@ impl PlanResolver<'_> {
                 description: _,
                 schema,
                 options,
+                // constraints,
+                if_not_exists,
+                or_replace,
+                column_defaults,
             } => {
                 // TODO: use spark.sql.sources.default to get the default source
                 let read = spec::Plan::new(PlanNode::Read {
@@ -997,11 +1001,21 @@ impl PlanResolver<'_> {
                     },
                     is_streaming: false,
                 });
+                let plan = self.resolve_plan(read, state).await?;
+                let schema = plan.schema();
+                let column_defaults: Vec<(String, Expr)> = column_defaults
+                    .into_iter()
+                    .map(|(name, expr)| Ok((name, self.resolve_expression(expr, schema, state)?)))
+                    .collect::<PlanResult<Vec<(String, Expr)>>>()?;
                 LogicalPlan::Extension(Extension {
                     node: Arc::new(CatalogCommandNode::try_new(
                         CatalogCommand::CreateTable {
                             table: build_table_reference(table)?,
-                            plan: Arc::new(self.resolve_plan(read, state).await?),
+                            plan: Arc::new(plan),
+                            constraints: Constraints::empty(),
+                            if_not_exists,
+                            or_replace,
+                            column_defaults,
                         },
                         self.config.clone(),
                     )?),

@@ -8,7 +8,7 @@ use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion::prelude::SessionContext;
 use datafusion_common::{
-    exec_datafusion_err, not_impl_err, DFSchema, SchemaReference, TableReference,
+    exec_datafusion_err, not_impl_err, Constraints, DFSchema, SchemaReference, TableReference,
 };
 use datafusion_expr::{TableScan, UNNAMED_TABLE};
 use serde::Serialize;
@@ -82,6 +82,10 @@ pub(crate) enum CatalogCommand {
     CreateTable {
         table: TableReference,
         plan: Arc<LogicalPlan>,
+        constraints: Constraints,
+        if_not_exists: bool,
+        or_replace: bool,
+        column_defaults: Vec<(String, Expr)>,
     },
     TableExists {
         table: TableReference,
@@ -281,9 +285,25 @@ impl CatalogCommand {
                 let rows = vec![SingleValueMetadata { value }];
                 build_record_batch(schema, &rows)?
             }
-            CatalogCommand::CreateTable { table, plan } => {
+            CatalogCommand::CreateTable {
+                table,
+                plan,
+                constraints,
+                if_not_exists,
+                or_replace,
+                column_defaults,
+            } => {
                 // TODO: we should probably create external table here
-                manager.create_memory_table(table, plan).await?;
+                manager
+                    .create_memory_table(
+                        table,
+                        plan,
+                        constraints,
+                        if_not_exists,
+                        or_replace,
+                        column_defaults,
+                    )
+                    .await?;
                 let rows: Vec<EmptyMetadata> = vec![];
                 build_record_batch(schema, &rows)?
             }

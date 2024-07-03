@@ -349,6 +349,10 @@ pub enum PlanNode {
         description: Option<String>,
         schema: Option<Schema>,
         options: HashMap<String, String>,
+        // constraints: Constraints,
+        if_not_exists: bool,
+        or_replace: bool,
+        column_defaults: Vec<(String, Expr)>,
     },
     DropTemporaryView {
         view: ObjectName,
