@@ -18,8 +18,8 @@ runs:
     # The Rust nightly toolchain is needed for features used in e.g. code formatting.
     - name: Install Rust toolchains
       run: |
-        rustup toolchain install stable
-        rustup toolchain install nightly
+        rustup toolchain install stable --component rustfmt clippy
+        rustup toolchain install nightly --component rustfmt
       shell: bash
 
     - name: Show versions
