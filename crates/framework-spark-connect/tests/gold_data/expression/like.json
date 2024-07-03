@@ -43,6 +43,7 @@
     },
     {
       "input": "a ilike all()",
+      "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na ilike all()\n--^^^\n",
       "output": {
         "success": {
           "unresolvedFunction": {
@@ -114,6 +115,7 @@
     },
     {
       "input": "a ilike any()",
+      "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na ilike any()\n--^^^\n",
       "output": {
         "success": {
           "unresolvedFunction": {
@@ -185,6 +187,7 @@
     },
     {
       "input": "a ilike some()",
+      "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na ilike some()\n--^^^\n",
       "output": {
         "success": {
           "unresolvedFunction": {
@@ -274,6 +277,7 @@
     },
     {
       "input": "a like 'pattern%' escape '##'",
+      "exception": "\n[INVALID_ESC] Found an invalid escape string: '##'. The escape string must contain only one character.(line 1, pos 2)\n\n== SQL ==\na like 'pattern%' escape '##'\n--^^^\n",
       "output": {
         "success": {
           "unresolvedFunction": {
@@ -338,6 +342,7 @@
     },
     {
       "input": "a like 'pattern%' escape ''",
+      "exception": "\n[INVALID_ESC] Found an invalid escape string: ''. The escape string must contain only one character.(line 1, pos 2)\n\n== SQL ==\na like 'pattern%' escape ''\n--^^^\n",
       "output": {
         "success": {
           "unresolvedFunction": {
@@ -411,6 +416,7 @@
     },
     {
       "input": "a like all()",
+      "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na like all()\n--^^^\n",
       "output": {
         "success": {
           "unresolvedFunction": {
@@ -482,6 +488,7 @@
     },
     {
       "input": "a like any()",
+      "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na like any()\n--^^^\n",
       "output": {
         "success": {
           "unresolvedFunction": {
@@ -553,6 +560,7 @@
     },
     {
       "input": "a like some()",
+      "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na like some()\n--^^^\n",
       "output": {
         "success": {
           "unresolvedFunction": {
@@ -810,6 +818,7 @@
     },
     {
       "input": "a not like 'pattern%' escape '\"/'",
+      "exception": "\n[INVALID_ESC] Found an invalid escape string: '\"/'. The escape string must contain only one character.(line 1, pos 2)\n\n== SQL ==\na not like 'pattern%' escape '\"/'\n--^^^\n",
       "output": {
         "success": {
           "unresolvedFunction": {
@@ -892,6 +901,7 @@
     },
     {
       "input": "a not like 'pattern%' escape ''",
+      "exception": "\n[INVALID_ESC] Found an invalid escape string: ''. The escape string must contain only one character.(line 1, pos 2)\n\n== SQL ==\na not like 'pattern%' escape ''\n--^^^\n",
       "output": {
         "success": {
           "unresolvedFunction": {

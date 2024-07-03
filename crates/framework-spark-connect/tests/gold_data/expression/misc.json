@@ -259,6 +259,7 @@
     },
     {
       "input": "1 - f('o', o(bar)) hello * world",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '*'.(line 1, pos 25)\n\n== SQL ==\n1 - f('o', o(bar)) hello * world\n-------------------------^^^\n",
       "output": {
         "failure": "invalid argument: extra tokens after wildcard expression: *"
       }
@@ -299,6 +300,7 @@
     },
     {
       "input": "GEO '(10,-6)'",
+      "exception": "\n[UNSUPPORTED_TYPED_LITERAL] Literals of the type \"GEO\" are not supported. Supported types are \"DATE\", \"TIMESTAMP_NTZ\", \"TIMESTAMP_LTZ\", \"TIMESTAMP\", \"INTERVAL\", \"X\".(line 1, pos 0)\n\n== SQL ==\nGEO '(10,-6)'\n^^^\n",
       "output": {
         "success": {
           "alias": {
@@ -380,6 +382,7 @@
     },
     {
       "input": "`fo`o.`ba`r",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '.'.(line 1, pos 5)\n\n== SQL ==\n`fo`o.`ba`r\n-----^^^\n",
       "output": {
         "failure": "invalid argument: extra tokens after wildcard expression: ."
       }
@@ -2397,6 +2400,7 @@
     },
     {
       "input": "foo(a x)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'x': extra input 'x'.(line 1, pos 6)\n\n== SQL ==\nfoo(a x)\n------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: ), found: x at Line: 1, Column: 7"
       }
@@ -2741,6 +2745,7 @@
     },
     {
       "input": "x'A1OC'",
+      "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"X\" is invalid: 'A1OC'.(line 1, pos 0)\n\n== SQL ==\nx'A1OC'\n^^^\n",
       "output": {
         "failure": "invalid argument: hex string: \"A1OC\""
       }

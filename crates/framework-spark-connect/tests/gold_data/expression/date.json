@@ -38,6 +38,7 @@
     },
     {
       "input": "DAtE 'mar 11 2016'",
+      "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"DATE\" is invalid: 'mar 11 2016'.(line 1, pos 0)\n\n== SQL ==\nDAtE 'mar 11 2016'\n^^^\n",
       "output": {
         "failure": "invalid argument: date: mar 11 2016"
       }

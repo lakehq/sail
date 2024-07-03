@@ -44,18 +44,21 @@
     },
     {
       "input": "select * from t order by a cluster by a",
+      "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 1, pos 16)\n\n== SQL ==\nselect * from t order by a cluster by a\n----------------^^^\n",
       "output": {
         "failure": "invalid argument: extra tokens after statement: cluster"
       }
     },
     {
       "input": "select * from t order by a distribute by a",
+      "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 1, pos 16)\n\n== SQL ==\nselect * from t order by a distribute by a\n----------------^^^\n",
       "output": {
         "failure": "invalid argument: extra tokens after statement: distribute"
       }
     },
     {
       "input": "select * from t order by a sort by a",
+      "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 1, pos 16)\n\n== SQL ==\nselect * from t order by a sort by a\n----------------^^^\n",
       "output": {
         "failure": "invalid argument: extra tokens after statement: sort"
       }

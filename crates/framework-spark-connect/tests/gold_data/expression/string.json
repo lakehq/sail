@@ -30,6 +30,7 @@
     },
     {
       "input": "'''",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ''': extra input '''.(line 1, pos 2)\n\n== SQL ==\n'''\n--^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Unterminated string literal at Line: 1, Column: 1"
       }

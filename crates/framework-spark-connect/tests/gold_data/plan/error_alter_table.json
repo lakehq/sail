@@ -2,24 +2,28 @@
   "tests": [
     {
       "input": "\nALTER TABLE t\nCHANGE COLUMN\ntest-col TYPE BIGINT\n        ",
+      "exception": "\n[INVALID_IDENTIFIER] The identifier test-col is invalid. Please, consider quoting it with back-quotes as `test-col`.(line 4, pos 4)\n\n== SQL ==\n\nALTER TABLE t\nCHANGE COLUMN\ntest-col TYPE BIGINT\n----^^^\n        \n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: identifier, found: - at Line: 4, Column: 5"
       }
     },
     {
       "input": "\nALTER TABLE t\nDROP COLUMN\ntest-col, test\n        ",
+      "exception": "\n[INVALID_IDENTIFIER] The identifier test-col is invalid. Please, consider quoting it with back-quotes as `test-col`.(line 4, pos 4)\n\n== SQL ==\n\nALTER TABLE t\nDROP COLUMN\ntest-col, test\n----^^^\n        \n",
       "output": {
         "failure": "invalid argument: extra tokens after statement: -"
       }
     },
     {
       "input": "\nALTER TABLE t\nRENAME COLUMN\ntest TO test-col\n        ",
+      "exception": "\n[INVALID_IDENTIFIER] The identifier test-col is invalid. Please, consider quoting it with back-quotes as `test-col`.(line 4, pos 12)\n\n== SQL ==\n\nALTER TABLE t\nRENAME COLUMN\ntest TO test-col\n------------^^^\n        \n",
       "output": {
         "failure": "invalid argument: extra tokens after statement: -"
       }
     },
     {
       "input": "\nALTER TABLE t\nRENAME COLUMN\ntest-col TO test\n        ",
+      "exception": "\n[INVALID_IDENTIFIER] The identifier test-col is invalid. Please, consider quoting it with back-quotes as `test-col`.(line 4, pos 4)\n\n== SQL ==\n\nALTER TABLE t\nRENAME COLUMN\ntest-col TO test\n----^^^\n        \n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: TO, found: - at Line: 4, Column: 5"
       }
