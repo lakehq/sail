@@ -2,6 +2,7 @@
   "tests": [
     {
       "input": "\n INSERT OVERWRITE LOCAL DIRECTORY\n USING parquet\n OPTIONS (\n  path 'xxx'\n )\n SELECT i from t1",
+      "exception": "[INTERNAL_ERROR] INSERT OVERWRITE DIRECTORY is not supported.",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: literal string, found: USING at Line: 3, Column: 2"
       }
@@ -26,6 +27,7 @@
     },
     {
       "input": "INSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2) IF NOT EXISTS\nSELECT * FROM source",
+      "exception": "\nOperation not allowed: IF NOT EXISTS with dynamic partitions: p2.(line 1, pos 0)\n\n== SQL ==\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\n^^^\nPARTITION (p1 = 3, p2) IF NOT EXISTS\nSELECT * FROM source\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: SELECT, VALUES, or a subquery in the query body, found: IF at Line: 2, Column: 24"
       }

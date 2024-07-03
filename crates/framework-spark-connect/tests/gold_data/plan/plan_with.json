@@ -20,6 +20,7 @@
     },
     {
       "input": "with cte1 (select 1), cte1 as (select 1 from cte1) select * from cte1",
+      "exception": "\nCTE definition can't have duplicate names: 'cte1'.(line 1, pos 0)\n\n== SQL ==\nwith cte1 (select 1), cte1 as (select 1 from cte1) select * from cte1\n^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: ), found: 1 at Line: 1, Column: 19"
       }

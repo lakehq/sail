@@ -14,6 +14,7 @@
     },
     {
       "input": "DELETE FROM testcat.ns1.ns2.tbl AS t(a,b,c,d) WHERE d = 2",
+      "exception": "\n[COLUMN_ALIASES_IS_NOT_ALLOWED] Columns aliases are not allowed in DELETE.(line 1, pos 36)\n\n== SQL ==\nDELETE FROM testcat.ns1.ns2.tbl AS t(a,b,c,d) WHERE d = 2\n------------------------------------^^^\n",
       "output": {
         "failure": "not implemented: SQL delete"
       }

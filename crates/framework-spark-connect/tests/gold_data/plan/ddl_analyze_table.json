@@ -14,18 +14,21 @@
     },
     {
       "input": "ANALYZE TABLE a.b.c COMPUTE STATISTICS FOR ALL",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input: missing 'COLUMNS'.(line 1, pos 46)\n\n== SQL ==\nANALYZE TABLE a.b.c COMPUTE STATISTICS FOR ALL\n----------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: COLUMNS, found: ALL at Line: 1, Column: 44"
       }
     },
     {
       "input": "ANALYZE TABLE a.b.c COMPUTE STATISTICS FOR ALL COLUMNS key, value",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'key'.(line 1, pos 55)\n\n== SQL ==\nANALYZE TABLE a.b.c COMPUTE STATISTICS FOR ALL COLUMNS key, value\n-------------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: COLUMNS, found: ALL at Line: 1, Column: 44"
       }
     },
     {
       "input": "ANALYZE TABLE a.b.c COMPUTE STATISTICS FOR COLUMNS",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 50)\n\n== SQL ==\nANALYZE TABLE a.b.c COMPUTE STATISTICS FOR COLUMNS\n--------------------------------------------------^^^\n",
       "output": {
         "failure": "not implemented: SQL analyze"
       }
@@ -98,6 +101,7 @@
     },
     {
       "input": "ANALYZE TABLES IN a.b.c COMPUTE STATISTICS xxxx",
+      "exception": "\n[INVALID_SQL_SYNTAX.ANALYZE_TABLE_UNEXPECTED_NOSCAN] Invalid SQL syntax: ANALYZE TABLE(S) ... COMPUTE STATISTICS ... XXXX must be either NOSCAN or empty.(line 1, pos 43)\n\n== SQL ==\nANALYZE TABLES IN a.b.c COMPUTE STATISTICS xxxx\n-------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: TABLE, found: TABLES at Line: 1, Column: 9"
       }
@@ -116,6 +120,7 @@
     },
     {
       "input": "analyze table a.b.c compute statistics xxxx",
+      "exception": "\n[INVALID_SQL_SYNTAX.ANALYZE_TABLE_UNEXPECTED_NOSCAN] Invalid SQL syntax: ANALYZE TABLE(S) ... COMPUTE STATISTICS ... XXXX must be either NOSCAN or empty.(line 1, pos 39)\n\n== SQL ==\nanalyze table a.b.c compute statistics xxxx\n---------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: extra tokens after statement: xxxx"
       }
@@ -128,6 +133,7 @@
     },
     {
       "input": "analyze table a.b.c partition (a) compute statistics xxxx",
+      "exception": "\n[INVALID_SQL_SYNTAX.ANALYZE_TABLE_UNEXPECTED_NOSCAN] Invalid SQL syntax: ANALYZE TABLE(S) ... COMPUTE STATISTICS ... XXXX must be either NOSCAN or empty.(line 1, pos 53)\n\n== SQL ==\nanalyze table a.b.c partition (a) compute statistics xxxx\n-----------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: extra tokens after statement: xxxx"
       }

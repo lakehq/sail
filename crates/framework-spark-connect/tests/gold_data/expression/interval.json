@@ -3587,6 +3587,7 @@
     },
     {
       "input": "INTERVAL '1 year 2 second'",
+      "exception": "\nCannot mix year-month and day-time fields: INTERVAL '1 year 2 second'.(line 1, pos 0)\n\n== SQL ==\nINTERVAL '1 year 2 second'\n^^^\n",
       "output": {
         "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
       }
@@ -3629,18 +3630,21 @@
     },
     {
       "input": "Interval 'interval 1 daysss 2 hoursss'",
+      "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"INTERVAL\" is invalid: 'interval 1 daysss 2 hoursss'.(line 1, pos 0)\n\n== SQL ==\nInterval 'interval 1 daysss 2 hoursss'\n^^^\n",
       "output": {
         "failure": "invalid argument: extra tokens after interval: daysss"
       }
     },
     {
       "input": "Interval 'interval 1 yearsss 2 monthsss'",
+      "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"INTERVAL\" is invalid: 'interval 1 yearsss 2 monthsss'.(line 1, pos 0)\n\n== SQL ==\nInterval 'interval 1 yearsss 2 monthsss'\n^^^\n",
       "output": {
         "failure": "invalid argument: extra tokens after interval: yearsss"
       }
     },
     {
       "input": "Interval 'interval 3 monthsss 1 hoursss'",
+      "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"INTERVAL\" is invalid: 'interval 3 monthsss 1 hoursss'.(line 1, pos 0)\n\n== SQL ==\nInterval 'interval 3 monthsss 1 hoursss'\n^^^\n",
       "output": {
         "failure": "invalid argument: extra tokens after interval: monthsss"
       }
@@ -4361,6 +4365,7 @@
     },
     {
       "input": "interval '10' month to second",
+      "exception": "\nIntervals FROM month TO second are not supported.(line 1, pos 9)\n\n== SQL ==\ninterval '10' month to second\n---------^^^\n",
       "output": {
         "failure": "invalid argument: interval: Standard { value: Value(SingleQuotedString(\"10\")), unit: IntervalUnit { leading_field: Some(Month), leading_precision: None, last_field: Some(Second), fractional_seconds_precision: None } }"
       }
@@ -5327,6 +5332,7 @@
     },
     {
       "input": "interval 10 nanoseconds",
+      "exception": "\nError parsing ' 10 nanoseconds' to interval, invalid unit 'nanoseconds'.(line 1, pos 9)\n\n== SQL ==\ninterval 10 nanoseconds\n---------^^^\n",
       "output": {
         "failure": "invalid argument: multi-unit interval"
       }

@@ -2,24 +2,28 @@
   "tests": [
     {
       "input": "SELECT * FROM t UNPIVOT (() FOR col in ((a, b), (c, d)))",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'.(line 1, pos 26)\n\n== SQL ==\nSELECT * FROM t UNPIVOT (() FOR col in ((a, b), (c, d)))\n--------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: identifier, found: ( at Line: 1, Column: 26"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in (()))",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'.(line 1, pos 51)\n\n== SQL ==\nSELECT * FROM t UNPIVOT ((val1, val2) FOR col in (()))\n---------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: identifier, found: ( at Line: 1, Column: 26"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a A, b), (c, d)))",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'A': extra input 'A'.(line 1, pos 53)\n\n== SQL ==\nSELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a A, b), (c, d)))\n-----------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: identifier, found: ( at Line: 1, Column: 26"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a AS A, b), (c, d)))",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'AS'.(line 1, pos 53)\n\n== SQL ==\nSELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a AS A, b), (c, d)))\n-----------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: identifier, found: ( at Line: 1, Column: 26"
       }
@@ -44,12 +48,14 @@
     },
     {
       "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ())",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'.(line 1, pos 50)\n\n== SQL ==\nSELECT * FROM t UNPIVOT ((val1, val2) FOR col in ())\n--------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: identifier, found: ( at Line: 1, Column: 26"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT (val FOR col in ())",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'.(line 1, pos 41)\n\n== SQL ==\nSELECT * FROM t UNPIVOT (val FOR col in ())\n-----------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: identifier, found: ) at Line: 1, Column: 42"
       }

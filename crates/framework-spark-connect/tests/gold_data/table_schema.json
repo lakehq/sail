@@ -2,6 +2,7 @@
   "tests": [
     {
       "input": "",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 0)\n\n== SQL ==\n\n^^^\n",
       "output": {
         "success": {
           "fields": []
@@ -40,6 +41,7 @@
     },
     {
       "input": "a",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 1)\n\n== SQL ==\na\n-^^^\n",
       "output": {
         "failure": "error in JSON serde: expected value at line 1 column 1"
       }
@@ -61,24 +63,28 @@
     },
     {
       "input": "a INT b long",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'b'.(line 1, pos 6)\n\n== SQL ==\na INT b long\n------^^^\n",
       "output": {
         "failure": "error in JSON serde: expected value at line 1 column 1"
       }
     },
     {
       "input": "a INT, b long, c int,",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 21)\n\n== SQL ==\na INT, b long, c int,\n---------------------^^^\n",
       "output": {
         "failure": "error in JSON serde: expected value at line 1 column 1"
       }
     },
     {
       "input": "a INT, b long,,",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ','.(line 1, pos 14)\n\n== SQL ==\na INT, b long,,\n--------------^^^\n",
       "output": {
         "failure": "error in JSON serde: expected value at line 1 column 1"
       }
     },
     {
       "input": "a INT,, b long",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ','.(line 1, pos 6)\n\n== SQL ==\na INT,, b long\n------^^^\n",
       "output": {
         "failure": "error in JSON serde: expected value at line 1 column 1"
       }

@@ -110,12 +110,14 @@
     },
     {
       "input": "select * from a natural cross join b",
+      "exception": "\n[INCOMPATIBLE_JOIN_TYPES] The join types NATURAL and CROSS are incompatible.(line 1, pos 16)\n\n== SQL ==\nselect * from a natural cross join b\n----------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: a join type after NATURAL, found: cross at Line: 1, Column: 25"
       }
     },
     {
       "input": "select * from a natural join b on a.id = b.id",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'on'.(line 1, pos 31)\n\n== SQL ==\nselect * from a natural join b on a.id = b.id\n-------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: extra tokens after statement: on"
       }
@@ -3018,6 +3020,7 @@
     },
     {
       "input": "select * from t1 inner join t2 inner join t3 on col3 = col2 on col3 = col1",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'on'.(line 1, pos 60)\n\n== SQL ==\nselect * from t1 inner join t2 inner join t3 on col3 = col2 on col3 = col1\n------------------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: extra tokens after statement: on"
       }
