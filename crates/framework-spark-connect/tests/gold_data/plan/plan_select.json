@@ -59,6 +59,7 @@
     },
     {
       "input": "SELECT * FROM (INSERT INTO BAR VALUES (2))",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'BAR': missing ')'.(line 1, pos 27)\n\n== SQL ==\nSELECT * FROM (INSERT INTO BAR VALUES (2))\n---------------------------^^^\n",
       "output": {
         "failure": "not supported: INSERT statement in set expression"
       }
@@ -149,6 +150,7 @@
     },
     {
       "input": "SELECT * FROM S WHERE C1 IN (INSERT INTO T VALUES (2))",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'IN'.(line 1, pos 25)\n\n== SQL ==\nSELECT * FROM S WHERE C1 IN (INSERT INTO T VALUES (2))\n-------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: ), found: INTO at Line: 1, Column: 37"
       }
@@ -302,6 +304,7 @@
     },
     {
       "input": "SELECT * FROM a.b.c TIMESTAMP AS OF col",
+      "exception": "\nInvalid time travel spec: timestamp expression cannot refer to any columns.(line 1, pos 36)\n\n== SQL ==\nSELECT * FROM a.b.c TIMESTAMP AS OF col\n------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: extra tokens after statement: AS"
       }
@@ -326,12 +329,14 @@
     },
     {
       "input": "SELECT * FROM parquet_t0 TABLESAMPLE(300M) s",
+      "exception": "\nTABLESAMPLE(byteLengthLiteral) is not supported.(line 1, pos 37)\n\n== SQL ==\nSELECT * FROM parquet_t0 TABLESAMPLE(300M) s\n-------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: identifier, found: 300M at Line: 1, Column: 38"
       }
     },
     {
       "input": "SELECT * FROM parquet_t0 TABLESAMPLE(BUCKET 3 OUT OF 32 ON rand()) s",
+      "exception": "\nTABLESAMPLE(BUCKET x OUT OF y ON function) is not supported.(line 1, pos 37)\n\n== SQL ==\nSELECT * FROM parquet_t0 TABLESAMPLE(BUCKET 3 OUT OF 32 ON rand()) s\n-------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: ), found: 3 at Line: 1, Column: 45"
       }
@@ -515,12 +520,14 @@
     },
     {
       "input": "SELECT :",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 8)\n\n== SQL ==\nSELECT :\n--------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: placeholder, found: EOF"
       }
     },
     {
       "input": "SELECT :-",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '-'.(line 1, pos 8)\n\n== SQL ==\nSELECT :-\n--------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: placeholder, found: - at Line: 1, Column: 9"
       }
@@ -771,6 +778,7 @@
     },
     {
       "input": "SELECT TRANSFORM(a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\n  USING 'cat' AS (a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\nFROM testData",
+      "exception": "\n[UNSUPPORTED_FEATURE.TRANSFORM_NON_HIVE] The feature is not supported: TRANSFORM with SERDE is only supported in hive mode.(line 1, pos 0)\n\n== SQL ==\nSELECT TRANSFORM(a, b, c)\n^^^\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\n  USING 'cat' AS (a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\nFROM testData\n",
       "output": {
         "failure": "invalid argument: extra tokens after statement: FORMAT"
       }
@@ -1147,18 +1155,21 @@
     },
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)",
+      "exception": "\n[NOT_ALLOWED_IN_FROM.LATERAL_WITH_PIVOT] Not allowed in the FROM clause: LATERAL together with PIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\n",
       "output": {
         "failure": "invalid argument: extra tokens after statement: ("
       }
     },
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\nunpivot (\n  val FOR y IN (x)\n)",
+      "exception": "\n[NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT] Not allowed in the FROM clause: UNPIVOT together with PIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\nunpivot (\n  val FOR y IN (x)\n)\n",
       "output": {
         "failure": "invalid argument: extra tokens after statement: ("
       }
     },
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\nunpivot (\n  val FOR y IN (x)\n)",
+      "exception": "\n[NOT_ALLOWED_IN_FROM.LATERAL_WITH_UNPIVOT] Not allowed in the FROM clause: LATERAL together with UNPIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\nunpivot (\n  val FOR y IN (x)\n)\n",
       "output": {
         "failure": "invalid argument: extra tokens after statement: ("
       }
@@ -1210,6 +1221,7 @@
     },
     {
       "input": "select * from default.range(2)",
+      "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_VALUED_FUNC_NAME] Invalid SQL syntax: Table valued function cannot specify database name: `default`.`range`.(line 1, pos 14)\n\n== SQL ==\nselect * from default.range(2)\n--------------^^^\n",
       "output": {
         "success": {
           "root": {
@@ -1287,6 +1299,7 @@
     },
     {
       "input": "select * from my_tvf(arg1 => table v1)",
+      "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_FUNCTION_IDENTIFIER_ARGUMENT_MISSING_PARENTHESES] Invalid SQL syntax: Syntax error: call to table-valued function is invalid because parentheses are missing around the provided TABLE argument `v1`; please surround this with parentheses and try again.(line 1, pos 29)\n\n== SQL ==\nselect * from my_tvf(arg1 => table v1)\n-----------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: ), found: v1 at Line: 1, Column: 36"
       }
@@ -1345,6 +1358,7 @@
     },
     {
       "input": "select * from spark_catalog.default.range(2)",
+      "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_VALUED_FUNC_NAME] Invalid SQL syntax: Table valued function cannot specify database name: `spark_catalog`.`default`.`range`.(line 1, pos 14)\n\n== SQL ==\nselect * from spark_catalog.default.range(2)\n--------------^^^\n",
       "output": {
         "success": {
           "root": {
@@ -1490,6 +1504,7 @@
     },
     {
       "input": "select * from t cluster by a distribute by a",
+      "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 1, pos 16)\n\n== SQL ==\nselect * from t cluster by a distribute by a\n----------------^^^\n",
       "output": {
         "failure": "not supported: CLUSTER BY clause in SELECT"
       }
@@ -1567,12 +1582,14 @@
     },
     {
       "input": "select * from t tablesample(bucket 11 out of 10) as x",
+      "exception": "\nSampling fraction (1.1) must be on interval [0, 1].(line 1, pos 16)\n\n== SQL ==\nselect * from t tablesample(bucket 11 out of 10) as x\n----------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: ), found: 11 at Line: 1, Column: 36"
       }
     },
     {
       "input": "select * from t tablesample(bucket 4 out of 10 on x) as x",
+      "exception": "\nTABLESAMPLE(BUCKET x OUT OF y ON colname) is not supported.(line 1, pos 28)\n\n== SQL ==\nselect * from t tablesample(bucket 4 out of 10 on x) as x\n----------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: ), found: 4 at Line: 1, Column: 36"
       }
@@ -2142,12 +2159,14 @@
     },
     {
       "input": "select ltrim(both 'S' from 'SS abc S'",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'.(line 1, pos 22)\n\n== SQL ==\nselect ltrim(both 'S' from 'SS abc S'\n----------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: ), found: 'S' at Line: 1, Column: 19"
       }
     },
     {
       "input": "select rtrim(trailing 'S' from 'SS abc S'",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'.(line 1, pos 26)\n\n== SQL ==\nselect rtrim(trailing 'S' from 'SS abc S'\n--------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: ), found: 'S' at Line: 1, Column: 23"
       }

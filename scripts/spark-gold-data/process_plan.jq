@@ -46,7 +46,7 @@ else
             | select(.kind == "plan")
             | . += {"group": (.data | classify)}
             | select(.group == $group)
-            | {"input": .data}
-        ] | unique
+            | {"input": .data, "exception": .exception}
+        ] | unique_by(.input)
     }
 end

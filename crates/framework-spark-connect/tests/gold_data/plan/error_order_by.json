@@ -2,12 +2,14 @@
   "tests": [
     {
       "input": "\nSELECT * FROM tab\nWINDOW hyphen-window AS\n  (PARTITION BY a, b ORDER BY c rows BETWEEN 1 PRECEDING AND 1 FOLLOWING)\n        ",
+      "exception": "\n[INVALID_IDENTIFIER] The identifier hyphen-window is invalid. Please, consider quoting it with back-quotes as `hyphen-window`.(line 3, pos 13)\n\n== SQL ==\n\nSELECT * FROM tab\nWINDOW hyphen-window AS\n-------------^^^\n  (PARTITION BY a, b ORDER BY c rows BETWEEN 1 PRECEDING AND 1 FOLLOWING)\n        \n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: AS, found: - at Line: 3, Column: 14"
       }
     },
     {
       "input": "\nSELECT a, b\nFROM grammar-breaker\nWHERE a-b > 10\nGROUP BY fake-breaker\nORDER BY c\n        ",
+      "exception": "\n[INVALID_IDENTIFIER] The identifier grammar-breaker is invalid. Please, consider quoting it with back-quotes as `grammar-breaker`.(line 3, pos 12)\n\n== SQL ==\n\nSELECT a, b\nFROM grammar-breaker\n------------^^^\nWHERE a-b > 10\nGROUP BY fake-breaker\nORDER BY c\n        \n",
       "output": {
         "failure": "invalid argument: extra tokens after statement: -"
       }
@@ -153,6 +155,7 @@
     },
     {
       "input": "\nSELECT product, category, dense_rank()\nOVER (PARTITION BY category ORDER BY revenue DESC) as hyphen-rank\nFROM productRevenue\n        ",
+      "exception": "\n[INVALID_IDENTIFIER] The identifier hyphen-rank is invalid. Please, consider quoting it with back-quotes as `hyphen-rank`.(line 3, pos 60)\n\n== SQL ==\n\nSELECT product, category, dense_rank()\nOVER (PARTITION BY category ORDER BY revenue DESC) as hyphen-rank\n------------------------------------------------------------^^^\nFROM productRevenue\n        \n",
       "output": {
         "failure": "invalid argument: extra tokens after statement: -"
       }

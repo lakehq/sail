@@ -15,6 +15,8 @@ pub struct TestData<S, T> {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TestCase<S, T> {
     input: S,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exception: Option<String>,
     output: Option<TestOutput<T>>,
 }
 
@@ -35,6 +37,8 @@ pub struct InputOnlyTestData<S> {
 #[serde(rename_all = "camelCase")]
 pub struct InputOnlyTestCase<S> {
     input: S,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exception: Option<String>,
 }
 
 impl<S, T> TestData<S, T>
@@ -56,6 +60,7 @@ where
                 };
                 TestCase {
                     input: x.input,
+                    exception: x.exception,
                     output: Some(output),
                 }
             })
@@ -78,6 +83,7 @@ where
             .into_iter()
             .map(|x| TestCase {
                 input: x.input,
+                exception: x.exception,
                 output: None,
             })
             .collect();

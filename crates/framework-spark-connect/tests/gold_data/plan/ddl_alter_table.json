@@ -2,24 +2,28 @@
   "tests": [
     {
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\"",
+      "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"COMMENT\" more than once, which is invalid.(line 1, pos 62)\n\n== SQL ==\nALTER TABLE my_tab ADD COLUMN b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\"\n--------------------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: string, found: \"abc\" at Line: 1, Column: 48"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\"",
+      "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"DEFAULT\" more than once, which is invalid.(line 1, pos 62)\n\n== SQL ==\nALTER TABLE my_tab ADD COLUMN b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\"\n--------------------------------------------------------------^^^\n",
       "output": {
         "failure": "not implemented: SQL alter table"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING FIRST COMMENT \"abc\" AFTER y",
+      "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"FIRST|AFTER\" more than once, which is invalid.(line 1, pos 59)\n\n== SQL ==\nALTER TABLE my_tab ADD COLUMN b STRING FIRST COMMENT \"abc\" AFTER y\n-----------------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: extra tokens after statement: COMMENT"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING NOT NULL DEFAULT \"abc\" NOT NULL",
+      "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"NOT NULL\" more than once, which is invalid.(line 1, pos 62)\n\n== SQL ==\nALTER TABLE my_tab ADD COLUMN b STRING NOT NULL DEFAULT \"abc\" NOT NULL\n--------------------------------------------------------------^^^\n",
       "output": {
         "failure": "not implemented: SQL alter table"
       }
@@ -182,12 +186,14 @@
     },
     {
       "input": "ALTER TABLE t1 ALTER COLUMN a.b.c DROP DEFAULT SET DEFAULT 42",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'SET'.(line 1, pos 47)\n\n== SQL ==\nALTER TABLE t1 ALTER COLUMN a.b.c DROP DEFAULT SET DEFAULT 42\n-----------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 30"
       }
     },
     {
       "input": "ALTER TABLE t1 ALTER COLUMN a.b.c SET DEFAULT ",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 46)\n\n== SQL ==\nALTER TABLE t1 ALTER COLUMN a.b.c SET DEFAULT \n----------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 30"
       }
@@ -284,6 +290,7 @@
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bad_type",
+      "exception": "\n[UNSUPPORTED_DATATYPE] Unsupported data type \"BAD_TYPE\".(line 1, pos 47)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bad_type\n-----------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
       }
@@ -296,18 +303,21 @@
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment'",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'.(line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment'\n------------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment' AFTER d",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'.(line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment' AFTER d\n------------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT AFTER d",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'.(line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT AFTER d\n------------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
       }
@@ -350,6 +360,7 @@
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c new_name INT",
+      "exception": "\nRenaming column is not supported in Hive-style ALTER COLUMN, please run RENAME COLUMN instead.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name CHANGE COLUMN a.b.c new_name INT\n^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: identifier, found: . at Line: 1, Column: 39"
       }
@@ -392,12 +403,14 @@
     },
     {
       "input": "ALTER TABLE table_name PARTITION (a='1') CHANGE COLUMN a.b.c c INT",
+      "exception": "\nOperation not allowed: ALTER TABLE table PARTITION partition_spec CHANGE COLUMN.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name PARTITION (a='1') CHANGE COLUMN a.b.c c INT\n^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: RENAME, found: CHANGE at Line: 1, Column: 42"
       }
     },
     {
       "input": "ALTER TABLE table_name PARTITION (a='1') REPLACE COLUMNS (x string)",
+      "exception": "\nOperation not allowed: ALTER TABLE table PARTITION partition_spec REPLACE COLUMNS.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name PARTITION (a='1') REPLACE COLUMNS (x string)\n^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: RENAME, found: REPLACE at Line: 1, Column: 42"
       }
@@ -410,12 +423,14 @@
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (a STRING COMMENT 'x' COMMENT 'y')",
+      "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE REPLACE column a specifies descriptor \"COMMENT\" more than once, which is invalid.(line 1, pos 61)\n\n== SQL ==\nALTER TABLE table_name REPLACE COLUMNS (a STRING COMMENT 'x' COMMENT 'y')\n-------------------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (a.b.c string)",
+      "exception": "\nReplacing with a nested column is not supported in Hive-style REPLACE COLUMNS.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name REPLACE COLUMNS (a.b.c string)\n^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
       }
@@ -440,12 +455,14 @@
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (x string FIRST)",
+      "exception": "\nColumn position is not supported in Hive-style REPLACE COLUMNS.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name REPLACE COLUMNS (x string FIRST)\n^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (x string NOT NULL)",
+      "exception": "\nNOT NULL is not supported in Hive-style REPLACE COLUMNS.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name REPLACE COLUMNS (x string NOT NULL)\n^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
       }

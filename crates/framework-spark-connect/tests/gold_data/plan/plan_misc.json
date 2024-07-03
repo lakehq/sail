@@ -262,12 +262,14 @@
     },
     {
       "input": "/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\n",
+      "exception": "\n[UNCLOSED_BRACKETED_COMMENT] Found an unclosed bracketed comment. Please, append */ at the end of the comment.\n== SQL ==\n/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\n",
       "output": {
         "failure": "invalid argument: sql parser error: Unexpected EOF while in a multi-line comment at Line: 10, Column: 1"
       }
     },
     {
       "input": "/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\nselect 4 as d\n",
+      "exception": "\n[UNCLOSED_BRACKETED_COMMENT] Found an unclosed bracketed comment. Please, append */ at the end of the comment.\n== SQL ==\n/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\nselect 4 as d\n",
       "output": {
         "failure": "invalid argument: sql parser error: Unexpected EOF while in a multi-line comment at Line: 11, Column: 1"
       }
@@ -280,12 +282,14 @@
     },
     {
       "input": "from (from a union all from b) c select *",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'union'.(line 1, pos 13)\n\n== SQL ==\nfrom (from a union all from b) c select *\n-------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
       }
     },
     {
       "input": "from a",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 6)\n\n== SQL ==\nfrom a\n------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
       }
@@ -298,12 +302,14 @@
     },
     {
       "input": "from a select * from b",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'.(line 1, pos 16)\n\n== SQL ==\nfrom a select * from b\n----------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
       }
     },
     {
       "input": "from a select * select * from x where a.s < 10",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'.(line 1, pos 25)\n\n== SQL ==\nfrom a select * select * from x where a.s < 10\n-------------------------^^^\n",
       "output": {
         "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
       }

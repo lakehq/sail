@@ -417,6 +417,7 @@
     },
     {
       "input": "it is not a data type",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'is'.(line 1, pos 3)\n\n== SQL ==\nit is not a data type\n---^^^\n",
       "output": {
         "failure": "error in JSON serde: expected value at line 1 column 1"
       }
@@ -553,12 +554,14 @@
     },
     {
       "input": "struct<x+y: int, 1.1:timestamp>",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '+'.(line 1, pos 8)\n\n== SQL ==\nstruct<x+y: int, 1.1:timestamp>\n--------^^^\n",
       "output": {
         "failure": "error in JSON serde: expected value at line 1 column 1"
       }
     },
     {
       "input": "struct<x: int",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input: missing '>'.(line 1, pos 13)\n\n== SQL ==\nstruct<x: int\n-------------^^^\n",
       "output": {
         "failure": "error in JSON serde: expected value at line 1 column 1"
       }
@@ -589,12 +592,14 @@
     },
     {
       "input": "unknown",
+      "exception": "\n[UNSUPPORTED_DATATYPE] Unsupported data type \"UNKNOWN\".(line 1, pos 0)\n\n== SQL ==\nunknown\n^^^\n",
       "output": {
         "failure": "error in JSON serde: expected value at line 1 column 1"
       }
     },
     {
       "input": "unknown(1,2,3)",
+      "exception": "\n[UNSUPPORTED_DATATYPE] Unsupported data type \"UNKNOWN(1,2,3)\".(line 1, pos 0)\n\n== SQL ==\nunknown(1,2,3)\n^^^\n",
       "output": {
         "failure": "error in JSON serde: expected value at line 1 column 1"
       }

@@ -2,6 +2,6 @@
     "tests": [
         inputs
         | select(.kind == "table-schema")
-        | {"input": .data}
-    ] | unique
+        | {"input": .data, "exception": .exception}
+    ] | unique_by(.input)
 }
