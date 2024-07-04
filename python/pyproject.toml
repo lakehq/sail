@@ -23,9 +23,8 @@ scikit-learn = "^1.1"
 mlflow = "^2.3.1"
 memory-profiler = "0.60.0"
 
-grpcio = ">=1.48,<1.57"
-grpcio-status = ">=1.48,<1.57"
-protobuf = "3.20.3"
+grpcio = ">=1.56,<1.57"
+grpcio-status = ">=1.56,<1.57"
 googleapis-common-protos = "1.56.4"
 
 [tool.poetry.group.dev.dependencies]
