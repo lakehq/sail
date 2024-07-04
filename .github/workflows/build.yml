@@ -30,7 +30,7 @@ jobs:
         run: |
           commit="${{ github.event.pull_request.head.sha || github.sha }}"
           commit_message="$(git show --pretty='format:%s' -s "${commit}")"
-          test_marker="$(printf '%s' "${commit_message}" | grep -q -i '\[\(spark tests\|tests\)\]' && printf 'true' || printf 'false')"
+          test_marker="$(printf '%s' "${commit_message}" | grep -q -i '\[\(spark tests\?\|tests\?\)\]' && printf 'true' || printf 'false')"
           test_head_ref="${{ github.event_name == 'pull_request' && github.ref || github.event.after || github.sha }}"
           test_base_ref="${{ github.event_name == 'pull_request' && github.base_ref || github.event.before || github.sha }}"
           echo "test_marker=${test_marker}" >> "$GITHUB_OUTPUT"
