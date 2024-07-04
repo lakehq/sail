@@ -31,7 +31,7 @@ sbt_command+='sql/testOnly org.apache.spark.sql.FunctionCollectorSuite; '
 sbt_command+='exit'
 
 env SPARK_LOCAL_IP=127.0.0.1 \
-  SPARK_SUITE_OUTPUT_DIR="${PWD}/${logs_path}" \
+  SPARK_SUITE_OUTPUT_DIR="${logs_path}" \
   build/sbt "${sbt_command}"
 
 echo "Removing existing test data..."

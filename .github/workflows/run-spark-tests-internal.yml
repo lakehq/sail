@@ -53,17 +53,8 @@ jobs:
         id: cache-logs
         with:
           path: |
-            opt/spark/logs
+            python/tmp/spark-tests
           key: spark-tests-logs-${{ runner.os }}-${{ steps.info.outputs.env_key }}-${{ steps.info.outputs.commit_hash }}
-
-      - if: steps.cache-logs.outputs.cache-hit != 'true'
-        uses: actions/checkout@v4
-        name: Checkout Spark
-        with:
-          repository: apache/spark
-          path: opt/spark
-          ref: v${{ inputs.spark_version }}
-          fetch-depth: 1
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         uses: actions/setup-java@v4
@@ -105,6 +96,15 @@ jobs:
           key: ${{ format('spark-tests-package-{0}-pyspark-{1}-{2}', runner.os, inputs.spark_version, hashFiles(format('scripts/spark-tests/spark-{0}.patch', inputs.spark_version), 'scripts/spark-tests/build-pyspark.sh')) }}
 
       - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-pyspark.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        name: Checkout Spark
+        with:
+          repository: apache/spark
+          path: opt/spark
+          ref: v${{ inputs.spark_version }}
+          fetch-depth: 1
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-pyspark.outputs.cache-hit != 'true'
         name: Build PySpark package
         run: |
           scripts/spark-tests/build-pyspark.sh
@@ -143,5 +143,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-logs-${{ inputs.name }}
-          path: opt/spark/logs/latest
+          path: python/tmp/spark-tests/latest
           retention-days: 7
