@@ -342,14 +342,20 @@ pub enum PlanNode {
     FunctionExists {
         function: ObjectName,
     },
-    CreateTable {
-        input: Box<Plan>,
+    CreateExternalTable {
         table: ObjectName,
-        description: Option<String>,
-        // constraints: Constraints,
+        schema: Schema,
+        column_defaults: HashMap<String, Expr>,
+        constraints: Vec<TableConstraint>,
+        location: Option<String>,
+        file_format: Option<String>,
+        table_partition_cols: Vec<Identifier>,
+        file_sort_order: Vec<Vec<Expr>>,
         if_not_exists: bool,
-        or_replace: bool,
-        column_defaults: Vec<(String, Expr)>,
+        unbounded: bool,
+        options: HashMap<String, String>,
+        query: Option<Plan>,
+        definition: Option<String>,
     },
     DropTemporaryView {
         view: ObjectName,
@@ -592,4 +598,16 @@ pub struct StorageLevel {
     pub use_off_heap: bool,
     pub deserialized: bool,
     pub replication: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TableConstraint {
+    Unique {
+        name: Option<Identifier>,
+        columns: Vec<Identifier>,
+    },
+    PrimaryKey {
+        name: Option<Identifier>,
+        columns: Vec<Identifier>,
+    },
 }

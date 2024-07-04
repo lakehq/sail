@@ -254,171 +254,177 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             nulls_distinct: _,
             predicate: _,
         }) => Err(SqlError::todo("SQL create index")),
-        Statement::CreateTable(ast::CreateTable {
-            or_replace, // Using
-            temporary: _,
-            external: _,
-            global: _,
-            if_not_exists, // Using
-            transient: _,
-            volatile: _,
-            name,        // Using
-            columns,     // Using
-            constraints, // Using
-            hive_distribution: _,
-            hive_formats: _,
-            table_properties, // Using
-            with_options,     // Using
-            file_format,      // Using
-            location,         // Using
-            query,            // Using
-            without_rowid: _,
-            like: _,
-            clone: _,
-            engine: _,
-            comment: _,
-            auto_increment_offset: _,
-            default_charset: _,
-            collation: _,
-            on_commit: _,
-            on_cluster: _,
-            primary_key: _,
-            order_by: _,
-            partition_by: _,
-            cluster_by: _,
-            options: _,
-            strict: _,
-            copy_grants: _,
-            enable_schema_evolution: _,
-            change_tracking: _,
-            data_retention_time_in_days: _,
-            max_data_extension_time_in_days: _,
-            default_ddl_collation: _,
-            with_aggregation_policy: _,
-            with_row_access_policy: _,
-            with_tags: _,
-        }) => {
-            if !table_properties.is_empty() {
-                return Err(SqlError::todo(format!(
-                    "Statement::CreateTable table_properties: {:?}",
-                    table_properties
-                )));
-            }
-            if !with_options.is_empty() {
-                return Err(SqlError::todo(format!(
-                    "Statement::CreateTable with_options: {:?}",
-                    with_options
-                )));
-            }
-            if query.is_some() && location.is_some() {
-                return Err(SqlError::invalid(
-                    "Cannot specify both a query and a location in CREATE TABLE",
-                ));
-            }
-
-            let mut all_constraints = constraints;
-            let inline_constraints = calc_inline_constraints_from_columns(&columns);
-            all_constraints.extend(inline_constraints);
-
-            let column_defaults = build_column_defaults(&columns)?;
-
-            match query {
-                Some(query) => {
-                    let plan = from_ast_query(*query)?;
-
-                    let plan = if !columns.is_empty() {
-                        // let plan_schema = plan.schema();
-                        // let plan_schema_fields = plan_schema.fields.0;
-                        // let plan_schema_fields_len = plan_schema_fields.len();
-                        //
-                        // let schema = build_schema_from_columns(columns)?;
-                        // let schema_fields = schema.fields.0;
-                        // let schema_fields_len = schema_fields.len();
-                        //
-                        // if schema_fields_len != plan_schema_fields_len {
-                        //     return Err(SqlError::invalid(format!(
-                        //         "Mismatch: {} columns specified, but result has {} columns",
-                        //         schema_fields_len, plan_schema_fields_len,
-                        //     )));
-                        // }
-                        //
-                        // let project_exprs = schema_fields
-                        //     .iter()
-                        //     .zip(plan_schema_fields)
-                        //     .map(|(schema_field, plan_schema_field)| {
-                        //         spec::Expr::Cast {
-                        //             expr: Box::new(spec::Expr::Column(
-                        //                 plan_schema_field.name.into(),
-                        //             )),
-                        //             cast_to_type: schema_field.data_type.clone(),
-                        //         }
-                        //         // cast(col(plan_field.name()), field.data_type.clone())
-                        //         //     .alias(field.name())
-                        //     })
-                        //     .collect::<Vec<_>>();
-                        // LogicalPlanBuilder::from(plan.clone())
-                        //     .project(project_exprs)?
-                        //     .build()?
-                        plan
-                    } else {
-                        plan
-                    };
-
-                    // let constraints =
-                    //     Constraints::new_from_table_constraints(&all_constraints, plan.schema())?;
-
-                    Ok(spec::Plan::new(spec::PlanNode::CreateTable {
-                        input: Box::new(plan),
-                        table: from_ast_object_name(name)?,
-                        description: None, // TODO: Use comment?
-                        if_not_exists,
-                        or_replace,
-                        column_defaults,
-                    }))
-                }
-                None => {
-                    match location {
-                        Some(location) => {
-                            let schema = build_schema_from_columns(columns)?;
-                            let read = spec::Plan::new(spec::PlanNode::Read {
-                                read_type: spec::ReadType::DataSource {
-                                    format: file_format.map(|ff| ff.to_string()),
-                                    schema: Some(schema),
-                                    options: Default::default(),
-                                    paths: vec![location],
-                                    predicates: vec![],
-                                },
-                                is_streaming: false,
-                            });
-                            Ok(spec::Plan::new(spec::PlanNode::CreateTable {
-                                input: Box::new(read),
-                                table: from_ast_object_name(name)?,
-                                description: None, // TODO: Use comment?
-                                if_not_exists,
-                                or_replace,
-                                column_defaults,
-                            }))
-                        }
-                        None => {
-                            let _schema = build_schema_from_columns(columns)?;
-                            let plan = spec::Plan::new(spec::PlanNode::Empty {
-                                produce_one_row: false,
-                            });
-                            // let constraints =
-                            //     Constraints::new_from_table_constraints(&all_constraints, plan.schema())?;
-
-                            Ok(spec::Plan::new(spec::PlanNode::CreateTable {
-                                input: Box::new(plan),
-                                table: from_ast_object_name(name)?,
-                                description: None, // TODO: Use comment?
-                                if_not_exists,
-                                or_replace,
-                                column_defaults,
-                            }))
-                        }
-                    }
-                }
-            }
+        Statement::CreateTable(create_table) => {
+            let ast::CreateTable {
+                or_replace, // Using
+                temporary: _,
+                external: _,
+                global: _,
+                if_not_exists, // Using
+                transient: _,
+                volatile: _,
+                name,        // Using
+                columns,     // Using
+                constraints, // Using
+                hive_distribution: _,
+                hive_formats: _,
+                table_properties, // Using
+                with_options,     // Using
+                file_format,      // Using
+                location,         // Using
+                query,            // Using
+                without_rowid: _,
+                like: _,
+                clone: _,
+                engine: _,
+                comment,
+                auto_increment_offset: _,
+                default_charset: _,
+                collation: _,
+                on_commit: _,
+                on_cluster: _,
+                primary_key: _,
+                order_by: _,
+                partition_by: _,
+                cluster_by: _,
+                options: _,
+                strict: _,
+                copy_grants: _,
+                enable_schema_evolution: _,
+                change_tracking: _,
+                data_retention_time_in_days: _,
+                max_data_extension_time_in_days: _,
+                default_ddl_collation: _,
+                with_aggregation_policy: _,
+                with_row_access_policy: _,
+                with_tags: _,
+            } = create_table;
+            println!("CHECK HERE CREATE TABLE: {:?}", create_table);
+            Err(SqlError::todo("SQL create table"))
+            // if !table_properties.is_empty() {
+            //     return Err(SqlError::todo(format!(
+            //         "Statement::CreateTable table_properties: {:?}",
+            //         table_properties
+            //     )));
+            // }
+            // if !with_options.is_empty() {
+            //     return Err(SqlError::todo(format!(
+            //         "Statement::CreateTable with_options: {:?}",
+            //         with_options
+            //     )));
+            // }
+            // if query.is_some() && location.is_some() {
+            //     return Err(SqlError::invalid(
+            //         "Cannot specify both a query and a location in CREATE TABLE",
+            //     ));
+            // }
+            //
+            // let file_format = file_format.map(|ff| ff.to_string());
+            // let comment = comment.map(|c| c.to_string());
+            //
+            // let mut all_constraints = constraints;
+            // let inline_constraints = calc_inline_constraints_from_columns(&columns);
+            // all_constraints.extend(inline_constraints);
+            //
+            // let column_defaults = build_column_defaults(&columns)?;
+            //
+            // match query {
+            //     Some(query) => {
+            //         let plan = from_ast_query(*query)?;
+            //
+            //         let plan = if !columns.is_empty() {
+            //             // let plan_schema = plan.schema();
+            //             // let plan_schema_fields = plan_schema.fields.0;
+            //             // let plan_schema_fields_len = plan_schema_fields.len();
+            //             //
+            //             // let schema = build_schema_from_columns(columns)?;
+            //             // let schema_fields = schema.fields.0;
+            //             // let schema_fields_len = schema_fields.len();
+            //             //
+            //             // if schema_fields_len != plan_schema_fields_len {
+            //             //     return Err(SqlError::invalid(format!(
+            //             //         "Mismatch: {} columns specified, but result has {} columns",
+            //             //         schema_fields_len, plan_schema_fields_len,
+            //             //     )));
+            //             // }
+            //             //
+            //             // let project_exprs = schema_fields
+            //             //     .iter()
+            //             //     .zip(plan_schema_fields)
+            //             //     .map(|(schema_field, plan_schema_field)| {
+            //             //         spec::Expr::Cast {
+            //             //             expr: Box::new(spec::Expr::Column(
+            //             //                 plan_schema_field.name.into(),
+            //             //             )),
+            //             //             cast_to_type: schema_field.data_type.clone(),
+            //             //         }
+            //             //         // cast(col(plan_field.name()), field.data_type.clone())
+            //             //         //     .alias(field.name())
+            //             //     })
+            //             //     .collect::<Vec<_>>();
+            //             // LogicalPlanBuilder::from(plan.clone())
+            //             //     .project(project_exprs)?
+            //             //     .build()?
+            //             plan
+            //         } else {
+            //             plan
+            //         };
+            //
+            //         // let constraints =
+            //         //     Constraints::new_from_table_constraints(&all_constraints, plan.schema())?;
+            //
+            //         Ok(spec::Plan::new(spec::PlanNode::CreateTable {
+            //             input: Box::new(plan),
+            //             table: from_ast_object_name(name)?,
+            //             description: comment,
+            //             if_not_exists,
+            //             or_replace,
+            //             column_defaults,
+            //         }))
+            //     }
+            //     None => {
+            //         match location {
+            //             Some(location) => {
+            //                 let schema = build_schema_from_columns(columns)?;
+            //                 let read = spec::Plan::new(spec::PlanNode::Read {
+            //                     read_type: spec::ReadType::DataSource {
+            //                         format: file_format,
+            //                         schema: Some(schema),
+            //                         options: Default::default(),
+            //                         paths: vec![location],
+            //                         predicates: vec![],
+            //                     },
+            //                     is_streaming: false,
+            //                 });
+            //                 Ok(spec::Plan::new(spec::PlanNode::CreateTable {
+            //                     input: Box::new(read),
+            //                     table: from_ast_object_name(name)?,
+            //                     description: comment,
+            //                     if_not_exists,
+            //                     or_replace,
+            //                     column_defaults,
+            //                 }))
+            //             }
+            //             None => {
+            //                 let _schema = build_schema_from_columns(columns)?;
+            //                 let plan = spec::Plan::new(spec::PlanNode::Empty {
+            //                     produce_one_row: false,
+            //                 });
+            //                 // let constraints =
+            //                 //     Constraints::new_from_table_constraints(&all_constraints, plan.schema())?;
+            //
+            //                 Ok(spec::Plan::new(spec::PlanNode::CreateTable {
+            //                     input: Box::new(plan),
+            //                     table: from_ast_object_name(name)?,
+            //                     description: comment,
+            //                     if_not_exists,
+            //                     or_replace,
+            //                     column_defaults,
+            //                 }))
+            //             }
+            //         }
+            //     }
+            // }
         }
         Statement::CreateView {
             or_replace: _,

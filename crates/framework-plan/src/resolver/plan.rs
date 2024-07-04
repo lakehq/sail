@@ -26,6 +26,7 @@ use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::{columnize_expr, expand_qualified_wildcard, expand_wildcard};
 use datafusion_expr::{build_join_schema, LogicalPlanBuilder};
 use framework_common::spec;
+use framework_common::spec::{Identifier, ObjectName, Plan, Schema, TableConstraint};
 use framework_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 
 use crate::error::{PlanError, PlanResult};
@@ -977,27 +978,35 @@ impl PlanResolver<'_> {
                     self.config.clone(),
                 )?),
             }),
-            PlanNode::CreateTable {
-                input,
+            PlanNode::CreateExternalTable {
                 table,
-                description: _,
-                // constraints,
-                if_not_exists,
-                or_replace,
+                schema,
                 column_defaults,
+                constraints,
+                location,
+                file_format,
+                table_partition_cols,
+                file_sort_order,
+                if_not_exists,
+                unbounded,
+                options,
+                query,
+                definition,
             } => {
-                let plan = self.resolve_plan(*input, state).await?;
-                let schema = plan.schema();
+                let fields = self.resolve_fields(schema.fields)?;
+                let schema = DFSchema::from_unqualifed_fields(fields, HashMap::new())?;
                 let column_defaults: Vec<(String, Expr)> = column_defaults
                     .into_iter()
-                    .map(|(name, expr)| Ok((name, self.resolve_expression(expr, schema, state)?)))
+                    .map(|(name, expr)| Ok((name, self.resolve_expression(expr, &schema, state)?)))
                     .collect::<PlanResult<Vec<(String, Expr)>>>()?;
+                let constraints = self.resolve_table_constraints(constraints, &schema)?;
+
                 LogicalPlan::Extension(Extension {
                     node: Arc::new(CatalogCommandNode::try_new(
                         CatalogCommand::CreateTable {
                             table: build_table_reference(table)?,
                             plan: Arc::new(plan),
-                            constraints: Constraints::empty(),
+                            constraints: constraints,
                             if_not_exists,
                             or_replace,
                             column_defaults,

@@ -13,6 +13,8 @@ use crate::expression::from_ast_expression;
 /// depending on whether they are quoted. Unquoted identifiers are typically case-insensitive
 /// and should be normalized to lowercase for consistent handling. Quoted identifiers, however,
 /// retain their case sensitivity and must be preserved exactly as written.
+/// TODO: Make sure this gets called everywhere in framework-sql
+///     because framework-plan spec expects the raw identifier.
 pub fn normalize_ident(id: ast::Ident) -> String {
     let ast::Ident { value, quote_style } = id;
     match quote_style {
