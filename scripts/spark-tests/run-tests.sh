@@ -4,17 +4,27 @@ set -euo 'pipefail'
 
 project_path="$(git rev-parse --show-toplevel)"
 
-cd "${project_path}"/opt/spark
+cd "${project_path}"/python
 
-source venv/bin/activate
+source .venv/bin/activate
 
-# Define the directory for test logs. The `logs/` directory is in `.gitignore`.
-logs_dir="logs/${TEST_RUN_NAME:-latest}"
+# Define the directory for test logs. The `tmp/` directory is in `.gitignore`.
+logs_dir="tmp/spark-tests/${TEST_RUN_NAME:-latest}"
 
 echo "Removing existing test logs..."
 rm -rf "${logs_dir}"
 mkdir -p "${logs_dir}"
 
+# Force color output for local test runs.
+if [ -z "${CI:-}" ]; then
+  export FORCE_COLOR="1"
+fi
+# The test name can be long, so we set the terminal width
+# for better test log readability.
+export COLUMNS="120"
+
+export SPARK_TESTING="1"
+export PYARROW_IGNORE_TIMEZONE="1"
 # Define a few environment variables if they are not set.
 # This does not override an environment variable if it is set but empty.
 # If the remote port is empty, the test runs against the original Spark Connect server.
@@ -27,7 +37,9 @@ function run_pytest() {
 
   echo "Test suite: ${name}"
   # We ignore the pytext exit code so that the command can complete successfully.
-  python/run-pytest.sh \
+  python -m pytest \
+    -o "doctest_optionflags=ELLIPSIS NORMALIZE_WHITESPACE" \
+    --basetemp=tmp/pytest \
     --disable-warnings \
     --report-log="${logs_dir}/${name}.jsonl" \
     "${args[@]}" \
@@ -47,8 +59,8 @@ if [ "${#pytest_args[@]}" -ne 0 ]; then
   run_pytest "test" "${pytest_args[@]}"
 else
   pytest_args=("--tb=no" "-rN")
-  run_pytest "test-connect" "python/pyspark/sql/tests/connect/" "${pytest_args[@]}"
-  run_pytest "doctest-column" "--doctest-modules" "python/pyspark/sql/column.py" "${pytest_args[@]}"
-  run_pytest "doctest-dataframe" "--doctest-modules" "python/pyspark/sql/dataframe.py" "${pytest_args[@]}"
-  run_pytest "doctest-functions" "--doctest-modules" "python/pyspark/sql/functions.py" "${pytest_args[@]}"
+  run_pytest "test-connect" "--pyargs" "pyspark.sql.tests.connect" "${pytest_args[@]}"
+  run_pytest "doctest-column" "--doctest-modules" "--pyargs" "pyspark.sql.column" "${pytest_args[@]}"
+  run_pytest "doctest-dataframe" "--doctest-modules" "--pyargs" "pyspark.sql.dataframe" "${pytest_args[@]}"
+  run_pytest "doctest-functions" "--doctest-modules" "--pyargs" "pyspark.sql.functions" "${pytest_args[@]}"
 fi

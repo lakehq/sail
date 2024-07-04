@@ -47,10 +47,6 @@ pyenv global 3.11.9
 pip install poetry
 ```
 
-The same Python version should be used in all the following sections.
-We will use this Python interpreter to create two virtual environments,
-one for the Spark project and the other for the framework.
-
 ### Java Setup
 
 Please install OpenJDK 17 on your host.
@@ -69,26 +65,34 @@ Run the following command to clone the Spark project.
 git clone git@github.com:apache/spark.git opt/spark
 ```
 
-Run the following command to patch the Spark project and set up the Python virtual environment for Spark.
-You need to make sure the Spark directory is clean before applying the patch.
+Run the following command to build the Spark project.
+You need to make sure the Spark directory is clean, since the script internally applies a patch to the repository.
+The patch is reverted before the script exits (either successfully or with an error).
 
 ```bash
-git -C opt/spark checkout v3.5.1
-git -C opt/spark apply ../../scripts/spark-tests/spark-3.5.1.patch
-scripts/spark-tests/build-spark-jars.sh
-scripts/spark-tests/setup-spark-env.sh
+scripts/spark-tests/build-pyspark.sh
 ```
 
-It may take a while to build the Spark project.
-(On GitHub Actions, it takes about 40 minutes on the default GitHub-hosted runners.)
+The command creates a PySpark package containing Python code along with the JAR files.
+Python tests are also included in the patched package.
+
+The command takes a while to run.
+On GitHub Actions, it takes about 40 minutes on the default GitHub-hosted runners.
+Fortunately, you only need to run this command once, unless there is a change in the Spark patch file.
+The patch file is in the `scripts/spark-tests` directory.
 
 ### Python Virtual Environment Setup
 
-Run the following commands to set up a Python virtual environment for the project.
+Run the following commands to set up a Python virtual environment,
+and install the patched PySpark package created in the previous section.
 
 ```bash
 poetry -C python install
+poetry -C python run pip install opt/spark/python/dist/pyspark-3.5.1.tar.gz
 ```
+
+When needed, you can run `poetry -C python install` again to replace the patched PySpark package
+with the official one from PyPI.
 
 ### Running the Spark Connect Server
 
@@ -107,7 +111,7 @@ poetry -C python run python -m app
 ### Running Spark Tests
 
 After running the Spark Connect server, start another terminal and use the following command to run the Spark tests.
-The test logs will be written to `opt/spark/logs/<name>` where `<name>` is defined by
+The test logs will be written to `python/tmp/spark-tests/<name>` where `<name>` is defined by
 the `TEST_RUN_NAME` environment variable whose default value is `latest`.
 
 ```bash
@@ -123,10 +127,10 @@ You can also use `PYTEST_` environment variables to customize the test execution
 For example, `PYTEST_ADDOPTS="-k <expression>"` can be used to run specific tests matching `<expression>`.
 
 ```bash
-# Write the test logs to a different directory (`opt/spark/logs/selected`).
+# Write the test logs to a different directory (`python/tmp/spark-tests/selected`).
 export TEST_RUN_NAME=selected
 
-scripts/spark-tests/run-tests.sh python/pyspark/sql/tests/connect/ -v -k test_something
+scripts/spark-tests/run-tests.sh --pyargs pyspark.sql.tests.connect -v -k test_sql
 ```
 
 When you customize the test execution using the above command, a single test suite will be run,
@@ -140,18 +144,26 @@ You can replace `test.jsonl` with a different log file name if you are analyzing
 (1) Get the error counts for failed tests.
 
 ```bash
-# You can remove the `--slurpfile baseline opt/spark/logs/baseline/test.jsonl` arguments
+# You can remove the `--slurpfile baseline python/tmp/spark-tests/baseline/test.jsonl` arguments
 # if you do not have baseline test logs.
 jq -r -f scripts/spark-tests/count-errors.jq \
-  --slurpfile baseline opt/spark/logs/baseline/test.jsonl \
-  opt/spark/logs/latest/test.jsonl | less
+  --slurpfile baseline python/tmp/spark-tests/baseline/test.jsonl \
+  python/tmp/spark-tests/latest/test.jsonl | less
 ```
 
 (2) Show a sorted list of passed tests.
 
 ```bash
 jq -r -f scripts/spark-tests/show-passed-tests.jq \
-  opt/spark/logs/latest/test.jsonl | less
+  python/tmp/spark-tests/latest/test.jsonl | less
+```
+
+(3) Show the differences of passed tests between two runs.
+
+```bash
+diff -U 0 \
+  <(jq -r -f scripts/spark-tests/show-passed-tests.jq python/tmp/spark-tests/baseline/test.jsonl) \
+  <(jq -r -f scripts/spark-tests/show-passed-tests.jq python/tmp/spark-tests/latest/test.jsonl)
 ```
 
 ### Starting a Local PySpark Session
@@ -159,15 +171,12 @@ jq -r -f scripts/spark-tests/show-passed-tests.jq \
 You can use the following commands to start a local PySpark session.
 
 ```bash
-cd opt/spark
-source venv/bin/activate
-
 # Run the PySpark shell using the original Java implementation.
-env SPARK_PREPEND_CLASSES=1 SPARK_LOCAL_IP=127.0.0.1 bin/pyspark
+poetry -C python run pyspark
 
 # Run the PySpark shell using the Spark Connect implementation.
 # You can ignore the "sparkContext() is not implemented" error when the shell starts.
-env SPARK_PREPEND_CLASSES=1 SPARK_REMOTE="sc://localhost:50051" bin/pyspark
+env SPARK_REMOTE="sc://localhost:50051" poetry -C python run pyspark
 ```
 
 ### Running Spark Tests in GitHub Actions
@@ -222,11 +231,24 @@ across environments. Please consider the following items.
    export PYO3_PYTHON="$(git rev-parse --show-toplevel)/python/.venv/bin/python"
    ```
 
-### Updating the Spark Patch
+### Working with the Spark Patch
 
-You can use the following commands to update the Spark patch with your local modification.
+Occasionally, you may need to patch the Spark source code further.
+Here are the commands that can be helpful for this purpose.
 
 ```bash
+# Apply the patch.
+# You can now modify the Spark source code.
+git -C opt/spark apply ../../scripts/spark-tests/spark-3.5.1.patch
+
+# Update the Spark patch file with your local modification.
 git -C opt/spark add .
 git -C opt/spark diff --staged -p > scripts/spark-tests/spark-3.5.1.patch
+
+# Revert the patch.
+git -C opt/spark reset
+git -C opt/spark apply -R ../../scripts/spark-tests/spark-3.5.1.patch
 ```
+
+However, note that we should keep the patch minimal.
+It is possible to alter many Spark test behaviors at runtime via monkey-patching using pytest fixtures.
