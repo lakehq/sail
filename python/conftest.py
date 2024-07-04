@@ -1,7 +1,7 @@
-from dataclasses import dataclass
 import os
 import shlex
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
@@ -37,16 +37,21 @@ def spark_env_var(tmp_path_factory):
     use pytest to run the tests.
     """
     tmp_dir = tmp_path_factory.mktemp("spark-tmp-dir-")
-    java_options = " ".join([
-        f"-Djava.io.tmpdir={shlex.quote(tmp_dir.as_posix())}",
-        "-Dio.netty.tryReflectionSetAccessible=true",
-        "-Xss4M",
-    ])
+    java_options = " ".join(
+        [
+            f"-Djava.io.tmpdir={shlex.quote(tmp_dir.as_posix())}",
+            "-Dio.netty.tryReflectionSetAccessible=true",
+            "-Xss4M",
+        ]
+    )
     warehouse_dir = tmp_dir / "spark-warehouse"
     spark_args = [
-        "--conf", f"spark.driver.extraJavaOptions={shlex.quote(java_options)}",
-        "--conf", f"spark.executor.extraJavaOptions={shlex.quote(java_options)}",
-        "--conf", f"spark.sql.warehouse.dir={shlex.quote(warehouse_dir.as_posix())}",
+        "--conf",
+        f"spark.driver.extraJavaOptions={shlex.quote(java_options)}",
+        "--conf",
+        f"spark.executor.extraJavaOptions={shlex.quote(java_options)}",
+        "--conf",
+        f"spark.sql.warehouse.dir={shlex.quote(warehouse_dir.as_posix())}",
         "pyspark-shell",
     ]
     os.environ["TMPDIR"] = tmp_dir.as_posix()
@@ -59,12 +64,7 @@ def spark_doctest_session(doctest_namespace, request):
     if request.config.option.doctestmodules:
         from pyspark.sql import SparkSession
 
-        spark = (
-            SparkSession.builder
-            .appName("doctest")
-            .remote("local")
-            .getOrCreate()
-        )
+        spark = SparkSession.builder.appName("doctest").remote("local").getOrCreate()
         doctest_namespace["spark"] = spark
         yield
         spark.stop()
@@ -119,7 +119,7 @@ SKIPPED_SPARK_TESTS = [
 
 
 def pytest_collection_modifyitems(
-        session: pytest.Session, config: pytest.Config, items: List[pytest.Item]
+    session: pytest.Session, config: pytest.Config, items: List[pytest.Item]
 ) -> None:
     if not _is_spark_testing():
         return
