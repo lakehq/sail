@@ -5,3 +5,4 @@ pub mod literal;
 pub mod parser;
 pub mod plan;
 pub mod statement;
+pub mod utils;

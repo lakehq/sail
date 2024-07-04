@@ -1053,14 +1053,22 @@ impl TryFrom<Catalog> for spec::PlanNode {
                 } = x;
                 let schema: Option<spec::DataType> = schema.map(|s| s.try_into()).transpose()?;
                 let schema = schema.map(|s| s.into_schema(DEFAULT_FIELD_NAME, true));
+                let read = spec::Plan::new(spec::PlanNode::Read {
+                    // TODO: use spark.sql.sources.default to get the default source
+                    read_type: spec::ReadType::DataSource {
+                        format: source,
+                        schema: schema,
+                        options,
+                        paths: path.map(|x| vec![x]).unwrap_or_default(),
+                        predicates: vec![],
+                    },
+                    is_streaming: false,
+                });
                 // "CreateExternalTable" is deprecated, so we use "CreateTable" instead.
                 Ok(spec::PlanNode::CreateTable {
+                    input: Box::new(read),
                     table: parse_object_name(table_name.as_str())?,
-                    path,
-                    source,
                     description: None,
-                    schema,
-                    options,
                     if_not_exists: false,    // TODO: Check if exists in options
                     or_replace: false,       // TODO: Check if exists in options
                     column_defaults: vec![], // TODO: Check if exists in options
@@ -1077,13 +1085,21 @@ impl TryFrom<Catalog> for spec::PlanNode {
                 } = x;
                 let schema: Option<spec::DataType> = schema.map(|s| s.try_into()).transpose()?;
                 let schema = schema.map(|s| s.into_schema(DEFAULT_FIELD_NAME, true));
+                let read = spec::Plan::new(spec::PlanNode::Read {
+                    // TODO: use spark.sql.sources.default to get the default source
+                    read_type: spec::ReadType::DataSource {
+                        format: source,
+                        schema: schema,
+                        options,
+                        paths: path.map(|x| vec![x]).unwrap_or_default(),
+                        predicates: vec![],
+                    },
+                    is_streaming: false,
+                });
                 Ok(spec::PlanNode::CreateTable {
+                    input: Box::new(read),
                     table: parse_object_name(table_name.as_str())?,
-                    path,
-                    source,
                     description,
-                    schema,
-                    options,
                     if_not_exists: false,    // TODO: Check if exists in options
                     or_replace: false,       // TODO: Check if exists in options
                     column_defaults: vec![], // TODO: Check if exists in options

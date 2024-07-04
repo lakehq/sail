@@ -343,12 +343,9 @@ pub enum PlanNode {
         function: ObjectName,
     },
     CreateTable {
+        input: Box<Plan>,
         table: ObjectName,
-        path: Option<String>,
-        source: Option<String>,
         description: Option<String>,
-        schema: Option<Schema>,
-        options: HashMap<String, String>,
         // constraints: Constraints,
         if_not_exists: bool,
         or_replace: bool,

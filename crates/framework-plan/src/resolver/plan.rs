@@ -978,30 +978,15 @@ impl PlanResolver<'_> {
                 )?),
             }),
             PlanNode::CreateTable {
+                input,
                 table,
-                path,
-                source,
                 description: _,
-                schema,
-                options,
                 // constraints,
                 if_not_exists,
                 or_replace,
                 column_defaults,
             } => {
-                // TODO: use spark.sql.sources.default to get the default source
-                let read = spec::Plan::new(PlanNode::Read {
-                    read_type: spec::ReadType::DataSource {
-                        // TODO: is `source` and `format` equivalent?
-                        format: source,
-                        schema,
-                        options,
-                        paths: path.map(|x| vec![x]).unwrap_or_default(),
-                        predicates: vec![],
-                    },
-                    is_streaming: false,
-                });
-                let plan = self.resolve_plan(read, state).await?;
+                let plan = self.resolve_plan(*input, state).await?;
                 let schema = plan.schema();
                 let column_defaults: Vec<(String, Expr)> = column_defaults
                     .into_iter()
