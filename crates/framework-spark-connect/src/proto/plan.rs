@@ -1057,7 +1057,7 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     // TODO: use spark.sql.sources.default to get the default source
                     read_type: spec::ReadType::DataSource {
                         format: source,
-                        schema: schema,
+                        schema,
                         options,
                         paths: path.map(|x| vec![x]).unwrap_or_default(),
                         predicates: vec![],
@@ -1089,7 +1089,7 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     // TODO: use spark.sql.sources.default to get the default source
                     read_type: spec::ReadType::DataSource {
                         format: source,
-                        schema: schema,
+                        schema,
                         options,
                         paths: path.map(|x| vec![x]).unwrap_or_default(),
                         predicates: vec![],

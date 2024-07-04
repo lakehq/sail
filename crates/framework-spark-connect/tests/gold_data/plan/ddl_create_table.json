@@ -45,13 +45,55 @@
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS INPUTFORMAT 'inFormat' OUTPUTFORMAT 'outFormat'\n        ",
       "output": {
-        "failure": "not implemented: SQL create table"
+        "success": {
+          "root": {
+            "createTable": {
+              "input": {
+                "empty": {
+                  "produceOneRow": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "my_tab"
+              ],
+              "description": null,
+              "ifNotExists": false,
+              "orReplace": false,
+              "columnDefaults": []
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS INPUTFORMAT 'inFormat' OUTPUTFORMAT 'outFormat'\nROW FORMAT SERDE 'customSerde'\n        ",
       "output": {
-        "failure": "not implemented: SQL create table"
+        "success": {
+          "root": {
+            "createTable": {
+              "input": {
+                "empty": {
+                  "produceOneRow": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "my_tab"
+              ],
+              "description": null,
+              "ifNotExists": false,
+              "orReplace": false,
+              "columnDefaults": []
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -71,37 +113,163 @@
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS parquet\n        ",
       "output": {
-        "failure": "not implemented: SQL create table"
+        "success": {
+          "root": {
+            "createTable": {
+              "input": {
+                "empty": {
+                  "produceOneRow": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "my_tab"
+              ],
+              "description": null,
+              "ifNotExists": false,
+              "orReplace": false,
+              "columnDefaults": []
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS rcfile\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n        ",
       "output": {
-        "failure": "not implemented: SQL create table"
+        "success": {
+          "root": {
+            "createTable": {
+              "input": {
+                "empty": {
+                  "produceOneRow": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "my_tab"
+              ],
+              "description": null,
+              "ifNotExists": false,
+              "orReplace": false,
+              "columnDefaults": []
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS sequencefile\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n        ",
       "output": {
-        "failure": "not implemented: SQL create table"
+        "success": {
+          "root": {
+            "createTable": {
+              "input": {
+                "empty": {
+                  "produceOneRow": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "my_tab"
+              ],
+              "description": null,
+              "ifNotExists": false,
+              "orReplace": false,
+              "columnDefaults": []
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS textfile\nROW FORMAT DELIMITED\nFIELDS TERMINATED BY ',' ESCAPED BY '\\\\' -- double escape for Scala and for SQL\nCOLLECTION ITEMS TERMINATED BY '#'\nMAP KEYS TERMINATED BY '='\nLINES TERMINATED BY '\\n'\n      ",
       "output": {
-        "failure": "not implemented: SQL create table"
+        "success": {
+          "root": {
+            "createTable": {
+              "input": {
+                "empty": {
+                  "produceOneRow": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "my_tab"
+              ],
+              "description": null,
+              "ifNotExists": false,
+              "orReplace": false,
+              "columnDefaults": []
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS textfile\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n        ",
       "output": {
-        "failure": "not implemented: SQL create table"
+        "success": {
+          "root": {
+            "createTable": {
+              "input": {
+                "empty": {
+                  "produceOneRow": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "my_tab"
+              ],
+              "description": null,
+              "ifNotExists": false,
+              "orReplace": false,
+              "columnDefaults": []
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint) PARTITIONED BY (part string)",
       "output": {
-        "failure": "not implemented: SQL create table"
+        "success": {
+          "root": {
+            "createTable": {
+              "input": {
+                "empty": {
+                  "produceOneRow": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "my_tab"
+              ],
+              "description": null,
+              "ifNotExists": false,
+              "orReplace": false,
+              "columnDefaults": []
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -162,7 +330,28 @@
     {
       "input": "CREATE TABLE my_tab PARTITIONED BY (part string)",
       "output": {
-        "failure": "not implemented: SQL create table"
+        "success": {
+          "root": {
+            "createTable": {
+              "input": {
+                "empty": {
+                  "produceOneRow": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "my_tab"
+              ],
+              "description": null,
+              "ifNotExists": false,
+              "orReplace": false,
+              "columnDefaults": []
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -209,7 +398,37 @@
       "input": "CREATE TABLE my_tab(a INT, b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\")",
       "exception": "\n[CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] CREATE TABLE column b specifies descriptor \"DEFAULT\" more than once, which is invalid.(line 1, pos 59)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\")\n-----------------------------------------------------------^^^\n",
       "output": {
-        "failure": "not implemented: SQL create table"
+        "success": {
+          "root": {
+            "createTable": {
+              "input": {
+                "empty": {
+                  "produceOneRow": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "my_tab"
+              ],
+              "description": null,
+              "ifNotExists": false,
+              "orReplace": false,
+              "columnDefaults": [
+                [
+                  "b",
+                  {
+                    "literal": {
+                      "string": "123"
+                    }
+                  }
+                ]
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -222,7 +441,37 @@
       "input": "CREATE TABLE my_tab(a INT, b STRING NOT NULL DEFAULT \"abc\" NOT NULL)",
       "exception": "\n[CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] CREATE TABLE column b specifies descriptor \"NOT NULL\" more than once, which is invalid.(line 1, pos 59)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING NOT NULL DEFAULT \"abc\" NOT NULL)\n-----------------------------------------------------------^^^\n",
       "output": {
-        "failure": "not implemented: SQL create table"
+        "success": {
+          "root": {
+            "createTable": {
+              "input": {
+                "empty": {
+                  "produceOneRow": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "my_tab"
+              ],
+              "description": null,
+              "ifNotExists": false,
+              "orReplace": false,
+              "columnDefaults": [
+                [
+                  "b",
+                  {
+                    "literal": {
+                      "string": "abc"
+                    }
+                  }
+                ]
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -249,7 +498,28 @@
       "input": "CREATE TABLE my_tab(a INT, b STRING) LOCATION '/tmp/file' LOCATION '/tmp/file'",
       "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: LOCATION. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) LOCATION '/tmp/file' LOCATION '/tmp/file'\n-------------------------------------^^^\n",
       "output": {
-        "failure": "not implemented: SQL create table"
+        "success": {
+          "root": {
+            "createTable": {
+              "input": {
+                "empty": {
+                  "produceOneRow": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "my_tab"
+              ],
+              "description": null,
+              "ifNotExists": false,
+              "orReplace": false,
+              "columnDefaults": []
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -270,21 +540,84 @@
       "input": "CREATE TABLE my_tab(a INT, b STRING) ROW FORMAT SERDE 'serde' ROW FORMAT SERDE 'serde'",
       "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: ROW FORMAT. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) ROW FORMAT SERDE 'serde' ROW FORMAT SERDE 'serde'\n-------------------------------------^^^\n",
       "output": {
-        "failure": "not implemented: SQL create table"
+        "success": {
+          "root": {
+            "createTable": {
+              "input": {
+                "empty": {
+                  "produceOneRow": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "my_tab"
+              ],
+              "description": null,
+              "ifNotExists": false,
+              "orReplace": false,
+              "columnDefaults": []
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(a INT, b STRING) STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out' STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out'",
       "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: STORED AS/BY. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out' STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out'\n-------------------------------------^^^\n",
       "output": {
-        "failure": "not implemented: SQL create table"
+        "success": {
+          "root": {
+            "createTable": {
+              "input": {
+                "empty": {
+                  "produceOneRow": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "my_tab"
+              ],
+              "description": null,
+              "ifNotExists": false,
+              "orReplace": false,
+              "columnDefaults": []
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(a INT, b STRING) STORED AS parquet STORED AS parquet",
       "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: STORED AS/BY. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) STORED AS parquet STORED AS parquet\n-------------------------------------^^^\n",
       "output": {
-        "failure": "not implemented: SQL create table"
+        "success": {
+          "root": {
+            "createTable": {
+              "input": {
+                "empty": {
+                  "produceOneRow": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "my_tab"
+              ],
+              "description": null,
+              "ifNotExists": false,
+              "orReplace": false,
+              "columnDefaults": []
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

@@ -1,9 +1,11 @@
+use std::collections::HashMap;
+
+use framework_common::spec;
+use sqlparser::ast;
+
 use crate::data_type::from_ast_data_type;
 use crate::error::SqlResult;
 use crate::expression::from_ast_expression;
-use framework_common::spec;
-use sqlparser::ast;
-use std::collections::HashMap;
 
 /// Normalize an identifier to a lowercase string if the identifier is not quoted.
 ///

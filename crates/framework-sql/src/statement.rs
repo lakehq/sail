@@ -1,20 +1,14 @@
-use crate::data_type::from_ast_data_type;
-use datafusion::logical_expr::{
-    CreateMemoryTable, DdlStatement, LogicalPlan, UserDefinedLogicalNode,
-};
 use framework_common::spec;
 use sqlparser::ast;
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Token;
-use std::sync::Arc;
 
 use crate::error::{SqlError, SqlResult};
-use crate::expression::{from_ast_expression, from_ast_object_name, from_ast_order_by};
-use crate::literal::LiteralValue;
+use crate::expression::from_ast_object_name;
 use crate::parser::{fail_on_extra_token, SparkDialect};
 use crate::plan::from_ast_query;
-use crate::utils::{build_column_defaults, build_schema_from_columns, normalize_ident};
+use crate::utils::{build_column_defaults, build_schema_from_columns};
 
 pub fn parse_sql_statement(sql: &str) -> SqlResult<spec::Plan> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
@@ -406,7 +400,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
                             }))
                         }
                         None => {
-                            let schema = build_schema_from_columns(columns)?;
+                            let _schema = build_schema_from_columns(columns)?;
                             let plan = spec::Plan::new(spec::PlanNode::Empty {
                                 produce_one_row: false,
                             });
