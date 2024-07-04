@@ -115,3 +115,33 @@ jobs:
           pip install poetry
           poetry -C python install
           poetry -C python run pip install opt/spark/python/dist/pyspark-3.5.1.tar.gz
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        uses: ./.github/actions/setup-rust
+        name: Set up Rust
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        name: Run Spark Connect server
+        run: scripts/spark-tests/run-server.sh
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        name: Wait for Spark Connect server to start
+        run: scripts/spark-tests/wait-for-server.sh
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        name: Run Spark tests
+        # We set a timeout to prevent the tests from hanging indefinitely,
+        # which can happen occasionally for unknown reasons.
+        # The timeout value should be adjusted as we add more tests.
+        timeout-minutes: 5
+        run: |
+          export TEST_RUN_GIT_COMMIT="${{ steps.info.outputs.commit_hash }}"
+          export TEST_RUN_GIT_REF="${{ inputs.ref }}"
+          scripts/spark-tests/run-tests.sh
+
+      - name: Upload test logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ inputs.name }}
+          path: python/tmp/spark-tests/latest
+          retention-days: 7
