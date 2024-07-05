@@ -1048,52 +1048,50 @@ impl TryFrom<RelType> for RelationNode {
                     seed,
                 }))
             }
-            RelType::Catalog(catalog) => catalog.try_into(),
+            RelType::Catalog(catalog) => Ok(RelationNode::Command(catalog.try_into()?)),
             RelType::Extension(_) => Err(SparkError::unsupported("extension relation")),
             RelType::Unknown(_) => Err(SparkError::unsupported("unknown relation")),
         }
     }
 }
 
-impl TryFrom<Catalog> for RelationNode {
+impl TryFrom<Catalog> for spec::CommandNode {
     type Error = SparkError;
 
-    fn try_from(catalog: Catalog) -> SparkResult<RelationNode> {
+    fn try_from(catalog: Catalog) -> SparkResult<spec::CommandNode> {
         let Catalog { cat_type } = catalog;
         let cat_type = cat_type.required("catalog type")?;
         match cat_type {
             CatType::CurrentDatabase(x) => {
                 let sc::CurrentDatabase {} = x;
-                Ok(RelationNode::Command(spec::CommandNode::CurrentDatabase))
+                Ok(spec::CommandNode::CurrentDatabase)
             }
             CatType::SetCurrentDatabase(x) => {
                 let sc::SetCurrentDatabase { db_name } = x;
-                Ok(RelationNode::Command(
-                    spec::CommandNode::SetCurrentDatabase {
-                        database_name: db_name.into(),
-                    },
-                ))
+                Ok(spec::CommandNode::SetCurrentDatabase {
+                    database_name: db_name.into(),
+                })
             }
             CatType::ListDatabases(x) => {
                 let sc::ListDatabases { pattern } = x;
-                Ok(RelationNode::Command(spec::CommandNode::ListDatabases {
+                Ok(spec::CommandNode::ListDatabases {
                     catalog: None,
                     database_pattern: pattern,
-                }))
+                })
             }
             CatType::ListTables(x) => {
                 let sc::ListTables { db_name, pattern } = x;
-                Ok(RelationNode::Command(spec::CommandNode::ListTables {
+                Ok(spec::CommandNode::ListTables {
                     database: db_name.map(|x| parse_object_name(x.as_str())).transpose()?,
                     table_pattern: pattern,
-                }))
+                })
             }
             CatType::ListFunctions(x) => {
                 let sc::ListFunctions { db_name, pattern } = x;
-                Ok(RelationNode::Command(spec::CommandNode::ListFunctions {
+                Ok(spec::CommandNode::ListFunctions {
                     database: db_name.map(|x| parse_object_name(x.as_str())).transpose()?,
                     function_pattern: pattern,
-                }))
+                })
             }
             CatType::ListColumns(x) => {
                 let sc::ListColumns {
@@ -1104,15 +1102,13 @@ impl TryFrom<Catalog> for RelationNode {
                     Some(x) => parse_object_name(x.as_str())?.child(table_name.into()),
                     None => spec::ObjectName::new_unqualified(table_name.into()),
                 };
-                Ok(RelationNode::Command(spec::CommandNode::ListColumns {
-                    table,
-                }))
+                Ok(spec::CommandNode::ListColumns { table })
             }
             CatType::GetDatabase(x) => {
                 let sc::GetDatabase { db_name } = x;
-                Ok(RelationNode::Command(spec::CommandNode::GetDatabase {
+                Ok(spec::CommandNode::GetDatabase {
                     database: parse_object_name(db_name.as_str())?,
-                }))
+                })
             }
             CatType::GetTable(x) => {
                 let sc::GetTable {
@@ -1123,7 +1119,7 @@ impl TryFrom<Catalog> for RelationNode {
                     Some(x) => parse_object_name(x.as_str())?.child(table_name.into()),
                     None => spec::ObjectName::new_unqualified(table_name.into()),
                 };
-                Ok(RelationNode::Command(spec::CommandNode::GetTable { table }))
+                Ok(spec::CommandNode::GetTable { table })
             }
             CatType::GetFunction(x) => {
                 let sc::GetFunction {
@@ -1134,15 +1130,13 @@ impl TryFrom<Catalog> for RelationNode {
                     Some(x) => parse_object_name(x.as_str())?.child(function_name.into()),
                     None => spec::ObjectName::new_unqualified(function_name.into()),
                 };
-                Ok(RelationNode::Command(spec::CommandNode::GetFunction {
-                    function,
-                }))
+                Ok(spec::CommandNode::GetFunction { function })
             }
             CatType::DatabaseExists(x) => {
                 let sc::DatabaseExists { db_name } = x;
-                Ok(RelationNode::Command(spec::CommandNode::DatabaseExists {
+                Ok(spec::CommandNode::DatabaseExists {
                     database: parse_object_name(db_name.as_str())?,
-                }))
+                })
             }
             CatType::TableExists(x) => {
                 let sc::TableExists {
@@ -1153,9 +1147,7 @@ impl TryFrom<Catalog> for RelationNode {
                     Some(x) => parse_object_name(x.as_str())?.child(table_name.into()),
                     None => spec::ObjectName::new_unqualified(table_name.into()),
                 };
-                Ok(RelationNode::Command(spec::CommandNode::TableExists {
-                    table,
-                }))
+                Ok(spec::CommandNode::TableExists { table })
             }
             CatType::FunctionExists(x) => {
                 let sc::FunctionExists {
@@ -1166,9 +1158,7 @@ impl TryFrom<Catalog> for RelationNode {
                     Some(x) => parse_object_name(x.as_str())?.child(function_name.into()),
                     None => spec::ObjectName::new_unqualified(function_name.into()),
                 };
-                Ok(RelationNode::Command(spec::CommandNode::FunctionExists {
-                    function,
-                }))
+                Ok(spec::CommandNode::FunctionExists { function })
             }
             CatType::CreateExternalTable(x) => {
                 let sc::CreateExternalTable {
@@ -1181,7 +1171,7 @@ impl TryFrom<Catalog> for RelationNode {
                 let schema = schema.required("create external table schema")?;
                 let schema: spec::DataType = schema.try_into()?;
                 let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
-                Ok(RelationNode::Command(spec::CommandNode::CreateTable {
+                Ok(spec::CommandNode::CreateTable {
                     table: parse_object_name(table_name.as_str())?,
                     definition: spec::TableDefinition {
                         schema,
@@ -1199,7 +1189,7 @@ impl TryFrom<Catalog> for RelationNode {
                         query: None,
                         definition: None,
                     },
-                }))
+                })
             }
             CatType::CreateTable(x) => {
                 let sc::CreateTable {
@@ -1213,7 +1203,7 @@ impl TryFrom<Catalog> for RelationNode {
                 let schema = schema.required("create external table schema")?;
                 let schema: spec::DataType = schema.try_into()?;
                 let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
-                Ok(RelationNode::Command(spec::CommandNode::CreateTable {
+                Ok(spec::CommandNode::CreateTable {
                     table: parse_object_name(table_name.as_str())?,
                     definition: spec::TableDefinition {
                         schema,
@@ -1231,41 +1221,35 @@ impl TryFrom<Catalog> for RelationNode {
                         query: None,
                         definition: None,
                     },
-                }))
+                })
             }
             CatType::DropTempView(x) => {
                 let sc::DropTempView { view_name } = x;
-                Ok(RelationNode::Command(
-                    spec::CommandNode::DropTemporaryView {
-                        view: parse_object_name(view_name.as_str())?,
-                        is_global: false,
-                        if_exists: false,
-                    },
-                ))
+                Ok(spec::CommandNode::DropTemporaryView {
+                    view: parse_object_name(view_name.as_str())?,
+                    is_global: false,
+                    if_exists: false,
+                })
             }
             CatType::DropGlobalTempView(x) => {
                 let sc::DropGlobalTempView { view_name } = x;
-                Ok(RelationNode::Command(
-                    spec::CommandNode::DropTemporaryView {
-                        view: parse_object_name(view_name.as_str())?,
-                        is_global: true,
-                        if_exists: false,
-                    },
-                ))
+                Ok(spec::CommandNode::DropTemporaryView {
+                    view: parse_object_name(view_name.as_str())?,
+                    is_global: true,
+                    if_exists: false,
+                })
             }
             CatType::RecoverPartitions(x) => {
                 let sc::RecoverPartitions { table_name } = x;
-                Ok(RelationNode::Command(
-                    spec::CommandNode::RecoverPartitions {
-                        table: parse_object_name(table_name.as_str())?,
-                    },
-                ))
+                Ok(spec::CommandNode::RecoverPartitions {
+                    table: parse_object_name(table_name.as_str())?,
+                })
             }
             CatType::IsCached(x) => {
                 let sc::IsCached { table_name } = x;
-                Ok(RelationNode::Command(spec::CommandNode::IsCached {
+                Ok(spec::CommandNode::IsCached {
                     table: parse_object_name(table_name.as_str())?,
-                }))
+                })
             }
             CatType::CacheTable(x) => {
                 let sc::CacheTable {
@@ -1274,50 +1258,46 @@ impl TryFrom<Catalog> for RelationNode {
                 } = x;
                 let storage_level: Option<spec::StorageLevel> =
                     storage_level.map(|s| s.try_into()).transpose()?;
-                Ok(RelationNode::Command(spec::CommandNode::CacheTable {
+                Ok(spec::CommandNode::CacheTable {
                     table: parse_object_name(table_name.as_str())?,
                     storage_level,
-                }))
+                })
             }
             CatType::UncacheTable(x) => {
                 let sc::UncacheTable { table_name } = x;
-                Ok(RelationNode::Command(spec::CommandNode::UncacheTable {
+                Ok(spec::CommandNode::UncacheTable {
                     table: parse_object_name(table_name.as_str())?,
-                }))
+                })
             }
             CatType::ClearCache(x) => {
                 let sc::ClearCache {} = x;
-                Ok(RelationNode::Command(spec::CommandNode::ClearCache))
+                Ok(spec::CommandNode::ClearCache)
             }
             CatType::RefreshTable(x) => {
                 let sc::RefreshTable { table_name } = x;
-                Ok(RelationNode::Command(spec::CommandNode::RefreshTable {
+                Ok(spec::CommandNode::RefreshTable {
                     table: parse_object_name(table_name.as_str())?,
-                }))
+                })
             }
             CatType::RefreshByPath(x) => {
                 let sc::RefreshByPath { path } = x;
-                Ok(RelationNode::Command(spec::CommandNode::RefreshByPath {
-                    path,
-                }))
+                Ok(spec::CommandNode::RefreshByPath { path })
             }
             CatType::CurrentCatalog(x) => {
                 let sc::CurrentCatalog {} = x;
-                Ok(RelationNode::Command(spec::CommandNode::CurrentCatalog))
+                Ok(spec::CommandNode::CurrentCatalog)
             }
             CatType::SetCurrentCatalog(x) => {
                 let sc::SetCurrentCatalog { catalog_name } = x;
-                Ok(RelationNode::Command(
-                    spec::CommandNode::SetCurrentCatalog {
-                        catalog_name: catalog_name.into(),
-                    },
-                ))
+                Ok(spec::CommandNode::SetCurrentCatalog {
+                    catalog_name: catalog_name.into(),
+                })
             }
             CatType::ListCatalogs(x) => {
                 let sc::ListCatalogs { pattern } = x;
-                Ok(RelationNode::Command(spec::CommandNode::ListCatalogs {
+                Ok(spec::CommandNode::ListCatalogs {
                     catalog_pattern: pattern,
-                }))
+                })
             }
         }
     }
