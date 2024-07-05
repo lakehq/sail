@@ -43,6 +43,9 @@ out/
 [._]ss[a-gi-z]
 [._]sw[a-p]
 
+# Spark
+spark-warehouse/
+
 # Kubernetes
 Chart.lock
 *.tar

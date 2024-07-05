@@ -53,7 +53,7 @@ jobs:
         id: cache-logs
         with:
           path: |
-            python/tmp/spark-tests
+            tmp/spark-tests
           key: spark-tests-logs-${{ runner.os }}-${{ steps.info.outputs.env_key }}-${{ steps.info.outputs.commit_hash }}
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
@@ -143,5 +143,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-logs-${{ inputs.name }}
-          path: python/tmp/spark-tests/latest
+          path: tmp/spark-tests/latest
           retention-days: 7

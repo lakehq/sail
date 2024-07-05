@@ -111,7 +111,7 @@ poetry -C python run python -m app
 ### Running Spark Tests
 
 After running the Spark Connect server, start another terminal and use the following command to run the Spark tests.
-The test logs will be written to `python/tmp/spark-tests/<name>` where `<name>` is defined by
+The test logs will be written to `tmp/spark-tests/<name>` where `<name>` is defined by
 the `TEST_RUN_NAME` environment variable whose default value is `latest`.
 
 ```bash
@@ -127,7 +127,7 @@ You can also use `PYTEST_` environment variables to customize the test execution
 For example, `PYTEST_ADDOPTS="-k <expression>"` can be used to run specific tests matching `<expression>`.
 
 ```bash
-# Write the test logs to a different directory (`python/tmp/spark-tests/selected`).
+# Write the test logs to a different directory (`tmp/spark-tests/selected`).
 export TEST_RUN_NAME=selected
 
 scripts/spark-tests/run-tests.sh --pyargs pyspark.sql.tests.connect -v -k test_sql
@@ -144,26 +144,26 @@ You can replace `test.jsonl` with a different log file name if you are analyzing
 (1) Get the error counts for failed tests.
 
 ```bash
-# You can remove the `--slurpfile baseline python/tmp/spark-tests/baseline/test.jsonl` arguments
+# You can remove the `--slurpfile baseline tmp/spark-tests/baseline/test.jsonl` arguments
 # if you do not have baseline test logs.
 jq -r -f scripts/spark-tests/count-errors.jq \
-  --slurpfile baseline python/tmp/spark-tests/baseline/test.jsonl \
-  python/tmp/spark-tests/latest/test.jsonl | less
+  --slurpfile baseline tmp/spark-tests/baseline/test.jsonl \
+  tmp/spark-tests/latest/test.jsonl | less
 ```
 
 (2) Show a sorted list of passed tests.
 
 ```bash
 jq -r -f scripts/spark-tests/show-passed-tests.jq \
-  python/tmp/spark-tests/latest/test.jsonl | less
+  tmp/spark-tests/latest/test.jsonl | less
 ```
 
 (3) Show the differences of passed tests between two runs.
 
 ```bash
 diff -U 0 \
-  <(jq -r -f scripts/spark-tests/show-passed-tests.jq python/tmp/spark-tests/baseline/test.jsonl) \
-  <(jq -r -f scripts/spark-tests/show-passed-tests.jq python/tmp/spark-tests/latest/test.jsonl)
+  <(jq -r -f scripts/spark-tests/show-passed-tests.jq tmp/spark-tests/baseline/test.jsonl) \
+  <(jq -r -f scripts/spark-tests/show-passed-tests.jq tmp/spark-tests/latest/test.jsonl)
 ```
 
 ### Starting a Local PySpark Session

@@ -4,12 +4,9 @@ set -euo 'pipefail'
 
 project_path="$(git rev-parse --show-toplevel)"
 
-cd "${project_path}"/python
-
-source .venv/bin/activate
-
 # Define the directory for test logs. The `tmp/` directory is in `.gitignore`.
-logs_dir="tmp/spark-tests/${TEST_RUN_NAME:-latest}"
+logs_dir="${project_path}/tmp/spark-tests/${TEST_RUN_NAME:-latest}"
+pytest_tmp_dir="${project_path}/tmp/pytest"
 
 echo "Removing existing test logs..."
 rm -rf "${logs_dir}"
@@ -31,15 +28,19 @@ export PYARROW_IGNORE_TIMEZONE="1"
 export SPARK_TESTING_REMOTE_PORT="${SPARK_TESTING_REMOTE_PORT-50051}"
 export SPARK_LOCAL_IP="${SPARK_LOCAL_IP-127.0.0.1}"
 
+# We must run pytest in the `python` directory since pytest needs to discover the
+# configuration files such as `conftest.py`.
+cd python
+
 function run_pytest() {
   name="$1"
   args=("${@:2}")
 
   echo "Test suite: ${name}"
   # We ignore the pytext exit code so that the command can complete successfully.
-  python -m pytest \
+  poetry run python -m pytest \
     -o "doctest_optionflags=ELLIPSIS NORMALIZE_WHITESPACE" \
-    --basetemp=tmp/pytest \
+    --basetemp="${pytest_tmp_dir}" \
     --disable-warnings \
     --report-log="${logs_dir}/${name}.jsonl" \
     "${args[@]}" \
