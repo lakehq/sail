@@ -48,20 +48,32 @@
         "success": {
           "root": {
             "createTable": {
-              "input": {
-                "empty": {
-                  "produceOneRow": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
               "table": [
                 "my_tab"
               ],
-              "description": null,
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
               "ifNotExists": false,
               "orReplace": false,
-              "columnDefaults": []
+              "unbounded": false,
+              "options": {},
+              "query": null,
+              "definition": null
             },
             "planId": null,
             "sourceInfo": null
@@ -75,20 +87,32 @@
         "success": {
           "root": {
             "createTable": {
-              "input": {
-                "empty": {
-                  "produceOneRow": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
               "table": [
                 "my_tab"
               ],
-              "description": null,
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
               "ifNotExists": false,
               "orReplace": false,
-              "columnDefaults": []
+              "unbounded": false,
+              "options": {},
+              "query": null,
+              "definition": null
             },
             "planId": null,
             "sourceInfo": null
@@ -116,20 +140,32 @@
         "success": {
           "root": {
             "createTable": {
-              "input": {
-                "empty": {
-                  "produceOneRow": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
               "table": [
                 "my_tab"
               ],
-              "description": null,
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
               "ifNotExists": false,
               "orReplace": false,
-              "columnDefaults": []
+              "unbounded": false,
+              "options": {},
+              "query": null,
+              "definition": null
             },
             "planId": null,
             "sourceInfo": null
@@ -143,20 +179,32 @@
         "success": {
           "root": {
             "createTable": {
-              "input": {
-                "empty": {
-                  "produceOneRow": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
               "table": [
                 "my_tab"
               ],
-              "description": null,
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
               "ifNotExists": false,
               "orReplace": false,
-              "columnDefaults": []
+              "unbounded": false,
+              "options": {},
+              "query": null,
+              "definition": null
             },
             "planId": null,
             "sourceInfo": null
@@ -170,20 +218,32 @@
         "success": {
           "root": {
             "createTable": {
-              "input": {
-                "empty": {
-                  "produceOneRow": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
               "table": [
                 "my_tab"
               ],
-              "description": null,
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
               "ifNotExists": false,
               "orReplace": false,
-              "columnDefaults": []
+              "unbounded": false,
+              "options": {},
+              "query": null,
+              "definition": null
             },
             "planId": null,
             "sourceInfo": null
@@ -197,20 +257,32 @@
         "success": {
           "root": {
             "createTable": {
-              "input": {
-                "empty": {
-                  "produceOneRow": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
               "table": [
                 "my_tab"
               ],
-              "description": null,
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
               "ifNotExists": false,
               "orReplace": false,
-              "columnDefaults": []
+              "unbounded": false,
+              "options": {},
+              "query": null,
+              "definition": null
             },
             "planId": null,
             "sourceInfo": null
@@ -224,20 +296,32 @@
         "success": {
           "root": {
             "createTable": {
-              "input": {
-                "empty": {
-                  "produceOneRow": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
               "table": [
                 "my_tab"
               ],
-              "description": null,
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
               "ifNotExists": false,
               "orReplace": false,
-              "columnDefaults": []
+              "unbounded": false,
+              "options": {},
+              "query": null,
+              "definition": null
             },
             "planId": null,
             "sourceInfo": null
@@ -251,20 +335,32 @@
         "success": {
           "root": {
             "createTable": {
-              "input": {
-                "empty": {
-                  "produceOneRow": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
               "table": [
                 "my_tab"
               ],
-              "description": null,
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
               "ifNotExists": false,
               "orReplace": false,
-              "columnDefaults": []
+              "unbounded": false,
+              "options": {},
+              "query": null,
+              "definition": null
             },
             "planId": null,
             "sourceInfo": null
@@ -333,20 +429,25 @@
         "success": {
           "root": {
             "createTable": {
-              "input": {
-                "empty": {
-                  "produceOneRow": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
               "table": [
                 "my_tab"
               ],
-              "description": null,
+              "schema": {
+                "fields": []
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
               "ifNotExists": false,
               "orReplace": false,
-              "columnDefaults": []
+              "unbounded": false,
+              "options": {},
+              "query": null,
+              "definition": null
             },
             "planId": null,
             "sourceInfo": null
@@ -401,19 +502,26 @@
         "success": {
           "root": {
             "createTable": {
-              "input": {
-                "empty": {
-                  "produceOneRow": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
               "table": [
                 "my_tab"
               ],
-              "description": null,
-              "ifNotExists": false,
-              "orReplace": false,
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "b",
+                    "dataType": "string",
+                    "nullable": false,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "comment": null,
               "columnDefaults": [
                 [
                   "b",
@@ -423,7 +531,18 @@
                     }
                   }
                 ]
-              ]
+              ],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": {},
+              "query": null,
+              "definition": null
             },
             "planId": null,
             "sourceInfo": null
@@ -444,19 +563,26 @@
         "success": {
           "root": {
             "createTable": {
-              "input": {
-                "empty": {
-                  "produceOneRow": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
               "table": [
                 "my_tab"
               ],
-              "description": null,
-              "ifNotExists": false,
-              "orReplace": false,
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "b",
+                    "dataType": "string",
+                    "nullable": false,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "comment": null,
               "columnDefaults": [
                 [
                   "b",
@@ -466,7 +592,18 @@
                     }
                   }
                 ]
-              ]
+              ],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": {},
+              "query": null,
+              "definition": null
             },
             "planId": null,
             "sourceInfo": null
@@ -501,20 +638,38 @@
         "success": {
           "root": {
             "createTable": {
-              "input": {
-                "empty": {
-                  "produceOneRow": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
               "table": [
                 "my_tab"
               ],
-              "description": null,
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "b",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
               "ifNotExists": false,
               "orReplace": false,
-              "columnDefaults": []
+              "unbounded": false,
+              "options": {},
+              "query": null,
+              "definition": null
             },
             "planId": null,
             "sourceInfo": null
@@ -543,20 +698,38 @@
         "success": {
           "root": {
             "createTable": {
-              "input": {
-                "empty": {
-                  "produceOneRow": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
               "table": [
                 "my_tab"
               ],
-              "description": null,
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "b",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
               "ifNotExists": false,
               "orReplace": false,
-              "columnDefaults": []
+              "unbounded": false,
+              "options": {},
+              "query": null,
+              "definition": null
             },
             "planId": null,
             "sourceInfo": null
@@ -571,20 +744,38 @@
         "success": {
           "root": {
             "createTable": {
-              "input": {
-                "empty": {
-                  "produceOneRow": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
               "table": [
                 "my_tab"
               ],
-              "description": null,
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "b",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
               "ifNotExists": false,
               "orReplace": false,
-              "columnDefaults": []
+              "unbounded": false,
+              "options": {},
+              "query": null,
+              "definition": null
             },
             "planId": null,
             "sourceInfo": null
@@ -599,20 +790,38 @@
         "success": {
           "root": {
             "createTable": {
-              "input": {
-                "empty": {
-                  "produceOneRow": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
               "table": [
                 "my_tab"
               ],
-              "description": null,
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "b",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
               "ifNotExists": false,
               "orReplace": false,
-              "columnDefaults": []
+              "unbounded": false,
+              "options": {},
+              "query": null,
+              "definition": null
             },
             "planId": null,
             "sourceInfo": null

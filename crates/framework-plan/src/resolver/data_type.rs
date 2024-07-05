@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes as adt;
-use datafusion_common::{Constraint, Constraints, DFSchema, DataFusionError};
 use framework_common::spec;
 
 use crate::error::{PlanError, PlanResult};
@@ -294,74 +293,5 @@ impl PlanResolver<'_> {
         Ok(spec::Schema {
             fields: spec::Fields(fields),
         })
-    }
-
-    pub fn resolve_table_constraint(
-        &self,
-        constraint: spec::TableConstraint,
-        schema: &DFSchema,
-    ) -> PlanResult<Constraint> {
-        use spec::TableConstraint;
-
-        match constraint {
-            TableConstraint::Unique { name, columns } => {
-                let field_names = schema.field_names();
-                let indices = columns
-                    .into_iter()
-                    .map(|col| {
-                        let col: String = col.into();
-                        let idx = field_names
-                            .iter()
-                            .position(|item| *item == col)
-                            .ok_or_else(|| {
-                                let name = name
-                                    .as_ref()
-                                    .map(|name| format!("with name '{name}' "))
-                                    .unwrap_or("".to_string());
-                                Err(PlanError::invalid(format!(
-                                    "column for unique constraint {name} not found in schema: {name}.",
-                                )))
-                            })?;
-                        Ok(idx)
-                    })
-                    .collect::<PlanResult<Vec<_>>>()?;
-                Ok(Constraint::Unique(indices))
-            }
-            TableConstraint::PrimaryKey { name, columns } => {
-                let field_names = schema.field_names();
-                let indices = columns
-                    .iter()
-                    .map(|col| {
-                        let col: String = col.into();
-                        let idx = field_names
-                            .iter()
-                            .position(|item| *item == col)
-                            .ok_or_else(|| {
-                                let name = name
-                                    .as_ref()
-                                    .map(|name| format!("with name '{name}' "))
-                                    .unwrap_or("".to_string());
-                                DataFusionError::invalid(format!(
-                                    "column for primary key {name} not found in schema: {col}",
-                                ))
-                            })?;
-                        Ok(idx)
-                    })
-                    .collect::<PlanResult<Vec<_>>>()?;
-                Ok(Constraint::PrimaryKey(indices))
-            }
-        }
-    }
-
-    pub fn resolve_table_constraints(
-        &self,
-        constraints: Vec<spec::TableConstraint>,
-        schema: &DFSchema,
-    ) -> PlanResult<Constraints> {
-        let constraints = constraints
-            .into_iter()
-            .map(|c| self.resolve_table_constraint(c, schema))
-            .collect::<PlanResult<Vec<_>>>()?;
-        Ok(Constraints::new_unverified(constraints))
     }
 }

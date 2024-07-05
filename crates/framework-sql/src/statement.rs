@@ -1,26 +1,24 @@
+use std::collections::HashMap;
+
 use framework_common::spec;
 use sqlparser::ast;
+use sqlparser::ast::TableConstraint;
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Token;
 
 use crate::error::{SqlError, SqlResult};
-use crate::expression::from_ast_object_name;
+use crate::expression::{from_ast_expression, from_ast_object_name};
 use crate::parser::{fail_on_extra_token, SparkDialect};
-use crate::plan::from_ast_query;
+use crate::query::from_ast_query;
 use crate::utils::{build_column_defaults, build_schema_from_columns};
 
 pub fn parse_sql_statement(sql: &str) -> SqlResult<spec::Plan> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
     let statement = match parser.peek_token().token {
-        Token::Word(w) => {
-            match w.keyword {
-                Keyword::EXPLAIN => {
-                    parser.next_token(); // consume EXPLAIN
-                    parse_explain_statement(&mut parser)?
-                }
-                _ => parser.parse_statement()?,
-            }
+        Token::Word(w) if w.keyword == Keyword::EXPLAIN => {
+            parser.next_token(); // consume EXPLAIN
+            parse_explain_statement(&mut parser)?
         }
         _ => parser.parse_statement()?,
     };
@@ -89,6 +87,7 @@ pub fn parse_explain_statement(parser: &mut Parser) -> SqlResult<ast::Statement>
         format: None,
     })
 }
+
 fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
     use ast::Statement;
 
@@ -256,23 +255,23 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
         }) => Err(SqlError::todo("SQL create index")),
         Statement::CreateTable(create_table) => {
             let ast::CreateTable {
-                or_replace, // Using
+                or_replace,
                 temporary: _,
                 external: _,
                 global: _,
-                if_not_exists, // Using
+                if_not_exists,
                 transient: _,
                 volatile: _,
-                name,        // Using
-                columns,     // Using
-                constraints, // Using
+                name,
+                columns,
+                mut constraints,
                 hive_distribution: _,
                 hive_formats: _,
-                table_properties, // Using
-                with_options,     // Using
-                file_format,      // Using
-                location,         // Using
-                query,            // Using
+                table_properties,
+                with_options,
+                file_format,
+                location,
+                query,
                 without_rowid: _,
                 like: _,
                 clone: _,
@@ -299,132 +298,44 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
                 with_row_access_policy: _,
                 with_tags: _,
             } = create_table;
-            println!("CHECK HERE CREATE TABLE: {:?}", create_table);
-            Err(SqlError::todo("SQL create table"))
-            // if !table_properties.is_empty() {
-            //     return Err(SqlError::todo(format!(
-            //         "Statement::CreateTable table_properties: {:?}",
-            //         table_properties
-            //     )));
-            // }
-            // if !with_options.is_empty() {
-            //     return Err(SqlError::todo(format!(
-            //         "Statement::CreateTable with_options: {:?}",
-            //         with_options
-            //     )));
-            // }
-            // if query.is_some() && location.is_some() {
-            //     return Err(SqlError::invalid(
-            //         "Cannot specify both a query and a location in CREATE TABLE",
-            //     ));
-            // }
-            //
-            // let file_format = file_format.map(|ff| ff.to_string());
-            // let comment = comment.map(|c| c.to_string());
-            //
-            // let mut all_constraints = constraints;
-            // let inline_constraints = calc_inline_constraints_from_columns(&columns);
-            // all_constraints.extend(inline_constraints);
-            //
-            // let column_defaults = build_column_defaults(&columns)?;
-            //
-            // match query {
-            //     Some(query) => {
-            //         let plan = from_ast_query(*query)?;
-            //
-            //         let plan = if !columns.is_empty() {
-            //             // let plan_schema = plan.schema();
-            //             // let plan_schema_fields = plan_schema.fields.0;
-            //             // let plan_schema_fields_len = plan_schema_fields.len();
-            //             //
-            //             // let schema = build_schema_from_columns(columns)?;
-            //             // let schema_fields = schema.fields.0;
-            //             // let schema_fields_len = schema_fields.len();
-            //             //
-            //             // if schema_fields_len != plan_schema_fields_len {
-            //             //     return Err(SqlError::invalid(format!(
-            //             //         "Mismatch: {} columns specified, but result has {} columns",
-            //             //         schema_fields_len, plan_schema_fields_len,
-            //             //     )));
-            //             // }
-            //             //
-            //             // let project_exprs = schema_fields
-            //             //     .iter()
-            //             //     .zip(plan_schema_fields)
-            //             //     .map(|(schema_field, plan_schema_field)| {
-            //             //         spec::Expr::Cast {
-            //             //             expr: Box::new(spec::Expr::Column(
-            //             //                 plan_schema_field.name.into(),
-            //             //             )),
-            //             //             cast_to_type: schema_field.data_type.clone(),
-            //             //         }
-            //             //         // cast(col(plan_field.name()), field.data_type.clone())
-            //             //         //     .alias(field.name())
-            //             //     })
-            //             //     .collect::<Vec<_>>();
-            //             // LogicalPlanBuilder::from(plan.clone())
-            //             //     .project(project_exprs)?
-            //             //     .build()?
-            //             plan
-            //         } else {
-            //             plan
-            //         };
-            //
-            //         // let constraints =
-            //         //     Constraints::new_from_table_constraints(&all_constraints, plan.schema())?;
-            //
-            //         Ok(spec::Plan::new(spec::PlanNode::CreateTable {
-            //             input: Box::new(plan),
-            //             table: from_ast_object_name(name)?,
-            //             description: comment,
-            //             if_not_exists,
-            //             or_replace,
-            //             column_defaults,
-            //         }))
-            //     }
-            //     None => {
-            //         match location {
-            //             Some(location) => {
-            //                 let schema = build_schema_from_columns(columns)?;
-            //                 let read = spec::Plan::new(spec::PlanNode::Read {
-            //                     read_type: spec::ReadType::DataSource {
-            //                         format: file_format,
-            //                         schema: Some(schema),
-            //                         options: Default::default(),
-            //                         paths: vec![location],
-            //                         predicates: vec![],
-            //                     },
-            //                     is_streaming: false,
-            //                 });
-            //                 Ok(spec::Plan::new(spec::PlanNode::CreateTable {
-            //                     input: Box::new(read),
-            //                     table: from_ast_object_name(name)?,
-            //                     description: comment,
-            //                     if_not_exists,
-            //                     or_replace,
-            //                     column_defaults,
-            //                 }))
-            //             }
-            //             None => {
-            //                 let _schema = build_schema_from_columns(columns)?;
-            //                 let plan = spec::Plan::new(spec::PlanNode::Empty {
-            //                     produce_one_row: false,
-            //                 });
-            //                 // let constraints =
-            //                 //     Constraints::new_from_table_constraints(&all_constraints, plan.schema())?;
-            //
-            //                 Ok(spec::Plan::new(spec::PlanNode::CreateTable {
-            //                     input: Box::new(plan),
-            //                     table: from_ast_object_name(name)?,
-            //                     description: comment,
-            //                     if_not_exists,
-            //                     or_replace,
-            //                     column_defaults,
-            //                 }))
-            //             }
-            //         }
-            //     }
-            // }
+            let options = {
+                let mut options = HashMap::new();
+                options.extend(from_ast_sql_options(table_properties)?);
+                options.extend(from_ast_sql_options(with_options)?);
+                options
+            };
+            let file_format = file_format.map(|ff| ff.to_string());
+            let comment = comment.map(|c| c.to_string());
+
+            constraints.extend(calc_inline_constraints_from_columns(&columns));
+            let constraints = constraints
+                .into_iter()
+                .map(from_ast_table_constraint)
+                .collect::<SqlResult<Vec<_>>>()?;
+
+            let column_defaults = build_column_defaults(&columns)?;
+
+            let schema = build_schema_from_columns(columns)?;
+            let definition = query.as_ref().map(|q| q.to_string());
+            let query = query.map(|q| from_ast_query(*q)).transpose()?.map(Box::new);
+
+            Ok(spec::Plan::new(spec::PlanNode::CreateTable {
+                table: from_ast_object_name(name)?,
+                schema,
+                comment,
+                column_defaults,
+                constraints,
+                location,
+                file_format,
+                table_partition_cols: vec![],
+                file_sort_order: vec![],
+                if_not_exists,
+                or_replace,
+                unbounded: false,
+                options,
+                query,
+                definition,
+            }))
         }
         Statement::CreateView {
             or_replace: _,
@@ -569,7 +480,55 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
     }
 }
 
-/// [CREDIT] (https://github.com/apache/datafusion/blob/5bdc7454d92aaaba8d147883a3f81f026e096761/datafusion/sql/src/statement.rs#L115
+fn from_ast_sql_options(options: Vec<ast::SqlOption>) -> SqlResult<Vec<(String, String)>> {
+    options
+        .into_iter()
+        .map(|opt| {
+            let ast::SqlOption { name, value } = opt;
+            let value = match from_ast_expression(value)? {
+                spec::Expr::Literal(spec::Literal::String(s)) => s,
+                x => return Err(SqlError::invalid(format!("SQL option value: {:?}", x))),
+            };
+            Ok((name.value, value))
+        })
+        .collect::<SqlResult<Vec<_>>>()
+}
+
+fn from_ast_table_constraint(constraint: ast::TableConstraint) -> SqlResult<spec::TableConstraint> {
+    match constraint {
+        TableConstraint::Unique {
+            name,
+            index_name: _,
+            index_type_display: _,
+            index_type: _,
+            columns,
+            index_options: _,
+            characteristics: _,
+        } => Ok(spec::TableConstraint::Unique {
+            name: name.map(|x| x.value.into()),
+            columns: columns.into_iter().map(|x| x.value.into()).collect(),
+        }),
+        TableConstraint::PrimaryKey {
+            name,
+            index_name: _,
+            index_type: _,
+            columns,
+            index_options: _,
+            characteristics: _,
+        } => Ok(spec::TableConstraint::PrimaryKey {
+            name: name.map(|x| x.value.into()),
+            columns: columns.into_iter().map(|x| x.value.into()).collect(),
+        }),
+        TableConstraint::ForeignKey { .. }
+        | TableConstraint::Check { .. }
+        | TableConstraint::Index { .. }
+        | TableConstraint::FulltextOrSpatial { .. } => {
+            Err(SqlError::unsupported(format!("{:?}", constraint)))
+        }
+    }
+}
+
+/// Credit: <https://github.com/apache/datafusion/blob/5bdc7454d92aaaba8d147883a3f81f026e096761/datafusion/sql/src/statement.rs#L115>
 fn calc_inline_constraints_from_columns(columns: &[ast::ColumnDef]) -> Vec<ast::TableConstraint> {
     let mut constraints = vec![];
     for column in columns {

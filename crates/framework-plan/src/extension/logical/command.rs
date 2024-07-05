@@ -81,11 +81,11 @@ pub(crate) enum CatalogCommand {
     },
     CreateTable {
         table: TableReference,
-        plan: Arc<LogicalPlan>,
+        schema: DFSchemaRef,
+        column_defaults: Vec<(String, Expr)>,
         constraints: Constraints,
         if_not_exists: bool,
         or_replace: bool,
-        column_defaults: Vec<(String, Expr)>,
     },
     TableExists {
         table: TableReference,
@@ -285,27 +285,8 @@ impl CatalogCommand {
                 let rows = vec![SingleValueMetadata { value }];
                 build_record_batch(schema, &rows)?
             }
-            CatalogCommand::CreateTable {
-                table,
-                plan,
-                constraints,
-                if_not_exists,
-                or_replace,
-                column_defaults,
-            } => {
-                // TODO: we should probably create external table here
-                manager
-                    .create_memory_table(
-                        table,
-                        plan,
-                        constraints,
-                        if_not_exists,
-                        or_replace,
-                        column_defaults,
-                    )
-                    .await?;
-                let rows: Vec<EmptyMetadata> = vec![];
-                build_record_batch(schema, &rows)?
+            CatalogCommand::CreateTable { .. } => {
+                return not_impl_err!("create table");
             }
             CatalogCommand::TableExists { table } => {
                 let value = manager.get_table(table).await?.is_some();

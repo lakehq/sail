@@ -342,19 +342,22 @@ pub enum PlanNode {
     FunctionExists {
         function: ObjectName,
     },
-    CreateExternalTable {
+    CreateTable {
         table: ObjectName,
         schema: Schema,
-        column_defaults: HashMap<String, Expr>,
+        comment: Option<String>,
+        column_defaults: Vec<(String, Expr)>,
         constraints: Vec<TableConstraint>,
         location: Option<String>,
         file_format: Option<String>,
         table_partition_cols: Vec<Identifier>,
         file_sort_order: Vec<Vec<Expr>>,
         if_not_exists: bool,
+        or_replace: bool,
         unbounded: bool,
         options: HashMap<String, String>,
-        query: Option<Plan>,
+        /// The query for `CREATE TABLE ... AS SELECT ...` (CTAS) statements.
+        query: Option<Box<Plan>>,
         definition: Option<String>,
     },
     DropTemporaryView {
@@ -453,6 +456,8 @@ pub enum PlanNode {
         name: Identifier,
         columns: Vec<Identifier>,
     },
+    // TODO: consolidate `Analyze` and `Explain` into a single variant
+    // TODO: define enum for different types of explain statements
     Analyze {
         verbose: bool,
         input: Box<Plan>,

@@ -18,15 +18,14 @@ use datafusion::logical_expr::{
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
 use datafusion_common::{
-    Column, Constraints, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference,
-    TableReference, ToDFSchema,
+    Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
+    ToDFSchema,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::{columnize_expr, expand_qualified_wildcard, expand_wildcard};
 use datafusion_expr::{build_join_schema, LogicalPlanBuilder};
 use framework_common::spec;
-use framework_common::spec::{Identifier, ObjectName, Plan, Schema, TableConstraint};
 use framework_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 
 use crate::error::{PlanError, PlanResult};
@@ -978,20 +977,22 @@ impl PlanResolver<'_> {
                     self.config.clone(),
                 )?),
             }),
-            PlanNode::CreateExternalTable {
+            PlanNode::CreateTable {
                 table,
                 schema,
+                comment: _,
                 column_defaults,
                 constraints,
-                location,
-                file_format,
-                table_partition_cols,
-                file_sort_order,
+                location: _,
+                file_format: _,
+                table_partition_cols: _,
+                file_sort_order: _,
                 if_not_exists,
-                unbounded,
-                options,
-                query,
-                definition,
+                or_replace,
+                unbounded: _,
+                options: _,
+                query: _,
+                definition: _,
             } => {
                 let fields = self.resolve_fields(schema.fields)?;
                 let schema = DFSchema::from_unqualifed_fields(fields, HashMap::new())?;
@@ -1005,8 +1006,8 @@ impl PlanResolver<'_> {
                     node: Arc::new(CatalogCommandNode::try_new(
                         CatalogCommand::CreateTable {
                             table: build_table_reference(table)?,
-                            plan: Arc::new(plan),
-                            constraints: constraints,
+                            schema: Arc::new(schema),
+                            constraints,
                             if_not_exists,
                             or_replace,
                             column_defaults,

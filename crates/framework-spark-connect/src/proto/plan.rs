@@ -1051,27 +1051,25 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     schema,
                     options,
                 } = x;
-                let schema: Option<spec::DataType> = schema.map(|s| s.try_into()).transpose()?;
-                let schema = schema.map(|s| s.into_schema(DEFAULT_FIELD_NAME, true));
-                let read = spec::Plan::new(spec::PlanNode::Read {
-                    // TODO: use spark.sql.sources.default to get the default source
-                    read_type: spec::ReadType::DataSource {
-                        format: source,
-                        schema,
-                        options,
-                        paths: path.map(|x| vec![x]).unwrap_or_default(),
-                        predicates: vec![],
-                    },
-                    is_streaming: false,
-                });
-                // "CreateExternalTable" is deprecated, so we use "CreateTable" instead.
+                let schema = schema.required("create external table schema")?;
+                let schema: spec::DataType = schema.try_into()?;
+                let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
                 Ok(spec::PlanNode::CreateTable {
-                    input: Box::new(read),
                     table: parse_object_name(table_name.as_str())?,
-                    description: None,
-                    if_not_exists: false,    // TODO: Check if exists in options
-                    or_replace: false,       // TODO: Check if exists in options
-                    column_defaults: vec![], // TODO: Check if exists in options
+                    schema,
+                    comment: None,
+                    column_defaults: Default::default(),
+                    constraints: vec![],
+                    location: path,
+                    file_format: source,
+                    table_partition_cols: vec![],
+                    file_sort_order: vec![],
+                    if_not_exists: false,
+                    or_replace: false,
+                    unbounded: false,
+                    options,
+                    query: None,
+                    definition: None,
                 })
             }
             CatType::CreateTable(x) => {
@@ -1083,26 +1081,25 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     schema,
                     options,
                 } = x;
-                let schema: Option<spec::DataType> = schema.map(|s| s.try_into()).transpose()?;
-                let schema = schema.map(|s| s.into_schema(DEFAULT_FIELD_NAME, true));
-                let read = spec::Plan::new(spec::PlanNode::Read {
-                    // TODO: use spark.sql.sources.default to get the default source
-                    read_type: spec::ReadType::DataSource {
-                        format: source,
-                        schema,
-                        options,
-                        paths: path.map(|x| vec![x]).unwrap_or_default(),
-                        predicates: vec![],
-                    },
-                    is_streaming: false,
-                });
+                let schema = schema.required("create external table schema")?;
+                let schema: spec::DataType = schema.try_into()?;
+                let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
                 Ok(spec::PlanNode::CreateTable {
-                    input: Box::new(read),
                     table: parse_object_name(table_name.as_str())?,
-                    description,
-                    if_not_exists: false,    // TODO: Check if exists in options
-                    or_replace: false,       // TODO: Check if exists in options
-                    column_defaults: vec![], // TODO: Check if exists in options
+                    schema,
+                    comment: description,
+                    column_defaults: Default::default(),
+                    constraints: vec![],
+                    location: path,
+                    file_format: source,
+                    table_partition_cols: vec![],
+                    file_sort_order: vec![],
+                    if_not_exists: false,
+                    or_replace: false,
+                    unbounded: false,
+                    options,
+                    query: None,
+                    definition: None,
                 })
             }
             CatType::DropTempView(x) => {
