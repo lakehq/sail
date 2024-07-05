@@ -5,6 +5,7 @@ use datafusion::prelude::SessionContext;
 use crate::config::PlanConfig;
 
 mod data_type;
+mod ddl;
 mod expression;
 mod literal;
 pub mod plan;

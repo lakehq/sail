@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use framework_common::spec;
 use framework_sql::expression::{parse_expression, parse_object_name};
-use framework_sql::plan::parse_sql_statement;
+use framework_sql::statement::parse_sql_statement;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::{parse_spark_data_type, DEFAULT_FIELD_NAME};
@@ -206,6 +206,7 @@ impl TryFrom<RelType> for spec::PlanNode {
                 let limit = usize::try_from(limit).required("limit value")?;
                 Ok(spec::PlanNode::Limit {
                     input: Box::new((*input).try_into()?),
+                    skip: 0,
                     limit,
                 })
             }
@@ -1050,16 +1051,25 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     schema,
                     options,
                 } = x;
-                let schema: Option<spec::DataType> = schema.map(|s| s.try_into()).transpose()?;
-                let schema = schema.map(|s| s.into_schema(DEFAULT_FIELD_NAME, true));
-                // "CreateExternalTable" is deprecated, so we use "CreateTable" instead.
+                let schema = schema.required("create external table schema")?;
+                let schema: spec::DataType = schema.try_into()?;
+                let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
                 Ok(spec::PlanNode::CreateTable {
                     table: parse_object_name(table_name.as_str())?,
-                    path,
-                    source,
-                    description: None,
                     schema,
+                    comment: None,
+                    column_defaults: Default::default(),
+                    constraints: vec![],
+                    location: path,
+                    file_format: source,
+                    table_partition_cols: vec![],
+                    file_sort_order: vec![],
+                    if_not_exists: false,
+                    or_replace: false,
+                    unbounded: false,
                     options,
+                    query: None,
+                    definition: None,
                 })
             }
             CatType::CreateTable(x) => {
@@ -1071,15 +1081,25 @@ impl TryFrom<Catalog> for spec::PlanNode {
                     schema,
                     options,
                 } = x;
-                let schema: Option<spec::DataType> = schema.map(|s| s.try_into()).transpose()?;
-                let schema = schema.map(|s| s.into_schema(DEFAULT_FIELD_NAME, true));
+                let schema = schema.required("create external table schema")?;
+                let schema: spec::DataType = schema.try_into()?;
+                let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
                 Ok(spec::PlanNode::CreateTable {
                     table: parse_object_name(table_name.as_str())?,
-                    path,
-                    source,
-                    description,
                     schema,
+                    comment: description,
+                    column_defaults: Default::default(),
+                    constraints: vec![],
+                    location: path,
+                    file_format: source,
+                    table_partition_cols: vec![],
+                    file_sort_order: vec![],
+                    if_not_exists: false,
+                    or_replace: false,
+                    unbounded: false,
                     options,
+                    query: None,
+                    definition: None,
                 })
             }
             CatType::DropTempView(x) => {
@@ -1166,7 +1186,7 @@ impl TryFrom<Catalog> for spec::PlanNode {
 mod tests {
     use framework_common::spec;
     use framework_common::tests::test_gold_set;
-    use framework_sql::plan::parse_sql_statement;
+    use framework_sql::statement::parse_sql_statement;
     use serde::{Deserialize, Serialize};
 
     use crate::error::{SparkError, SparkResult};

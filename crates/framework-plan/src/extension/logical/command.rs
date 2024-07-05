@@ -8,7 +8,7 @@ use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion::prelude::SessionContext;
 use datafusion_common::{
-    exec_datafusion_err, not_impl_err, DFSchema, SchemaReference, TableReference,
+    exec_datafusion_err, not_impl_err, Constraints, DFSchema, SchemaReference, TableReference,
 };
 use datafusion_expr::{TableScan, UNNAMED_TABLE};
 use serde::Serialize;
@@ -81,7 +81,11 @@ pub(crate) enum CatalogCommand {
     },
     CreateTable {
         table: TableReference,
-        plan: Arc<LogicalPlan>,
+        schema: DFSchemaRef,
+        column_defaults: Vec<(String, Expr)>,
+        constraints: Constraints,
+        if_not_exists: bool,
+        or_replace: bool,
     },
     TableExists {
         table: TableReference,
@@ -281,11 +285,8 @@ impl CatalogCommand {
                 let rows = vec![SingleValueMetadata { value }];
                 build_record_batch(schema, &rows)?
             }
-            CatalogCommand::CreateTable { table, plan } => {
-                // TODO: we should probably create external table here
-                manager.create_memory_table(table, plan).await?;
-                let rows: Vec<EmptyMetadata> = vec![];
-                build_record_batch(schema, &rows)?
+            CatalogCommand::CreateTable { .. } => {
+                return not_impl_err!("create table");
             }
             CatalogCommand::TableExists { table } => {
                 let value = manager.get_table(table).await?.is_some();

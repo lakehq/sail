@@ -4,14 +4,43 @@
       "input": "EXPLAIN formatted SELECT 1",
       "exception": "\nUnsupported SQL statement\n== SQL ==\nEXPLAIN formatted SELECT 1",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: 1"
+        "success": {
+          "root": {
+            "explain": {
+              "verbose": false,
+              "input": {
+                "project": {
+                  "input": {
+                    "empty": {
+                      "produceOneRow": true
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "literal": {
+                        "integer": 1
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "logicalOptimizationSucceeded": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "EXPLAIN logical SELECT 1",
       "exception": "\nUnsupported SQL statement\n== SQL ==\nEXPLAIN logical SELECT 1",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: SELECT"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: logical at Line: 1, Column: 9"
       }
     }
   ]

@@ -15,9 +15,11 @@ use datafusion::execution::context::DataFilePaths;
 use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
+use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
+    ToDFSchema,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::normalize_col;
@@ -338,10 +340,10 @@ impl PlanResolver<'_> {
                     })
                 }
             }
-            PlanNode::Limit { input, limit } => {
+            PlanNode::Limit { input, skip, limit } => {
                 let input = self.resolve_plan(*input, state).await?;
                 LogicalPlan::Limit(plan::Limit {
-                    skip: 0,
+                    skip,
                     fetch: Some(limit),
                     input: Arc::new(input),
                 })
@@ -977,29 +979,38 @@ impl PlanResolver<'_> {
             }),
             PlanNode::CreateTable {
                 table,
-                path,
-                source,
-                description: _,
                 schema,
-                options,
+                comment: _,
+                column_defaults,
+                constraints,
+                location: _,
+                file_format: _,
+                table_partition_cols: _,
+                file_sort_order: _,
+                if_not_exists,
+                or_replace,
+                unbounded: _,
+                options: _,
+                query: _,
+                definition: _,
             } => {
-                // TODO: use spark.sql.sources.default to get the default source
-                let read = spec::Plan::new(PlanNode::Read {
-                    read_type: spec::ReadType::DataSource {
-                        // TODO: is `source` and `format` equivalent?
-                        format: source,
-                        schema,
-                        options,
-                        paths: path.map(|x| vec![x]).unwrap_or_default(),
-                        predicates: vec![],
-                    },
-                    is_streaming: false,
-                });
+                let fields = self.resolve_fields(schema.fields)?;
+                let schema = DFSchema::from_unqualifed_fields(fields, HashMap::new())?;
+                let column_defaults: Vec<(String, Expr)> = column_defaults
+                    .into_iter()
+                    .map(|(name, expr)| Ok((name, self.resolve_expression(expr, &schema, state)?)))
+                    .collect::<PlanResult<Vec<(String, Expr)>>>()?;
+                let constraints = self.resolve_table_constraints(constraints, &schema)?;
+
                 LogicalPlan::Extension(Extension {
                     node: Arc::new(CatalogCommandNode::try_new(
                         CatalogCommand::CreateTable {
                             table: build_table_reference(table)?,
-                            plan: Arc::new(self.resolve_plan(read, state).await?),
+                            schema: Arc::new(schema),
+                            constraints,
+                            if_not_exists,
+                            or_replace,
+                            column_defaults,
                         },
                         self.config.clone(),
                     )?),
@@ -1186,6 +1197,34 @@ impl PlanResolver<'_> {
                         table: Arc::from(String::from(name)),
                     },
                 )?)
+            }
+            PlanNode::Analyze { verbose, input } => {
+                let input = Arc::new(self.resolve_plan(*input, state).await?);
+                let schema = LogicalPlan::explain_schema();
+                let schema = schema.to_dfschema_ref()?;
+                LogicalPlan::Analyze(plan::Analyze {
+                    verbose,
+                    input,
+                    schema,
+                })
+            }
+            PlanNode::Explain {
+                verbose,
+                input,
+                logical_optimization_succeeded,
+            } => {
+                let input = self.resolve_plan(*input, state).await?;
+                let stringified_plans: Vec<StringifiedPlan> =
+                    vec![input.to_stringified(PlanType::InitialLogicalPlan)];
+                let schema = LogicalPlan::explain_schema();
+                let schema = schema.to_dfschema_ref()?;
+                LogicalPlan::Explain(plan::Explain {
+                    verbose,
+                    plan: Arc::new(input),
+                    stringified_plans,
+                    schema,
+                    logical_optimization_succeeded,
+                })
             }
         };
         if self.is_query_plan(&plan) {

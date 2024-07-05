@@ -86,6 +86,7 @@ pub enum PlanNode {
     },
     Limit {
         input: Box<Plan>,
+        skip: usize,
         limit: usize,
     },
     Aggregate {
@@ -343,11 +344,21 @@ pub enum PlanNode {
     },
     CreateTable {
         table: ObjectName,
-        path: Option<String>,
-        source: Option<String>,
-        description: Option<String>,
-        schema: Option<Schema>,
+        schema: Schema,
+        comment: Option<String>,
+        column_defaults: Vec<(String, Expr)>,
+        constraints: Vec<TableConstraint>,
+        location: Option<String>,
+        file_format: Option<String>,
+        table_partition_cols: Vec<Identifier>,
+        file_sort_order: Vec<Vec<Expr>>,
+        if_not_exists: bool,
+        or_replace: bool,
+        unbounded: bool,
         options: HashMap<String, String>,
+        /// The query for `CREATE TABLE ... AS SELECT ...` (CTAS) statements.
+        query: Option<Box<Plan>>,
+        definition: Option<String>,
     },
     DropTemporaryView {
         view: ObjectName,
@@ -444,6 +455,18 @@ pub enum PlanNode {
         input: Box<Plan>,
         name: Identifier,
         columns: Vec<Identifier>,
+    },
+    // TODO: consolidate `Analyze` and `Explain` into a single variant
+    // TODO: define enum for different types of explain statements
+    Analyze {
+        verbose: bool,
+        input: Box<Plan>,
+    },
+    Explain {
+        // TODO: Support stringified_plans
+        verbose: bool,
+        input: Box<Plan>,
+        logical_optimization_succeeded: bool,
     },
 }
 
@@ -580,4 +603,16 @@ pub struct StorageLevel {
     pub use_off_heap: bool,
     pub deserialized: bool,
     pub replication: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TableConstraint {
+    Unique {
+        name: Option<Identifier>,
+        columns: Vec<Identifier>,
+    },
+    PrimaryKey {
+        name: Option<Identifier>,
+        columns: Vec<Identifier>,
+    },
 }
