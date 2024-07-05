@@ -211,302 +211,79 @@ impl PlanResolver<'_> {
         use spec::Expr;
 
         match expr {
-            Expr::Literal(literal) => {
-                let name = self.config.plan_formatter.literal_to_string(&literal)?;
-                let literal = self.resolve_literal(literal)?;
-                Ok(NamedExpr::new(vec![name], expr::Expr::Literal(literal)))
-            }
+            Expr::Literal(literal) => self.resolve_expression_literal(literal),
             Expr::UnresolvedAttribute { name, plan_id } => {
-                let name: Vec<String> = name.into();
-                let last = name
-                    .last()
-                    .ok_or_else(|| PlanError::invalid("empty attribute name"))?
-                    .clone();
-                Ok(NamedExpr::new(
-                    vec![last],
-                    self.resolve_attribute(name, plan_id, schema, state)?,
-                ))
+                self.resolve_expression_attribute(name, plan_id, schema, state)
             }
             Expr::UnresolvedFunction {
                 function_name,
                 arguments,
                 is_distinct,
                 is_user_defined_function: _, // FIXME: is_user_defined_function is always false.
-            } => {
-                let (argument_names, arguments) =
-                    self.resolve_alias_expressions_and_names(arguments, schema, state)?;
-                let input_types: Vec<DataType> = arguments
-                    .iter()
-                    .map(|arg| arg.get_type(schema))
-                    .collect::<Result<Vec<DataType>, DataFusionError>>(
-                )?;
-
-                // FIXME: is_user_defined_function is always false
-                //  So, we need to check udf's before built-in functions.
-                let func = if let Ok(udf) = self.ctx.udf(function_name.as_str()) {
-                    // TODO: UnresolvedPythonUDF will likely need to be accounted for as well
-                    //  once we integrate LakeSail Python UDF.
-                    let udf = if let Some(f) =
-                        udf.inner().as_any().downcast_ref::<UnresolvedPySparkUDF>()
-                    {
-                        let deterministic = f.deterministic()?;
-                        let function_definition = f.python_function_definition()?;
-                        let (output_type, eval_type, command, python_version) =
-                            match &function_definition {
-                                spec::FunctionDefinition::PythonUdf {
-                                    output_type,
-                                    eval_type,
-                                    command,
-                                    python_version,
-                                } => (output_type, eval_type, command, python_version),
-                                _ => {
-                                    return Err(PlanError::invalid(
-                                        "UDF function type must be Python UDF",
-                                    ));
-                                }
-                            };
-                        let output_type: DataType = self.resolve_data_type(output_type.clone())?;
-
-                        let python_function: PartialPySparkUDF = deserialize_partial_pyspark_udf(
-                            python_version,
-                            command,
-                            eval_type,
-                            &(arguments.len() as i32),
-                            &self.config.spark_udf_config,
-                        )
-                        .map_err(|e| {
-                            PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
-                        })?;
-
-                        let python_udf: PySparkUDF = PySparkUDF::new(
-                            function_name.to_owned(),
-                            deterministic,
-                            input_types,
-                            *eval_type,
-                            python_function,
-                            output_type,
-                        );
-
-                        Arc::new(ScalarUDF::from(python_udf))
-                    } else {
-                        udf
-                    };
-                    expr::Expr::ScalarFunction(expr::ScalarFunction {
-                        func: udf,
-                        args: arguments,
-                    })
-                } else if let Ok(func) = get_built_in_function(function_name.as_str()) {
-                    func(arguments.clone())?
-                } else if let Ok(func) = get_built_in_aggregate_function(
-                    function_name.as_str(),
-                    arguments.clone(),
-                    is_distinct,
-                ) {
-                    func
-                } else {
-                    return Err(PlanError::unsupported(format!(
-                        "unknown function: {function_name}",
-                    )));
-                };
-                // TODO: udaf and udwf
-
-                let name = self.config.plan_formatter.function_to_string(
-                    function_name.as_str(),
-                    argument_names.iter().map(|x| x.as_str()).collect(),
-                )?;
-                Ok(NamedExpr::new(vec![name], func))
-            }
+            } => self.resolve_expression_function(
+                function_name,
+                arguments,
+                is_distinct,
+                schema,
+                state,
+            ),
             Expr::UnresolvedStar { target } => {
-                // FIXME: column reference is parsed as qualifier
-                let expr = if let Some(target) = target {
-                    let target: Vec<String> = target.into();
-                    expr::Expr::Wildcard {
-                        qualifier: Some(target.join(".").into()),
-                    }
-                } else {
-                    expr::Expr::Wildcard { qualifier: None }
-                };
-                Ok(NamedExpr::new(vec!["*".to_string()], expr))
+                self.resolve_expression_wildcard(target, schema, state)
             }
             Expr::Alias {
                 expr,
                 name,
                 metadata,
-            } => {
-                let expr = self.resolve_expression(*expr, schema, state)?;
-                let name = name.into_iter().map(|x| x.into()).collect::<Vec<String>>();
-                let expr = if let [n] = name.as_slice() {
-                    expr.alias(n)
-                } else {
-                    expr
-                };
-                if let Some(metadata) = metadata {
-                    Ok(NamedExpr::new(name, expr).with_metadata(metadata))
-                } else {
-                    Ok(NamedExpr::new(name, expr))
-                }
-            }
+            } => self.resolve_expression_alias(*expr, name, metadata, schema, state),
             Expr::Cast { expr, cast_to_type } => {
-                let data_type = self.resolve_data_type(cast_to_type)?;
-                let NamedExpr { expr, name, .. } =
-                    self.resolve_named_expression(*expr, schema, state)?;
-                let expr = expr::Expr::Cast(expr::Cast {
-                    expr: Box::new(expr),
-                    data_type,
-                });
-                Ok(NamedExpr::new(name, expr))
+                self.resolve_expression_cast(*expr, cast_to_type, schema, state)
             }
-            Expr::UnresolvedRegex { .. } => Err(PlanError::todo("unresolved regex")),
-            Expr::SortOrder(sort) => {
-                let sort = self.resolve_sort_order(sort, schema, state);
-                Ok(NamedExpr::new(vec![], sort?))
+            Expr::UnresolvedRegex { col_name, plan_id } => {
+                self.resolve_expression_regex(col_name, plan_id, schema, state)
             }
-            Expr::LambdaFunction { .. } => Err(PlanError::todo("lambda function")),
+            Expr::SortOrder(sort) => self.resolve_expression_sort_order(sort, schema, state),
+            Expr::LambdaFunction {
+                function,
+                arguments,
+            } => self.resolve_expression_lambda_function(*function, arguments, schema, state),
             Expr::Window {
                 window_function,
                 partition_spec,
                 order_spec,
                 frame_spec,
-            } => {
-                let (function_name, argument_names, arguments) = match *window_function {
-                    Expr::UnresolvedFunction {
-                        function_name,
-                        arguments,
-                        is_user_defined_function,
-                        is_distinct,
-                    } => {
-                        if is_user_defined_function {
-                            return Err(PlanError::unsupported("user defined window function"));
-                        }
-                        if is_distinct {
-                            return Err(PlanError::unsupported("distinct window function"));
-                        }
-                        let (argument_names, arguments) =
-                            self.resolve_alias_expressions_and_names(arguments, schema, state)?;
-                        (function_name, argument_names, arguments)
-                    }
-                    Expr::CommonInlineUserDefinedFunction(_) => {
-                        return Err(PlanError::unsupported(
-                            "inline user defined window function",
-                        ));
-                    }
-                    _ => {
-                        return Err(PlanError::invalid(format!(
-                            "invalid window function expression: {:?}",
-                            window_function
-                        )));
-                    }
-                };
-                let partition_by = self.resolve_expressions(partition_spec, schema, state)?;
-                let order_by = self.resolve_sort_orders(order_spec, schema, state)?;
-                let window_frame = if let Some(frame) = frame_spec {
-                    self.resolve_window_frame(frame, state)?
-                } else {
-                    window_frame::WindowFrame::new(None)
-                };
-                let window = expr::Expr::WindowFunction(expr::WindowFunction {
-                    fun: get_built_in_window_function(function_name.as_str())?,
-                    args: arguments,
-                    partition_by,
-                    order_by,
-                    window_frame,
-                    null_treatment: None,
-                });
-                let name = self.config.plan_formatter.function_to_string(
-                    function_name.as_str(),
-                    argument_names.iter().map(|x| x.as_str()).collect(),
-                )?;
-                Ok(NamedExpr::new(vec![name], window))
-            }
+            } => self.resolve_expression_window(
+                *window_function,
+                partition_spec,
+                order_spec,
+                frame_spec,
+                schema,
+                state,
+            ),
             Expr::UnresolvedExtractValue { child, extraction } => {
-                let extraction = match *extraction {
-                    Expr::Literal(literal) => literal,
-                    _ => {
-                        return Err(PlanError::invalid("extraction must be a literal"));
-                    }
-                };
-                let extraction_name = self.config.plan_formatter.literal_to_string(&extraction)?;
-                let extraction = self.resolve_literal(extraction)?;
-                let NamedExpr { name, expr, .. } =
-                    self.resolve_named_expression(*child, schema, state)?;
-                let name = format!("{}[{}]", name.one()?, extraction_name);
-                Ok(NamedExpr::new(vec![name], expr.field(extraction)))
+                self.resolve_expression_extract_value(*child, *extraction, schema, state)
             }
-            Expr::UpdateFields { .. } => Err(PlanError::todo("update fields")),
-            Expr::UnresolvedNamedLambdaVariable(_) => {
-                Err(PlanError::todo("unresolved named lambda variable"))
+            Expr::UpdateFields {
+                struct_expression,
+                field_name,
+                value_expression,
+            } => self.resolve_expression_update_fields(
+                *struct_expression,
+                field_name,
+                value_expression.map(|x| *x),
+                schema,
+                state,
+            ),
+            Expr::UnresolvedNamedLambdaVariable(variable) => {
+                self.resolve_expression_named_lambda_variable(variable, schema, state)
             }
             Expr::CommonInlineUserDefinedFunction(function) => {
-                // TODO: Function arg for if pyspark_udf or not.
-                use framework_python::cereal::partial_pyspark_udf::{
-                    deserialize_partial_pyspark_udf, PartialPySparkUDF,
-                };
-                use framework_python::udf::pyspark_udf::PySparkUDF;
-
-                let spec::CommonInlineUserDefinedFunction {
-                    function_name,
-                    deterministic,
-                    arguments,
-                    function,
-                } = function;
-
-                let function_name: &str = function_name.as_str();
-                let (argument_names, arguments) =
-                    self.resolve_alias_expressions_and_names(arguments, schema, state)?;
-                let input_types: Vec<DataType> = arguments
-                    .iter()
-                    .map(|arg| arg.get_type(schema))
-                    .collect::<Result<Vec<DataType>, DataFusionError>>(
-                )?;
-
-                let (output_type, eval_type, command, python_version) = match function {
-                    spec::FunctionDefinition::PythonUdf {
-                        output_type,
-                        eval_type,
-                        command,
-                        python_version,
-                    } => (output_type, eval_type, command, python_version),
-                    _ => {
-                        return Err(PlanError::invalid("UDF function type must be Python UDF"));
-                    }
-                };
-                let output_type = self.resolve_data_type(output_type)?;
-
-                let python_function: PartialPySparkUDF = deserialize_partial_pyspark_udf(
-                    &python_version,
-                    &command,
-                    &eval_type,
-                    &(arguments.len() as i32),
-                    &self.config.spark_udf_config,
-                )
-                .map_err(|e| {
-                    PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
-                })?;
-
-                let python_udf: PySparkUDF = PySparkUDF::new(
-                    function_name.to_owned(),
-                    deterministic,
-                    input_types,
-                    eval_type,
-                    python_function,
-                    output_type,
-                );
-                let name = self.config.plan_formatter.function_to_string(
-                    function_name,
-                    argument_names.iter().map(|x| x.as_str()).collect(),
-                )?;
-                let func = expr::Expr::ScalarFunction(expr::ScalarFunction {
-                    func: Arc::new(ScalarUDF::from(python_udf)),
-                    args: arguments,
-                });
-                Ok(NamedExpr::new(vec![name], func))
+                self.resolve_expression_common_inline_udf(function, schema, state)
             }
-            Expr::CallFunction { .. } => Err(PlanError::todo("call function")),
-            Expr::Placeholder(placeholder) => {
-                let name = placeholder.clone();
-                let expr = expr::Expr::Placeholder(expr::Placeholder::new(placeholder, None));
-                Ok(NamedExpr::new(vec![name], expr))
-            }
+            Expr::CallFunction {
+                function_name,
+                arguments,
+            } => self.resolve_expression_call_function(function_name, arguments, schema, state),
+            Expr::Placeholder(placeholder) => self.resolve_expression_placeholder(placeholder),
         }
     }
 
@@ -563,17 +340,28 @@ impl PlanResolver<'_> {
             .unzip())
     }
 
-    fn resolve_attribute(
+    fn resolve_expression_literal(&self, literal: spec::Literal) -> PlanResult<NamedExpr> {
+        let name = self.config.plan_formatter.literal_to_string(&literal)?;
+        let literal = self.resolve_literal(literal)?;
+        Ok(NamedExpr::new(vec![name], expr::Expr::Literal(literal)))
+    }
+
+    fn resolve_expression_attribute(
         &self,
-        name: Vec<String>,
+        name: spec::ObjectName,
         plan_id: Option<i64>,
         schema: &DFSchema,
         state: &mut PlanResolverState,
-    ) -> PlanResult<expr::Expr> {
+    ) -> PlanResult<NamedExpr> {
         // TODO: handle qualifier and nested fields
+        let name: Vec<String> = name.into();
         let first = name
             .first()
-            .ok_or_else(|| plan_datafusion_err!("empty attribute: {:?}", name))?;
+            .ok_or_else(|| PlanError::invalid(format!("empty attribute: {:?}", name)))?;
+        let last = name
+            .last()
+            .ok_or_else(|| PlanError::invalid(format!("empty attribute: {:?}", name)))?
+            .clone();
         let column = if let Some(plan_id) = plan_id {
             let field = state.get_resolved_field_name_in_plan(plan_id, first)?;
             schema.columns_with_unqualified_name(field)
@@ -595,7 +383,361 @@ impl PlanResolver<'_> {
         let column = column
             .one()
             .map_err(|_| plan_datafusion_err!("cannot resolve attribute: {:?}", name))?;
-        Ok(expr::Expr::Column(column))
+        Ok(NamedExpr::new(vec![last], expr::Expr::Column(column)))
+    }
+
+    fn resolve_expression_function(
+        &self,
+        function_name: String,
+        arguments: Vec<spec::Expr>,
+        is_distinct: bool,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let (argument_names, arguments) =
+            self.resolve_alias_expressions_and_names(arguments, schema, state)?;
+        let input_types: Vec<DataType> = arguments
+            .iter()
+            .map(|arg| arg.get_type(schema))
+            .collect::<Result<Vec<DataType>, DataFusionError>>()?;
+
+        // FIXME: is_user_defined_function is always false
+        //  So, we need to check udf's before built-in functions.
+        let func = if let Ok(udf) = self.ctx.udf(function_name.as_str()) {
+            // TODO: UnresolvedPythonUDF will likely need to be accounted for as well
+            //  once we integrate LakeSail Python UDF.
+            let udf = if let Some(f) = udf.inner().as_any().downcast_ref::<UnresolvedPySparkUDF>() {
+                let deterministic = f.deterministic()?;
+                let function_definition = f.python_function_definition()?;
+                let (output_type, eval_type, command, python_version) = match &function_definition {
+                    spec::FunctionDefinition::PythonUdf {
+                        output_type,
+                        eval_type,
+                        command,
+                        python_version,
+                    } => (output_type, eval_type, command, python_version),
+                    _ => {
+                        return Err(PlanError::invalid("UDF function type must be Python UDF"));
+                    }
+                };
+                let output_type: DataType = self.resolve_data_type(output_type.clone())?;
+
+                let python_function: PartialPySparkUDF = deserialize_partial_pyspark_udf(
+                    python_version,
+                    command,
+                    eval_type,
+                    &(arguments.len() as i32),
+                    &self.config.spark_udf_config,
+                )
+                .map_err(|e| {
+                    PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
+                })?;
+
+                let python_udf: PySparkUDF = PySparkUDF::new(
+                    function_name.to_owned(),
+                    deterministic,
+                    input_types,
+                    *eval_type,
+                    python_function,
+                    output_type,
+                );
+
+                Arc::new(ScalarUDF::from(python_udf))
+            } else {
+                udf
+            };
+            expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func: udf,
+                args: arguments,
+            })
+        } else if let Ok(func) = get_built_in_function(function_name.as_str()) {
+            func(arguments.clone())?
+        } else if let Ok(func) =
+            get_built_in_aggregate_function(function_name.as_str(), arguments.clone(), is_distinct)
+        {
+            func
+        } else {
+            return Err(PlanError::unsupported(format!(
+                "unknown function: {function_name}",
+            )));
+        };
+        // TODO: udaf and udwf
+
+        let name = self.config.plan_formatter.function_to_string(
+            function_name.as_str(),
+            argument_names.iter().map(|x| x.as_str()).collect(),
+        )?;
+        Ok(NamedExpr::new(vec![name], func))
+    }
+
+    fn resolve_expression_alias(
+        &self,
+        expr: spec::Expr,
+        name: Vec<spec::Identifier>,
+        metadata: Option<HashMap<String, String>>,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let expr = self.resolve_expression(expr, schema, state)?;
+        let name = name.into_iter().map(|x| x.into()).collect::<Vec<String>>();
+        let expr = if let [n] = name.as_slice() {
+            expr.alias(n)
+        } else {
+            expr
+        };
+        if let Some(metadata) = metadata {
+            Ok(NamedExpr::new(name, expr).with_metadata(metadata))
+        } else {
+            Ok(NamedExpr::new(name, expr))
+        }
+    }
+
+    fn resolve_expression_cast(
+        &self,
+        expr: spec::Expr,
+        cast_to_type: spec::DataType,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let data_type = self.resolve_data_type(cast_to_type)?;
+        let NamedExpr { expr, name, .. } = self.resolve_named_expression(expr, schema, state)?;
+        let expr = expr::Expr::Cast(expr::Cast {
+            expr: Box::new(expr),
+            data_type,
+        });
+        Ok(NamedExpr::new(name, expr))
+    }
+
+    fn resolve_expression_sort_order(
+        &self,
+        sort: spec::SortOrder,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let sort = self.resolve_sort_order(sort, schema, state);
+        Ok(NamedExpr::new(vec![], sort?))
+    }
+
+    fn resolve_expression_regex(
+        &self,
+        _col_name: String,
+        _plan_id: Option<i64>,
+        _schema: &DFSchema,
+        _state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        Err(PlanError::todo("unresolved regex"))
+    }
+
+    fn resolve_expression_lambda_function(
+        &self,
+        _function: spec::Expr,
+        _arguments: Vec<spec::UnresolvedNamedLambdaVariable>,
+        _schema: &DFSchema,
+        _state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        Err(PlanError::todo("lambda function"))
+    }
+
+    fn resolve_expression_window(
+        &self,
+        window_function: spec::Expr,
+        partition_spec: Vec<spec::Expr>,
+        order_spec: Vec<spec::SortOrder>,
+        frame_spec: Option<spec::WindowFrame>,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let (function_name, argument_names, arguments) = match window_function {
+            spec::Expr::UnresolvedFunction {
+                function_name,
+                arguments,
+                is_user_defined_function,
+                is_distinct,
+            } => {
+                if is_user_defined_function {
+                    return Err(PlanError::unsupported("user defined window function"));
+                }
+                if is_distinct {
+                    return Err(PlanError::unsupported("distinct window function"));
+                }
+                let (argument_names, arguments) =
+                    self.resolve_alias_expressions_and_names(arguments, schema, state)?;
+                (function_name, argument_names, arguments)
+            }
+            spec::Expr::CommonInlineUserDefinedFunction(_) => {
+                return Err(PlanError::unsupported(
+                    "inline user defined window function",
+                ));
+            }
+            _ => {
+                return Err(PlanError::invalid(format!(
+                    "invalid window function expression: {:?}",
+                    window_function
+                )));
+            }
+        };
+        let partition_by = self.resolve_expressions(partition_spec, schema, state)?;
+        let order_by = self.resolve_sort_orders(order_spec, schema, state)?;
+        let window_frame = if let Some(frame) = frame_spec {
+            self.resolve_window_frame(frame, state)?
+        } else {
+            window_frame::WindowFrame::new(None)
+        };
+        let window = expr::Expr::WindowFunction(expr::WindowFunction {
+            fun: get_built_in_window_function(function_name.as_str())?,
+            args: arguments,
+            partition_by,
+            order_by,
+            window_frame,
+            null_treatment: None,
+        });
+        let name = self.config.plan_formatter.function_to_string(
+            function_name.as_str(),
+            argument_names.iter().map(|x| x.as_str()).collect(),
+        )?;
+        Ok(NamedExpr::new(vec![name], window))
+    }
+
+    fn resolve_expression_wildcard(
+        &self,
+        target: Option<spec::ObjectName>,
+        _schema: &DFSchema,
+        _state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        // FIXME: column reference is parsed as qualifier
+        let expr = if let Some(target) = target {
+            let target: Vec<String> = target.into();
+            expr::Expr::Wildcard {
+                qualifier: Some(target.join(".").into()),
+            }
+        } else {
+            expr::Expr::Wildcard { qualifier: None }
+        };
+        Ok(NamedExpr::new(vec!["*".to_string()], expr))
+    }
+
+    fn resolve_expression_extract_value(
+        &self,
+        child: spec::Expr,
+        extraction: spec::Expr,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let extraction = match extraction {
+            spec::Expr::Literal(literal) => literal,
+            _ => {
+                return Err(PlanError::invalid("extraction must be a literal"));
+            }
+        };
+        let extraction_name = self.config.plan_formatter.literal_to_string(&extraction)?;
+        let extraction = self.resolve_literal(extraction)?;
+        let NamedExpr { name, expr, .. } = self.resolve_named_expression(child, schema, state)?;
+        let name = format!("{}[{}]", name.one()?, extraction_name);
+        Ok(NamedExpr::new(vec![name], expr.field(extraction)))
+    }
+
+    fn resolve_expression_common_inline_udf(
+        &self,
+        function: spec::CommonInlineUserDefinedFunction,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        // TODO: Function arg for if pyspark_udf or not.
+        use framework_python::cereal::partial_pyspark_udf::{
+            deserialize_partial_pyspark_udf, PartialPySparkUDF,
+        };
+        use framework_python::udf::pyspark_udf::PySparkUDF;
+
+        let spec::CommonInlineUserDefinedFunction {
+            function_name,
+            deterministic,
+            arguments,
+            function,
+        } = function;
+
+        let function_name: &str = function_name.as_str();
+        let (argument_names, arguments) =
+            self.resolve_alias_expressions_and_names(arguments, schema, state)?;
+        let input_types: Vec<DataType> = arguments
+            .iter()
+            .map(|arg| arg.get_type(schema))
+            .collect::<Result<Vec<DataType>, DataFusionError>>()?;
+
+        let (output_type, eval_type, command, python_version) = match function {
+            spec::FunctionDefinition::PythonUdf {
+                output_type,
+                eval_type,
+                command,
+                python_version,
+            } => (output_type, eval_type, command, python_version),
+            _ => {
+                return Err(PlanError::invalid("UDF function type must be Python UDF"));
+            }
+        };
+        let output_type = self.resolve_data_type(output_type)?;
+
+        let python_function: PartialPySparkUDF = deserialize_partial_pyspark_udf(
+            &python_version,
+            &command,
+            &eval_type,
+            &(arguments.len() as i32),
+            &self.config.spark_udf_config,
+        )
+        .map_err(|e| PlanError::invalid(format!("Python UDF deserialization error: {:?}", e)))?;
+
+        let python_udf: PySparkUDF = PySparkUDF::new(
+            function_name.to_owned(),
+            deterministic,
+            input_types,
+            eval_type,
+            python_function,
+            output_type,
+        );
+        let name = self.config.plan_formatter.function_to_string(
+            function_name,
+            argument_names.iter().map(|x| x.as_str()).collect(),
+        )?;
+        let func = expr::Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(python_udf)),
+            args: arguments,
+        });
+        Ok(NamedExpr::new(vec![name], func))
+    }
+
+    fn resolve_expression_update_fields(
+        &self,
+        _struct_expression: spec::Expr,
+        _field_name: spec::ObjectName,
+        _value_expression: Option<spec::Expr>,
+        _schema: &DFSchema,
+        _state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        Err(PlanError::todo("update fields"))
+    }
+
+    fn resolve_expression_named_lambda_variable(
+        &self,
+        _variable: spec::UnresolvedNamedLambdaVariable,
+        _schema: &DFSchema,
+        _state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        Err(PlanError::todo("named lambda variable"))
+    }
+
+    fn resolve_expression_call_function(
+        &self,
+        _function_name: String,
+        _arguments: Vec<spec::Expr>,
+        _schema: &DFSchema,
+        _state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        Err(PlanError::todo("call function"))
+    }
+
+    fn resolve_expression_placeholder(&self, placeholder: String) -> PlanResult<NamedExpr> {
+        let name = placeholder.clone();
+        let expr = expr::Expr::Placeholder(expr::Placeholder::new(placeholder, None));
+        Ok(NamedExpr::new(vec![name], expr))
     }
 }
 

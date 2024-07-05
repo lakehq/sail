@@ -74,7 +74,7 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "t"
                         ],
                         "options": {}
@@ -142,7 +142,7 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "identifier": [
+                            "name": [
                               "t"
                             ],
                             "options": {}

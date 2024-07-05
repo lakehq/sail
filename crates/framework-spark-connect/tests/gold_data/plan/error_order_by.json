@@ -27,7 +27,7 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "identifier": [
+                            "name": [
                               "t"
                             ],
                             "options": {}

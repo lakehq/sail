@@ -9,7 +9,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "options": {}
@@ -42,7 +42,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "options": {}
@@ -75,7 +75,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "options": {}
@@ -108,7 +108,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "options": {}
@@ -196,7 +196,7 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "t1"
                         ],
                         "options": {}
@@ -222,7 +222,7 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "t2"
                         ],
                         "options": {}

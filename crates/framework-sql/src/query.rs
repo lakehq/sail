@@ -131,14 +131,14 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::Plan> {
             |r: Option<spec::Plan>, table| -> SqlResult<Option<spec::Plan>> {
                 let right = from_ast_table_with_joins(table)?;
                 match r {
-                    Some(left) => Ok(Some(spec::Plan::new(spec::PlanNode::Join {
+                    Some(left) => Ok(Some(spec::Plan::new(spec::PlanNode::Join(spec::Join {
                         left: Box::new(left),
                         right: Box::new(right),
                         join_condition: None,
                         join_type: spec::JoinType::Cross,
                         using_columns: vec![],
                         join_data_type: None,
-                    }))),
+                    })))),
                     None => Ok(Some(right)),
                 }
             },
@@ -196,13 +196,13 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::Plan> {
                     .into_iter()
                     .map(from_ast_expression)
                     .collect::<SqlResult<_>>()?;
-                let aggregate = spec::Plan::new(spec::PlanNode::Aggregate {
+                let aggregate = spec::Plan::new(spec::PlanNode::Aggregate(spec::Aggregate {
                     input: Box::new(plan),
                     group_type: spec::GroupType::GroupBy,
                     grouping_expressions: group_by,
                     aggregate_expressions: projection,
                     pivot: None,
-                });
+                }));
                 if let Some(having) = having {
                     let having = from_ast_expression(having)?;
                     spec::Plan::new(spec::PlanNode::Filter {
@@ -239,12 +239,14 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::Plan> {
 
     let plan = match distinct {
         None => plan,
-        Some(Distinct::Distinct) => spec::Plan::new(spec::PlanNode::Deduplicate {
-            input: Box::new(plan),
-            column_names: vec![],
-            all_columns_as_keys: true,
-            within_watermark: false,
-        }),
+        Some(Distinct::Distinct) => {
+            spec::Plan::new(spec::PlanNode::Deduplicate(spec::Deduplicate {
+                input: Box::new(plan),
+                column_names: vec![],
+                all_columns_as_keys: true,
+                within_watermark: false,
+            }))
+        }
         Some(Distinct::On(_)) => return Err(SqlError::unsupported("DISTINCT ON")),
     };
 
@@ -276,14 +278,16 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::Plan> {
                 SetOperator::Except => spec::SetOpType::Except,
                 SetOperator::Intersect => spec::SetOpType::Intersect,
             };
-            Ok(spec::Plan::new(spec::PlanNode::SetOperation {
-                left: Box::new(left),
-                right: Box::new(right),
-                set_op_type,
-                is_all,
-                by_name,
-                allow_missing_columns: false,
-            }))
+            Ok(spec::Plan::new(spec::PlanNode::SetOperation(
+                spec::SetOperation {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    set_op_type,
+                    is_all,
+                    by_name,
+                    allow_missing_columns: false,
+                },
+            )))
         }
         SetExpr::Values(values) => {
             let ast::Values {
@@ -314,10 +318,10 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::new(spec::PlanNode::Read {
                 is_streaming: false,
-                read_type: spec::ReadType::NamedTable {
-                    identifier: from_ast_object_name(ast::ObjectName(names))?,
+                read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
+                    name: from_ast_object_name(ast::ObjectName(names))?,
                     options: Default::default(),
-                },
+                }),
             }))
         }
     }
@@ -371,14 +375,14 @@ fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::Plan
                 Some(JoinConstraint::Natural) => return Err(SqlError::unsupported("natural join")),
                 Some(JoinConstraint::None) | None => (None, vec![]),
             };
-            Ok(spec::Plan::new(spec::PlanNode::Join {
+            Ok(spec::Plan::new(spec::PlanNode::Join(spec::Join {
                 left: Box::new(left),
                 right: Box::new(right),
                 join_condition,
                 join_type,
                 using_columns: using_columns.into_iter().map(|c| c.into()).collect(),
                 join_data_type: None,
-            }))
+            })))
         })?;
     Ok(plan)
 }
@@ -418,19 +422,19 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::Plan> {
                     .collect::<SqlResult<Vec<_>>>()?;
                 spec::Plan::new(spec::PlanNode::Read {
                     is_streaming: false,
-                    read_type: spec::ReadType::Udtf {
-                        identifier: from_ast_object_name(name)?,
+                    read_type: spec::ReadType::Udtf(spec::ReadUdtf {
+                        name: from_ast_object_name(name)?,
                         arguments: args,
                         options: Default::default(),
-                    },
+                    }),
                 })
             } else {
                 spec::Plan::new(spec::PlanNode::Read {
                     is_streaming: false,
-                    read_type: spec::ReadType::NamedTable {
-                        identifier: from_ast_object_name(name)?,
+                    read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
+                        name: from_ast_object_name(name)?,
                         options: Default::default(),
-                    },
+                    }),
                 })
             };
             let plan = with_ast_table_alias(plan, alias)?;

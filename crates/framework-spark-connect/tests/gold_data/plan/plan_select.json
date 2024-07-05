@@ -9,7 +9,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "options": {}
@@ -77,7 +77,7 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "identifier": [
+                            "name": [
                               "t"
                             ],
                             "options": {}
@@ -164,7 +164,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "options": {}
@@ -352,7 +352,7 @@
                   "input": {
                     "read": {
                       "udtf": {
-                        "identifier": [
+                        "name": [
                           "range"
                         ],
                         "arguments": [
@@ -400,7 +400,7 @@
                   "input": {
                     "read": {
                       "udtf": {
-                        "identifier": [
+                        "name": [
                           "range"
                         ],
                         "arguments": [
@@ -450,7 +450,7 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "testData"
                         ],
                         "options": {}
@@ -492,7 +492,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "testcat",
                       "db",
                       "tab"
@@ -1024,7 +1024,7 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "identifier": [
+                            "name": [
                               "t"
                             ],
                             "options": {}
@@ -1117,7 +1117,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "options": {}
@@ -1183,7 +1183,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "a"
                     ],
                     "options": {}
@@ -1229,7 +1229,7 @@
               "input": {
                 "read": {
                   "udtf": {
-                    "identifier": [
+                    "name": [
                       "default",
                       "range"
                     ],
@@ -1325,7 +1325,7 @@
               "input": {
                 "read": {
                   "udtf": {
-                    "identifier": [
+                    "name": [
                       "range"
                     ],
                     "arguments": [
@@ -1366,7 +1366,7 @@
               "input": {
                 "read": {
                   "udtf": {
-                    "identifier": [
+                    "name": [
                       "spark_catalog",
                       "default",
                       "range"
@@ -1408,7 +1408,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -1451,7 +1451,7 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "identifier": [
+                            "name": [
                               "t"
                             ],
                             "options": {}
@@ -1470,7 +1470,7 @@
                   "right": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "u"
                         ],
                         "options": {}
@@ -1532,7 +1532,7 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "t"
                         ],
                         "options": {}
@@ -1725,7 +1725,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "db",
                       "c"
                     ],
@@ -1790,7 +1790,7 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "db",
                           "c"
                         ],
@@ -1861,7 +1861,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "db",
                       "c"
                     ],
@@ -1906,7 +1906,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "db",
                       "c"
                     ],
@@ -1989,7 +1989,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "db",
                       "c"
                     ],
@@ -2036,7 +2036,7 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "db",
                           "c"
                         ],
@@ -2094,7 +2094,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t0"
                     ],
                     "options": {}
@@ -2130,7 +2130,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t0"
                     ],
                     "options": {}

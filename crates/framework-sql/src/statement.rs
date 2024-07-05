@@ -193,10 +193,12 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             }
             let node = spec::PlanNode::CreateDatabase {
                 database: from_ast_object_name(db_name)?,
-                if_not_exists,
-                comment: None, // TODO: support comment
-                location,
-                properties: Default::default(), // TODO: support properties
+                definition: spec::DatabaseDefinition {
+                    if_not_exists,
+                    comment: None, // TODO: support comment
+                    location,
+                    properties: Default::default(), // TODO: support properties
+                },
             };
             Ok(spec::Plan::new(node))
         }
@@ -217,10 +219,12 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             };
             let node = spec::PlanNode::CreateDatabase {
                 database: db_name,
-                if_not_exists,
-                comment: None,
-                location: None,
-                properties: Default::default(), // TODO: support properties
+                definition: spec::DatabaseDefinition {
+                    if_not_exists,
+                    comment: None,
+                    location: None,
+                    properties: Default::default(), // TODO: support properties
+                },
             };
             Ok(spec::Plan::new(node))
         }
@@ -321,20 +325,22 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
 
             Ok(spec::Plan::new(spec::PlanNode::CreateTable {
                 table: from_ast_object_name(name)?,
-                schema,
-                comment,
-                column_defaults,
-                constraints,
-                location,
-                file_format,
-                table_partition_cols: vec![],
-                file_sort_order: vec![],
-                if_not_exists,
-                or_replace,
-                unbounded: false,
-                options,
-                query,
-                definition,
+                definition: spec::TableDefinition {
+                    schema,
+                    comment,
+                    column_defaults,
+                    constraints,
+                    location,
+                    file_format,
+                    table_partition_cols: vec![],
+                    file_sort_order: vec![],
+                    if_not_exists,
+                    or_replace,
+                    unbounded: false,
+                    options,
+                    query,
+                    definition,
+                },
             }))
         }
         Statement::CreateView {
