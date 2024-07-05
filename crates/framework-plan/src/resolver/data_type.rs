@@ -284,14 +284,10 @@ impl PlanResolver<'_> {
         Ok(adt::Schema::new(fields))
     }
 
-    pub fn unresolve_schema(schema: adt::Schema) -> PlanResult<spec::Schema> {
-        let fields = schema
-            .fields()
-            .iter()
-            .map(|f| Self::unresolve_field(f.as_ref().clone()))
-            .collect::<PlanResult<Vec<_>>>()?;
+    pub fn unresolve_schema(schema: adt::SchemaRef) -> PlanResult<spec::Schema> {
+        let fields = Self::unresolve_fields(schema.fields().clone())?;
         Ok(spec::Schema {
-            fields: spec::Fields(fields),
+            fields: spec::Fields(fields.into()),
         })
     }
 }
