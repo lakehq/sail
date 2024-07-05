@@ -9,7 +9,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -42,7 +42,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "testcat",
                       "db",
                       "tab"
@@ -77,7 +77,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -110,7 +110,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -143,7 +143,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -177,7 +177,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -210,7 +210,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -244,7 +244,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -277,7 +277,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -310,7 +310,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -343,7 +343,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -376,7 +376,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -409,7 +409,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -442,7 +442,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -475,7 +475,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -509,7 +509,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "default",
                       "t"
                     ],
@@ -543,7 +543,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -576,7 +576,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "default.t"
                     ],
                     "options": {}
@@ -613,7 +613,7 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "identifier": [
+                            "name": [
                               "t"
                             ],
                             "options": {}
@@ -689,7 +689,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -722,7 +722,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -755,7 +755,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -788,7 +788,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -821,7 +821,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -854,7 +854,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -887,7 +887,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -920,7 +920,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
@@ -953,7 +953,7 @@
               "input": {
                 "read": {
                   "namedTable": {
-                    "identifier": [
+                    "name": [
                       "t"
                     ],
                     "options": {}
