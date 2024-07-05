@@ -67,7 +67,7 @@
       "input": "select * from t order by a, b desc",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "sort": {
               "input": {
                 "project": {
@@ -133,7 +133,7 @@
       "input": "select * from t order by a, b desc limit 10",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "limit": {
               "input": {
                 "sort": {

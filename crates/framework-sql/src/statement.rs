@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use framework_common::spec;
+use framework_common::spec::{CommandNode, CommandPlan};
 use sqlparser::ast;
 use sqlparser::ast::TableConstraint;
 use sqlparser::keywords::Keyword;
@@ -13,14 +14,19 @@ use crate::parser::{fail_on_extra_token, SparkDialect};
 use crate::query::from_ast_query;
 use crate::utils::{build_column_defaults, build_schema_from_columns};
 
+enum Statement {
+    Standard(ast::Statement),
+    Explain {
+        mode: spec::ExplainMode,
+        query: ast::Query,
+    },
+}
+
 pub fn parse_sql_statement(sql: &str) -> SqlResult<spec::Plan> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
     let statement = match parser.peek_token().token {
-        Token::Word(w) if w.keyword == Keyword::EXPLAIN => {
-            parser.next_token(); // consume EXPLAIN
-            parse_explain_statement(&mut parser)?
-        }
-        _ => parser.parse_statement()?,
+        Token::Word(w) if w.keyword == Keyword::EXPLAIN => parse_explain_statement(&mut parser)?,
+        _ => Statement::Standard(parser.parse_statement()?),
     };
     loop {
         if !parser.consume_token(&Token::SemiColon) {
@@ -28,48 +34,46 @@ pub fn parse_sql_statement(sql: &str) -> SqlResult<spec::Plan> {
         }
     }
     fail_on_extra_token(&mut parser, "statement")?;
-    from_ast_statement(statement)
+    match statement {
+        Statement::Standard(statement) => from_ast_statement(statement),
+        Statement::Explain { mode, query } => from_explain_statement(mode, query),
+    }
 }
 
-pub fn parse_explain_statement(parser: &mut Parser) -> SqlResult<ast::Statement> {
-    let mut analyze = parser.parse_keyword(Keyword::ANALYZE); // Must be parsed first.
-    let mut verbose = false;
-    let mut _extended = false;
-    let mut _formatted = false;
-    let mut _codegen = false;
-    let mut _cost = false;
-    if let Token::Word(word) = parser.peek_token().token {
-        match word.keyword {
-            Keyword::VERBOSE => {
-                verbose = true;
-                parser.next_token(); // consume VERBOSE
-            }
-            Keyword::EXTENDED => {
-                _extended = true;
-                verbose = true; // Temp until we actually implement EXTENDED
-                parser.next_token(); // consume EXTENDED
-            }
-            Keyword::FORMATTED => {
-                _formatted = true;
-                parser.next_token(); // consume FORMATTED
-            }
-            _ => {
-                match word.value.to_uppercase().as_str() {
-                    "CODEGEN" => {
-                        _codegen = true;
-                        parser.next_token(); // consume CODEGEN
-                    }
-                    "COST" => {
-                        _cost = true;
-                        verbose = true; // Temp until we actually implement COST
-                        analyze = true; // Temp until we actually implement COST
-                        parser.next_token(); // consume COST
-                    }
-                    _ => {}
-                }
-            }
+fn parse_explain_statement(parser: &mut Parser) -> SqlResult<Statement> {
+    use spec::ExplainMode;
+
+    parser.expect_keyword(Keyword::EXPLAIN)?;
+    let mode = match parser.peek_token().token {
+        Token::Word(w) if w.keyword == Keyword::ANALYZE => {
+            parser.next_token();
+            ExplainMode::Analyze
         }
-    }
+        Token::Word(w) if w.keyword == Keyword::VERBOSE => {
+            parser.next_token();
+            ExplainMode::Verbose
+        }
+        Token::Word(w) if w.keyword == Keyword::EXTENDED => {
+            parser.next_token();
+            ExplainMode::Extended
+        }
+        Token::Word(w) if w.keyword == Keyword::FORMATTED => {
+            parser.next_token();
+            ExplainMode::Formatted
+        }
+        Token::Word(w) => match w.value.to_uppercase().as_str() {
+            "CODEGEN" => {
+                parser.next_token();
+                ExplainMode::Codegen
+            }
+            "COST" => {
+                parser.next_token();
+                ExplainMode::Cost
+            }
+            _ => return Err(SqlError::invalid(format!("token after EXPLAIN: {:?}", w))),
+        },
+        x => return Err(SqlError::invalid(format!("token after EXPLAIN: {:?}", x))),
+    };
     // TODO: Properly implement each explain mode:
     //  1. Format the explain output the way Spark does
     //  2. Implement each ExplainMode, Verbose/Analyze don't accurately reflect Spark's behavior.
@@ -77,22 +81,15 @@ pub fn parse_explain_statement(parser: &mut Parser) -> SqlResult<ast::Statement>
     //          https://github.com/lakehq/framework/pull/72/files#r1660104742
     //      Spark's documentation for each ExplainMode:
     //          https://spark.apache.org/docs/latest/sql-ref-syntax-qry-explain.html
-
-    let statement = parser.parse_statement()?;
-    Ok(ast::Statement::Explain {
-        describe_alias: ast::DescribeAlias::Explain,
-        analyze,
-        verbose,
-        statement: Box::new(statement),
-        format: None,
-    })
+    let query = parser.parse_query()?;
+    Ok(Statement::Explain { mode, query })
 }
 
 fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
     use ast::Statement;
 
     match statement {
-        Statement::Query(query) => from_ast_query(*query),
+        Statement::Query(query) => Ok(spec::Plan::Query(from_ast_query(*query)?)),
         Statement::Insert(ast::Insert {
             or: _,
             ignore: _,
@@ -128,35 +125,9 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             legacy_options: _,
             values: _,
         } => Err(SqlError::todo("SQL copy")),
-        Statement::Explain {
-            describe_alias: _,
-            analyze,
-            verbose,
-            statement,
-            format,
-        } => {
-            if format.is_some() {
-                return Err(SqlError::unsupported("Statement::Explain: FORMAT clause"));
-            }
-            let plan = from_ast_statement(*statement)?;
-            if matches!(plan.node, spec::PlanNode::Explain { .. }) {
-                return Err(SqlError::unsupported(
-                    "Statement::Explain: Nested EXPLAINs not supported",
-                ));
-            }
-            let node = if analyze {
-                spec::PlanNode::Analyze {
-                    verbose,
-                    input: Box::new(plan),
-                }
-            } else {
-                spec::PlanNode::Explain {
-                    verbose,
-                    input: Box::new(plan),
-                    logical_optimization_succeeded: false,
-                }
-            };
-            Ok(spec::Plan::new(node))
+        Statement::Explain { .. } => {
+            // This should never be called, as we handle EXPLAIN statements separately.
+            Err(SqlError::invalid("unexpected EXPLAIN statement"))
         }
         Statement::AlterTable {
             name: _,
@@ -191,7 +162,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
                     "SQL create database with managed location",
                 ));
             }
-            let node = spec::PlanNode::CreateDatabase {
+            let node = spec::CommandNode::CreateDatabase {
                 database: from_ast_object_name(db_name)?,
                 definition: spec::DatabaseDefinition {
                     if_not_exists,
@@ -200,7 +171,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
                     properties: Default::default(), // TODO: support properties
                 },
             };
-            Ok(spec::Plan::new(node))
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::CreateSchema {
             schema_name,
@@ -217,7 +188,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
                     from_ast_object_name(ast::ObjectName(object_name_parts))?
                 }
             };
-            let node = spec::PlanNode::CreateDatabase {
+            let node = spec::CommandNode::CreateDatabase {
                 database: db_name,
                 definition: spec::DatabaseDefinition {
                     if_not_exists,
@@ -226,7 +197,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
                     properties: Default::default(), // TODO: support properties
                 },
             };
-            Ok(spec::Plan::new(node))
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::CreateFunction {
             or_replace: _,
@@ -323,25 +294,27 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             let definition = query.as_ref().map(|q| q.to_string());
             let query = query.map(|q| from_ast_query(*q)).transpose()?.map(Box::new);
 
-            Ok(spec::Plan::new(spec::PlanNode::CreateTable {
-                table: from_ast_object_name(name)?,
-                definition: spec::TableDefinition {
-                    schema,
-                    comment,
-                    column_defaults,
-                    constraints,
-                    location,
-                    file_format,
-                    table_partition_cols: vec![],
-                    file_sort_order: vec![],
-                    if_not_exists,
-                    or_replace,
-                    unbounded: false,
-                    options,
-                    query,
-                    definition,
+            Ok(spec::Plan::Command(spec::CommandPlan::new(
+                spec::CommandNode::CreateTable {
+                    table: from_ast_object_name(name)?,
+                    definition: spec::TableDefinition {
+                        schema,
+                        comment,
+                        column_defaults,
+                        constraints,
+                        location,
+                        file_format,
+                        table_partition_cols: vec![],
+                        file_sort_order: vec![],
+                        if_not_exists,
+                        or_replace,
+                        unbounded: false,
+                        options,
+                        query,
+                        definition,
+                    },
                 },
-            }))
+            )))
         }
         Statement::CreateView {
             or_replace: _,
@@ -382,23 +355,23 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             }
             let name = from_ast_object_name(names.pop().unwrap())?;
             let node = match (object_type, temporary) {
-                (ObjectType::Table, _) => spec::PlanNode::DropTable {
+                (ObjectType::Table, _) => spec::CommandNode::DropTable {
                     table: name,
                     if_exists,
                     purge,
                 },
-                (ObjectType::View, true) => spec::PlanNode::DropTemporaryView {
+                (ObjectType::View, true) => spec::CommandNode::DropTemporaryView {
                     view: name,
                     // TODO: support global temporary views
                     is_global: false,
                     if_exists,
                 },
-                (ObjectType::View, false) => spec::PlanNode::DropView {
+                (ObjectType::View, false) => spec::CommandNode::DropView {
                     view: name,
                     if_exists,
                 },
                 (ObjectType::Schema, false) | (ObjectType::Database, false) => {
-                    spec::PlanNode::DropDatabase {
+                    spec::CommandNode::DropDatabase {
                         database: name,
                         if_exists,
                         cascade,
@@ -414,7 +387,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
                 }
                 (ObjectType::Stage, _) => return Err(SqlError::unsupported("SQL drop stage")),
             };
-            Ok(spec::Plan::new(node))
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::DropFunction { .. } => Err(SqlError::todo("SQL drop function")),
         Statement::ExplainTable { .. } => Err(SqlError::todo("SQL explain table")),
@@ -596,4 +569,14 @@ fn calc_inline_constraints_from_columns(columns: &[ast::ColumnDef]) -> Vec<ast::
         }
     }
     constraints
+}
+
+fn from_explain_statement(mode: spec::ExplainMode, query: ast::Query) -> SqlResult<spec::Plan> {
+    let query = from_ast_query(query)?;
+    Ok(spec::Plan::Command(CommandPlan::new(
+        CommandNode::Explain {
+            mode,
+            input: Box::new(query),
+        },
+    )))
 }

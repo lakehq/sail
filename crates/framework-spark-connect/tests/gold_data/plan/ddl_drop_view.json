@@ -4,7 +4,7 @@
       "input": "DROP VIEW IF EXISTS db.view",
       "output": {
         "success": {
-          "root": {
+          "command": {
             "dropView": {
               "view": [
                 "db",
@@ -22,7 +22,7 @@
       "input": "DROP VIEW IF EXISTS view",
       "output": {
         "success": {
-          "root": {
+          "command": {
             "dropView": {
               "view": [
                 "view"
@@ -39,7 +39,7 @@
       "input": "DROP VIEW db.view",
       "output": {
         "success": {
-          "root": {
+          "command": {
             "dropView": {
               "view": [
                 "db",
@@ -57,7 +57,7 @@
       "input": "DROP VIEW testcat.db.view",
       "output": {
         "success": {
-          "root": {
+          "command": {
             "dropView": {
               "view": [
                 "testcat",
@@ -76,7 +76,7 @@
       "input": "DROP VIEW view",
       "output": {
         "success": {
-          "root": {
+          "command": {
             "dropView": {
               "view": [
                 "view"

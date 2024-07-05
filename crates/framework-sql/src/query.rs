@@ -5,7 +5,7 @@ use crate::error::{SqlError, SqlResult};
 use crate::expression::{from_ast_expression, from_ast_object_name, from_ast_order_by};
 use crate::literal::LiteralValue;
 
-pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::Plan> {
+pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
     let ast::Query {
         with,
         body,
@@ -39,7 +39,7 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::Plan> {
             .into_iter()
             .map(from_ast_order_by)
             .collect::<SqlResult<_>>()?;
-        spec::Plan::new(spec::PlanNode::Sort {
+        spec::QueryPlan::new(spec::QueryNode::Sort {
             input: Box::new(plan),
             order: order_by,
             is_global: true,
@@ -51,7 +51,7 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::Plan> {
     let plan = if let Some(ast::Offset { value, rows: _ }) = offset {
         let offset = LiteralValue::<i128>::try_from(value)?.0;
         let offset = usize::try_from(offset).map_err(|e| SqlError::invalid(e.to_string()))?;
-        spec::Plan::new(spec::PlanNode::Offset {
+        spec::QueryPlan::new(spec::QueryNode::Offset {
             input: Box::new(plan),
             offset,
         })
@@ -62,7 +62,7 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::Plan> {
     let plan = if let Some(limit) = limit {
         let limit = LiteralValue::<i128>::try_from(limit)?.0;
         let limit = usize::try_from(limit).map_err(|e| SqlError::invalid(e.to_string()))?;
-        spec::Plan::new(spec::PlanNode::Limit {
+        spec::QueryPlan::new(spec::QueryNode::Limit {
             input: Box::new(plan),
             skip: 0,
             limit,
@@ -74,7 +74,7 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::Plan> {
     Ok(plan)
 }
 
-fn from_ast_select(select: ast::Select) -> SqlResult<spec::Plan> {
+fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
     use ast::{Distinct, GroupByExpr, SelectItem};
 
     let ast::Select {
@@ -128,30 +128,32 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::Plan> {
         .into_iter()
         .try_fold(
             None,
-            |r: Option<spec::Plan>, table| -> SqlResult<Option<spec::Plan>> {
+            |r: Option<spec::QueryPlan>, table| -> SqlResult<Option<spec::QueryPlan>> {
                 let right = from_ast_table_with_joins(table)?;
                 match r {
-                    Some(left) => Ok(Some(spec::Plan::new(spec::PlanNode::Join(spec::Join {
-                        left: Box::new(left),
-                        right: Box::new(right),
-                        join_condition: None,
-                        join_type: spec::JoinType::Cross,
-                        using_columns: vec![],
-                        join_data_type: None,
-                    })))),
+                    Some(left) => Ok(Some(spec::QueryPlan::new(spec::QueryNode::Join(
+                        spec::Join {
+                            left: Box::new(left),
+                            right: Box::new(right),
+                            join_condition: None,
+                            join_type: spec::JoinType::Cross,
+                            using_columns: vec![],
+                            join_data_type: None,
+                        },
+                    )))),
                     None => Ok(Some(right)),
                 }
             },
         )?
         .unwrap_or_else(|| {
-            spec::Plan::new(spec::PlanNode::Empty {
+            spec::QueryPlan::new(spec::QueryNode::Empty {
                 produce_one_row: true,
             })
         });
 
     let plan = if let Some(selection) = selection {
         let selection = from_ast_expression(selection)?;
-        spec::Plan::new(spec::PlanNode::Filter {
+        spec::QueryPlan::new(spec::QueryNode::Filter {
             input: Box::new(plan),
             condition: selection,
         })
@@ -187,7 +189,7 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::Plan> {
                 if having.is_some() {
                     return Err(SqlError::unsupported("HAVING without GROUP BY"));
                 }
-                spec::Plan::new(spec::PlanNode::Project {
+                spec::QueryPlan::new(spec::QueryNode::Project {
                     input: Some(Box::new(plan)),
                     expressions: projection,
                 })
@@ -196,7 +198,7 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::Plan> {
                     .into_iter()
                     .map(from_ast_expression)
                     .collect::<SqlResult<_>>()?;
-                let aggregate = spec::Plan::new(spec::PlanNode::Aggregate(spec::Aggregate {
+                let aggregate = spec::QueryPlan::new(spec::QueryNode::Aggregate(spec::Aggregate {
                     input: Box::new(plan),
                     group_type: spec::GroupType::GroupBy,
                     grouping_expressions: group_by,
@@ -205,7 +207,7 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::Plan> {
                 }));
                 if let Some(having) = having {
                     let having = from_ast_expression(having)?;
-                    spec::Plan::new(spec::PlanNode::Filter {
+                    spec::QueryPlan::new(spec::QueryNode::Filter {
                         input: Box::new(aggregate),
                         condition: having,
                     })
@@ -228,7 +230,7 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::Plan> {
                 from_ast_order_by(expr)
             })
             .collect::<SqlResult<_>>()?;
-        spec::Plan::new(spec::PlanNode::Sort {
+        spec::QueryPlan::new(spec::QueryNode::Sort {
             input: Box::new(plan),
             order: sort_by,
             is_global: false,
@@ -240,7 +242,7 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::Plan> {
     let plan = match distinct {
         None => plan,
         Some(Distinct::Distinct) => {
-            spec::Plan::new(spec::PlanNode::Deduplicate(spec::Deduplicate {
+            spec::QueryPlan::new(spec::QueryNode::Deduplicate(spec::Deduplicate {
                 input: Box::new(plan),
                 column_names: vec![],
                 all_columns_as_keys: true,
@@ -253,7 +255,7 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::Plan> {
     Ok(plan)
 }
 
-fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::Plan> {
+fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::QueryPlan> {
     use ast::{SetExpr, SetOperator, SetQuantifier};
 
     match set_expr {
@@ -278,7 +280,7 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::Plan> {
                 SetOperator::Except => spec::SetOpType::Except,
                 SetOperator::Intersect => spec::SetOpType::Intersect,
             };
-            Ok(spec::Plan::new(spec::PlanNode::SetOperation(
+            Ok(spec::QueryPlan::new(spec::QueryNode::SetOperation(
                 spec::SetOperation {
                     left: Box::new(left),
                     right: Box::new(right),
@@ -302,7 +304,7 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::Plan> {
                         .collect::<SqlResult<Vec<_>>>()
                 })
                 .collect::<SqlResult<Vec<_>>>()?;
-            Ok(spec::Plan::new(spec::PlanNode::Values(rows)))
+            Ok(spec::QueryPlan::new(spec::QueryNode::Values(rows)))
         }
         SetExpr::Insert(_) => Err(SqlError::unsupported("INSERT statement in set expression")),
         SetExpr::Update(_) => Err(SqlError::unsupported("UPDATE statement in set expression")),
@@ -316,7 +318,7 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::Plan> {
                 (None, Some(t)) => vec![t.as_str().into()],
                 (_, None) => return Err(SqlError::invalid("missing table name in set expression")),
             };
-            Ok(spec::Plan::new(spec::PlanNode::Read {
+            Ok(spec::QueryPlan::new(spec::QueryNode::Read {
                 is_streaming: false,
                 read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
                     name: from_ast_object_name(ast::ObjectName(names))?,
@@ -327,7 +329,7 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::Plan> {
     }
 }
 
-fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::Plan> {
+fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::QueryPlan> {
     use sqlparser::ast::{JoinConstraint, JoinOperator};
 
     let ast::TableWithJoins { relation, joins } = table;
@@ -375,7 +377,7 @@ fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::Plan
                 Some(JoinConstraint::Natural) => return Err(SqlError::unsupported("natural join")),
                 Some(JoinConstraint::None) | None => (None, vec![]),
             };
-            Ok(spec::Plan::new(spec::PlanNode::Join(spec::Join {
+            Ok(spec::QueryPlan::new(spec::QueryNode::Join(spec::Join {
                 left: Box::new(left),
                 right: Box::new(right),
                 join_condition,
@@ -387,7 +389,7 @@ fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::Plan
     Ok(plan)
 }
 
-fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::Plan> {
+fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> {
     use ast::TableFactor;
 
     match table {
@@ -420,7 +422,7 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::Plan> {
                         }
                     })
                     .collect::<SqlResult<Vec<_>>>()?;
-                spec::Plan::new(spec::PlanNode::Read {
+                spec::QueryPlan::new(spec::QueryNode::Read {
                     is_streaming: false,
                     read_type: spec::ReadType::Udtf(spec::ReadUdtf {
                         name: from_ast_object_name(name)?,
@@ -429,7 +431,7 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::Plan> {
                     }),
                 })
             } else {
-                spec::Plan::new(spec::PlanNode::Read {
+                spec::QueryPlan::new(spec::QueryNode::Read {
                     is_streaming: false,
                     read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
                         name: from_ast_object_name(name)?,
@@ -463,11 +465,14 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::Plan> {
     }
 }
 
-fn with_ast_table_alias(plan: spec::Plan, alias: Option<ast::TableAlias>) -> SqlResult<spec::Plan> {
+fn with_ast_table_alias(
+    plan: spec::QueryPlan,
+    alias: Option<ast::TableAlias>,
+) -> SqlResult<spec::QueryPlan> {
     match alias {
         None => Ok(plan),
         Some(ast::TableAlias { name, columns }) => {
-            Ok(spec::Plan::new(spec::PlanNode::TableAlias {
+            Ok(spec::QueryPlan::new(spec::QueryNode::TableAlias {
                 input: Box::new(plan),
                 name: name.value.into(),
                 columns: columns.into_iter().map(|c| c.value.into()).collect(),

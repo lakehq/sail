@@ -84,17 +84,32 @@ pub struct NamedPlan {
 }
 
 impl PlanResolver<'_> {
+    pub async fn resolve_named_plan(&self, plan: spec::Plan) -> PlanResult<NamedPlan> {
+        let mut state = PlanResolverState::new();
+        match plan {
+            spec::Plan::Query(query) => {
+                let plan = self.resolve_query_plan(query, &mut state).await?;
+                let fields = Some(state.get_field_names(plan.schema().inner())?);
+                Ok(NamedPlan { plan, fields })
+            }
+            spec::Plan::Command(command) => {
+                let plan = self.resolve_command_plan(command, &mut state).await?;
+                Ok(NamedPlan { plan, fields: None })
+            }
+        }
+    }
+
     #[async_recursion]
-    pub(super) async fn resolve_plan(
+    pub(super) async fn resolve_query_plan(
         &self,
-        plan: spec::Plan,
+        plan: spec::QueryPlan,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        use spec::PlanNode;
+        use spec::QueryNode;
 
         let plan_id = plan.plan_id;
         let plan = match plan.node {
-            PlanNode::Read {
+            QueryNode::Read {
                 read_type,
                 is_streaming: _,
             } => match read_type {
@@ -106,16 +121,16 @@ impl PlanResolver<'_> {
                     self.resolve_query_read_data_source(source, state).await?
                 }
             },
-            PlanNode::Project { input, expressions } => {
+            QueryNode::Project { input, expressions } => {
                 self.resolve_query_project(input.map(|x| *x), expressions, state)
                     .await?
             }
-            PlanNode::Filter { input, condition } => {
+            QueryNode::Filter { input, condition } => {
                 self.resolve_query_filter(*input, condition, state).await?
             }
-            PlanNode::Join(join) => self.resolve_query_join(join, state).await?,
-            PlanNode::SetOperation(op) => self.resolve_query_set_operation(op, state).await?,
-            PlanNode::Sort {
+            QueryNode::Join(join) => self.resolve_query_join(join, state).await?,
+            QueryNode::SetOperation(op) => self.resolve_query_set_operation(op, state).await?,
+            QueryNode::Sort {
                 input,
                 order,
                 is_global,
@@ -123,13 +138,13 @@ impl PlanResolver<'_> {
                 self.resolve_query_sort(*input, order, is_global, state)
                     .await?
             }
-            PlanNode::Limit { input, skip, limit } => {
+            QueryNode::Limit { input, skip, limit } => {
                 self.resolve_query_limit(*input, skip, limit, state).await?
             }
-            PlanNode::Aggregate(aggregate) => {
+            QueryNode::Aggregate(aggregate) => {
                 self.resolve_query_aggregate(aggregate, state).await?
             }
-            PlanNode::WithParameters {
+            QueryNode::WithParameters {
                 input,
                 positional_arguments,
                 named_arguments,
@@ -142,19 +157,19 @@ impl PlanResolver<'_> {
                 )
                 .await?
             }
-            PlanNode::LocalRelation { data, schema } => {
+            QueryNode::LocalRelation { data, schema } => {
                 self.resolve_query_local_relation(data, schema, state)
                     .await?
             }
-            PlanNode::Sample(sample) => self.resolve_query_sample(sample, state).await?,
-            PlanNode::Offset { input, offset } => {
+            QueryNode::Sample(sample) => self.resolve_query_sample(sample, state).await?,
+            QueryNode::Offset { input, offset } => {
                 self.resolve_query_offset(*input, offset, state).await?
             }
-            PlanNode::Deduplicate(deduplicate) => {
+            QueryNode::Deduplicate(deduplicate) => {
                 self.resolve_query_deduplicate(deduplicate, state).await?
             }
-            PlanNode::Range(range) => self.resolve_query_range(range, state).await?,
-            PlanNode::SubqueryAlias {
+            QueryNode::Range(range) => self.resolve_query_range(range, state).await?,
+            QueryNode::SubqueryAlias {
                 input,
                 alias,
                 qualifier,
@@ -162,7 +177,7 @@ impl PlanResolver<'_> {
                 self.resolve_query_subquery_alias(*input, alias, qualifier, state)
                     .await?
             }
-            PlanNode::Repartition {
+            QueryNode::Repartition {
                 input,
                 num_partitions,
                 shuffle: _,
@@ -170,22 +185,21 @@ impl PlanResolver<'_> {
                 self.resolve_query_repartition(*input, num_partitions, state)
                     .await?
             }
-            PlanNode::ToDf {
+            QueryNode::ToDf {
                 input,
                 column_names,
             } => {
                 self.resolve_query_to_df(*input, column_names, state)
                     .await?
             }
-            PlanNode::WithColumnsRenamed {
+            QueryNode::WithColumnsRenamed {
                 input,
                 rename_columns_map,
             } => {
                 self.resolve_query_with_columns_renamed(*input, rename_columns_map, state)
                     .await?
             }
-            PlanNode::ShowString(show) => self.resolve_command_show_string(show, state).await?,
-            PlanNode::Drop {
+            QueryNode::Drop {
                 input,
                 columns,
                 column_names,
@@ -193,14 +207,14 @@ impl PlanResolver<'_> {
                 self.resolve_query_drop(*input, columns, column_names, state)
                     .await?
             }
-            PlanNode::Tail { input, limit } => {
+            QueryNode::Tail { input, limit } => {
                 self.resolve_query_tail(*input, limit, state).await?
             }
-            PlanNode::WithColumns { input, aliases } => {
+            QueryNode::WithColumns { input, aliases } => {
                 self.resolve_query_with_columns(*input, aliases, state)
                     .await?
             }
-            PlanNode::Hint {
+            QueryNode::Hint {
                 input,
                 name,
                 parameters,
@@ -208,11 +222,11 @@ impl PlanResolver<'_> {
                 self.resolve_query_hint(*input, name, parameters, state)
                     .await?
             }
-            PlanNode::Unpivot(unpivot) => self.resolve_query_unpivot(unpivot, state).await?,
-            PlanNode::ToSchema { input, schema } => {
+            QueryNode::Unpivot(unpivot) => self.resolve_query_unpivot(unpivot, state).await?,
+            QueryNode::ToSchema { input, schema } => {
                 self.resolve_query_to_schema(*input, schema, state).await?
             }
-            PlanNode::RepartitionByExpression {
+            QueryNode::RepartitionByExpression {
                 input,
                 partition_expressions,
                 num_partitions,
@@ -225,7 +239,7 @@ impl PlanResolver<'_> {
                 )
                 .await?
             }
-            PlanNode::MapPartitions {
+            QueryNode::MapPartitions {
                 input,
                 function,
                 is_barrier,
@@ -233,7 +247,7 @@ impl PlanResolver<'_> {
                 self.resolve_query_map_partitions(*input, function, is_barrier, state)
                     .await?
             }
-            PlanNode::CollectMetrics {
+            QueryNode::CollectMetrics {
                 input,
                 name,
                 metrics,
@@ -241,211 +255,66 @@ impl PlanResolver<'_> {
                 self.resolve_query_collect_metrics(*input, name, metrics, state)
                     .await?
             }
-            PlanNode::Parse(parse) => self.resolve_query_parse(parse, state).await?,
-            PlanNode::GroupMap(map) => self.resolve_query_group_map(map, state).await?,
-            PlanNode::CoGroupMap(map) => self.resolve_query_co_group_map(map, state).await?,
-            PlanNode::WithWatermark(watermark) => {
+            QueryNode::Parse(parse) => self.resolve_query_parse(parse, state).await?,
+            QueryNode::GroupMap(map) => self.resolve_query_group_map(map, state).await?,
+            QueryNode::CoGroupMap(map) => self.resolve_query_co_group_map(map, state).await?,
+            QueryNode::WithWatermark(watermark) => {
                 self.resolve_query_with_watermark(watermark, state).await?
             }
-            PlanNode::ApplyInPandasWithState(apply) => {
+            QueryNode::ApplyInPandasWithState(apply) => {
                 self.resolve_query_apply_in_pandas_with_state(apply, state)
                     .await?
             }
-            PlanNode::HtmlString(html) => self.resolve_command_html_string(html, state).await?,
-            PlanNode::CachedLocalRelation { .. } => {
+            QueryNode::CachedLocalRelation { .. } => {
                 return Err(PlanError::todo("cached local relation"));
             }
-            PlanNode::CachedRemoteRelation { .. } => {
+            QueryNode::CachedRemoteRelation { .. } => {
                 return Err(PlanError::todo("cached remote relation"));
             }
-            PlanNode::CommonInlineUserDefinedTableFunction(udtf) => {
+            QueryNode::CommonInlineUserDefinedTableFunction(udtf) => {
                 self.resolve_query_common_inline_udtf(udtf, state).await?
             }
-            PlanNode::FillNa { .. } => {
+            QueryNode::FillNa { .. } => {
                 return Err(PlanError::todo("fill na"));
             }
-            PlanNode::DropNa { .. } => {
+            QueryNode::DropNa { .. } => {
                 return Err(PlanError::todo("drop na"));
             }
-            PlanNode::ReplaceNa { .. } => {
+            QueryNode::ReplaceNa { .. } => {
                 return Err(PlanError::todo("replace"));
             }
-            PlanNode::StatSummary { .. } => {
+            QueryNode::StatSummary { .. } => {
                 return Err(PlanError::todo("summary"));
             }
-            PlanNode::StatCrosstab { .. } => {
+            QueryNode::StatCrosstab { .. } => {
                 return Err(PlanError::todo("crosstab"));
             }
-            PlanNode::StatDescribe { .. } => {
+            QueryNode::StatDescribe { .. } => {
                 return Err(PlanError::todo("describe"));
             }
-            PlanNode::StatCov { .. } => {
+            QueryNode::StatCov { .. } => {
                 return Err(PlanError::todo("cov"));
             }
-            PlanNode::StatCorr { .. } => {
+            QueryNode::StatCorr { .. } => {
                 return Err(PlanError::todo("corr"));
             }
-            PlanNode::StatApproxQuantile { .. } => {
+            QueryNode::StatApproxQuantile { .. } => {
                 return Err(PlanError::todo("approx quantile"));
             }
-            PlanNode::StatFreqItems { .. } => {
+            QueryNode::StatFreqItems { .. } => {
                 return Err(PlanError::todo("freq items"));
             }
-            PlanNode::StatSampleBy { .. } => {
+            QueryNode::StatSampleBy { .. } => {
                 return Err(PlanError::todo("sample by"));
             }
-            PlanNode::CurrentDatabase {} => {
-                self.resolve_catalog_command(CatalogCommand::CurrentDatabase)?
-            }
-            PlanNode::SetCurrentDatabase { database_name } => {
-                self.resolve_catalog_command(CatalogCommand::SetCurrentDatabase {
-                    database_name: database_name.into(),
-                })?
-            }
-            PlanNode::ListDatabases {
-                catalog,
-                database_pattern,
-            } => self.resolve_catalog_command(CatalogCommand::ListDatabases {
-                catalog: catalog.map(|x| x.into()),
-                database_pattern,
-            })?,
-            PlanNode::ListTables {
-                database,
-                table_pattern,
-            } => self.resolve_catalog_command(CatalogCommand::ListTables {
-                database: database.map(build_schema_reference).transpose()?,
-                table_pattern,
-            })?,
-            PlanNode::ListFunctions {
-                database,
-                function_pattern,
-            } => self.resolve_catalog_command(CatalogCommand::ListFunctions {
-                database: database.map(build_schema_reference).transpose()?,
-                function_pattern,
-            })?,
-            PlanNode::ListColumns { table } => {
-                self.resolve_catalog_command(CatalogCommand::ListColumns {
-                    table: build_table_reference(table)?,
-                })?
-            }
-            PlanNode::GetDatabase { database } => {
-                self.resolve_catalog_command(CatalogCommand::GetDatabase {
-                    database: build_schema_reference(database)?,
-                })?
-            }
-            PlanNode::GetTable { table } => {
-                self.resolve_catalog_command(CatalogCommand::GetTable {
-                    table: build_table_reference(table)?,
-                })?
-            }
-            PlanNode::GetFunction { function } => {
-                self.resolve_catalog_command(CatalogCommand::GetFunction {
-                    function: build_table_reference(function)?,
-                })?
-            }
-            PlanNode::DatabaseExists { database } => {
-                self.resolve_catalog_command(CatalogCommand::DatabaseExists {
-                    database: build_schema_reference(database)?,
-                })?
-            }
-            PlanNode::TableExists { table } => {
-                self.resolve_catalog_command(CatalogCommand::TableExists {
-                    table: build_table_reference(table)?,
-                })?
-            }
-            PlanNode::FunctionExists { function } => {
-                self.resolve_catalog_command(CatalogCommand::FunctionExists {
-                    function: build_table_reference(function)?,
-                })?
-            }
-            PlanNode::CreateTable { table, definition } => {
-                self.resolve_catalog_create_table(table, definition, state)?
-            }
-            PlanNode::DropTemporaryView {
-                view,
-                is_global,
-                if_exists,
-            } => self.resolve_catalog_command(CatalogCommand::DropTemporaryView {
-                view: build_table_reference(view)?,
-                is_global,
-                if_exists,
-            })?,
-            PlanNode::DropDatabase {
-                database,
-                if_exists,
-                cascade,
-            } => self.resolve_catalog_command(CatalogCommand::DropDatabase {
-                database: build_schema_reference(database)?,
-                if_exists,
-                cascade,
-            })?,
-            PlanNode::DropFunction {
-                function,
-                if_exists,
-                is_temporary,
-            } => self.resolve_catalog_command(CatalogCommand::DropFunction {
-                function: build_table_reference(function)?,
-                if_exists,
-                is_temporary,
-            })?,
-            PlanNode::DropTable {
-                table,
-                if_exists,
-                purge,
-            } => self.resolve_catalog_command(CatalogCommand::DropTable {
-                table: build_table_reference(table)?,
-                if_exists,
-                purge,
-            })?,
-            PlanNode::DropView { view, if_exists } => {
-                self.resolve_catalog_command(CatalogCommand::DropView {
-                    view: build_table_reference(view)?,
-                    if_exists,
-                })?
-            }
-            PlanNode::RecoverPartitions { .. } => {
-                return Err(PlanError::todo("PlanNode::RecoverPartitions"))
-            }
-            PlanNode::IsCached { .. } => return Err(PlanError::todo("PlanNode::IsCached")),
-            PlanNode::CacheTable { .. } => return Err(PlanError::todo("PlanNode::CacheTable")),
-            PlanNode::UncacheTable { .. } => return Err(PlanError::todo("PlanNode::UncacheTable")),
-            PlanNode::ClearCache {} => return Err(PlanError::todo("PlanNode::ClearCache")),
-            PlanNode::RefreshTable { .. } => return Err(PlanError::todo("PlanNode::RefreshTable")),
-            PlanNode::RefreshByPath { .. } => {
-                return Err(PlanError::todo("PlanNode::RefreshByPath"))
-            }
-            PlanNode::CurrentCatalog => {
-                self.resolve_catalog_command(CatalogCommand::CurrentCatalog)?
-            }
-            PlanNode::SetCurrentCatalog { catalog_name } => {
-                self.resolve_catalog_command(CatalogCommand::SetCurrentCatalog {
-                    catalog_name: catalog_name.into(),
-                })?
-            }
-            PlanNode::ListCatalogs { catalog_pattern } => {
-                self.resolve_catalog_command(CatalogCommand::ListCatalogs { catalog_pattern })?
-            }
-            PlanNode::CreateCatalog { .. } => return Err(PlanError::todo("create catalog")),
-            PlanNode::CreateDatabase {
-                database,
-                definition,
-            } => self.resolve_catalog_create_database(database, definition)?,
-            PlanNode::RegisterFunction(_) => return Err(PlanError::todo("register function")),
-            PlanNode::RegisterTableFunction(_) => {
-                return Err(PlanError::todo("register table function"))
-            }
-            PlanNode::CreateTemporaryView { .. } => {
-                return Err(PlanError::todo("create temporary view"))
-            }
-            PlanNode::Write { .. } => return Err(PlanError::todo("write")),
-            PlanNode::Empty { produce_one_row } => {
+            QueryNode::Empty { produce_one_row } => {
                 LogicalPlan::EmptyRelation(plan::EmptyRelation {
                     produce_one_row,
                     schema: DFSchemaRef::new(DFSchema::empty()),
                 })
             }
-            PlanNode::Values(values) => self.resolve_query_values(values, state).await?,
-            PlanNode::TableAlias {
+            QueryNode::Values(values) => self.resolve_query_values(values, state).await?,
+            QueryNode::TableAlias {
                 input,
                 name,
                 columns,
@@ -453,34 +322,168 @@ impl PlanResolver<'_> {
                 self.resolve_query_table_alias(*input, name, columns, state)
                     .await?
             }
-            PlanNode::Analyze { verbose, input } => {
-                self.resolve_command_analyze(*input, verbose, state).await?
-            }
-            PlanNode::Explain {
-                verbose,
-                input,
-                logical_optimization_succeeded,
-            } => {
-                self.resolve_command_explain(*input, verbose, logical_optimization_succeeded, state)
-                    .await?
-            }
         };
-        if self.is_query_plan(&plan) {
-            self.verify_query_plan(&plan, state)?;
-            self.register_schema_with_plan_id(&plan, plan_id, state)?;
-        };
+        self.verify_query_plan(&plan, state)?;
+        self.register_schema_with_plan_id(&plan, plan_id, state)?;
         Ok(plan)
     }
 
-    pub async fn resolve_named_plan(&self, plan: spec::Plan) -> PlanResult<NamedPlan> {
-        let mut state = PlanResolverState::new();
-        let plan = self.resolve_plan(plan, &mut state).await?;
-        let fields = if self.is_query_plan(&plan) {
-            Some(state.get_field_names(plan.schema().inner())?)
-        } else {
-            None
-        };
-        Ok(NamedPlan { plan, fields })
+    pub(super) async fn resolve_command_plan(
+        &self,
+        plan: spec::CommandPlan,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        use spec::CommandNode;
+
+        match plan.node {
+            CommandNode::ShowString(show) => self.resolve_command_show_string(show, state).await,
+            CommandNode::HtmlString(html) => self.resolve_command_html_string(html, state).await,
+            CommandNode::CurrentDatabase => {
+                self.resolve_catalog_command(CatalogCommand::CurrentDatabase)
+            }
+            CommandNode::SetCurrentDatabase { database_name } => {
+                self.resolve_catalog_command(CatalogCommand::SetCurrentDatabase {
+                    database_name: database_name.into(),
+                })
+            }
+            CommandNode::ListDatabases {
+                catalog,
+                database_pattern,
+            } => self.resolve_catalog_command(CatalogCommand::ListDatabases {
+                catalog: catalog.map(|x| x.into()),
+                database_pattern,
+            }),
+            CommandNode::ListTables {
+                database,
+                table_pattern,
+            } => self.resolve_catalog_command(CatalogCommand::ListTables {
+                database: database.map(build_schema_reference).transpose()?,
+                table_pattern,
+            }),
+            CommandNode::ListFunctions {
+                database,
+                function_pattern,
+            } => self.resolve_catalog_command(CatalogCommand::ListFunctions {
+                database: database.map(build_schema_reference).transpose()?,
+                function_pattern,
+            }),
+            CommandNode::ListColumns { table } => {
+                self.resolve_catalog_command(CatalogCommand::ListColumns {
+                    table: build_table_reference(table)?,
+                })
+            }
+            CommandNode::GetDatabase { database } => {
+                self.resolve_catalog_command(CatalogCommand::GetDatabase {
+                    database: build_schema_reference(database)?,
+                })
+            }
+            CommandNode::GetTable { table } => {
+                self.resolve_catalog_command(CatalogCommand::GetTable {
+                    table: build_table_reference(table)?,
+                })
+            }
+            CommandNode::GetFunction { function } => {
+                self.resolve_catalog_command(CatalogCommand::GetFunction {
+                    function: build_table_reference(function)?,
+                })
+            }
+            CommandNode::DatabaseExists { database } => {
+                self.resolve_catalog_command(CatalogCommand::DatabaseExists {
+                    database: build_schema_reference(database)?,
+                })
+            }
+            CommandNode::TableExists { table } => {
+                self.resolve_catalog_command(CatalogCommand::TableExists {
+                    table: build_table_reference(table)?,
+                })
+            }
+            CommandNode::FunctionExists { function } => {
+                self.resolve_catalog_command(CatalogCommand::FunctionExists {
+                    function: build_table_reference(function)?,
+                })
+            }
+            CommandNode::CreateTable { table, definition } => {
+                self.resolve_catalog_create_table(table, definition, state)
+            }
+            CommandNode::DropTemporaryView {
+                view,
+                is_global,
+                if_exists,
+            } => self.resolve_catalog_command(CatalogCommand::DropTemporaryView {
+                view: build_table_reference(view)?,
+                is_global,
+                if_exists,
+            }),
+            CommandNode::DropDatabase {
+                database,
+                if_exists,
+                cascade,
+            } => self.resolve_catalog_command(CatalogCommand::DropDatabase {
+                database: build_schema_reference(database)?,
+                if_exists,
+                cascade,
+            }),
+            CommandNode::DropFunction {
+                function,
+                if_exists,
+                is_temporary,
+            } => self.resolve_catalog_command(CatalogCommand::DropFunction {
+                function: build_table_reference(function)?,
+                if_exists,
+                is_temporary,
+            }),
+            CommandNode::DropTable {
+                table,
+                if_exists,
+                purge,
+            } => self.resolve_catalog_command(CatalogCommand::DropTable {
+                table: build_table_reference(table)?,
+                if_exists,
+                purge,
+            }),
+            CommandNode::DropView { view, if_exists } => {
+                self.resolve_catalog_command(CatalogCommand::DropView {
+                    view: build_table_reference(view)?,
+                    if_exists,
+                })
+            }
+            CommandNode::RecoverPartitions { .. } => {
+                Err(PlanError::todo("PlanNode::RecoverPartitions"))
+            }
+            CommandNode::IsCached { .. } => Err(PlanError::todo("PlanNode::IsCached")),
+            CommandNode::CacheTable { .. } => Err(PlanError::todo("PlanNode::CacheTable")),
+            CommandNode::UncacheTable { .. } => Err(PlanError::todo("PlanNode::UncacheTable")),
+            CommandNode::ClearCache => Err(PlanError::todo("PlanNode::ClearCache")),
+            CommandNode::RefreshTable { .. } => Err(PlanError::todo("PlanNode::RefreshTable")),
+            CommandNode::RefreshByPath { .. } => Err(PlanError::todo("PlanNode::RefreshByPath")),
+            CommandNode::CurrentCatalog => {
+                self.resolve_catalog_command(CatalogCommand::CurrentCatalog)
+            }
+            CommandNode::SetCurrentCatalog { catalog_name } => {
+                self.resolve_catalog_command(CatalogCommand::SetCurrentCatalog {
+                    catalog_name: catalog_name.into(),
+                })
+            }
+            CommandNode::ListCatalogs { catalog_pattern } => {
+                self.resolve_catalog_command(CatalogCommand::ListCatalogs { catalog_pattern })
+            }
+            CommandNode::CreateCatalog { .. } => Err(PlanError::todo("create catalog")),
+            CommandNode::CreateDatabase {
+                database,
+                definition,
+            } => self.resolve_catalog_create_database(database, definition),
+            CommandNode::RegisterFunction(_) => Err(PlanError::todo("register function")),
+            CommandNode::RegisterTableFunction(_) => {
+                Err(PlanError::todo("register table function"))
+            }
+            CommandNode::CreateTemporaryView { .. } => {
+                Err(PlanError::todo("create temporary view"))
+            }
+            CommandNode::Write { .. } => Err(PlanError::todo("write")),
+            CommandNode::Explain { mode, input } => {
+                self.resolve_command_explain(*input, mode, state).await
+            }
+        }
     }
 
     async fn resolve_query_read_named_table(
@@ -577,12 +580,12 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_project(
         &self,
-        input: Option<spec::Plan>,
+        input: Option<spec::QueryPlan>,
         expr: Vec<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = match input {
-            Some(x) => self.resolve_plan(x, state).await?,
+            Some(x) => self.resolve_query_plan(x, state).await?,
             None => LogicalPlan::EmptyRelation(plan::EmptyRelation {
                 // allows literal projection with no input
                 produce_one_row: true,
@@ -619,11 +622,11 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_filter(
         &self,
-        input: spec::Plan,
+        input: spec::QueryPlan,
         condition: spec::Expr,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_plan(input, state).await?;
+        let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
         let predicate = self.resolve_expression(condition, schema, state)?;
         let filter = plan::Filter::try_new(predicate, Arc::new(input))?;
@@ -645,8 +648,8 @@ impl PlanResolver<'_> {
             using_columns,
             join_data_type,
         } = join;
-        let left = self.resolve_plan(*left, state).await?;
-        let right = self.resolve_plan(*right, state).await?;
+        let left = self.resolve_query_plan(*left, state).await?;
+        let right = self.resolve_query_plan(*right, state).await?;
         let (join_type, is_cross_join) = match join_type {
             JoinType::Inner => (plan::JoinType::Inner, false),
             JoinType::LeftOuter => (plan::JoinType::Left, false),
@@ -725,8 +728,8 @@ impl PlanResolver<'_> {
             allow_missing_columns: _,
         } = op;
         // TODO: support set operation by name
-        let left = self.resolve_plan(*left, state).await?;
-        let right = self.resolve_plan(*right, state).await?;
+        let left = self.resolve_query_plan(*left, state).await?;
+        let right = self.resolve_query_plan(*right, state).await?;
         match set_op_type {
             SetOpType::Intersect => Ok(LogicalPlanBuilder::intersect(left, right, is_all)?),
             SetOpType::Union => {
@@ -744,12 +747,12 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_sort(
         &self,
-        input: spec::Plan,
+        input: spec::QueryPlan,
         order: Vec<spec::SortOrder>,
         is_global: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_plan(input, state).await?;
+        let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
         let expr = self.resolve_sort_orders(order, schema, state)?;
         if is_global {
@@ -767,12 +770,12 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_limit(
         &self,
-        input: spec::Plan,
+        input: spec::QueryPlan,
         skip: usize,
         limit: usize,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_plan(input, state).await?;
+        let input = self.resolve_query_plan(input, state).await?;
         Ok(LogicalPlan::Limit(plan::Limit {
             skip,
             fetch: Some(limit),
@@ -800,7 +803,7 @@ impl PlanResolver<'_> {
         if group_type != GroupType::GroupBy {
             return Err(PlanError::todo("unsupported aggregate group type"));
         }
-        let input = self.resolve_plan(*input, state).await?;
+        let input = self.resolve_query_plan(*input, state).await?;
         let schema = input.schema();
         let grouping_expressions =
             self.resolve_named_expressions(grouping_expressions, schema, state)?;
@@ -817,12 +820,12 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_with_parameters(
         &self,
-        input: spec::Plan,
+        input: spec::QueryPlan,
         positional: Vec<spec::Literal>,
         named: HashMap<String, spec::Literal>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_plan(input, state).await?;
+        let input = self.resolve_query_plan(input, state).await?;
         let input = if !positional.is_empty() {
             let params = positional
                 .into_iter()
@@ -892,11 +895,11 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_offset(
         &self,
-        input: spec::Plan,
+        input: spec::QueryPlan,
         offset: usize,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_plan(input, state).await?;
+        let input = self.resolve_query_plan(input, state).await?;
         Ok(LogicalPlan::Limit(plan::Limit {
             skip: offset,
             fetch: None,
@@ -915,7 +918,7 @@ impl PlanResolver<'_> {
             all_columns_as_keys,
             within_watermark,
         } = deduplicate;
-        let input = self.resolve_plan(*input, state).await?;
+        let input = self.resolve_query_plan(*input, state).await?;
         let schema = input.schema();
         if within_watermark {
             return Err(PlanError::todo("deduplicate within watermark"));
@@ -979,24 +982,24 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_subquery_alias(
         &self,
-        input: spec::Plan,
+        input: spec::QueryPlan,
         alias: spec::Identifier,
         qualifier: Vec<spec::Identifier>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         Ok(LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
-            Arc::new(self.resolve_plan(input, state).await?),
+            Arc::new(self.resolve_query_plan(input, state).await?),
             build_table_reference(spec::ObjectName::new_qualified(alias, qualifier))?,
         )?))
     }
 
     async fn resolve_query_repartition(
         &self,
-        input: spec::Plan,
+        input: spec::QueryPlan,
         num_partitions: usize,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_plan(input, state).await?;
+        let input = self.resolve_query_plan(input, state).await?;
         // TODO: handle shuffle partition
         Ok(LogicalPlan::Repartition(plan::Repartition {
             input: Arc::new(input),
@@ -1006,11 +1009,11 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_to_df(
         &self,
-        input: spec::Plan,
+        input: spec::QueryPlan,
         columns: Vec<spec::Identifier>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_plan(input, state).await?;
+        let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
         if columns.len() != schema.fields().len() {
             return Err(PlanError::invalid(format!(
@@ -1034,11 +1037,11 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_with_columns_renamed(
         &self,
-        input: spec::Plan,
+        input: spec::QueryPlan,
         rename_columns_map: HashMap<spec::Identifier, spec::Identifier>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_plan(input, state).await?;
+        let input = self.resolve_query_plan(input, state).await?;
         let rename_columns_map: HashMap<String, String> = rename_columns_map
             .into_iter()
             .map(|(k, v)| (k.into(), v.into()))
@@ -1064,12 +1067,12 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_drop(
         &self,
-        input: spec::Plan,
+        input: spec::QueryPlan,
         columns: Vec<spec::Expr>,
         column_names: Vec<spec::Identifier>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_plan(input, state).await?;
+        let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
         let mut excluded_names = vec![];
         let mut excluded_fields = vec![];
@@ -1114,7 +1117,7 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_tail(
         &self,
-        _input: spec::Plan,
+        _input: spec::QueryPlan,
         _limit: usize,
         _state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
@@ -1123,11 +1126,11 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_with_columns(
         &self,
-        input: spec::Plan,
+        input: spec::QueryPlan,
         aliases: Vec<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_plan(input, state).await?;
+        let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
         let mut aliases: HashMap<String, (Expr, bool)> = aliases
             .into_iter()
@@ -1181,7 +1184,7 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_hint(
         &self,
-        _input: spec::Plan,
+        _input: spec::QueryPlan,
         _name: String,
         _parameters: Vec<spec::Expr>,
         _state: &mut PlanResolverState,
@@ -1199,7 +1202,7 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_to_schema(
         &self,
-        _input: spec::Plan,
+        _input: spec::QueryPlan,
         _schema: spec::Schema,
         _state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
@@ -1208,12 +1211,12 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_repartition_by_expression(
         &self,
-        input: spec::Plan,
+        input: spec::QueryPlan,
         partition_expressions: Vec<spec::Expr>,
         num_partitions: Option<usize>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_plan(input, state).await?;
+        let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
         let expr = self.resolve_expressions(partition_expressions, schema, state)?;
         let num_partitions = num_partitions
@@ -1226,7 +1229,7 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_map_partitions(
         &self,
-        _input: spec::Plan,
+        _input: spec::QueryPlan,
         _function: spec::CommonInlineUserDefinedFunction,
         _is_barrier: bool,
         _state: &mut PlanResolverState,
@@ -1236,7 +1239,7 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_collect_metrics(
         &self,
-        _input: spec::Plan,
+        _input: spec::QueryPlan,
         _name: String,
         _metrics: Vec<spec::Expr>,
         _state: &mut PlanResolverState,
@@ -1311,12 +1314,12 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_table_alias(
         &self,
-        input: spec::Plan,
+        input: spec::QueryPlan,
         name: spec::Identifier,
         columns: Vec<spec::Identifier>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_plan(input, state).await?;
+        let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
         let input = if columns.is_empty() {
             input
@@ -1416,7 +1419,7 @@ impl PlanResolver<'_> {
             truncate,
             vertical,
         } = show;
-        let input = self.resolve_plan(*input, state).await?;
+        let input = self.resolve_query_plan(*input, state).await?;
         let style = match vertical {
             true => ShowStringStyle::Vertical,
             false => ShowStringStyle::Default,
@@ -1443,7 +1446,7 @@ impl PlanResolver<'_> {
             num_rows,
             truncate,
         } = html;
-        let input = self.resolve_plan(*input, state).await?;
+        let input = self.resolve_query_plan(*input, state).await?;
         let format = ShowStringFormat::new(
             state.register_field("html_string"),
             ShowStringStyle::Html,
@@ -1460,40 +1463,23 @@ impl PlanResolver<'_> {
         }))
     }
 
-    async fn resolve_command_analyze(
-        &self,
-        input: spec::Plan,
-        verbose: bool,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        let input = Arc::new(self.resolve_plan(input, state).await?);
-        let schema = LogicalPlan::explain_schema();
-        let schema = schema.to_dfschema_ref()?;
-        Ok(LogicalPlan::Analyze(plan::Analyze {
-            verbose,
-            input,
-            schema,
-        }))
-    }
-
     async fn resolve_command_explain(
         &self,
-        input: spec::Plan,
-        verbose: bool,
-        logical_optimization_succeeded: bool,
+        input: spec::QueryPlan,
+        mode: spec::ExplainMode,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_plan(input, state).await?;
+        let input = self.resolve_query_plan(input, state).await?;
         let stringified_plans: Vec<StringifiedPlan> =
             vec![input.to_stringified(PlanType::InitialLogicalPlan)];
         let schema = LogicalPlan::explain_schema();
         let schema = schema.to_dfschema_ref()?;
         Ok(LogicalPlan::Explain(plan::Explain {
-            verbose,
+            verbose: matches!(mode, spec::ExplainMode::Verbose),
             plan: Arc::new(input),
             stringified_plans,
             schema,
-            logical_optimization_succeeded,
+            logical_optimization_succeeded: true,
         }))
     }
 
@@ -1563,38 +1549,6 @@ impl PlanResolver<'_> {
             properties,
         };
         self.resolve_catalog_command(command)
-    }
-
-    fn is_query_plan(&self, plan: &LogicalPlan) -> bool {
-        match plan {
-            LogicalPlan::Projection(_)
-            | LogicalPlan::Filter(_)
-            | LogicalPlan::Window(_)
-            | LogicalPlan::Aggregate(_)
-            | LogicalPlan::Sort(_)
-            | LogicalPlan::Join(_)
-            | LogicalPlan::CrossJoin(_)
-            | LogicalPlan::Repartition(_)
-            | LogicalPlan::Union(_)
-            | LogicalPlan::TableScan(_)
-            | LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Subquery(_)
-            | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Limit(_)
-            | LogicalPlan::Values(_)
-            | LogicalPlan::Distinct(_)
-            | LogicalPlan::RecursiveQuery(_)
-            | LogicalPlan::Unnest(_) => true,
-            LogicalPlan::Statement(_)
-            | LogicalPlan::Explain(_)
-            | LogicalPlan::Analyze(_)
-            | LogicalPlan::Prepare(_)
-            | LogicalPlan::Dml(_)
-            | LogicalPlan::Ddl(_)
-            | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_) => false,
-            LogicalPlan::Extension(Extension { node }) => !node.as_any().is::<CatalogCommandNode>(),
-        }
     }
 
     fn verify_query_plan(&self, plan: &LogicalPlan, state: &PlanResolverState) -> PlanResult<()> {

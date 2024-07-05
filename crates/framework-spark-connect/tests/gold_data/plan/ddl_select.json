@@ -4,7 +4,7 @@
       "input": "SELECT 1",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "empty": {

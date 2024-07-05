@@ -4,7 +4,7 @@
       "input": "\nSELECT -- continued after the following block comments...\n/* Deeply nested comment.\n   This includes a single apostrophe to make sure we aren't decoding this part as a string.\nSELECT 'deep nest' AS n1;\n/* Second level of nesting...\nSELECT 'deeper nest' as n2;\n/* Third level of nesting...\nSELECT 'deepest nest' as n3;\n*/\nHoo boy. Still two deep...\n*/\nNow just one deep...\n*/\n* FROM a\n      ",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -68,7 +68,7 @@
       "input": "SELECT * FROM (SELECT a AS x, b AS y FROM t) t(col1, col2)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "tableAlias": {
@@ -159,7 +159,7 @@
       "input": "SELECT * FROM a",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -345,7 +345,7 @@
       "input": "SELECT * FROM range(10) AS t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "tableAlias": {
@@ -393,7 +393,7 @@
       "input": "SELECT * FROM range(7) AS t(a)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "tableAlias": {
@@ -443,7 +443,7 @@
       "input": "SELECT * FROM testData AS t(col1, col2)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "tableAlias": {
@@ -487,7 +487,7 @@
       "input": "SELECT * FROM testcat.db.tab",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -536,7 +536,7 @@
       "input": "SELECT :param_1",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "empty": {
@@ -561,7 +561,7 @@
       "input": "SELECT ?",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "empty": {
@@ -586,7 +586,7 @@
       "input": "SELECT OVERLAY('Spark SQL' PLACING 'ANSI ' FROM 7 FOR 0)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "empty": {
@@ -637,7 +637,7 @@
       "input": "SELECT OVERLAY('Spark SQL' PLACING 'CORE' FROM 7)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "empty": {
@@ -683,7 +683,7 @@
       "input": "SELECT OVERLAY('Spark SQL' PLACING '_' FROM 6)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "empty": {
@@ -729,7 +729,7 @@
       "input": "SELECT OVERLAY('Spark SQL' PLACING 'tructured' FROM 2 FOR 4)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "empty": {
@@ -787,7 +787,7 @@
       "input": "SELECT TRIM('xyz' FROM 'yxTomxx')",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "empty": {
@@ -828,7 +828,7 @@
       "input": "SELECT TRIM(BOTH '@$%&( )abc' FROM '@ $ % & ()abc ' )",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "empty": {
@@ -875,7 +875,7 @@
       "input": "SELECT TRIM(LEADING 'c []' FROM '[ ccccbcc ')",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "empty": {
@@ -922,7 +922,7 @@
       "input": "SELECT TRIM(TRAILING 'c&^,.' FROM 'bc...,,,&&&ccc')",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "empty": {
@@ -975,7 +975,7 @@
       "input": "SELECT abs(?)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "empty": {
@@ -1015,7 +1015,7 @@
       "input": "SELECT t.col1, t.col2 FROM (SELECT a AS x, b AS y FROM t) t(col1, col2)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "tableAlias": {
@@ -1112,7 +1112,7 @@
       "input": "sELEct * FroM a",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -1178,7 +1178,7 @@
       "input": "select * fRoM a",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -1224,7 +1224,7 @@
       "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_VALUED_FUNC_NAME] Invalid SQL syntax: Table valued function cannot specify database name: `default`.`range`.(line 1, pos 14)\n\n== SQL ==\nselect * from default.range(2)\n--------------^^^\n",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -1320,7 +1320,7 @@
       "input": "select * from range(2)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -1361,7 +1361,7 @@
       "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_VALUED_FUNC_NAME] Invalid SQL syntax: Table valued function cannot specify database name: `spark_catalog`.`default`.`range`.(line 1, pos 14)\n\n== SQL ==\nselect * from spark_catalog.default.range(2)\n--------------^^^\n",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -1403,7 +1403,7 @@
       "input": "select * from t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -1442,7 +1442,7 @@
       "input": "select * from t as tt , u",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -1525,7 +1525,7 @@
       "input": "select * from t limit 10",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "limit": {
               "input": {
                 "project": {
@@ -1622,7 +1622,7 @@
       "input": "select 1",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "empty": {
@@ -1649,7 +1649,7 @@
       "input": "select 1;",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "empty": {
@@ -1682,7 +1682,7 @@
       "input": "select a, b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "empty": {
@@ -1720,7 +1720,7 @@
       "input": "select a, b from db.c",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -1783,7 +1783,7 @@
       "input": "select a, b from db.c where x < 1",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "filter": {
@@ -1856,7 +1856,7 @@
       "input": "select a, b from db.c; ;;  ;",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -1901,7 +1901,7 @@
       "input": "select a, b from db.c;;;",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -1946,7 +1946,7 @@
       "input": "select a, b;",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "empty": {
@@ -1984,7 +1984,7 @@
       "input": "select all a, b from db.c",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -2029,7 +2029,7 @@
       "input": "select distinct a, b from db.c",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "deduplicate": {
               "input": {
                 "project": {
@@ -2089,7 +2089,7 @@
       "input": "select id from ((((((t0))))))",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -2125,7 +2125,7 @@
       "input": "select id from (t0)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {

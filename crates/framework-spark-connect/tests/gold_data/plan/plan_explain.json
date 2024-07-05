@@ -5,9 +5,9 @@
       "exception": "\nUnsupported SQL statement\n== SQL ==\nEXPLAIN formatted SELECT 1",
       "output": {
         "success": {
-          "root": {
+          "command": {
             "explain": {
-              "verbose": false,
+              "mode": "formatted",
               "input": {
                 "project": {
                   "input": {
@@ -27,8 +27,7 @@
                 },
                 "planId": null,
                 "sourceInfo": null
-              },
-              "logicalOptimizationSucceeded": false
+              }
             },
             "planId": null,
             "sourceInfo": null
@@ -40,7 +39,7 @@
       "input": "EXPLAIN logical SELECT 1",
       "exception": "\nUnsupported SQL statement\n== SQL ==\nEXPLAIN logical SELECT 1",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: logical at Line: 1, Column: 9"
+        "failure": "invalid argument: token after EXPLAIN: Word { value: \"logical\", quote_style: None, keyword: NoKeyword }"
       }
     }
   ]
