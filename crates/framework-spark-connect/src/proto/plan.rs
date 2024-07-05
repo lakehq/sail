@@ -1058,7 +1058,7 @@ impl TryFrom<Catalog> for spec::PlanNode {
                 let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
                 Ok(spec::PlanNode::CreateTable {
                     table: parse_object_name(table_name.as_str())?,
-                    definition: spec::CreateTableDefinition {
+                    definition: spec::TableDefinition {
                         schema,
                         comment: None,
                         column_defaults: Default::default(),
@@ -1090,7 +1090,7 @@ impl TryFrom<Catalog> for spec::PlanNode {
                 let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
                 Ok(spec::PlanNode::CreateTable {
                     table: parse_object_name(table_name.as_str())?,
-                    definition: spec::CreateTableDefinition {
+                    definition: spec::TableDefinition {
                         schema,
                         comment: description,
                         column_defaults: Default::default(),

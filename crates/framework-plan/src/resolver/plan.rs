@@ -1506,10 +1506,10 @@ impl PlanResolver<'_> {
     fn resolve_catalog_create_table(
         &self,
         table: spec::ObjectName,
-        definition: spec::CreateTableDefinition,
+        definition: spec::TableDefinition,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let spec::CreateTableDefinition {
+        let spec::TableDefinition {
             schema,
             comment: _,
             column_defaults,
@@ -1546,9 +1546,9 @@ impl PlanResolver<'_> {
     fn resolve_catalog_create_database(
         &self,
         database: spec::ObjectName,
-        definition: spec::CreateDatabaseDefinition,
+        definition: spec::DatabaseDefinition,
     ) -> PlanResult<LogicalPlan> {
-        let spec::CreateDatabaseDefinition {
+        let spec::DatabaseDefinition {
             if_not_exists,
             comment,
             location,

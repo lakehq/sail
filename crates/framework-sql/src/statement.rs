@@ -193,7 +193,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             }
             let node = spec::PlanNode::CreateDatabase {
                 database: from_ast_object_name(db_name)?,
-                definition: spec::CreateDatabaseDefinition {
+                definition: spec::DatabaseDefinition {
                     if_not_exists,
                     comment: None, // TODO: support comment
                     location,
@@ -219,7 +219,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             };
             let node = spec::PlanNode::CreateDatabase {
                 database: db_name,
-                definition: spec::CreateDatabaseDefinition {
+                definition: spec::DatabaseDefinition {
                     if_not_exists,
                     comment: None,
                     location: None,
@@ -325,7 +325,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
 
             Ok(spec::Plan::new(spec::PlanNode::CreateTable {
                 table: from_ast_object_name(name)?,
-                definition: spec::CreateTableDefinition {
+                definition: spec::TableDefinition {
                     schema,
                     comment,
                     column_defaults,

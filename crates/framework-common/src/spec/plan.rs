@@ -258,7 +258,7 @@ pub enum PlanNode {
     CreateTable {
         table: ObjectName,
         #[serde(flatten)]
-        definition: CreateTableDefinition,
+        definition: TableDefinition,
     },
     DropTemporaryView {
         view: ObjectName,
@@ -295,13 +295,13 @@ pub enum PlanNode {
     CreateCatalog {
         catalog: Identifier,
         #[serde(flatten)]
-        definition: CreateCatalogDefinition,
+        definition: CatalogDefinition,
     },
     // commands
     CreateDatabase {
         database: ObjectName,
         #[serde(flatten)]
-        definition: CreateDatabaseDefinition,
+        definition: DatabaseDefinition,
     },
     DropDatabase {
         database: ObjectName,
@@ -323,7 +323,7 @@ pub enum PlanNode {
     CreateTemporaryView {
         view: ObjectName,
         #[serde(flatten)]
-        definition: CreateTemporaryViewDefinition,
+        definition: TemporaryViewDefinition,
     },
     DropView {
         view: ObjectName,
@@ -539,7 +539,7 @@ pub struct HtmlString {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CreateTableDefinition {
+pub struct TableDefinition {
     pub schema: Schema,
     pub comment: Option<String>,
     pub column_defaults: Vec<(String, Expr)>,
@@ -559,7 +559,7 @@ pub struct CreateTableDefinition {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CreateDatabaseDefinition {
+pub struct DatabaseDefinition {
     pub if_not_exists: bool,
     pub comment: Option<String>,
     pub location: Option<String>,
@@ -568,13 +568,13 @@ pub struct CreateDatabaseDefinition {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CreateCatalogDefinition {
+pub struct CatalogDefinition {
     pub options: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CreateTemporaryViewDefinition {
+pub struct TemporaryViewDefinition {
     pub input: Box<Plan>,
     pub is_global: bool,
     pub replace: bool,
