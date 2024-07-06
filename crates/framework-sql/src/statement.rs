@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use framework_common::spec;
 use framework_common::spec::{CommandNode, CommandPlan};
 use sqlparser::ast;
-use sqlparser::ast::TableConstraint;
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Token;
@@ -475,7 +474,7 @@ fn from_ast_sql_options(options: Vec<ast::SqlOption>) -> SqlResult<Vec<(String, 
 
 fn from_ast_table_constraint(constraint: ast::TableConstraint) -> SqlResult<spec::TableConstraint> {
     match constraint {
-        TableConstraint::Unique {
+        ast::TableConstraint::Unique {
             name,
             index_name: _,
             index_type_display: _,
@@ -487,7 +486,7 @@ fn from_ast_table_constraint(constraint: ast::TableConstraint) -> SqlResult<spec
             name: name.map(|x| x.value.into()),
             columns: columns.into_iter().map(|x| x.value.into()).collect(),
         }),
-        TableConstraint::PrimaryKey {
+        ast::TableConstraint::PrimaryKey {
             name,
             index_name: _,
             index_type: _,
@@ -498,16 +497,16 @@ fn from_ast_table_constraint(constraint: ast::TableConstraint) -> SqlResult<spec
             name: name.map(|x| x.value.into()),
             columns: columns.into_iter().map(|x| x.value.into()).collect(),
         }),
-        TableConstraint::ForeignKey { .. }
-        | TableConstraint::Check { .. }
-        | TableConstraint::Index { .. }
-        | TableConstraint::FulltextOrSpatial { .. } => {
+        ast::TableConstraint::ForeignKey { .. }
+        | ast::TableConstraint::Check { .. }
+        | ast::TableConstraint::Index { .. }
+        | ast::TableConstraint::FulltextOrSpatial { .. } => {
             Err(SqlError::unsupported(format!("{:?}", constraint)))
         }
     }
 }
 
-/// Credit: <https://github.com/apache/datafusion/blob/5bdc7454d92aaaba8d147883a3f81f026e096761/datafusion/sql/src/statement.rs#L115>
+/// [Credit]: <https://github.com/apache/datafusion/blob/5bdc7454d92aaaba8d147883a3f81f026e096761/datafusion/sql/src/statement.rs#L115>
 fn calc_inline_constraints_from_columns(columns: &[ast::ColumnDef]) -> Vec<ast::TableConstraint> {
     let mut constraints = vec![];
     for column in columns {
