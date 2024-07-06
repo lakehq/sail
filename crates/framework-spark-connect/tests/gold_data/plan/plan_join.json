@@ -10,7 +10,7 @@
       "input": "select * from a join b join c right join d",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -126,7 +126,7 @@
       "input": "select * from t anti join u as uu on a = b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -222,7 +222,7 @@
       "input": "select * from t anti join u using(a, b)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -295,7 +295,7 @@
       "input": "select * from t as tt cross join u",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -359,7 +359,7 @@
       "input": "select * from t as tt full join u",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -423,7 +423,7 @@
       "input": "select * from t as tt full outer join u",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -487,7 +487,7 @@
       "input": "select * from t as tt inner join u",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -551,7 +551,7 @@
       "input": "select * from t as tt join u",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -615,7 +615,7 @@
       "input": "select * from t as tt left anti join u",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -679,7 +679,7 @@
       "input": "select * from t as tt left join u",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -743,7 +743,7 @@
       "input": "select * from t as tt left outer join u",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -807,7 +807,7 @@
       "input": "select * from t as tt left semi join u",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -871,7 +871,7 @@
       "input": "select * from t as tt right join u",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -935,7 +935,7 @@
       "input": "select * from t as tt right outer join u",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -1011,7 +1011,7 @@
       "input": "select * from t full join u as uu on a = b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -1099,7 +1099,7 @@
       "input": "select * from t full join u using(a, b)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -1158,7 +1158,7 @@
       "input": "select * from t full outer join u as uu on a = b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -1246,7 +1246,7 @@
       "input": "select * from t full outer join u using(a, b)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -1311,7 +1311,7 @@
       "input": "select * from t inner join u as uu on a = b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -1399,7 +1399,7 @@
       "input": "select * from t inner join u using(a, b)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -1470,7 +1470,7 @@
       "input": "select * from t join u as uu on a = b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -1558,7 +1558,7 @@
       "input": "select * from t join u using(a, b)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -1617,7 +1617,7 @@
       "input": "select * from t left anti join u as uu on a = b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -1705,7 +1705,7 @@
       "input": "select * from t left anti join u using(a, b)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -1770,7 +1770,7 @@
       "input": "select * from t left join u as uu on a = b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -1858,7 +1858,7 @@
       "input": "select * from t left join u using(a, b)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -1923,7 +1923,7 @@
       "input": "select * from t left outer join u as uu on a = b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -2011,7 +2011,7 @@
       "input": "select * from t left outer join u using(a, b)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -2070,7 +2070,7 @@
       "input": "select * from t left semi join u as uu on a = b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -2158,7 +2158,7 @@
       "input": "select * from t left semi join u using(a, b)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -2217,7 +2217,7 @@
       "input": "select * from t right join u as uu on a = b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -2305,7 +2305,7 @@
       "input": "select * from t right join u using(a, b)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -2364,7 +2364,7 @@
       "input": "select * from t right outer join u as uu on a = b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -2452,7 +2452,7 @@
       "input": "select * from t right outer join u using(a, b)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -2511,7 +2511,7 @@
       "input": "select * from t semi join u as uu on a = b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -2607,7 +2607,7 @@
       "input": "select * from t semi join u using(a, b)",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -2722,7 +2722,7 @@
       "input": "select * from t1 JOIN t2, t3 join t2 on t1.col1 = t2.col2",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -2850,7 +2850,7 @@
       "input": "select * from t1 cross join t2 join t3 on t3.id = t1.id join t4 on t4.id = t1.id",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {
@@ -3029,7 +3029,7 @@
       "input": "select * from t1, t3 join t2 on t1.col1 = t2.col2",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "join": {

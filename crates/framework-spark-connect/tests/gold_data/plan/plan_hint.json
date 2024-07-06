@@ -4,7 +4,7 @@
       "input": "\nSELECT\n/*+ REPARTITION(100, c), BROADCASTJOIN(u), COALESCE(50), REPARTITION(300, c) */\n* FROM t\n        ",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -37,7 +37,7 @@
       "input": "SELECT /*+ BROADCAST(tab) */ * FROM testcat.db.tab",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -72,7 +72,7 @@
       "input": "SELECT /*+ BROADCASTJOIN(u) */ * FROM t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -105,7 +105,7 @@
       "input": "SELECT /*+ BROADCASTJOIN(u), REPARTITION(100) */ * FROM t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -138,7 +138,7 @@
       "input": "SELECT /*+ COALESCE(10) */ * FROM t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -172,7 +172,7 @@
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '+'.(line 1, pos 23)\n\n== SQL ==\nSELECT /*+ COALESCE(30 + 50) */ * FROM t\n-----------------------^^^\n",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -205,7 +205,7 @@
       "input": "SELECT /*+ HINT */ * FROM t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -239,7 +239,7 @@
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'.(line 1, pos 16)\n\n== SQL ==\nSELECT /*+ HINT() */ * FROM t\n----------------^^^\n",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -272,7 +272,7 @@
       "input": "SELECT /*+ HINT1('a', (b, c), (1, 2)) */ * from t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -305,7 +305,7 @@
       "input": "SELECT /*+ HINT1(a, 1) */ /*+ hint2(b, 2) */ * from t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -338,7 +338,7 @@
       "input": "SELECT /*+ HINT1(a, 1) hint2(b, 2) */ * from t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -371,7 +371,7 @@
       "input": "SELECT /*+ HINT1(a, 1), hint2(b, 2) */ /*+ hint3(c, 3) */ * from t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -404,7 +404,7 @@
       "input": "SELECT /*+ HINT1(a, 1),hint2(b, 2) */ * from t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -437,7 +437,7 @@
       "input": "SELECT /*+ HINT1(a, 5, 'a', b) */ * from t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -470,7 +470,7 @@
       "input": "SELECT /*+ HINT1(a, array(1, 2, 3)) */ * from t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -504,7 +504,7 @@
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'b'.(line 1, pos 19)\n\n== SQL ==\nSELECT /*+ INDEX(a b c) */ * from default.t\n-------------------^^^\n",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -538,7 +538,7 @@
       "input": "SELECT /*+ INDEX(t, emp_job_ix) */ * FROM t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -571,7 +571,7 @@
       "input": "SELECT /*+ MAPJOIN(`default.t`) */ * from `default.t`",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -604,7 +604,7 @@
       "input": "SELECT /*+ MAPJOIN(t) */ a from t where true group by a order by a",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "sort": {
               "input": {
                 "aggregate": {
@@ -684,7 +684,7 @@
       "input": "SELECT /*+ MAPJOIN(u) */ * FROM t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -717,7 +717,7 @@
       "input": "SELECT /*+ REPARTITION(100) */ * FROM t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -750,7 +750,7 @@
       "input": "SELECT /*+ REPARTITION(100, c) */ * FROM t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -783,7 +783,7 @@
       "input": "SELECT /*+ REPARTITION(100, c), BROADCASTJOIN(u), COALESCE(50) */ * FROM t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -816,7 +816,7 @@
       "input": "SELECT /*+ REPARTITION(100, c), COALESCE(50) */ * FROM t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -849,7 +849,7 @@
       "input": "SELECT /*+ REPARTITION(c) */ * FROM t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -882,7 +882,7 @@
       "input": "SELECT /*+ REPARTITION_BY_RANGE(100, c) */ * FROM t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -915,7 +915,7 @@
       "input": "SELECT /*+ REPARTITION_BY_RANGE(c) */ * FROM t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
@@ -948,7 +948,7 @@
       "input": "SELECT /*+ STREAMTABLE(a,b,c) */ * FROM t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "read": {
