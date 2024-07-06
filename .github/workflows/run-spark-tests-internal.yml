@@ -95,7 +95,7 @@ jobs:
           # We must use `format()` to define the key here since nested variable substitution is not supported.
           key: ${{ format('spark-tests-package-{0}-pyspark-{1}-{2}', runner.os, inputs.spark_version, hashFiles(format('scripts/spark-tests/spark-{0}.patch', inputs.spark_version), 'scripts/spark-tests/build-pyspark.sh')) }}
 
-      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-pyspark.outputs.cache-hit != 'true'
+      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-env.outputs.cache-hit != 'true' && steps.cache-pyspark.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
         name: Checkout Spark
         with:
@@ -104,7 +104,7 @@ jobs:
           ref: v${{ inputs.spark_version }}
           fetch-depth: 1
 
-      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-pyspark.outputs.cache-hit != 'true'
+      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-env.outputs.cache-hit != 'true' && steps.cache-pyspark.outputs.cache-hit != 'true'
         name: Build PySpark package
         run: |
           scripts/spark-tests/build-pyspark.sh
