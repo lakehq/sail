@@ -32,13 +32,15 @@ export SPARK_LOCAL_IP="${SPARK_LOCAL_IP-127.0.0.1}"
 # configuration files such as `conftest.py`.
 cd python
 
+source .venv/bin/activate
+
 function run_pytest() {
   name="$1"
   args=("${@:2}")
 
   echo "Test suite: ${name}"
   # We ignore the pytext exit code so that the command can complete successfully.
-  poetry run python -m pytest \
+  python -m pytest \
     -o "doctest_optionflags=ELLIPSIS NORMALIZE_WHITESPACE" \
     --basetemp="${pytest_tmp_dir}" \
     --disable-warnings \
