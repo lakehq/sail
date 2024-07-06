@@ -749,6 +749,7 @@ pub enum TableConstraint {
 #[serde(rename_all = "camelCase")]
 pub enum ExplainMode {
     Unspecified,
+    Simple,
     Analyze,
     Verbose,
     Extended,

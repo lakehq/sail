@@ -243,6 +243,17 @@ pub(crate) async fn execute_plan(
     Ok(execute_stream(plan, Arc::new(TaskContext::default()))?)
 }
 
+pub(crate) async fn read_stream(
+    mut stream: SendableRecordBatchStream,
+) -> SparkResult<Vec<RecordBatch>> {
+    let mut output = vec![];
+    while let Some(batch) = stream.next().await {
+        let batch = batch?;
+        output.push(batch);
+    }
+    Ok(output)
+}
+
 pub(crate) async fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
     let mut output = ArrowBatch::default();
     {
@@ -265,25 +276,21 @@ pub(crate) async fn execute_query(
     use framework_plan::config::PlanConfig;
     use framework_plan::resolver::PlanResolver;
 
+    use crate::spark::connect::relation::RelType;
+    use crate::spark::connect::{Relation, Sql};
+
     let config = PlanConfig::default();
-    let relation = crate::spark::connect::Relation {
+    let relation = Relation {
         common: None,
-        rel_type: Some(crate::spark::connect::relation::RelType::Sql(
-            crate::spark::connect::Sql {
-                query: query.to_string(),
-                args: HashMap::new(),
-                pos_args: vec![],
-            },
-        )),
+        rel_type: Some(RelType::Sql(Sql {
+            query: query.to_string(),
+            args: HashMap::new(),
+            pos_args: vec![],
+        })),
     };
     let plan = PlanResolver::new(ctx, Arc::new(config))
         .resolve_named_plan(relation.try_into()?)
         .await?;
-    let mut stream = execute_plan(ctx, plan).await?;
-    let mut output = vec![];
-    while let Some(batch) = stream.next().await {
-        let batch = batch?;
-        output.push(batch);
-    }
-    Ok(output)
+    let stream = execute_plan(ctx, plan).await?;
+    read_stream(stream).await
 }
