@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
 use datafusion::arrow::util::pretty::pretty_format_batches;
-use datafusion::dataframe::DataFrame;
-use framework_common::utils::{rename_logical_plan, rename_schema};
+use framework_common::spec;
+use framework_common::utils::rename_schema;
 use framework_plan::resolver::plan::NamedPlan;
 use framework_plan::resolver::PlanResolver;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
+use crate::executor::{execute_plan, read_stream};
 use crate::proto::data_type::parse_spark_data_type;
 use crate::schema::to_spark_schema;
 use crate::session::Session;
-use crate::spark::connect as sc;
 use crate::spark::connect::analyze_plan_request::explain::ExplainMode;
 use crate::spark::connect::analyze_plan_request::{
     DdlParse as DdlParseRequest, Explain as ExplainRequest,
@@ -28,21 +28,20 @@ use crate::spark::connect::analyze_plan_response::{
     SemanticHash as SemanticHashResponse, SparkVersion as SparkVersionResponse,
     TreeString as TreeStringResponse, Unpersist as UnpersistResponse,
 };
-use crate::spark::connect::{plan, StorageLevel};
+use crate::spark::connect::StorageLevel;
 use crate::SPARK_VERSION;
 
 pub(crate) async fn handle_analyze_schema(
     session: Arc<Session>,
     request: SchemaRequest,
 ) -> SparkResult<SchemaResponse> {
+    let SchemaRequest { plan } = request;
+    let plan = plan.required("plan")?;
     let ctx = session.context();
-    let sc::Plan { op_type: op } = request.plan.required("plan")?;
-    let relation = match op.required("plan op")? {
-        plan::OpType::Root(relation) => relation,
-        plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
-    };
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
-    let NamedPlan { plan, fields } = resolver.resolve_named_plan(relation.try_into()?).await?;
+    let NamedPlan { plan, fields } = resolver
+        .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
+        .await?;
     let schema = if let Some(fields) = fields {
         rename_schema(plan.schema().inner(), fields.as_slice())?
     } else {
@@ -57,48 +56,22 @@ pub(crate) async fn handle_analyze_explain(
     session: Arc<Session>,
     request: ExplainRequest,
 ) -> SparkResult<ExplainResponse> {
+    let ExplainRequest { plan, explain_mode } = request;
+    let plan = plan.required("plan")?;
+    let explain_mode = ExplainMode::try_from(explain_mode)?;
+    let explain = spec::Plan::Command(spec::CommandPlan::new(spec::CommandNode::Explain {
+        mode: explain_mode.try_into()?,
+        input: Box::new(plan.try_into()?),
+    }));
     let ctx = session.context();
-    let sc::Plan { op_type: op } = request.plan.required("plan")?;
-    let relation = match op.required("plan op")? {
-        plan::OpType::Root(relation) => relation,
-        plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
-    };
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
-    let NamedPlan { plan, fields } = resolver.resolve_named_plan(relation.try_into()?).await?;
-    let plan = if let Some(fields) = fields {
-        rename_logical_plan(plan, &fields)?
-    } else {
-        plan
-    };
-
-    let explain_mode: i32 = request.explain_mode;
-    let (verbose, analyze) = match ExplainMode::try_from(explain_mode) {
-        Ok(ExplainMode::Unspecified) | Ok(ExplainMode::Simple) => (false, false),
-        Ok(ExplainMode::Extended) => (true, false),
-        Ok(ExplainMode::Codegen) => (false, false),
-        Ok(ExplainMode::Cost) => (true, true),
-        Ok(ExplainMode::Formatted) => (false, false),
-        Err(_) => {
-            return Err(SparkError::invalid(format!(
-                "Invalid Explain Mode: {}",
-                &explain_mode
-            )))
-        }
-    };
-    let df = DataFrame::new(ctx.state(), plan.clone())
-        .explain(verbose, analyze)?
-        .collect()
-        .await?;
+    let explain = resolver.resolve_named_plan(explain).await?;
+    let stream = execute_plan(ctx, explain).await?;
+    let batches = read_stream(stream).await?;
     Ok(ExplainResponse {
-        explain_string: pretty_format_batches(&df)?.to_string(),
+        // FIXME: The explain output should not be formatted as a table.
+        explain_string: pretty_format_batches(&batches)?.to_string(),
     })
-    // TODO: Properly implement each explain mode:
-    //  1. Format the explain output the way Spark does
-    //  2. Implement each ExplainMode, Verbose/Analyze don't accurately reflect Spark's behavior.
-    //      Output for each pair of Verbose and Analyze should for `test_simple_explain_string`:
-    //          https://github.com/lakehq/framework/pull/72/files#r1660104742
-    //      Spark's documentation for each ExplainMode:
-    //          https://spark.apache.org/docs/latest/sql-ref-syntax-qry-explain.html
 }
 
 pub(crate) async fn handle_analyze_tree_string(

@@ -9,7 +9,7 @@ use crate::proto::data_type::{parse_spark_data_type, DEFAULT_FIELD_NAME};
 use crate::spark::connect as sc;
 use crate::spark::connect::catalog::CatType;
 use crate::spark::connect::relation::RelType;
-use crate::spark::connect::{Catalog, Relation, RelationCommon};
+use crate::spark::connect::{plan, Catalog, Plan, Relation, RelationCommon};
 
 struct RelationMetadata {
     plan_id: Option<i64>,
@@ -31,6 +31,19 @@ impl From<Option<RelationCommon>> for RelationMetadata {
                 source_info: None,
             },
         }
+    }
+}
+
+impl TryFrom<Plan> for spec::QueryPlan {
+    type Error = SparkError;
+
+    fn try_from(plan: Plan) -> SparkResult<spec::QueryPlan> {
+        let Plan { op_type: op } = plan;
+        let relation = match op.required("plan op")? {
+            plan::OpType::Root(relation) => relation,
+            plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
+        };
+        relation.try_into()
     }
 }
 
