@@ -182,6 +182,7 @@ pub enum QueryNode {
     CachedRemoteRelation {
         relation_id: String,
     },
+    CommonInlineUserDefinedTableFunction(CommonInlineUserDefinedTableFunction),
     // NA operations
     FillNa {
         input: Box<QueryPlan>,
@@ -240,7 +241,6 @@ pub enum QueryNode {
         fractions: Vec<Fraction>,
         seed: Option<i64>,
     },
-    CommonInlineUserDefinedTableFunction(CommonInlineUserDefinedTableFunction),
     // extensions
     Empty {
         produce_one_row: bool,
