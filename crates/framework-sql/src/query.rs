@@ -1,184 +1,11 @@
 use framework_common::spec;
 use sqlparser::ast;
-use sqlparser::parser::Parser;
-use sqlparser::tokenizer::Token;
 
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{from_ast_expression, from_ast_object_name, from_ast_order_by};
 use crate::literal::LiteralValue;
-use crate::parser::{fail_on_extra_token, SparkDialect};
 
-pub fn parse_sql_statement(sql: &str) -> SqlResult<spec::Plan> {
-    let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
-    let statement = parser.parse_statement()?;
-    loop {
-        if !parser.consume_token(&Token::SemiColon) {
-            break;
-        }
-    }
-    fail_on_extra_token(&mut parser, "statement")?;
-    from_ast_statement(statement)
-}
-
-fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
-    use ast::Statement;
-
-    match statement {
-        Statement::Query(query) => from_ast_query(*query),
-        Statement::Insert(_) => Err(SqlError::todo("SQL insert")),
-        Statement::Call(_) => Err(SqlError::todo("SQL call")),
-        Statement::Copy { .. } => Err(SqlError::todo("SQL copy")),
-        Statement::Explain { .. } => Err(SqlError::todo("SQL explain")),
-        Statement::AlterTable { .. } => Err(SqlError::todo("SQL alter table")),
-        Statement::AlterView { .. } => Err(SqlError::todo("SQL alter view")),
-        Statement::Analyze { .. } => Err(SqlError::todo("SQL analyze")),
-        Statement::CreateDatabase {
-            db_name,
-            if_not_exists,
-            location,
-            managed_location,
-        } => {
-            if managed_location.is_some() {
-                return Err(SqlError::unsupported(
-                    "SQL create database with managed location",
-                ));
-            }
-            let node = spec::PlanNode::CreateDatabase {
-                database: from_ast_object_name(db_name)?,
-                if_not_exists,
-                comment: None, // TODO: support comment
-                location,
-                properties: Default::default(), // TODO: support properties
-            };
-            Ok(spec::Plan::new(node))
-        }
-        Statement::CreateFunction { .. } => Err(SqlError::todo("SQL create function")),
-        Statement::CreateIndex { .. } => Err(SqlError::todo("SQL create index")),
-        Statement::CreateSchema { .. } => Err(SqlError::todo("SQL create schema")),
-        Statement::CreateTable { .. } => Err(SqlError::todo("SQL create table")),
-        Statement::CreateView { .. } => Err(SqlError::todo("SQL create view")),
-        Statement::Delete(_) => Err(SqlError::todo("SQL delete")),
-        Statement::Drop {
-            object_type,
-            if_exists,
-            mut names,
-            cascade,
-            restrict: _,
-            purge,
-            temporary,
-        } => {
-            use ast::ObjectType;
-
-            if names.len() != 1 {
-                return Err(SqlError::invalid("expecting one name in drop statement"));
-            }
-            let name = from_ast_object_name(names.pop().unwrap())?;
-            let node = match (object_type, temporary) {
-                (ObjectType::Table, _) => spec::PlanNode::DropTable {
-                    table: name,
-                    if_exists,
-                    purge,
-                },
-                (ObjectType::View, true) => spec::PlanNode::DropTemporaryView {
-                    view: name,
-                    // TODO: support global temporary views
-                    is_global: false,
-                    if_exists,
-                },
-                (ObjectType::View, false) => spec::PlanNode::DropView {
-                    view: name,
-                    if_exists,
-                },
-                (ObjectType::Schema, false) | (ObjectType::Database, false) => {
-                    spec::PlanNode::DropDatabase {
-                        database: name,
-                        if_exists,
-                        cascade,
-                    }
-                }
-                (ObjectType::Schema, true) | (ObjectType::Database, true) => {
-                    return Err(SqlError::unsupported("SQL drop temporary database"))
-                }
-                (ObjectType::Index, _) => return Err(SqlError::unsupported("SQL drop index")),
-                (ObjectType::Role, _) => return Err(SqlError::unsupported("SQL drop role")),
-                (ObjectType::Sequence, _) => {
-                    return Err(SqlError::unsupported("SQL drop sequence"))
-                }
-                (ObjectType::Stage, _) => return Err(SqlError::unsupported("SQL drop stage")),
-            };
-            Ok(spec::Plan::new(node))
-        }
-        Statement::DropFunction { .. } => Err(SqlError::todo("SQL drop function")),
-        Statement::ExplainTable { .. } => Err(SqlError::todo("SQL explain table")),
-        Statement::Merge { .. } => Err(SqlError::todo("SQL merge")),
-        Statement::ShowCreate { .. } => Err(SqlError::todo("SQL show create")),
-        Statement::ShowFunctions { .. } => Err(SqlError::todo("SQL show functions")),
-        Statement::ShowTables { .. } => Err(SqlError::todo("SQL show tables")),
-        Statement::ShowColumns { .. } => Err(SqlError::todo("SQL show columns")),
-        Statement::Truncate { .. } => Err(SqlError::todo("SQL truncate")),
-        Statement::Update { .. } => Err(SqlError::todo("SQL update")),
-        Statement::Use { .. } => Err(SqlError::todo("SQL use")),
-        Statement::SetVariable { .. } => Err(SqlError::todo("SQL set variable")),
-        Statement::Cache { .. } => Err(SqlError::todo("SQL cache")),
-        Statement::UNCache { .. } => Err(SqlError::todo("SQL uncache")),
-        Statement::Install { .. }
-        | Statement::Msck { .. }
-        | Statement::Load { .. }
-        | Statement::Directory { .. }
-        | Statement::CopyIntoSnowflake { .. }
-        | Statement::Close { .. }
-        | Statement::CreateVirtualTable { .. }
-        | Statement::CreateRole { .. }
-        | Statement::CreateSecret { .. }
-        | Statement::AlterIndex { .. }
-        | Statement::AlterRole { .. }
-        | Statement::AttachDatabase { .. }
-        | Statement::AttachDuckDBDatabase { .. }
-        | Statement::DetachDuckDBDatabase { .. }
-        | Statement::DropSecret { .. }
-        | Statement::Declare { .. }
-        | Statement::CreateExtension { .. }
-        | Statement::Fetch { .. }
-        | Statement::Flush { .. }
-        | Statement::Discard { .. }
-        | Statement::SetRole { .. }
-        | Statement::SetTimeZone { .. }
-        | Statement::SetNames { .. }
-        | Statement::SetNamesDefault { .. }
-        | Statement::ShowStatus { .. }
-        | Statement::ShowCollation { .. }
-        | Statement::ShowVariable { .. }
-        | Statement::ShowVariables { .. }
-        | Statement::StartTransaction { .. }
-        | Statement::SetTransaction { .. }
-        | Statement::Comment { .. }
-        | Statement::Commit { .. }
-        | Statement::Rollback { .. }
-        | Statement::CreateProcedure { .. }
-        | Statement::CreateMacro { .. }
-        | Statement::CreateStage { .. }
-        | Statement::Assert { .. }
-        | Statement::Grant { .. }
-        | Statement::Revoke { .. }
-        | Statement::Deallocate { .. }
-        | Statement::Execute { .. }
-        | Statement::Prepare { .. }
-        | Statement::Kill { .. }
-        | Statement::Savepoint { .. }
-        | Statement::ReleaseSavepoint { .. }
-        | Statement::CreateSequence { .. }
-        | Statement::CreateType { .. }
-        | Statement::Pragma { .. }
-        | Statement::LockTables { .. }
-        | Statement::UnlockTables
-        | Statement::Unload { .. } => Err(SqlError::unsupported(format!(
-            "Unsupported statement: {:?}",
-            statement
-        ))),
-    }
-}
-
-pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::Plan> {
+pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
     let ast::Query {
         with,
         body,
@@ -212,7 +39,7 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::Plan> {
             .into_iter()
             .map(from_ast_order_by)
             .collect::<SqlResult<_>>()?;
-        spec::Plan::new(spec::PlanNode::Sort {
+        spec::QueryPlan::new(spec::QueryNode::Sort {
             input: Box::new(plan),
             order: order_by,
             is_global: true,
@@ -224,7 +51,7 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::Plan> {
     let plan = if let Some(ast::Offset { value, rows: _ }) = offset {
         let offset = LiteralValue::<i128>::try_from(value)?.0;
         let offset = usize::try_from(offset).map_err(|e| SqlError::invalid(e.to_string()))?;
-        spec::Plan::new(spec::PlanNode::Offset {
+        spec::QueryPlan::new(spec::QueryNode::Offset {
             input: Box::new(plan),
             offset,
         })
@@ -235,8 +62,9 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::Plan> {
     let plan = if let Some(limit) = limit {
         let limit = LiteralValue::<i128>::try_from(limit)?.0;
         let limit = usize::try_from(limit).map_err(|e| SqlError::invalid(e.to_string()))?;
-        spec::Plan::new(spec::PlanNode::Limit {
+        spec::QueryPlan::new(spec::QueryNode::Limit {
             input: Box::new(plan),
+            skip: 0,
             limit,
         })
     } else {
@@ -246,7 +74,7 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::Plan> {
     Ok(plan)
 }
 
-fn from_ast_select(select: ast::Select) -> SqlResult<spec::Plan> {
+fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
     use ast::{Distinct, GroupByExpr, SelectItem};
 
     let ast::Select {
@@ -300,30 +128,32 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::Plan> {
         .into_iter()
         .try_fold(
             None,
-            |r: Option<spec::Plan>, table| -> SqlResult<Option<spec::Plan>> {
+            |r: Option<spec::QueryPlan>, table| -> SqlResult<Option<spec::QueryPlan>> {
                 let right = from_ast_table_with_joins(table)?;
                 match r {
-                    Some(left) => Ok(Some(spec::Plan::new(spec::PlanNode::Join {
-                        left: Box::new(left),
-                        right: Box::new(right),
-                        join_condition: None,
-                        join_type: spec::JoinType::Cross,
-                        using_columns: vec![],
-                        join_data_type: None,
-                    }))),
+                    Some(left) => Ok(Some(spec::QueryPlan::new(spec::QueryNode::Join(
+                        spec::Join {
+                            left: Box::new(left),
+                            right: Box::new(right),
+                            join_condition: None,
+                            join_type: spec::JoinType::Cross,
+                            using_columns: vec![],
+                            join_data_type: None,
+                        },
+                    )))),
                     None => Ok(Some(right)),
                 }
             },
         )?
         .unwrap_or_else(|| {
-            spec::Plan::new(spec::PlanNode::Empty {
+            spec::QueryPlan::new(spec::QueryNode::Empty {
                 produce_one_row: true,
             })
         });
 
     let plan = if let Some(selection) = selection {
         let selection = from_ast_expression(selection)?;
-        spec::Plan::new(spec::PlanNode::Filter {
+        spec::QueryPlan::new(spec::QueryNode::Filter {
             input: Box::new(plan),
             condition: selection,
         })
@@ -359,7 +189,7 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::Plan> {
                 if having.is_some() {
                     return Err(SqlError::unsupported("HAVING without GROUP BY"));
                 }
-                spec::Plan::new(spec::PlanNode::Project {
+                spec::QueryPlan::new(spec::QueryNode::Project {
                     input: Some(Box::new(plan)),
                     expressions: projection,
                 })
@@ -368,16 +198,16 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::Plan> {
                     .into_iter()
                     .map(from_ast_expression)
                     .collect::<SqlResult<_>>()?;
-                let aggregate = spec::Plan::new(spec::PlanNode::Aggregate {
+                let aggregate = spec::QueryPlan::new(spec::QueryNode::Aggregate(spec::Aggregate {
                     input: Box::new(plan),
                     group_type: spec::GroupType::GroupBy,
                     grouping_expressions: group_by,
                     aggregate_expressions: projection,
                     pivot: None,
-                });
+                }));
                 if let Some(having) = having {
                     let having = from_ast_expression(having)?;
-                    spec::Plan::new(spec::PlanNode::Filter {
+                    spec::QueryPlan::new(spec::QueryNode::Filter {
                         input: Box::new(aggregate),
                         condition: having,
                     })
@@ -400,7 +230,7 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::Plan> {
                 from_ast_order_by(expr)
             })
             .collect::<SqlResult<_>>()?;
-        spec::Plan::new(spec::PlanNode::Sort {
+        spec::QueryPlan::new(spec::QueryNode::Sort {
             input: Box::new(plan),
             order: sort_by,
             is_global: false,
@@ -411,19 +241,21 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::Plan> {
 
     let plan = match distinct {
         None => plan,
-        Some(Distinct::Distinct) => spec::Plan::new(spec::PlanNode::Deduplicate {
-            input: Box::new(plan),
-            column_names: vec![],
-            all_columns_as_keys: true,
-            within_watermark: false,
-        }),
+        Some(Distinct::Distinct) => {
+            spec::QueryPlan::new(spec::QueryNode::Deduplicate(spec::Deduplicate {
+                input: Box::new(plan),
+                column_names: vec![],
+                all_columns_as_keys: true,
+                within_watermark: false,
+            }))
+        }
         Some(Distinct::On(_)) => return Err(SqlError::unsupported("DISTINCT ON")),
     };
 
     Ok(plan)
 }
 
-fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::Plan> {
+fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::QueryPlan> {
     use ast::{SetExpr, SetOperator, SetQuantifier};
 
     match set_expr {
@@ -448,14 +280,16 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::Plan> {
                 SetOperator::Except => spec::SetOpType::Except,
                 SetOperator::Intersect => spec::SetOpType::Intersect,
             };
-            Ok(spec::Plan::new(spec::PlanNode::SetOperation {
-                left: Box::new(left),
-                right: Box::new(right),
-                set_op_type,
-                is_all,
-                by_name,
-                allow_missing_columns: false,
-            }))
+            Ok(spec::QueryPlan::new(spec::QueryNode::SetOperation(
+                spec::SetOperation {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    set_op_type,
+                    is_all,
+                    by_name,
+                    allow_missing_columns: false,
+                },
+            )))
         }
         SetExpr::Values(values) => {
             let ast::Values {
@@ -470,7 +304,7 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::Plan> {
                         .collect::<SqlResult<Vec<_>>>()
                 })
                 .collect::<SqlResult<Vec<_>>>()?;
-            Ok(spec::Plan::new(spec::PlanNode::Values(rows)))
+            Ok(spec::QueryPlan::new(spec::QueryNode::Values(rows)))
         }
         SetExpr::Insert(_) => Err(SqlError::unsupported("INSERT statement in set expression")),
         SetExpr::Update(_) => Err(SqlError::unsupported("UPDATE statement in set expression")),
@@ -484,18 +318,18 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::Plan> {
                 (None, Some(t)) => vec![t.as_str().into()],
                 (_, None) => return Err(SqlError::invalid("missing table name in set expression")),
             };
-            Ok(spec::Plan::new(spec::PlanNode::Read {
+            Ok(spec::QueryPlan::new(spec::QueryNode::Read {
                 is_streaming: false,
-                read_type: spec::ReadType::NamedTable {
-                    identifier: from_ast_object_name(ast::ObjectName(names))?,
+                read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
+                    name: from_ast_object_name(ast::ObjectName(names))?,
                     options: Default::default(),
-                },
+                }),
             }))
         }
     }
 }
 
-fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::Plan> {
+fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::QueryPlan> {
     use sqlparser::ast::{JoinConstraint, JoinOperator};
 
     let ast::TableWithJoins { relation, joins } = table;
@@ -543,19 +377,19 @@ fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::Plan
                 Some(JoinConstraint::Natural) => return Err(SqlError::unsupported("natural join")),
                 Some(JoinConstraint::None) | None => (None, vec![]),
             };
-            Ok(spec::Plan::new(spec::PlanNode::Join {
+            Ok(spec::QueryPlan::new(spec::QueryNode::Join(spec::Join {
                 left: Box::new(left),
                 right: Box::new(right),
                 join_condition,
                 join_type,
                 using_columns: using_columns.into_iter().map(|c| c.into()).collect(),
                 join_data_type: None,
-            }))
+            })))
         })?;
     Ok(plan)
 }
 
-fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::Plan> {
+fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> {
     use ast::TableFactor;
 
     match table {
@@ -588,21 +422,21 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::Plan> {
                         }
                     })
                     .collect::<SqlResult<Vec<_>>>()?;
-                spec::Plan::new(spec::PlanNode::Read {
+                spec::QueryPlan::new(spec::QueryNode::Read {
                     is_streaming: false,
-                    read_type: spec::ReadType::Udtf {
-                        identifier: from_ast_object_name(name)?,
+                    read_type: spec::ReadType::Udtf(spec::ReadUdtf {
+                        name: from_ast_object_name(name)?,
                         arguments: args,
                         options: Default::default(),
-                    },
+                    }),
                 })
             } else {
-                spec::Plan::new(spec::PlanNode::Read {
+                spec::QueryPlan::new(spec::QueryNode::Read {
                     is_streaming: false,
-                    read_type: spec::ReadType::NamedTable {
-                        identifier: from_ast_object_name(name)?,
+                    read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
+                        name: from_ast_object_name(name)?,
                         options: Default::default(),
-                    },
+                    }),
                 })
             };
             let plan = with_ast_table_alias(plan, alias)?;
@@ -631,11 +465,14 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::Plan> {
     }
 }
 
-fn with_ast_table_alias(plan: spec::Plan, alias: Option<ast::TableAlias>) -> SqlResult<spec::Plan> {
+fn with_ast_table_alias(
+    plan: spec::QueryPlan,
+    alias: Option<ast::TableAlias>,
+) -> SqlResult<spec::QueryPlan> {
     match alias {
         None => Ok(plan),
         Some(ast::TableAlias { name, columns }) => {
-            Ok(spec::Plan::new(spec::PlanNode::TableAlias {
+            Ok(spec::QueryPlan::new(spec::QueryNode::TableAlias {
                 input: Box::new(plan),
                 name: name.value.into(),
                 columns: columns.into_iter().map(|c| c.value.into()).collect(),

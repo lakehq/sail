@@ -5,7 +5,7 @@ use datafusion::datasource::TableProvider;
 use datafusion_common::{
     exec_err, Constraints, DFSchema, DFSchemaRef, Result, SchemaReference, TableReference,
 };
-use datafusion_expr::{CreateMemoryTable, DdlStatement, DropTable, LogicalPlan, TableType};
+use datafusion_expr::{CreateMemoryTable, DdlStatement, DropTable, Expr, LogicalPlan, TableType};
 use framework_common::unwrap_or;
 use serde::{Deserialize, Serialize};
 
@@ -97,18 +97,23 @@ impl TableMetadata {
 }
 
 impl<'a> CatalogManager<'a> {
+    #[allow(dead_code)]
     pub(crate) async fn create_memory_table(
         &self,
         table: TableReference,
         plan: Arc<LogicalPlan>,
+        constraints: Constraints,
+        if_not_exists: bool,
+        or_replace: bool,
+        column_defaults: Vec<(String, Expr)>,
     ) -> Result<()> {
         let ddl = LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
             name: table,
-            constraints: Constraints::empty(), // TODO: Check if exists in options
+            constraints,
             input: plan,
-            if_not_exists: false,    // TODO: Check if exists in options
-            or_replace: false,       // TODO: Check if exists in options
-            column_defaults: vec![], // TODO: Check if exists in options
+            if_not_exists,
+            or_replace,
+            column_defaults,
         }));
         // TODO: process the output
         _ = self.ctx.execute_logical_plan(ddl).await?;

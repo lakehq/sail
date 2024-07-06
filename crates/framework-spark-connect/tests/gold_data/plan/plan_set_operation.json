@@ -4,7 +4,7 @@
       "input": "\nSELECT * FROM a\nUNION\nSELECT * FROM b\nEXCEPT\nSELECT * FROM c\nINTERSECT\nSELECT * FROM d\n      ",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "setOperation": {
               "left": {
                 "setOperation": {
@@ -13,7 +13,7 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "identifier": [
+                            "name": [
                               "a"
                             ],
                             "options": {}
@@ -39,7 +39,7 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "identifier": [
+                            "name": [
                               "b"
                             ],
                             "options": {}
@@ -75,7 +75,7 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "identifier": [
+                            "name": [
                               "c"
                             ],
                             "options": {}
@@ -101,7 +101,7 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "identifier": [
+                            "name": [
                               "d"
                             ],
                             "options": {}
@@ -145,7 +145,7 @@
       "input": "\nSELECT * FROM a\nUNION\nSELECT * FROM b\nEXCEPT ALL\nSELECT * FROM c\nINTERSECT ALL\nSELECT * FROM d\n      ",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "setOperation": {
               "left": {
                 "setOperation": {
@@ -154,7 +154,7 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "identifier": [
+                            "name": [
                               "a"
                             ],
                             "options": {}
@@ -180,7 +180,7 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "identifier": [
+                            "name": [
                               "b"
                             ],
                             "options": {}
@@ -216,7 +216,7 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "identifier": [
+                            "name": [
                               "c"
                             ],
                             "options": {}
@@ -242,7 +242,7 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "identifier": [
+                            "name": [
                               "d"
                             ],
                             "options": {}
@@ -286,7 +286,7 @@
       "input": "select  id\nfrom (((select id from t0)\n       union all\n       (select  id from t0))\n      union all\n      (select id from t0)) as u_1\n      ",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "tableAlias": {
@@ -299,7 +299,7 @@
                               "input": {
                                 "read": {
                                   "namedTable": {
-                                    "identifier": [
+                                    "name": [
                                       "t0"
                                     ],
                                     "options": {}
@@ -328,7 +328,7 @@
                               "input": {
                                 "read": {
                                   "namedTable": {
-                                    "identifier": [
+                                    "name": [
                                       "t0"
                                     ],
                                     "options": {}
@@ -365,7 +365,7 @@
                           "input": {
                             "read": {
                               "namedTable": {
-                                "identifier": [
+                                "name": [
                                   "t0"
                                 ],
                                 "options": {}
@@ -424,7 +424,7 @@
       "input": "select * from ((select * from t1) union (select * from t2)) t",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "project": {
               "input": {
                 "tableAlias": {
@@ -435,7 +435,7 @@
                           "input": {
                             "read": {
                               "namedTable": {
-                                "identifier": [
+                                "name": [
                                   "t1"
                                 ],
                                 "options": {}
@@ -461,7 +461,7 @@
                           "input": {
                             "read": {
                               "namedTable": {
-                                "identifier": [
+                                "name": [
                                   "t2"
                                 ],
                                 "options": {}
@@ -514,14 +514,14 @@
       "input": "select * from a except all select * from b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "setOperation": {
               "left": {
                 "project": {
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "a"
                         ],
                         "options": {}
@@ -547,7 +547,7 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "b"
                         ],
                         "options": {}
@@ -583,14 +583,14 @@
       "input": "select * from a except distinct select * from b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "setOperation": {
               "left": {
                 "project": {
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "a"
                         ],
                         "options": {}
@@ -616,7 +616,7 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "b"
                         ],
                         "options": {}
@@ -652,14 +652,14 @@
       "input": "select * from a except select * from b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "setOperation": {
               "left": {
                 "project": {
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "a"
                         ],
                         "options": {}
@@ -685,7 +685,7 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "b"
                         ],
                         "options": {}
@@ -721,14 +721,14 @@
       "input": "select * from a intersect all select * from b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "setOperation": {
               "left": {
                 "project": {
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "a"
                         ],
                         "options": {}
@@ -754,7 +754,7 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "b"
                         ],
                         "options": {}
@@ -790,14 +790,14 @@
       "input": "select * from a intersect distinct select * from b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "setOperation": {
               "left": {
                 "project": {
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "a"
                         ],
                         "options": {}
@@ -823,7 +823,7 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "b"
                         ],
                         "options": {}
@@ -859,14 +859,14 @@
       "input": "select * from a intersect select * from b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "setOperation": {
               "left": {
                 "project": {
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "a"
                         ],
                         "options": {}
@@ -892,7 +892,7 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "b"
                         ],
                         "options": {}
@@ -946,14 +946,14 @@
       "input": "select * from a union all select * from b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "setOperation": {
               "left": {
                 "project": {
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "a"
                         ],
                         "options": {}
@@ -979,7 +979,7 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "b"
                         ],
                         "options": {}
@@ -1015,14 +1015,14 @@
       "input": "select * from a union distinct select * from b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "setOperation": {
               "left": {
                 "project": {
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "a"
                         ],
                         "options": {}
@@ -1048,7 +1048,7 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "b"
                         ],
                         "options": {}
@@ -1084,14 +1084,14 @@
       "input": "select * from a union select * from b",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "setOperation": {
               "left": {
                 "project": {
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "a"
                         ],
                         "options": {}
@@ -1117,7 +1117,7 @@
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "b"
                         ],
                         "options": {}
@@ -1153,7 +1153,7 @@
       "input": "select 1 union select 1",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "setOperation": {
               "left": {
                 "project": {

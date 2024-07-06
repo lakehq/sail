@@ -10,25 +10,6 @@ use crate::spec::expression::{
 use crate::spec::literal::Literal;
 use crate::spec::Identifier;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Plan {
-    #[serde(flatten)]
-    pub node: PlanNode,
-    pub plan_id: Option<i64>,
-    pub source_info: Option<String>,
-}
-
-impl Plan {
-    pub fn new(node: PlanNode) -> Self {
-        Self {
-            node,
-            plan_id: None,
-            source_info: None,
-        }
-    }
-}
-
 /// Unresolved logical plan node for the framework.
 /// As a starting point, the definition matches the structure of the `Relation` message
 /// in the Spark Connect protocol, but enum variants are added to include write commands
@@ -49,193 +30,150 @@ impl Plan {
 ///   6. Some names are modified for naming consistency.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
-pub enum PlanNode {
+pub enum Plan {
+    Query(QueryPlan),
+    Command(CommandPlan),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryPlan {
+    #[serde(flatten)]
+    pub node: QueryNode,
+    pub plan_id: Option<i64>,
+    pub source_info: Option<String>,
+}
+
+impl QueryPlan {
+    pub fn new(node: QueryNode) -> Self {
+        Self {
+            node,
+            plan_id: None,
+            source_info: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandPlan {
+    #[serde(flatten)]
+    pub node: CommandNode,
+    pub plan_id: Option<i64>,
+    pub source_info: Option<String>,
+}
+
+impl CommandPlan {
+    pub fn new(node: CommandNode) -> Self {
+        Self {
+            node,
+            plan_id: None,
+            source_info: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum QueryNode {
     Read {
         #[serde(flatten)]
         read_type: ReadType,
         is_streaming: bool,
     },
     Project {
-        input: Option<Box<Plan>>,
+        input: Option<Box<QueryPlan>>,
         expressions: Vec<Expr>,
     },
     Filter {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         condition: Expr,
     },
-    Join {
-        left: Box<Plan>,
-        right: Box<Plan>,
-        join_condition: Option<Expr>,
-        join_type: JoinType,
-        using_columns: Vec<Identifier>,
-        join_data_type: Option<JoinDataType>,
-    },
-    SetOperation {
-        left: Box<Plan>,
-        right: Box<Plan>,
-        set_op_type: SetOpType,
-        is_all: bool,
-        by_name: bool,
-        allow_missing_columns: bool,
-    },
+    Join(Join),
+    SetOperation(SetOperation),
     Sort {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         order: Vec<SortOrder>,
         is_global: bool,
     },
     Limit {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
+        skip: usize,
         limit: usize,
     },
-    Aggregate {
-        input: Box<Plan>,
-        group_type: GroupType,
-        grouping_expressions: Vec<Expr>,
-        aggregate_expressions: Vec<Expr>,
-        pivot: Option<Pivot>,
-    },
+    Aggregate(Aggregate),
     LocalRelation {
         data: Option<Vec<u8>>,
         schema: Option<Schema>,
     },
-    Sample {
-        input: Box<Plan>,
-        lower_bound: f64,
-        upper_bound: f64,
-        with_replacement: bool,
-        seed: Option<i64>,
-        deterministic_order: bool,
-    },
+    Sample(Sample),
     Offset {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         offset: usize,
     },
-    Deduplicate {
-        input: Box<Plan>,
-        column_names: Vec<Identifier>,
-        all_columns_as_keys: bool,
-        within_watermark: bool,
-    },
-    Range {
-        start: Option<i64>,
-        end: i64,
-        step: i64,
-        num_partitions: Option<usize>,
-    },
+    Deduplicate(Deduplicate),
+    Range(Range),
     SubqueryAlias {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         alias: Identifier,
         qualifier: Vec<Identifier>,
     },
     Repartition {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         num_partitions: usize,
         shuffle: bool,
     },
     ToDf {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         column_names: Vec<Identifier>,
     },
     WithColumnsRenamed {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         rename_columns_map: HashMap<Identifier, Identifier>,
     },
-    ShowString {
-        input: Box<Plan>,
-        num_rows: usize,
-        truncate: usize,
-        vertical: bool,
-    },
     Drop {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         columns: Vec<Expr>,
         column_names: Vec<Identifier>,
     },
     Tail {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         limit: usize,
     },
     WithColumns {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         aliases: Vec<Expr>,
     },
     Hint {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         name: String,
         parameters: Vec<Expr>,
     },
-    Unpivot {
-        input: Box<Plan>,
-        ids: Vec<Expr>,
-        values: Vec<Expr>,
-        variable_column_name: Identifier,
-        value_column_name: Identifier,
-    },
+    Unpivot(Unpivot),
     ToSchema {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         schema: Schema,
     },
     RepartitionByExpression {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         partition_expressions: Vec<Expr>,
         num_partitions: Option<usize>,
     },
     MapPartitions {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         function: CommonInlineUserDefinedFunction,
         is_barrier: bool,
     },
     CollectMetrics {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         name: String,
         metrics: Vec<Expr>,
     },
-    Parse {
-        input: Box<Plan>,
-        format: ParseFormat,
-        schema: Option<Schema>,
-        options: HashMap<String, String>,
-    },
-    GroupMap {
-        input: Box<Plan>,
-        grouping_expressions: Vec<Expr>,
-        function: CommonInlineUserDefinedFunction,
-        sorting_expressions: Vec<Expr>,
-        initial_input: Option<Box<Plan>>,
-        initial_grouping_expressions: Vec<Expr>,
-        is_map_groups_with_state: Option<bool>, // TODO: this should probably be an enum
-        output_mode: Option<String>,            // TODO: this should probably be an enum
-        timeout_conf: Option<String>,           // TODO: this should probably be a struct
-    },
-    CoGroupMap {
-        input: Box<Plan>,
-        input_grouping_expressions: Vec<Expr>,
-        other: Box<Plan>,
-        other_grouping_expressions: Vec<Expr>,
-        function: CommonInlineUserDefinedFunction,
-        input_sorting_expressions: Vec<Expr>,
-        other_sorting_expressions: Vec<Expr>,
-    },
-    WithWatermark {
-        input: Box<Plan>,
-        event_time: String,
-        delay_threshold: String,
-    },
-    ApplyInPandasWithState {
-        input: Box<Plan>,
-        grouping_expressions: Vec<Expr>,
-        function: CommonInlineUserDefinedFunction,
-        output_schema: Schema,
-        state_schema: Schema,
-        output_mode: String,  // TODO: this should probably be an enum
-        timeout_conf: String, // TODO: this should probably be a struct
-    },
-    HtmlString {
-        input: Box<Plan>,
-        num_rows: usize,
-        truncate: usize,
-    },
+    Parse(Parse),
+    GroupMap(GroupMap),
+    CoGroupMap(CoGroupMap),
+    WithWatermark(WithWatermark),
+    ApplyInPandasWithState(ApplyInPandasWithState),
     CachedLocalRelation {
         user_id: String,
         session_id: String,
@@ -247,62 +185,86 @@ pub enum PlanNode {
     CommonInlineUserDefinedTableFunction(CommonInlineUserDefinedTableFunction),
     // NA operations
     FillNa {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         columns: Vec<Identifier>,
         values: Vec<Expr>,
     },
     DropNa {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         columns: Vec<Identifier>,
         min_non_nulls: Option<usize>,
     },
     ReplaceNa {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         columns: Vec<Identifier>,
         replacements: Vec<Replacement>,
     },
     // stat operations
     StatSummary {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         statistics: Vec<String>,
     },
     StatDescribe {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         columns: Vec<Identifier>,
     },
     StatCrosstab {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         left_column: Identifier,
         right_column: Identifier,
     },
     StatCov {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         left_column: Identifier,
         right_column: Identifier,
     },
     StatCorr {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         left_column: Identifier,
         right_column: Identifier,
         method: String,
     },
     StatApproxQuantile {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         columns: Vec<Identifier>,
         probabilities: Vec<f64>,
         relative_error: f64,
     },
     StatFreqItems {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         columns: Vec<Identifier>,
         support: Option<f64>,
     },
     StatSampleBy {
-        input: Box<Plan>,
+        input: Box<QueryPlan>,
         column: Expr,
         fractions: Vec<Fraction>,
         seed: Option<i64>,
     },
+    // extensions
+    Empty {
+        produce_one_row: bool,
+    },
+    WithParameters {
+        input: Box<QueryPlan>,
+        positional_arguments: Vec<Literal>,
+        named_arguments: HashMap<String, Literal>,
+    },
+    Values(Vec<Vec<Expr>>),
+    TableAlias {
+        input: Box<QueryPlan>,
+        name: Identifier,
+        columns: Vec<Identifier>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum CommandNode {
+    ShowString(ShowString),
+    HtmlString(HtmlString),
+    // TODO: add all the "analyze" requests
+    // TODO: should streaming query request be added here?
     // catalog operations
     CurrentDatabase,
     SetCurrentDatabase {
@@ -343,11 +305,8 @@ pub enum PlanNode {
     },
     CreateTable {
         table: ObjectName,
-        path: Option<String>,
-        source: Option<String>,
-        description: Option<String>,
-        schema: Option<Schema>,
-        options: HashMap<String, String>,
+        #[serde(flatten)]
+        definition: TableDefinition,
     },
     DropTemporaryView {
         view: ObjectName,
@@ -381,13 +340,16 @@ pub enum PlanNode {
     ListCatalogs {
         catalog_pattern: Option<String>,
     },
+    CreateCatalog {
+        catalog: Identifier,
+        #[serde(flatten)]
+        definition: CatalogDefinition,
+    },
     // commands
     CreateDatabase {
         database: ObjectName,
-        if_not_exists: bool,
-        comment: Option<String>,
-        location: Option<String>,
-        properties: HashMap<String, String>,
+        #[serde(flatten)]
+        definition: DatabaseDefinition,
     },
     DropDatabase {
         database: ObjectName,
@@ -408,64 +370,253 @@ pub enum PlanNode {
     },
     CreateTemporaryView {
         view: ObjectName,
-        input: Box<Plan>,
-        is_global: bool,
-        replace: bool,
+        #[serde(flatten)]
+        definition: TemporaryViewDefinition,
     },
     DropView {
         view: ObjectName,
         if_exists: bool,
     },
-    Write {
-        input: Box<Plan>,
-        source: Option<String>, // TODO: is this the same as "provider" in `WriteOperationV2`?
-        save_type: SaveType,
-        mode: SaveMode,
-        sort_columns: Vec<Identifier>,
-        partitioning_columns: Vec<Identifier>,
-        bucket_by: Option<SaveBucketBy>,
-        options: HashMap<String, String>,
-        table_properties: HashMap<String, String>,
-        overwrite_condition: Option<Expr>,
-    },
-    // TODO: add all the "analyze" requests
-    // TODO: should streaming query request be added here?
-    // extensions
-    Empty {
-        produce_one_row: bool,
-    },
-    WithParameters {
-        input: Box<Plan>,
-        positional_arguments: Vec<Literal>,
-        named_arguments: HashMap<String, Literal>,
-    },
-    Values(Vec<Vec<Expr>>),
-    TableAlias {
-        input: Box<Plan>,
-        name: Identifier,
-        columns: Vec<Identifier>,
+    Write(Write),
+    Explain {
+        // TODO: Support stringified_plans
+        mode: ExplainMode,
+        input: Box<QueryPlan>,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ReadType {
-    NamedTable {
-        identifier: ObjectName,
-        options: HashMap<String, String>,
-    },
-    Udtf {
-        identifier: ObjectName,
-        arguments: Vec<Expr>,
-        options: HashMap<String, String>,
-    },
-    DataSource {
-        format: Option<String>,
-        schema: Option<Schema>,
-        options: HashMap<String, String>,
-        paths: Vec<String>,
-        predicates: Vec<Expr>,
-    },
+    NamedTable(ReadNamedTable),
+    Udtf(ReadUdtf),
+    DataSource(ReadDataSource),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadNamedTable {
+    pub name: ObjectName,
+    pub options: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadUdtf {
+    pub name: ObjectName,
+    pub arguments: Vec<Expr>,
+    pub options: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadDataSource {
+    pub format: Option<String>,
+    pub schema: Option<Schema>,
+    pub options: HashMap<String, String>,
+    pub paths: Vec<String>,
+    pub predicates: Vec<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Join {
+    pub left: Box<QueryPlan>,
+    pub right: Box<QueryPlan>,
+    pub join_condition: Option<Expr>,
+    pub join_type: JoinType,
+    pub using_columns: Vec<Identifier>,
+    pub join_data_type: Option<JoinDataType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetOperation {
+    pub left: Box<QueryPlan>,
+    pub right: Box<QueryPlan>,
+    pub set_op_type: SetOpType,
+    pub is_all: bool,
+    pub by_name: bool,
+    pub allow_missing_columns: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Aggregate {
+    pub input: Box<QueryPlan>,
+    pub group_type: GroupType,
+    pub grouping_expressions: Vec<Expr>,
+    pub aggregate_expressions: Vec<Expr>,
+    pub pivot: Option<Pivot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sample {
+    pub input: Box<QueryPlan>,
+    pub lower_bound: f64,
+    pub upper_bound: f64,
+    pub with_replacement: bool,
+    pub seed: Option<i64>,
+    pub deterministic_order: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Deduplicate {
+    pub input: Box<QueryPlan>,
+    pub column_names: Vec<Identifier>,
+    pub all_columns_as_keys: bool,
+    pub within_watermark: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Range {
+    pub start: Option<i64>,
+    pub end: i64,
+    pub step: i64,
+    pub num_partitions: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShowString {
+    pub input: Box<QueryPlan>,
+    pub num_rows: usize,
+    pub truncate: usize,
+    pub vertical: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Unpivot {
+    pub input: Box<QueryPlan>,
+    pub ids: Vec<Expr>,
+    pub values: Vec<Expr>,
+    pub variable_column_name: Identifier,
+    pub value_column_name: Identifier,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Parse {
+    pub input: Box<QueryPlan>,
+    pub format: ParseFormat,
+    pub schema: Option<Schema>,
+    pub options: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupMap {
+    pub input: Box<QueryPlan>,
+    pub grouping_expressions: Vec<Expr>,
+    pub function: CommonInlineUserDefinedFunction,
+    pub sorting_expressions: Vec<Expr>,
+    pub initial_input: Option<Box<QueryPlan>>,
+    pub initial_grouping_expressions: Vec<Expr>,
+    pub is_map_groups_with_state: Option<bool>, // TODO: this should probably be an enum
+    pub output_mode: Option<String>,            // TODO: this should probably be an enum
+    pub timeout_conf: Option<String>,           // TODO: this should probably be a struct
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoGroupMap {
+    pub input: Box<QueryPlan>,
+    pub input_grouping_expressions: Vec<Expr>,
+    pub other: Box<QueryPlan>,
+    pub other_grouping_expressions: Vec<Expr>,
+    pub function: CommonInlineUserDefinedFunction,
+    pub input_sorting_expressions: Vec<Expr>,
+    pub other_sorting_expressions: Vec<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WithWatermark {
+    pub input: Box<QueryPlan>,
+    pub event_time: String,
+    pub delay_threshold: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyInPandasWithState {
+    pub input: Box<QueryPlan>,
+    pub grouping_expressions: Vec<Expr>,
+    pub function: CommonInlineUserDefinedFunction,
+    pub output_schema: Schema,
+    pub state_schema: Schema,
+    pub output_mode: String,  // TODO: this should probably be an enum
+    pub timeout_conf: String, // TODO: this should probably be a struct
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HtmlString {
+    pub input: Box<QueryPlan>,
+    pub num_rows: usize,
+    pub truncate: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableDefinition {
+    pub schema: Schema,
+    pub comment: Option<String>,
+    pub column_defaults: Vec<(String, Expr)>,
+    pub constraints: Vec<TableConstraint>,
+    pub location: Option<String>,
+    pub file_format: Option<String>,
+    pub table_partition_cols: Vec<Identifier>,
+    pub file_sort_order: Vec<Vec<Expr>>,
+    pub if_not_exists: bool,
+    pub or_replace: bool,
+    pub unbounded: bool,
+    pub options: HashMap<String, String>,
+    /// The query for `CREATE TABLE ... AS SELECT ...` (CTAS) statements.
+    pub query: Option<Box<QueryPlan>>,
+    pub definition: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseDefinition {
+    pub if_not_exists: bool,
+    pub comment: Option<String>,
+    pub location: Option<String>,
+    pub properties: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogDefinition {
+    pub options: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemporaryViewDefinition {
+    pub input: Box<QueryPlan>,
+    pub is_global: bool,
+    pub replace: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Write {
+    pub input: Box<QueryPlan>,
+    pub source: Option<String>, // TODO: is this the same as "provider" in `WriteOperationV2`?
+    pub save_type: SaveType,
+    pub mode: SaveMode,
+    pub sort_columns: Vec<Identifier>,
+    pub partitioning_columns: Vec<Identifier>,
+    pub bucket_by: Option<SaveBucketBy>,
+    pub options: HashMap<String, String>,
+    pub table_properties: HashMap<String, String>,
+    pub overwrite_condition: Option<Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -580,4 +731,28 @@ pub struct StorageLevel {
     pub use_off_heap: bool,
     pub deserialized: bool,
     pub replication: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TableConstraint {
+    Unique {
+        name: Option<Identifier>,
+        columns: Vec<Identifier>,
+    },
+    PrimaryKey {
+        name: Option<Identifier>,
+        columns: Vec<Identifier>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExplainMode {
+    Unspecified,
+    Analyze,
+    Verbose,
+    Extended,
+    Codegen,
+    Cost,
+    Formatted,
 }

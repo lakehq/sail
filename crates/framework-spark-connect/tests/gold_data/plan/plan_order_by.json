@@ -67,14 +67,14 @@
       "input": "select * from t order by a, b desc",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "sort": {
               "input": {
                 "project": {
                   "input": {
                     "read": {
                       "namedTable": {
-                        "identifier": [
+                        "name": [
                           "t"
                         ],
                         "options": {}
@@ -133,7 +133,7 @@
       "input": "select * from t order by a, b desc limit 10",
       "output": {
         "success": {
-          "root": {
+          "query": {
             "limit": {
               "input": {
                 "sort": {
@@ -142,7 +142,7 @@
                       "input": {
                         "read": {
                           "namedTable": {
-                            "identifier": [
+                            "name": [
                               "t"
                             ],
                             "options": {}
@@ -194,6 +194,7 @@
                 "planId": null,
                 "sourceInfo": null
               },
+              "skip": 0,
               "limit": 10
             },
             "planId": null,
