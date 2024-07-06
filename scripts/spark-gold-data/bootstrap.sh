@@ -9,40 +9,17 @@ fi
 
 project_path="$(git rev-parse --show-toplevel)"
 
+scripts_path="${project_path}/scripts/spark-gold-data"
+logs_path="${project_path}/tmp/spark-gold-data"
+output_path="${project_path}/crates/framework-spark-connect/tests/gold_data"
+
+source "${project_path}/scripts/shell-tools/git-patch.sh"
+
 cd "${project_path}"/opt/spark
 
-# Define paths relative to the working directory (Spark project root directory).
-logs_path="logs/gold-data"
-scripts_path="../../scripts/spark-gold-data"
-output_path="../../crates/framework-spark-connect/tests/gold_data"
+apply_git_patch "v3.5.1" "${scripts_path}"/spark-3.5.1.patch
 
-function git_enter() {
-  status="$(git status --porcelain)"
-  if [ -n "$status" ]; then
-    echo "The working directory of the Spark project is not clean."
-    exit 1
-  fi
-
-  head_commit="$(git rev-parse HEAD)"
-  tag_commit="$(git rev-parse v3.5.1)"
-  if [ "${head_commit}" != "${tag_commit}" ]; then
-    echo "The current commit of the Spark project is not v3.5.1."
-    exit 1
-  fi
-
-  echo "Applying the patch for gold data generation..."
-  git apply "${scripts_path}"/spark-3.5.1.patch
-
-  trap 'git_exit' EXIT
-}
-
-function git_exit() {
-  git apply -R "${scripts_path}"/spark-3.5.1.patch
-  echo "Reverted the patch for gold data generation."
-}
-
-git_enter
-
+echo "Removing existing test logs..."
 rm -rf "${logs_path}"
 mkdir -p "${logs_path}"
 
@@ -54,7 +31,7 @@ sbt_command+='sql/testOnly org.apache.spark.sql.FunctionCollectorSuite; '
 sbt_command+='exit'
 
 env SPARK_LOCAL_IP=127.0.0.1 \
-  SPARK_SUITE_OUTPUT_DIR="${PWD}/${logs_path}" \
+  SPARK_SUITE_OUTPUT_DIR="${logs_path}" \
   build/sbt "${sbt_command}"
 
 echo "Removing existing test data..."
