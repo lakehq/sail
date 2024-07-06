@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use framework_common::spec;
-use framework_common::spec::{CommandNode, CommandPlan};
 use sqlparser::ast;
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::Parser;
@@ -9,6 +8,7 @@ use sqlparser::tokenizer::Token;
 
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{from_ast_expression, from_ast_object_name};
+use crate::parse::{parse_comment, parse_option_value, parse_value_options};
 use crate::parser::{fail_on_extra_token, SparkDialect};
 use crate::query::from_ast_query;
 use crate::utils::{build_column_defaults, build_schema_from_columns};
@@ -19,12 +19,17 @@ enum Statement {
         mode: spec::ExplainMode,
         query: ast::Query,
     },
+    CreateExternalTable {
+        table: spec::ObjectName,
+        definition: spec::TableDefinition,
+    },
 }
 
 pub fn parse_sql_statement(sql: &str) -> SqlResult<spec::Plan> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
     let statement = match parser.peek_token().token {
         Token::Word(w) if w.keyword == Keyword::EXPLAIN => parse_explain_statement(&mut parser)?,
+        Token::Word(w) if w.keyword == Keyword::CREATE => parse_create_statement(&mut parser)?,
         _ => Statement::Standard(parser.parse_statement()?),
     };
     loop {
@@ -36,6 +41,9 @@ pub fn parse_sql_statement(sql: &str) -> SqlResult<spec::Plan> {
     match statement {
         Statement::Standard(statement) => from_ast_statement(statement),
         Statement::Explain { mode, query } => from_explain_statement(mode, query),
+        Statement::CreateExternalTable { table, definition } => {
+            from_create_table_statement(table, definition)
+        }
     }
 }
 
@@ -82,6 +90,126 @@ fn parse_explain_statement(parser: &mut Parser) -> SqlResult<Statement> {
     //          https://spark.apache.org/docs/latest/sql-ref-syntax-qry-explain.html
     let query = parser.parse_query()?;
     Ok(Statement::Explain { mode, query })
+}
+
+// Spark Syntax reference:
+//  https://docs.databricks.com/en/sql/language-manual/sql-ref-syntax-ddl-create-table.html
+//  https://spark.apache.org/docs/latest/sql-ref-syntax-ddl-create-table.html
+fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement> {
+    parser.expect_keyword(Keyword::CREATE)?;
+    let or_replace: bool = parser.parse_keywords(&[Keyword::OR, Keyword::REPLACE]);
+    let mut unbounded = false;
+    // FIXME: Spark does not have an "Unbounded" keyword,
+    //  so we will need to figure out how to detect if a table is unbounded.
+    //  See: https://spark.apache.org/docs/latest/structured-streaming-programming-guide.html
+    if parser.parse_keyword(Keyword::UNBOUNDED) {
+        unbounded = true;
+        parser.expect_keyword(Keyword::EXTERNAL)?;
+    } else if !parser.parse_keyword(Keyword::EXTERNAL)
+        && !matches!(parser.peek_token().token, Token::Word(w) if w.keyword == Keyword::TABLE)
+    {
+        return Ok(Statement::Standard(parser.parse_statement()?));
+    }
+    parser.expect_keyword(Keyword::TABLE)?;
+
+    let if_not_exists: bool = parser.parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
+    let table_name: ast::ObjectName = parser.parse_object_name(true)?;
+    if parser.parse_keyword(Keyword::LIKE) {
+        return Err(SqlError::todo("CREATE TABLE LIKE"));
+    }
+    let (columns, mut constraints): (Vec<ast::ColumnDef>, Vec<ast::TableConstraint>) =
+        parser.parse_columns()?;
+    let mut file_format: Option<String> = None;
+    if parser.parse_keyword(Keyword::USING) {
+        file_format = Some(parse_option_value(parser)?);
+    }
+    // FIXME: Function to loop and do parse_one_of_keywords for all table clauses + hive format
+    //  so that there is not order dependency.
+    //      Ref: https://docs.databricks.com/en/sql/language-manual/sql-ref-syntax-ddl-create-table-using.html
+    //      Ref: https://docs.databricks.com/en/sql/language-manual/sql-ref-syntax-ddl-create-table-hiveformat.html
+    let mut options: HashMap<String, String> = parse_value_options(parser)?;
+    let mut comment: Option<String> = parse_comment(parser)?;
+    let hive_distribution: ast::HiveDistributionStyle = parser.parse_hive_distribution()?;
+    let hive_formats: ast::HiveFormat = parser.parse_hive_formats()?;
+    if comment.is_none() {
+        // Comment can be in two different locations depending on the Spark SQL format used.
+        comment = parse_comment(parser)?;
+    }
+    let table_properties: Vec<ast::SqlOption> = parser.parse_options(Keyword::TBLPROPERTIES)?;
+    let query: Option<Box<ast::Query>> = if parser.parse_keyword(Keyword::AS) {
+        Some(parser.parse_boxed_query()?)
+    } else {
+        None
+    };
+
+    let table_partition_cols: Vec<spec::Identifier> = match hive_distribution {
+        ast::HiveDistributionStyle::PARTITIONED { columns } => columns
+            .iter()
+            .map(|x| spec::Identifier::from(x.name.to_string()))
+            .collect(),
+        ast::HiveDistributionStyle::CLUSTERED { .. } => {
+            return Err(SqlError::todo("CLUSTERED BY in CREATE TABLE statement"))
+        }
+        ast::HiveDistributionStyle::SKEWED { .. } => {
+            return Err(SqlError::unsupported("SKEWED BY in CREATE TABLE statement"))
+        }
+        ast::HiveDistributionStyle::NONE { .. } => vec![],
+    };
+
+    let location: Option<String> = hive_formats.location;
+    if let Some(ff) = &hive_formats.storage {
+        if let ast::HiveIOFormat::FileFormat { format } = ff {
+            if file_format.is_some() {
+                return Err(SqlError::invalid(
+                    "Multiple file formats in CREATE TABLE statement",
+                ));
+            }
+            file_format = Some(format.to_string());
+        }
+        if let ast::HiveIOFormat::IOF { .. } = ff {
+            return Err(SqlError::todo(
+                "INPUTFORMAT and OUTPUTFORMAT file format in CREATE TABLE statement",
+            ));
+        }
+    }
+    if hive_formats.row_format.is_some() {
+        return Err(SqlError::todo("ROW FORMAT in CREATE TABLE statement"));
+    }
+    if hive_formats.serde_properties.is_some() {
+        return Err(SqlError::todo("SERDEPROPERTIES in CREATE TABLE statement"));
+    }
+
+    options.extend(from_ast_sql_options(table_properties)?);
+    constraints.extend(calc_inline_constraints_from_columns(&columns));
+    let constraints: Vec<spec::TableConstraint> = constraints
+        .into_iter()
+        .map(from_ast_table_constraint)
+        .collect::<SqlResult<Vec<_>>>()?;
+    let column_defaults: Vec<(String, spec::Expr)> = build_column_defaults(&columns)?;
+    let schema: spec::Schema = build_schema_from_columns(columns)?;
+    let definition: Option<String> = query.as_ref().map(|q| q.to_string());
+    let query: Option<Box<spec::QueryPlan>> =
+        query.map(|q| from_ast_query(*q)).transpose()?.map(Box::new);
+
+    Ok(Statement::CreateExternalTable {
+        table: from_ast_object_name(table_name)?,
+        definition: spec::TableDefinition {
+            schema,
+            comment,
+            column_defaults,
+            constraints,
+            location,
+            file_format,
+            table_partition_cols,
+            file_sort_order: vec![], //TODO: file_sort_order
+            if_not_exists,
+            or_replace,
+            unbounded,
+            options,
+            query,
+            definition,
+        },
+    })
 }
 
 fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
@@ -227,93 +355,9 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             nulls_distinct: _,
             predicate: _,
         }) => Err(SqlError::todo("SQL create index")),
-        Statement::CreateTable(create_table) => {
-            let ast::CreateTable {
-                or_replace,
-                temporary: _,
-                external: _,
-                global: _,
-                if_not_exists,
-                transient: _,
-                volatile: _,
-                name,
-                columns,
-                mut constraints,
-                hive_distribution: _,
-                hive_formats: _,
-                table_properties,
-                with_options,
-                file_format,
-                location,
-                query,
-                without_rowid: _,
-                like: _,
-                clone: _,
-                engine: _,
-                comment,
-                auto_increment_offset: _,
-                default_charset: _,
-                collation: _,
-                on_commit: _,
-                on_cluster: _,
-                primary_key: _,
-                order_by: _,
-                partition_by: _,
-                cluster_by: _,
-                options: _,
-                strict: _,
-                copy_grants: _,
-                enable_schema_evolution: _,
-                change_tracking: _,
-                data_retention_time_in_days: _,
-                max_data_extension_time_in_days: _,
-                default_ddl_collation: _,
-                with_aggregation_policy: _,
-                with_row_access_policy: _,
-                with_tags: _,
-            } = create_table;
-            let options = {
-                let mut options = HashMap::new();
-                options.extend(from_ast_sql_options(table_properties)?);
-                options.extend(from_ast_sql_options(with_options)?);
-                options
-            };
-            let file_format = file_format.map(|ff| ff.to_string());
-            let comment = comment.map(|c| c.to_string());
-
-            constraints.extend(calc_inline_constraints_from_columns(&columns));
-            let constraints = constraints
-                .into_iter()
-                .map(from_ast_table_constraint)
-                .collect::<SqlResult<Vec<_>>>()?;
-
-            let column_defaults = build_column_defaults(&columns)?;
-
-            let schema = build_schema_from_columns(columns)?;
-            let definition = query.as_ref().map(|q| q.to_string());
-            let query = query.map(|q| from_ast_query(*q)).transpose()?.map(Box::new);
-
-            Ok(spec::Plan::Command(spec::CommandPlan::new(
-                spec::CommandNode::CreateTable {
-                    table: from_ast_object_name(name)?,
-                    definition: spec::TableDefinition {
-                        schema,
-                        comment,
-                        column_defaults,
-                        constraints,
-                        location,
-                        file_format,
-                        table_partition_cols: vec![],
-                        file_sort_order: vec![],
-                        if_not_exists,
-                        or_replace,
-                        unbounded: false,
-                        options,
-                        query,
-                        definition,
-                    },
-                },
-            )))
+        Statement::CreateTable(_create_table) => {
+            // This should never be called, as we handle CREATE TABLE statements separately.
+            Err(SqlError::invalid("unexpected CREATE TABLE statement"))
         }
         Statement::CreateView {
             or_replace: _,
@@ -572,10 +616,19 @@ fn calc_inline_constraints_from_columns(columns: &[ast::ColumnDef]) -> Vec<ast::
 
 fn from_explain_statement(mode: spec::ExplainMode, query: ast::Query) -> SqlResult<spec::Plan> {
     let query = from_ast_query(query)?;
-    Ok(spec::Plan::Command(CommandPlan::new(
-        CommandNode::Explain {
+    Ok(spec::Plan::Command(spec::CommandPlan::new(
+        spec::CommandNode::Explain {
             mode,
             input: Box::new(query),
         },
+    )))
+}
+
+fn from_create_table_statement(
+    table: spec::ObjectName,
+    definition: spec::TableDefinition,
+) -> SqlResult<spec::Plan> {
+    Ok(spec::Plan::Command(spec::CommandPlan::new(
+        spec::CommandNode::CreateTable { table, definition },
     )))
 }

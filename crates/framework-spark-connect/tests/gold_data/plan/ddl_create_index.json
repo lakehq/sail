@@ -3,19 +3,19 @@
     {
       "input": "CREATE index IF NOT EXISTS i1 ON TABLE a.b.c USING BTREE (col1 OPTIONS ('k1'='v1'), col2 OPTIONS ('k2'='v2')) ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: (, found: a at Line: 1, Column: 40"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: index at Line: 1, Column: 8"
       }
     },
     {
       "input": "CREATE index i1 ON a.b.c (col1 OPTIONS ('k1'='v1'), col2 OPTIONS ('k2'='v2')) OPTIONS ('k3'='v3', 'k4'='v4')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: OPTIONS at Line: 1, Column: 32"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: index at Line: 1, Column: 8"
       }
     },
     {
       "input": "CREATE index i1 ON a.b.c USING BTREE (col1)",
       "output": {
-        "failure": "not implemented: SQL create index"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: index at Line: 1, Column: 8"
       }
     }
   ]

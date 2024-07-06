@@ -18,14 +18,14 @@
       "input": "CREATE DATABASE IF NOT EXISTS my-database",
       "exception": "\n[INVALID_IDENTIFIER] The identifier my-database is invalid. Please, consider quoting it with back-quotes as `my-database`.(line 1, pos 32)\n\n== SQL ==\nCREATE DATABASE IF NOT EXISTS my-database\n--------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: -"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: DATABASE at Line: 1, Column: 8"
       }
     },
     {
       "input": "CREATE FUNCTION test-func as org.test.func",
       "exception": "\n[INVALID_IDENTIFIER] The identifier test-func is invalid. Please, consider quoting it with back-quotes as `test-func`.(line 1, pos 20)\n\n== SQL ==\nCREATE FUNCTION test-func as org.test.func\n--------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: (, found: - at Line: 1, Column: 21"
+        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: FUNCTION at Line: 1, Column: 8"
       }
     },
     {

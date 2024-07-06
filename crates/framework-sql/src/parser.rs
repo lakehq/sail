@@ -1,9 +1,6 @@
 use std::any::TypeId;
 
-use sqlparser::ast::{
-    BinaryOperator, Expr, Function, FunctionArg, FunctionArgExpr, FunctionArgumentList,
-    FunctionArguments, Ident, ObjectName, SelectItem, UnaryOperator,
-};
+use sqlparser::ast;
 use sqlparser::dialect::{Dialect, GenericDialect};
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::{Parser, ParserError};
@@ -15,25 +12,25 @@ use crate::error::{SqlError, SqlResult};
 pub struct SparkDialect {}
 
 impl SparkDialect {
-    fn parse_exclamation_mark_unary(&self, parser: &mut Parser) -> Result<Expr, ParserError> {
+    fn parse_exclamation_mark_unary(&self, parser: &mut Parser) -> Result<ast::Expr, ParserError> {
         parser.expect_token(&Token::ExclamationMark)?;
         let expr = parser.parse_subexpr(Parser::UNARY_NOT_PREC)?;
-        Ok(Expr::UnaryOp {
-            op: UnaryOperator::Not,
+        Ok(ast::Expr::UnaryOp {
+            op: ast::UnaryOperator::Not,
             expr: Box::new(expr),
         })
     }
 
-    fn parse_array_function(&self, parser: &mut Parser) -> Result<Expr, ParserError> {
+    fn parse_array_function(&self, parser: &mut Parser) -> Result<ast::Expr, ParserError> {
         parser.expect_keyword(Keyword::ARRAY)?;
         if parser.peek_token() == Token::LParen {
-            parser.parse_function(ObjectName(vec![Ident::new("array")]))
+            parser.parse_function(ast::ObjectName(vec![ast::Ident::new("array")]))
         } else {
-            Ok(Expr::Identifier(Ident::new("array")))
+            Ok(ast::Expr::Identifier(ast::Ident::new("array")))
         }
     }
 
-    fn parse_struct_function(&self, parser: &mut Parser) -> Result<Expr, ParserError> {
+    fn parse_struct_function(&self, parser: &mut Parser) -> Result<ast::Expr, ParserError> {
         parser.expect_keyword(Keyword::STRUCT)?;
         parser.expect_token(&Token::LParen)?;
         let args = parser
@@ -41,27 +38,29 @@ impl SparkDialect {
             .into_iter()
             .map(|x| -> Result<_, ParserError> {
                 match x {
-                    SelectItem::UnnamedExpr(expr) => {
-                        Ok(FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)))
+                    ast::SelectItem::UnnamedExpr(expr) => {
+                        Ok(ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(expr)))
                     }
-                    SelectItem::ExprWithAlias { expr, alias } => {
-                        Ok(FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Named {
+                    ast::SelectItem::ExprWithAlias { expr, alias } => Ok(
+                        ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(ast::Expr::Named {
                             name: alias,
                             expr: Box::new(expr),
-                        })))
-                    }
-                    SelectItem::QualifiedWildcard(name, _) => Ok(FunctionArg::Unnamed(
-                        FunctionArgExpr::QualifiedWildcard(name),
+                        })),
+                    ),
+                    ast::SelectItem::QualifiedWildcard(name, _) => Ok(ast::FunctionArg::Unnamed(
+                        ast::FunctionArgExpr::QualifiedWildcard(name),
                     )),
-                    SelectItem::Wildcard(_) => Ok(FunctionArg::Unnamed(FunctionArgExpr::Wildcard)),
+                    ast::SelectItem::Wildcard(_) => {
+                        Ok(ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard))
+                    }
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
         parser.expect_token(&Token::RParen)?;
-        Ok(Expr::Function(Function {
-            name: ObjectName(vec![Ident::new("struct")]),
-            parameters: FunctionArguments::None,
-            args: FunctionArguments::List(FunctionArgumentList {
+        Ok(ast::Expr::Function(ast::Function {
+            name: ast::ObjectName(vec![ast::Ident::new("struct")]),
+            parameters: ast::FunctionArguments::None,
+            args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                 duplicate_treatment: None,
                 args,
                 clauses: vec![],
@@ -107,7 +106,7 @@ impl Dialect for SparkDialect {
         true
     }
 
-    fn parse_prefix(&self, parser: &mut Parser) -> Option<Result<Expr, ParserError>> {
+    fn parse_prefix(&self, parser: &mut Parser) -> Option<Result<ast::Expr, ParserError>> {
         match parser.peek_token().token {
             Token::ExclamationMark => Some(self.parse_exclamation_mark_unary(parser)),
             Token::Word(w) if w.keyword == Keyword::ARRAY => {
@@ -123,13 +122,13 @@ impl Dialect for SparkDialect {
     fn parse_infix(
         &self,
         parser: &mut Parser,
-        expr: &Expr,
+        expr: &ast::Expr,
         _precedence: u8,
-    ) -> Option<Result<Expr, ParserError>> {
+    ) -> Option<Result<ast::Expr, ParserError>> {
         if parser.parse_keyword(Keyword::DIV) {
-            return Some(Ok(Expr::BinaryOp {
+            return Some(Ok(ast::Expr::BinaryOp {
                 left: Box::new(expr.clone()),
-                op: BinaryOperator::MyIntegerDivide,
+                op: ast::BinaryOperator::MyIntegerDivide,
                 right: Box::new(parser.parse_expr().unwrap()),
             }));
         }
