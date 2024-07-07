@@ -310,7 +310,7 @@ impl CatalogCommand {
                 definition,
             } => {
                 let value = manager
-                    .create_table(
+                    .create_table(CatalogCommand::CreateTable {
                         table,
                         schema,
                         comment,
@@ -325,7 +325,7 @@ impl CatalogCommand {
                         unbounded,
                         options,
                         definition,
-                    )
+                    })
                     .await
                     .is_ok();
                 let rows = vec![SingleValueMetadata { value }];

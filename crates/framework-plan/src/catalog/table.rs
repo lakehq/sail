@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::catalog::utils::match_pattern;
 use crate::catalog::CatalogManager;
+use crate::extension::logical::CatalogCommand;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TableTypeName {
@@ -122,23 +123,31 @@ impl<'a> CatalogManager<'a> {
         Ok(())
     }
 
-    pub(crate) async fn create_table(
-        &self,
-        table: TableReference,
-        schema: DFSchemaRef,
-        _comment: Option<String>,
-        column_defaults: Vec<(String, Expr)>,
-        constraints: Constraints,
-        location: String,
-        file_format: String,
-        table_partition_cols: Vec<String>,
-        file_sort_order: Vec<Vec<Expr>>,
-        if_not_exists: bool,
-        _or_replace: bool,
-        unbounded: bool,
-        options: Vec<(String, String)>,
-        definition: Option<String>,
-    ) -> Result<()> {
+    pub(crate) async fn create_table(&self, create_table: CatalogCommand) -> Result<()> {
+        if !matches!(create_table, CatalogCommand::CreateTable { .. }) {
+            return exec_err!("Expected CatalogCommand::CreateTable");
+        }
+
+        let CatalogCommand::CreateTable {
+            table,
+            schema,
+            comment: _, // TODO: support comment
+            column_defaults,
+            constraints,
+            location,
+            file_format,
+            table_partition_cols,
+            file_sort_order,
+            if_not_exists,
+            or_replace: _, // TODO: support or_replace
+            unbounded,
+            options,
+            definition,
+        } = create_table
+        else {
+            unreachable!()
+        };
+
         let ddl = LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
             schema,
             name: table,

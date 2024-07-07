@@ -1527,10 +1527,8 @@ impl PlanResolver<'_> {
             // TODO: Use default file_format config
             "PARQUET".to_string()
         };
-        let table_partition_cols: Vec<String> = table_partition_cols
-            .into_iter()
-            .map(|col| String::from(col))
-            .collect();
+        let table_partition_cols: Vec<String> =
+            table_partition_cols.into_iter().map(String::from).collect();
         let file_sort_order: Vec<Vec<Expr>> = file_sort_order
             .into_iter()
             .map(|order| {
