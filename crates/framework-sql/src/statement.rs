@@ -8,7 +8,7 @@ use sqlparser::tokenizer::Token;
 
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{from_ast_expression, from_ast_object_name};
-use crate::parse::{parse_comment, parse_option_value, parse_value_options};
+use crate::parse::{maybe_parse_comment, parse_option_value, parse_value_options};
 use crate::parser::{fail_on_extra_token, SparkDialect};
 use crate::query::from_ast_query;
 use crate::utils::{build_column_defaults, build_schema_from_columns};
@@ -92,24 +92,46 @@ fn parse_explain_statement(parser: &mut Parser) -> SqlResult<Statement> {
     Ok(Statement::Explain { mode, query })
 }
 
+pub fn is_create_table_statement(parser: &mut Parser) -> bool {
+    // CREATE TABLE
+    // CREATE OR REPLACE TABLE
+    // CREATE EXTERNAL TABLE
+    // CREATE OR REPLACE EXTERNAL TABLE
+    // CREATE UNBOUNDED EXTERNAL TABLE
+    // CREATE OR REPLACE UNBOUNDED EXTERNAL TABLE
+    let tokens = parser.peek_tokens_with_location::<6>();
+    if !matches!(&tokens[0].token, Token::Word(w) if w.keyword == Keyword::CREATE) {
+        return false;
+    }
+    for token in tokens.iter().skip(1) {
+        if matches!(&token.token, Token::Word(w) if w.keyword == Keyword::TABLE) {
+            return true;
+        }
+    }
+    false
+}
+
 // Spark Syntax reference:
 //  https://docs.databricks.com/en/sql/language-manual/sql-ref-syntax-ddl-create-table.html
 //  https://spark.apache.org/docs/latest/sql-ref-syntax-ddl-create-table.html
 fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement> {
+    if !is_create_table_statement(parser) {
+        parser.expect_keyword(Keyword::CREATE)?;
+        return Ok(Statement::Standard(parser.parse_create()?));
+    }
+
     parser.expect_keyword(Keyword::CREATE)?;
     let or_replace: bool = parser.parse_keywords(&[Keyword::OR, Keyword::REPLACE]);
-    let mut unbounded = false;
-    // FIXME: Spark does not have an "Unbounded" keyword,
-    //  so we will need to figure out how to detect if a table is unbounded.
-    //  See: https://spark.apache.org/docs/latest/structured-streaming-programming-guide.html
-    if parser.parse_keyword(Keyword::UNBOUNDED) {
-        unbounded = true;
+    let unbounded = if parser.parse_keyword(Keyword::UNBOUNDED) {
         parser.expect_keyword(Keyword::EXTERNAL)?;
-    } else if !parser.parse_keyword(Keyword::EXTERNAL)
-        && !matches!(parser.peek_token().token, Token::Word(w) if w.keyword == Keyword::TABLE)
-    {
-        return Ok(Statement::Standard(parser.parse_statement()?));
-    }
+        true
+    } else {
+        let _ = parser.parse_keyword(Keyword::EXTERNAL);
+        false
+        // FIXME: Spark does not have an "Unbounded" keyword,
+        //  so we will need to figure out how to detect if a table is unbounded.
+        //  See: https://spark.apache.org/docs/latest/structured-streaming-programming-guide.html
+    };
     parser.expect_keyword(Keyword::TABLE)?;
 
     let if_not_exists: bool = parser.parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
@@ -128,12 +150,12 @@ fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement> {
     //      Ref: https://docs.databricks.com/en/sql/language-manual/sql-ref-syntax-ddl-create-table-using.html
     //      Ref: https://docs.databricks.com/en/sql/language-manual/sql-ref-syntax-ddl-create-table-hiveformat.html
     let mut options: HashMap<String, String> = parse_value_options(parser)?;
-    let mut comment: Option<String> = parse_comment(parser)?;
+    let mut comment: Option<String> = maybe_parse_comment(parser)?;
     let hive_distribution: ast::HiveDistributionStyle = parser.parse_hive_distribution()?;
     let hive_formats: ast::HiveFormat = parser.parse_hive_formats()?;
     if comment.is_none() {
         // Comment can be in two different locations depending on the Spark SQL format used.
-        comment = parse_comment(parser)?;
+        comment = maybe_parse_comment(parser)?;
     }
     let table_properties: Vec<ast::SqlOption> = parser.parse_options(Keyword::TBLPROPERTIES)?;
     let query: Option<Box<ast::Query>> = if parser.parse_keyword(Keyword::AS) {

@@ -99,3 +99,12 @@ pub fn parse_comment(parser: &mut Parser) -> SqlResult<Option<String>> {
         ))),
     }
 }
+
+pub fn maybe_parse_comment(parser: &mut Parser) -> SqlResult<Option<String>> {
+    if let Token::Word(word) = parser.peek_token().token {
+        if word.keyword == Keyword::COMMENT {
+            return parse_comment(parser);
+        }
+    };
+    Ok(None)
+}
