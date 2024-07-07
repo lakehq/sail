@@ -734,6 +734,7 @@ pub struct StorageLevel {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum TableConstraint {
     Unique {
         name: Option<Identifier>,

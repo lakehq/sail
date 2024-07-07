@@ -8,7 +8,7 @@ use sqlparser::tokenizer::Token;
 
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{from_ast_expression, from_ast_object_name};
-use crate::parse::{maybe_parse_comment, parse_option_value, parse_value_options};
+use crate::parse::{parse_comment, parse_file_format, parse_value_options};
 use crate::parser::{fail_on_extra_token, SparkDialect};
 use crate::query::from_ast_query;
 use crate::utils::{build_column_defaults, build_schema_from_columns};
@@ -141,65 +141,118 @@ fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement> {
     }
     let (columns, mut constraints): (Vec<ast::ColumnDef>, Vec<ast::TableConstraint>) =
         parser.parse_columns()?;
+
     let mut file_format: Option<String> = None;
+    let mut comment: Option<String> = None;
+    let mut options: HashMap<String, String> = HashMap::new();
+    let mut table_partition_cols: Vec<spec::Identifier> = vec![];
+    let mut location: Option<String> = None;
+    let mut table_properties: Vec<ast::SqlOption> = vec![];
+
     if parser.parse_keyword(Keyword::USING) {
-        file_format = Some(parse_option_value(parser)?);
+        file_format = Some(parse_file_format(parser)?);
     }
-    // FIXME: Function to loop and do parse_one_of_keywords for all table clauses + hive format
-    //  so that there is not order dependency.
-    //      Ref: https://docs.databricks.com/en/sql/language-manual/sql-ref-syntax-ddl-create-table-using.html
-    //      Ref: https://docs.databricks.com/en/sql/language-manual/sql-ref-syntax-ddl-create-table-hiveformat.html
-    let mut options: HashMap<String, String> = parse_value_options(parser)?;
-    let mut comment: Option<String> = maybe_parse_comment(parser)?;
-    let hive_distribution: ast::HiveDistributionStyle = parser.parse_hive_distribution()?;
-    let hive_formats: ast::HiveFormat = parser.parse_hive_formats()?;
-    if comment.is_none() {
-        // Comment can be in two different locations depending on the Spark SQL format used.
-        comment = maybe_parse_comment(parser)?;
+
+    while let Some(keyword) = parser.parse_one_of_keywords(&[
+        Keyword::ROW,
+        Keyword::STORED,
+        Keyword::LOCATION,
+        Keyword::WITH,
+        Keyword::PARTITIONED,
+        Keyword::OPTIONS,
+        Keyword::COMMENT,
+        Keyword::TBLPROPERTIES,
+    ]) {
+        match keyword {
+            Keyword::ROW => {
+                parser.expect_keyword(Keyword::FORMAT)?;
+                return Err(SqlError::todo("ROW FORMAT in CREATE TABLE statement"));
+            }
+            Keyword::STORED => {
+                parser.expect_keyword(Keyword::AS)?;
+                if file_format.is_some() {
+                    return Err(SqlError::invalid(
+                        "Multiple file formats in CREATE TABLE statement",
+                    ));
+                }
+                if parser.parse_keyword(Keyword::INPUTFORMAT) {
+                    let input_format: ast::Expr = parser.parse_expr()?;
+                    parser.expect_keyword(Keyword::OUTPUTFORMAT)?;
+                    let output_format: ast::Expr = parser.parse_expr()?;
+                    return Err(SqlError::todo(format!("STORED AS INPUTFORMAT: {input_format} OUTPUTFORMAT: {output_format} in CREATE TABLE statement")));
+                }
+                file_format = Some(parse_file_format(parser)?);
+            }
+            Keyword::LOCATION => {
+                if location.is_some() {
+                    return Err(SqlError::invalid(
+                        "Multiple locations in CREATE TABLE statement",
+                    ));
+                }
+                location = Some(parser.parse_literal_string()?);
+            }
+            Keyword::WITH => {
+                parser.prev_token();
+                let properties: Vec<ast::SqlOption> = parser
+                    .parse_options_with_keywords(&[Keyword::WITH, Keyword::SERDEPROPERTIES])?;
+                if !properties.is_empty() {
+                    return Err(SqlError::todo(
+                        "WITH SERDEPROPERTIES in CREATE TABLE statement",
+                    ));
+                }
+            }
+            Keyword::PARTITIONED => {
+                parser.expect_keyword(Keyword::BY)?;
+                if !table_partition_cols.is_empty() {
+                    return Err(SqlError::invalid(
+                        "Multiple PARTITIONED BY clauses in CREATE TABLE statement",
+                    ));
+                }
+                parser.expect_token(&Token::LParen)?;
+                table_partition_cols = parser
+                    .parse_comma_separated(Parser::parse_column_def)?
+                    .iter()
+                    .map(|x| spec::Identifier::from(x.name.to_string()))
+                    .collect();
+                parser.expect_token(&Token::RParen)?;
+            }
+            Keyword::OPTIONS => {
+                if !options.is_empty() {
+                    return Err(SqlError::invalid(
+                        "Multiple OPTIONS clauses in CREATE TABLE statement",
+                    ));
+                }
+                options = parse_value_options(parser)?;
+            }
+            Keyword::COMMENT => {
+                if comment.is_some() {
+                    return Err(SqlError::invalid(
+                        "Multiple comments in CREATE TABLE statement",
+                    ));
+                }
+                comment = parse_comment(parser)?;
+            }
+            Keyword::TBLPROPERTIES => {
+                if !table_properties.is_empty() {
+                    return Err(SqlError::invalid(
+                        "Multiple TBLPROPERTIES clauses in CREATE TABLE statement",
+                    ));
+                }
+                parser.expect_token(&Token::LParen)?;
+                table_properties = parser.parse_comma_separated(Parser::parse_sql_option)?;
+                parser.expect_token(&Token::RParen)?;
+            }
+            _ => {
+                unreachable!()
+            }
+        }
     }
-    let table_properties: Vec<ast::SqlOption> = parser.parse_options(Keyword::TBLPROPERTIES)?;
+
     let query: Option<Box<ast::Query>> = if parser.parse_keyword(Keyword::AS) {
         Some(parser.parse_boxed_query()?)
     } else {
         None
     };
-
-    let table_partition_cols: Vec<spec::Identifier> = match hive_distribution {
-        ast::HiveDistributionStyle::PARTITIONED { columns } => columns
-            .iter()
-            .map(|x| spec::Identifier::from(x.name.to_string()))
-            .collect(),
-        ast::HiveDistributionStyle::CLUSTERED { .. } => {
-            return Err(SqlError::todo("CLUSTERED BY in CREATE TABLE statement"))
-        }
-        ast::HiveDistributionStyle::SKEWED { .. } => {
-            return Err(SqlError::unsupported("SKEWED BY in CREATE TABLE statement"))
-        }
-        ast::HiveDistributionStyle::NONE { .. } => vec![],
-    };
-
-    let location: Option<String> = hive_formats.location;
-    if let Some(ff) = &hive_formats.storage {
-        if let ast::HiveIOFormat::FileFormat { format } = ff {
-            if file_format.is_some() {
-                return Err(SqlError::invalid(
-                    "Multiple file formats in CREATE TABLE statement",
-                ));
-            }
-            file_format = Some(format.to_string());
-        }
-        if let ast::HiveIOFormat::IOF { .. } = ff {
-            return Err(SqlError::todo(
-                "INPUTFORMAT and OUTPUTFORMAT file format in CREATE TABLE statement",
-            ));
-        }
-    }
-    if hive_formats.row_format.is_some() {
-        return Err(SqlError::todo("ROW FORMAT in CREATE TABLE statement"));
-    }
-    if hive_formats.serde_properties.is_some() {
-        return Err(SqlError::todo("SERDEPROPERTIES in CREATE TABLE statement"));
-    }
 
     options.extend(from_ast_sql_options(table_properties)?);
     constraints.extend(calc_inline_constraints_from_columns(&columns));

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use sqlparser::ast;
-use sqlparser::keywords::Keyword;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::{Token, Word};
 
@@ -64,9 +63,6 @@ pub fn parse_option_value(parser: &mut Parser) -> SqlResult<String> {
 /// [Credit]: <https://github.com/apache/datafusion/blob/13cb65e44136711befb87dd75fb8b41f814af16f/datafusion/sql/src/parser.rs#L849>
 pub fn parse_value_options(parser: &mut Parser) -> SqlResult<HashMap<String, String>> {
     let mut options = HashMap::new();
-    if !parser.parse_keyword(Keyword::OPTIONS) {
-        return Ok(options);
-    }
     parser.expect_token(&Token::LParen)?;
     loop {
         let key = parse_option_key(parser)?;
@@ -87,9 +83,6 @@ pub fn parse_value_options(parser: &mut Parser) -> SqlResult<HashMap<String, Str
 }
 
 pub fn parse_comment(parser: &mut Parser) -> SqlResult<Option<String>> {
-    if !parser.parse_keyword(Keyword::COMMENT) {
-        return Ok(None);
-    }
     let _ = parser.consume_token(&Token::Eq);
     let next_token = parser.next_token();
     match next_token.token {
@@ -100,11 +93,12 @@ pub fn parse_comment(parser: &mut Parser) -> SqlResult<Option<String>> {
     }
 }
 
-pub fn maybe_parse_comment(parser: &mut Parser) -> SqlResult<Option<String>> {
-    if let Token::Word(word) = parser.peek_token().token {
-        if word.keyword == Keyword::COMMENT {
-            return parse_comment(parser);
-        }
-    };
-    Ok(None)
+pub fn parse_file_format(parser: &mut Parser) -> SqlResult<String> {
+    let token = parser.next_token();
+    match &token.token {
+        Token::Word(w) => Ok(w.value.to_uppercase()),
+        _ => Err(SqlError::invalid(format!(
+            "Expected file format as one of ARROW, PARQUET, AVRO, CSV, etc, found: {token}"
+        ))),
+    }
 }
