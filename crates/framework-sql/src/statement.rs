@@ -11,7 +11,7 @@ use crate::expression::{from_ast_expression, from_ast_object_name};
 use crate::parse::{parse_comment, parse_file_format, parse_value_options};
 use crate::parser::{fail_on_extra_token, SparkDialect};
 use crate::query::from_ast_query;
-use crate::utils::{build_column_defaults, build_schema_from_columns};
+use crate::utils::{build_column_defaults, build_schema_from_columns, normalize_ident};
 
 enum Statement {
     Standard(ast::Statement),
@@ -212,7 +212,7 @@ fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement> {
                 table_partition_cols = parser
                     .parse_comma_separated(Parser::parse_column_def)?
                     .iter()
-                    .map(|x| spec::Identifier::from(x.name.to_string()))
+                    .map(|x| spec::Identifier::from(normalize_ident(x.name.clone()).to_string()))
                     .collect();
                 parser.expect_token(&Token::RParen)?;
             }

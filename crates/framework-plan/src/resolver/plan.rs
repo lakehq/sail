@@ -1494,19 +1494,19 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let spec::TableDefinition {
             schema,
-            comment: _,
+            comment,
             column_defaults,
             constraints,
-            location: _,
-            file_format: _,
-            table_partition_cols: _,
-            file_sort_order: _,
+            location,
+            file_format,
+            table_partition_cols,
+            file_sort_order,
             if_not_exists,
             or_replace,
-            unbounded: _,
-            options: _,
-            query: _,
-            definition: _,
+            unbounded,
+            options,
+            query: _, // TODO: handle query
+            definition,
         } = definition;
         let fields = self.resolve_fields(schema.fields)?;
         let schema = DFSchema::from_unqualifed_fields(fields, HashMap::new())?;
@@ -1515,13 +1515,50 @@ impl PlanResolver<'_> {
             .map(|(name, expr)| Ok((name, self.resolve_expression(expr, &schema, state)?)))
             .collect::<PlanResult<Vec<(String, Expr)>>>()?;
         let constraints = self.resolve_table_constraints(constraints, &schema)?;
+        let location = if let Some(location) = location {
+            location
+        } else {
+            // TODO: Use default location config (look into spark.sql.warehouse.dir)
+            "/tmp/meow".to_string()
+        };
+        let file_format = if let Some(file_format) = file_format {
+            file_format
+        } else {
+            // TODO: Use default file_format config
+            "PARQUET".to_string()
+        };
+        let table_partition_cols: Vec<String> = table_partition_cols
+            .into_iter()
+            .map(|col| String::from(col))
+            .collect();
+        let file_sort_order: Vec<Vec<Expr>> = file_sort_order
+            .into_iter()
+            .map(|order| {
+                order
+                    .into_iter()
+                    .map(|expr| self.resolve_expression(expr, &schema, state))
+                    .collect::<PlanResult<Vec<Expr>>>()
+            })
+            .collect::<PlanResult<Vec<Vec<Expr>>>>()?;
+        let options: Vec<(String, String)> = options
+            .into_iter()
+            .map(|(k, v)| Ok((k, v)))
+            .collect::<PlanResult<Vec<(String, String)>>>()?;
         let command = CatalogCommand::CreateTable {
             table: build_table_reference(table)?,
             schema: Arc::new(schema),
+            comment,
+            column_defaults,
             constraints,
+            location,
+            file_format,
+            table_partition_cols,
+            file_sort_order,
             if_not_exists,
             or_replace,
-            column_defaults,
+            unbounded,
+            options,
+            definition,
         };
         self.resolve_catalog_command(command)
     }

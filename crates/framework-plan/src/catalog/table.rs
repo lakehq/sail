@@ -5,7 +5,9 @@ use datafusion::datasource::TableProvider;
 use datafusion_common::{
     exec_err, Constraints, DFSchema, DFSchemaRef, Result, SchemaReference, TableReference,
 };
-use datafusion_expr::{CreateMemoryTable, DdlStatement, DropTable, Expr, LogicalPlan, TableType};
+use datafusion_expr::{
+    CreateExternalTable, CreateMemoryTable, DdlStatement, DropTable, Expr, LogicalPlan, TableType,
+};
 use framework_common::unwrap_or;
 use serde::{Deserialize, Serialize};
 
@@ -114,6 +116,42 @@ impl<'a> CatalogManager<'a> {
             if_not_exists,
             or_replace,
             column_defaults,
+        }));
+        // TODO: process the output
+        _ = self.ctx.execute_logical_plan(ddl).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn create_table(
+        &self,
+        table: TableReference,
+        schema: DFSchemaRef,
+        _comment: Option<String>,
+        column_defaults: Vec<(String, Expr)>,
+        constraints: Constraints,
+        location: String,
+        file_format: String,
+        table_partition_cols: Vec<String>,
+        file_sort_order: Vec<Vec<Expr>>,
+        if_not_exists: bool,
+        _or_replace: bool,
+        unbounded: bool,
+        options: Vec<(String, String)>,
+        definition: Option<String>,
+    ) -> Result<()> {
+        let ddl = LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
+            schema,
+            name: table,
+            location,
+            file_type: file_format,
+            table_partition_cols,
+            if_not_exists,
+            definition,
+            order_exprs: file_sort_order,
+            unbounded,
+            options: options.into_iter().collect(),
+            constraints,
+            column_defaults: column_defaults.into_iter().collect(),
         }));
         // TODO: process the output
         _ = self.ctx.execute_logical_plan(ddl).await?;
