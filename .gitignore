@@ -45,6 +45,7 @@ out/
 
 # Spark
 spark-warehouse/
+artifacts/
 
 # Kubernetes
 Chart.lock
@@ -58,13 +59,16 @@ __pycache__/
 .coverage
 .pytest_cache
 .mypy_cache
+.hypothesis
 
 # Python environments
 .python-version
 .env/
 .venv/
+.venvs/
 env/
 venv/
+venvs/
 
 # Python Poetry files
 poetry.lock
