@@ -11,11 +11,12 @@ You also need the following tools when working on the project.
 
 1. The [Protocol Buffers](https://protobuf.dev/) compiler (`protoc`).
 2. [Hatch](https://hatch.pypa.io/latest/).
+3. [Maturin](https://www.maturin.rs/).
 
 On macOS, you can install these tools via Homebrew.
 
 ```bash
-brew install protobuf hatch
+brew install protobuf hatch maturin
 ```
 
 ### Building the Project
@@ -32,6 +33,28 @@ while the nightly toolchain is required for formatting the code.
 Please make sure there are no warnings in the output.
 The GitHub Actions workflow runs `cargo clippy` with the `-D warnings` option,
 so that the build will fail if there are any warnings from either the compiler or the linter.
+
+#### Building the Python Library
+
+Run the following command to build the Python library using Maturin. The command builds the package inside the default
+Hatch environment.
+
+```bash
+hatch run maturin build
+```
+
+If you want to build the Python library as an editable package for local development, run the following command.
+
+```bash
+hatch run maturin develop
+```
+
+For the editable package, the built `.so` native library is copied to the source tree. You can then use `hatch shell`
+to enter the Python environment and test the library. Any changes to the Python code will be reflected in the Python
+interpreter immediately. But if you make changes to the Rust code, you need to run the `develop` command again and
+restart the Python interpreter.
+
+#### Updating Test Gold Data
 
 If the test fails due to mismatched gold data, use the following command to update the gold data
 and commit the changes.
@@ -230,18 +253,25 @@ The issue gets more complicated when you use both command line tools and IDEs, w
 To reduce the build time, you need to make sure the Python interpreter used by PyO3 is configured in the same way
 across environments. Please consider the following items.
 
-1. The `scripts/spark-tests/run-server.sh` script internally sets the `PYO3_PYTHON` environment variable to the
-   absolute path of the Python interpreter of the project's default Hatch environment.
-2. The RustRover debugger configuration in the previous section sets the `PYO3_PYTHON` environment variable to the
+1. Please always invoke Maturin via Hatch (e.g. `hatch run maturin develop` and `hatch run maturin build`). In this way,
+   Maturin internally sets the `PYO3_PYTHON` environment variable to the absolute path of the Python interpreter of the
+   project's default Hatch environment.
+2. The `scripts/spark-tests/run-server.sh` script internally sets the `PYO3_PYTHON` environment variable to the
    same value as above.
-3. For RustRover, in "**Preferences**" > "**Rust**" > "**External Linters**", set the `PYO3_PYTHON` environment variable
+3. The RustRover debugger configuration in the previous section sets the `PYO3_PYTHON` environment variable to the
+   same value as above.
+4. For RustRover, in "**Preferences**" > "**Rust**" > "**External Linters**", set the `PYO3_PYTHON` environment variable
    to the same value as above.
-4. If you need to run Cargo commands such as `cargo build`, set the `PYO3_PYTHON` environment variable in the terminal
+5. If you need to run Cargo commands such as `cargo build`, set the `PYO3_PYTHON` environment variable in the terminal
    session to the same value as above.
    ```bash
    # Run the following command in the project root directory.
    export PYO3_PYTHON="$(hatch env find)/bin/python"
    ```
+
+If you run `hatch build`, it uses Maturin as the build system, and the build happens in an isolated Python environment.
+So the build does not interfere with the Cargo build cache in `target/`. However, it also means that a fresh build
+is performed every time, which can be slow. Therefore, it is not recommended to use `hatch build` for local development.
 
 ### Working with the Spark Patch
 

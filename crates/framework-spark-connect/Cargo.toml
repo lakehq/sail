@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 framework-common = { path = "../framework-common" }
 framework-plan = { path = "../framework-plan" }
-framework-python = { path = "../framework-python" }
+framework-python-udf = { path = "../framework-python-udf" }
 framework-sql = { path = "../framework-sql" }
 framework-telemetry = { path = "../framework-telemetry" }
 

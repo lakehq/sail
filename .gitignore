@@ -56,10 +56,15 @@ Chart.lock
 # Python build artifacts
 __pycache__/
 *.py[cod]
+*.so
+*.egg-info/
+*.egg
 .coverage
-.pytest_cache
-.mypy_cache
-.hypothesis
+.coverage.*
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
 
 # Python environments
 .python-version

@@ -11,8 +11,8 @@ requires-python = ">=3.8"
 dependencies = []
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
 
 # We use `uv` in CI for faster package installation, but we still use `pip` for local development,
 # since the IDE may only support `pip`. Also, if we used `uv` for local development, the `pip` command
@@ -70,3 +70,9 @@ packages = ["python/framework"]
 
 [tool.pytest.ini_options]
 testpaths = ["python"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "framework._native"
+manifest-path = "crates/framework-python/Cargo.toml"
+features = ["pyo3/extension-module"]

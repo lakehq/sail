@@ -4,18 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-framework-common = { path = "../framework-common" }
-
-thiserror = { workspace = true }
-datafusion = { workspace = true }
-datafusion-common = { workspace = true }
-datafusion-expr = { workspace = true }
-datafusion-functions-array = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-serde_bytes = { workspace = true }
 pyo3 = { workspace = true }
-arrow = { workspace = true }
-arrow-cast = { workspace = true }
-sqlparser = { workspace = true }
-async-trait = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
+framework-common = { path = "../framework-common" }
+framework-spark-connect = { path = "../framework-spark-connect" }
+
+[lib]
+crate-type = ["cdylib"]

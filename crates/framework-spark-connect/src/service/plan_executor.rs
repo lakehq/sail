@@ -17,8 +17,8 @@ use framework_common::spec::{
 use framework_common::utils::rename_logical_plan;
 use framework_plan::resolver::plan::NamedPlan;
 use framework_plan::resolver::PlanResolver;
-use framework_python::udf::pyspark_udtf::PySparkUDTF;
-use framework_python::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
+use framework_python_udf::udf::pyspark_udtf::PySparkUDTF;
+use framework_python_udf::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;

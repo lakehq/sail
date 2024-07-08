@@ -8,11 +8,11 @@ use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion_common::{plan_datafusion_err, plan_err, Column, DataFusionError};
 use datafusion_expr::{expr, window_frame, ExprSchemable, ScalarUDF};
 use framework_common::spec;
-use framework_python::cereal::partial_pyspark_udf::{
+use framework_python_udf::cereal::partial_pyspark_udf::{
     deserialize_partial_pyspark_udf, PartialPySparkUDF,
 };
-use framework_python::udf::pyspark_udf::PySparkUDF;
-use framework_python::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
+use framework_python_udf::udf::pyspark_udf::PySparkUDF;
+use framework_python_udf::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::{
@@ -643,10 +643,10 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         // TODO: Function arg for if pyspark_udf or not.
-        use framework_python::cereal::partial_pyspark_udf::{
+        use framework_python_udf::cereal::partial_pyspark_udf::{
             deserialize_partial_pyspark_udf, PartialPySparkUDF,
         };
-        use framework_python::udf::pyspark_udf::PySparkUDF;
+        use framework_python_udf::udf::pyspark_udf::PySparkUDF;
 
         let spec::CommonInlineUserDefinedFunction {
             function_name,

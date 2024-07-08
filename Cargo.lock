@@ -1176,6 +1176,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "glob",
+ "pyo3",
  "serde",
  "serde_json",
  "thiserror",
@@ -1197,7 +1198,7 @@ dependencies = [
  "datafusion-functions-array",
  "either",
  "framework-common",
- "framework-python",
+ "framework-python-udf",
  "framework-sql",
  "futures",
  "html-escape",
@@ -1214,6 +1215,17 @@ dependencies = [
 
 [[package]]
 name = "framework-python"
+version = "0.1.0"
+dependencies = [
+ "framework-common",
+ "framework-spark-connect",
+ "futures",
+ "pyo3",
+ "tokio",
+]
+
+[[package]]
+name = "framework-python-udf"
 version = "0.1.0"
 dependencies = [
  "arrow",
@@ -1248,7 +1260,7 @@ dependencies = [
  "datafusion-functions-array",
  "framework-common",
  "framework-plan",
- "framework-python",
+ "framework-python-udf",
  "framework-sql",
  "framework-telemetry",
  "glob",

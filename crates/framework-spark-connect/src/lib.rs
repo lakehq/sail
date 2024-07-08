@@ -1,4 +1,5 @@
 mod config;
+pub mod entrypoint;
 mod error;
 mod executor;
 mod proto;
