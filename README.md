@@ -240,7 +240,7 @@ across environments. Please consider the following items.
    session to the same value as above.
    ```bash
    # Run the following command in the project root directory.
-   export PYO3_PYTHON="$(hatch env find)"
+   export PYO3_PYTHON="$(hatch env find)/bin/python"
    ```
 
 ### Working with the Spark Patch
