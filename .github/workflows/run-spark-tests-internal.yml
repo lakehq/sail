@@ -68,6 +68,10 @@ jobs:
           python-version: ${{ inputs.python_version }}
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
+        name: Install Hatch
+        uses: pypa/hatch@install
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
         name: Install grpc_health_probe
         run: |
           wget -q -O /usr/local/bin/grpc_health_probe "https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.26/grpc_health_probe-linux-amd64"
