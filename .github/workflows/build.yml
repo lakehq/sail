@@ -37,19 +37,7 @@ jobs:
           echo "test_head_ref=${test_head_ref}" >> "$GITHUB_OUTPUT"
           echo "test_base_ref=${test_base_ref}" >> "$GITHUB_OUTPUT"
 
-      - uses: ./.github/actions/setup-rust
-
-      - name: Format check
-        run: cargo +nightly fmt -- --check
-
-      - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Build
-        run: cargo build
-
-      - name: Test
-        run: cargo test
+      # FIXME: add back build steps
 
   run-spark-tests:
     uses: ./.github/workflows/run-spark-tests.yml

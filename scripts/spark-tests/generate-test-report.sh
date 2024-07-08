@@ -15,6 +15,8 @@ tmp_dir="$(mktemp -d)"
 
 trap clean_up EXIT
 
+cd "${project_path}"
+
 function clean_up() {
   echo "Cleaning up temporary files..." >&2
   rm -rvf "${tmp_dir}" >&2

@@ -74,18 +74,9 @@ jobs:
           chmod +x /usr/local/bin/grpc_health_probe
           grpc_health_probe -version
 
-      - if: steps.cache-logs.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
-        name: Cache test environment
-        id: cache-env
-        with:
-          path: |
-            python/.venv
-          key: spark-tests-env-${{ runner.os }}-${{ steps.info.outputs.env_key }}-${{ hashFiles('scripts/spark-tests/**', 'python/pyproject.toml', 'python/poetry.toml') }}
-
       # Building PySpark package is slow (~40 minutes on GitHub Linux runners),
       # so we create a dedicated cache for them to increase the cache hit rate.
-      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-env.outputs.cache-hit != 'true'
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         name: Cache PySpark package
         id: cache-pyspark
@@ -95,7 +86,7 @@ jobs:
           # We must use `format()` to define the key here since nested variable substitution is not supported.
           key: ${{ format('spark-tests-package-{0}-pyspark-{1}-{2}', runner.os, inputs.spark_version, hashFiles(format('scripts/spark-tests/spark-{0}.patch', inputs.spark_version), 'scripts/spark-tests/build-pyspark.sh')) }}
 
-      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-env.outputs.cache-hit != 'true' && steps.cache-pyspark.outputs.cache-hit != 'true'
+      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-pyspark.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
         name: Checkout Spark
         with:
@@ -104,17 +95,20 @@ jobs:
           ref: v${{ inputs.spark_version }}
           fetch-depth: 1
 
-      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-env.outputs.cache-hit != 'true' && steps.cache-pyspark.outputs.cache-hit != 'true'
+      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-pyspark.outputs.cache-hit != 'true'
         name: Build PySpark package
         run: |
           scripts/spark-tests/build-pyspark.sh
 
-      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-env.outputs.cache-hit != 'true'
-        name: Set up test environment
+      # Hatch can automatically create the environments when running commands such as `hatch run`,
+      # but here we explicitly create the environments in a dedicated step.
+      # We do not cache the environments since package installation via `uv` is fast, while downloading
+      # the environments from the cache still takes time.
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        name: Set up Hatch environments
         run: |
-          pip install poetry
-          poetry -C python install
-          poetry -C python run pip install opt/spark/python/dist/pyspark-3.5.1.tar.gz
+          hatch env create
+          hatch env create test
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         uses: ./.github/actions/setup-rust
