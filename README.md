@@ -4,7 +4,19 @@
 
 ### Prerequisites
 
-Please install the protocol buffer compiler (`protoc`) and the Rust toolchain (stable and nightly).
+You need the Rust toolchain (both stable and nightly) to build the project.
+You can use [rustup](https://rustup.rs/) to manage the Rust toolchain in your local environment.
+
+You also need the following tools when working on the project.
+
+1. The [Protocol Buffers](https://protobuf.dev/) compiler (`protoc`).
+2. [Hatch](https://hatch.pypa.io/latest/).
+
+On macOS, you can install these tools via Homebrew.
+
+```bash
+brew install protobuf hatch
+```
 
 ### Building the Project
 
@@ -30,23 +42,6 @@ env FRAMEWORK_UPDATE_GOLD_DATA=1 cargo test
 
 ## Development Notes
 
-### Python Setup
-
-It is recommended to install Python via [pyenv](https://github.com/pyenv/pyenv).
-
-```bash
-# Build and install Python.
-pyenv install 3.11.9
-
-# Set the global Python version.
-# If you do not want to set the global Python version, you can use the `PYENV_VERSION` environment variable
-# or the `pyenv shell` command to set the Python version for the current terminal session.
-pyenv global 3.11.9
-
-# Install required tools for the Python version.
-pip install poetry
-```
-
 ### Java Setup
 
 Please install OpenJDK 17 on your host.
@@ -66,33 +61,56 @@ git clone git@github.com:apache/spark.git opt/spark
 ```
 
 Run the following command to build the Spark project.
-You need to make sure the Spark directory is clean, since the script internally applies a patch to the repository.
-The patch is reverted before the script exits (either successfully or with an error).
+The command creates a patched PySpark package containing Python code along with the JAR files.
+Python tests are also included in the patched package.
 
 ```bash
 scripts/spark-tests/build-pyspark.sh
 ```
 
-The command creates a PySpark package containing Python code along with the JAR files.
-Python tests are also included in the patched package.
+### Additional Notes
 
-The command takes a while to run.
-On GitHub Actions, it takes about 40 minutes on the default GitHub-hosted runners.
-Fortunately, you only need to run this command once, unless there is a change in the Spark patch file.
-The patch file is in the `scripts/spark-tests` directory.
+Here are some notes about the `build-pyspark.sh` script.
 
-### Python Virtual Environment Setup
+1. The script will fail with an error if the Spark directory is not clean. The script internally applies a patch
+   to the repository, and the patch is reverted before the script exits (either successfully or with an error).
+2. The script can work with an arbitrary Python 3 installation,
+   since the `setup.py` script in the Spark project only uses the Python standard library.
+3. The script takes a while to run.
+   On GitHub Actions, it takes about 40 minutes on the default GitHub-hosted runners.
+   Fortunately, you only need to run this script once, unless there is a change in the Spark patch file.
+   The patch file is in the `scripts/spark-tests` directory.
 
-Run the following commands to set up a Python virtual environment,
-and install the patched PySpark package created in the previous section.
+### Python Setup
 
-```bash
-poetry -C python install
-poetry -C python run pip install opt/spark/python/dist/pyspark-3.5.1.tar.gz
-```
+We use [Hatch](https://hatch.pypa.io/latest/) to manage Python environments.
+The environments are defined in the `pyproject.toml` file.
 
-When needed, you can run `poetry -C python install` again to replace the patched PySpark package
-with the official one from PyPI.
+When you run Hatch commands, environments are created in `.venvs/` in the project root directory.
+You can also run `hatch env create` to create the `default` environment explicitly, and then configure your IDE
+to use this environment (`.venvs/default`) for Python development.
+
+### Additional Notes
+
+1. Some environments depend on the patched PySpark package created in the previous section.
+   The patched PySpark package will be installed automatically during the environment creation.
+2. For this project, all Hatch environments are configured to use `pip` as the package installer for local development,
+   so pip environment variables such as `PIP_INDEX_URL` still work.
+   However, it is recommended to also set `uv` environment variables such as `UV_INDEX_URL`, since Hatch
+   uses `uv` as the package installer for internal environments (e.g. when doing static analysis
+   via `hatch fmt`.)
+3. Hatch will download prebuilt Python interpreters when the specified Python version for an environment
+   is not installed on your host. Note that the prebuilt Python interpreters only track the **minor version** of Python.
+   If downloading prebuilt Python interpreters fails (e.g. due to network issues), or if you want precise control
+   over the **patch version** of Python being used in Hatch environments, you can install Python manually so that
+   Hatch can pick up the Python installations. For example, you can use [pyenv](https://github.com/pyenv/pyenv) to
+   install multiple Python versions and run the following command in the project root directory.
+   ```bash
+   pyenv local 3.8.19 3.9.19 3.10.14 3.11.9
+   ```
+   The above command creates a `.python-version` file (ignored by Git) in the project root directory, so that multiple
+   Python versions are available on `PATH` due to the pyenv shim.
+   These Python versions are then available to Hatch for the environment creation.
 
 ### Running the Spark Connect Server
 
@@ -100,12 +118,6 @@ Use the following commands to build and run the Spark Connect server powered by 
 
 ```bash
 scripts/spark-tests/run-server.sh
-```
-
-You can run the Python examples in another terminal using the following command.
-
-```bash
-poetry -C python run python -m app
 ```
 
 ### Running Spark Tests
@@ -172,11 +184,11 @@ You can use the following commands to start a local PySpark session.
 
 ```bash
 # Run the PySpark shell using the original Java implementation.
-poetry -C python run pyspark
+hatch run pyspark
 
 # Run the PySpark shell using the Spark Connect implementation.
 # You can ignore the "sparkContext() is not implemented" error when the shell starts.
-env SPARK_REMOTE="sc://localhost:50051" poetry -C python run pyspark
+env SPARK_REMOTE="sc://localhost:50051" hatch run pyspark
 ```
 
 ### Running Spark Tests in GitHub Actions
@@ -195,13 +207,13 @@ In **Run** > **Edit Configurations**, add a new **Cargo** configuration with the
 1. Name: **Run Spark Connect server** (You can use any name you like.)
 2. Command: `run -p framework-spark-connect`
 3. Environment Variables:
-    - (required) `PYTHONPATH`: `python/.venv/lib/python<version>/site-packages` (Please replace `<version>` with the
-      actual Python version, e.g. `3.11`.)
-    - (required) `PYO3_PYTHON`: `<project>/python/.venv/bin/python` (Please replace `<project>` with the actual project
-      path. **This must be an absolute path.**)
-    - (required) `RUST_MIN_STACK`: `8388608`
-    - (optional) `RUST_BACKTRACE`: `full`
-    - (optional) `RUST_LOG`: `framework_spark_connect=debug`
+   - (required) `PYTHONPATH`: `.venvs/default/lib/python<version>/site-packages` (Please replace `<version>` with the
+     actual Python version, e.g. `3.11`.)
+   - (required) `PYO3_PYTHON`: `<project>/.venvs/default/bin/python` (Please replace `<project>` with the actual project
+     path. **This must be an absolute path.**)
+   - (required) `RUST_MIN_STACK`: `8388608`
+   - (optional) `RUST_BACKTRACE`: `full`
+   - (optional) `RUST_LOG`: `framework_spark_connect=debug`
 
 When entering environment variables, you can click on the button on the right side of the input box to open the dialog
 and add the environment variables one by one.
@@ -219,7 +231,7 @@ To reduce the build time, you need to make sure the Python interpreter used by P
 across environments. Please consider the following items.
 
 1. The `scripts/spark-tests/run-server.sh` script internally sets the `PYO3_PYTHON` environment variable to the
-   absolute path of the Python interpreter in the project virtual environment.
+   absolute path of the Python interpreter of the project's default Hatch environment.
 2. The RustRover debugger configuration in the previous section sets the `PYO3_PYTHON` environment variable to the
    same value as above.
 3. For RustRover, in "**Preferences**" > "**Rust**" > "**External Linters**", set the `PYO3_PYTHON` environment variable
@@ -228,7 +240,7 @@ across environments. Please consider the following items.
    session to the same value as above.
    ```bash
    # Run the following command in the project root directory.
-   export PYO3_PYTHON="$(git rev-parse --show-toplevel)/python/.venv/bin/python"
+   export PYO3_PYTHON="$(hatch env find)/bin/python"
    ```
 
 ### Working with the Spark Patch

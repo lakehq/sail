@@ -12,6 +12,8 @@ base_dir="$2"
 
 project_path="$(git rev-parse --show-toplevel)"
 
+cd "${project_path}"
+
 function show_commit_info() {
   local name="$1"
   local dir="$2"
