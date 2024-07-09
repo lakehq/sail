@@ -1508,6 +1508,11 @@ impl PlanResolver<'_> {
             query: _, // TODO: handle query
             definition,
         } = definition;
+        // TODO: handle query
+        //  1. Resolve query to get schema
+        //  2. (optional) if columns are specified in the definition, validate the schema
+        //  3. create external table
+        //  4. fill external table from query table (copy to)
         let fields = self.resolve_fields(schema.fields)?;
         let schema = DFSchema::from_unqualifed_fields(fields, HashMap::new())?;
         let column_defaults: Vec<(String, Expr)> = column_defaults
@@ -1519,12 +1524,15 @@ impl PlanResolver<'_> {
             location
         } else {
             // TODO: Use default location config (look into spark.sql.warehouse.dir)
+            //  Have it in the PlanConfig
             "/tmp/meow".to_string()
         };
         let file_format = if let Some(file_format) = file_format {
             file_format
         } else {
             // TODO: Use default file_format config
+            //  NOTE: if unbounded is true, the default file format should be "ARROW"
+            //  Have it in the PlanConfig
             "PARQUET".to_string()
         };
         let table_partition_cols: Vec<String> =

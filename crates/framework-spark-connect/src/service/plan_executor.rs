@@ -185,6 +185,7 @@ pub(crate) async fn handle_execute_write_operation(
     write: WriteOperation,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
+    // TODO: Move to resolver
     let relation = write.input.required("input")?;
     let ctx = session.context();
     let save_mode = SaveMode::try_from(write.mode).required("save mode")?;
