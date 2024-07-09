@@ -1,3 +1,5 @@
+"""A pytest plugin for PySpark tests.
+"""
 import os
 import shlex
 import shutil
