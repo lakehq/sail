@@ -43,13 +43,14 @@ Hatch environment.
 hatch run maturin build
 ```
 
-If you want to build the Python library as an editable package for local development, run the following command.
+If you want to build and install the Python library for local development, run the following command.
 
 ```bash
 hatch run maturin develop
 ```
 
-For the editable package, the built `.so` native library is copied to the source tree. You can then use `hatch shell`
+The command installs the source code as an editable package in the Hatch environment, while
+The built `.so` native library is stored in the source directory. You can then use `hatch shell`
 to enter the Python environment and test the library. Any changes to the Python code will be reflected in the Python
 interpreter immediately. But if you make changes to the Rust code, you need to run the `develop` command again and
 restart the Python interpreter.

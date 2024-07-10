@@ -425,7 +425,7 @@ mod tests {
         // Run the test in a separate thread with a large stack size
         // so that it can handle deeply nested expressions.
         let builder = thread::Builder::new().stack_size(96 * 1024 * 1024);
-        let handler = builder.spawn(|| {
+        let handle = builder.spawn(|| {
             test_gold_set(
                 "tests/gold_data/expression/*.json",
                 |sql: String| {
@@ -439,7 +439,7 @@ mod tests {
                 |e: String| SparkError::internal(e),
             )
         })?;
-        Ok(handler
+        Ok(handle
             .join()
             .map_err(|_| SparkError::internal("failed to join thread"))??)
     }

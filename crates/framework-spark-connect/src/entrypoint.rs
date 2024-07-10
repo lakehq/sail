@@ -1,4 +1,8 @@
+use std::future::Future;
+
+use tokio::net::TcpListener;
 use tonic::codegen::http;
+use tonic::transport::server::TcpIncoming;
 use tower::ServiceBuilder;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::{debug, Span};
@@ -6,10 +10,16 @@ use tracing::{debug, Span};
 use crate::server::SparkConnectServer;
 use crate::spark::connect::spark_connect_service_server::SparkConnectServiceServer;
 
-pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
-    // A secure connection can be handled by a gateway in production.
-    let address = "0.0.0.0:50051".parse()?;
-
+pub async fn serve<F>(
+    // We must use the TCP listener from tokio.
+    // The TCP listener from the standard library does not work with graceful shutdown.
+    // See also: https://github.com/hyperium/tonic/issues/1424
+    listener: TcpListener,
+    signal: Option<F>,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: Future<Output = ()>,
+{
     let (mut health_reporter, health_server) = tonic_health::server::health_reporter();
     health_reporter
         .set_serving::<SparkConnectServiceServer<SparkConnectServer>>()
@@ -35,13 +45,26 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into_inner();
 
-    tonic::transport::Server::builder()
+    let nodelay = true;
+    let keepalive = None;
+    let incoming = TcpIncoming::from_listener(listener, nodelay, keepalive)
+        .map_err(|e| e as Box<dyn std::error::Error>)?;
+    let server = tonic::transport::Server::builder()
+        .tcp_nodelay(nodelay)
+        .tcp_keepalive(keepalive)
         .layer(layer)
         .add_service(reflect_server)
         .add_service(health_server)
-        .add_service(SparkConnectServiceServer::new(server))
-        .serve(address)
-        .await?;
-
+        .add_service(SparkConnectServiceServer::new(server));
+    match signal {
+        None => {
+            server.serve_with_incoming(incoming).await?;
+        }
+        Some(signal) => {
+            server
+                .serve_with_incoming_shutdown(incoming, signal)
+                .await?;
+        }
+    }
     Ok(())
 }

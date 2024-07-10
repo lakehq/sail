@@ -75,4 +75,4 @@ testpaths = ["python"]
 python-source = "python"
 module-name = "framework._native"
 manifest-path = "crates/framework-python/Cargo.toml"
-features = ["pyo3/extension-module"]
+features = ["pyo3/extension-module", "pyo3/abi3-py38"]

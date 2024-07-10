@@ -1219,6 +1219,7 @@ version = "0.1.0"
 dependencies = [
  "framework-common",
  "framework-spark-connect",
+ "framework-telemetry",
  "futures",
  "pyo3",
  "tokio",
