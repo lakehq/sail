@@ -1523,17 +1523,14 @@ impl PlanResolver<'_> {
         let location = if let Some(location) = location {
             location
         } else {
-            // TODO: Use default location config (look into spark.sql.warehouse.dir)
-            //  Have it in the PlanConfig
-            "/tmp/meow".to_string()
+            self.config.default_warehouse_directory.clone()
         };
         let file_format = if let Some(file_format) = file_format {
             file_format
+        } else if unbounded {
+            self.config.default_unbounded_table_file_format.clone()
         } else {
-            // TODO: Use default file_format config
-            //  NOTE: if unbounded is true, the default file format should be "ARROW"
-            //  Have it in the PlanConfig
-            "PARQUET".to_string()
+            self.config.default_bounded_table_file_format.clone()
         };
         let table_partition_cols: Vec<String> =
             table_partition_cols.into_iter().map(String::from).collect();

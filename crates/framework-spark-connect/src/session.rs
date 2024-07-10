@@ -19,7 +19,7 @@ use crate::spark::config::{
     SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH,
     SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY,
     SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME,
-    SPARK_SQL_SESSION_TIME_ZONE,
+    SPARK_SQL_SESSION_TIME_ZONE, SPARK_SQL_SOURCES_DEFAULT, SPARK_SQL_WAREHOUSE_DIR,
 };
 
 const DEFAULT_SPARK_SCHEMA: &str = "default";
@@ -122,12 +122,26 @@ impl Session {
                     .map(|s| s.to_string()),
             },
         };
+        let default_bounded_table_file_format = state
+            .config
+            .get(SPARK_SQL_SOURCES_DEFAULT)?
+            .map(|x| x.to_string())
+            .unwrap_or_else(|| PlanConfig::default().default_bounded_table_file_format);
+        let default_warehouse_directory = state
+            .config
+            .get(SPARK_SQL_WAREHOUSE_DIR)?
+            .map(|x| x.to_string())
+            .unwrap_or_else(|| PlanConfig::default().default_warehouse_directory);
         Ok(Arc::new(PlanConfig {
             time_zone,
             // TODO: get the default timestamp type from configuration
             timestamp_type: TimestampType::TimestampLtz,
             plan_formatter: Arc::new(DefaultPlanFormatter),
             spark_udf_config,
+            default_bounded_table_file_format,
+            default_unbounded_table_file_format: PlanConfig::default()
+                .default_unbounded_table_file_format,
+            default_warehouse_directory,
         }))
     }
 
