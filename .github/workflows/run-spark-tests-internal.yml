@@ -104,27 +104,32 @@ jobs:
         run: |
           scripts/spark-tests/build-pyspark.sh
 
-      # Hatch can automatically create the environments when running commands such as `hatch run`,
-      # but here we explicitly create the environments in a dedicated step.
-      # We do not cache the environments since package installation via `uv` is fast, while downloading
-      # the environments from the cache still takes time.
-      - if: steps.cache-logs.outputs.cache-hit != 'true'
-        name: Set up Hatch environments
-        run: |
-          hatch env create
-          hatch env create test
-
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         uses: ./.github/actions/setup-rust
         name: Set up Rust
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
+        name: Build Python package
+        uses: PyO3/maturin-action@v1
+
+      # We do not cache the environments since package installation via `uv` is fast, while downloading
+      # the environments from the cache still takes time.
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
+        name: Set up Hatch environments
+        run: |
+          hatch env create test
+          hatch run test:install-pyspark
+          hatch run test:bash -c '{env:HATCH_UV} pip install framework --no-index -f target/wheels --force-reinstall'
+
+      - if: steps.cache-logs.outputs.cache-hit != 'true'
         name: Run Spark Connect server
-        run: scripts/spark-tests/run-server.sh
+        run: |
+          nohup hatch run test:python -m framework.spark.server > /dev/null 2>&1 < /dev/null &
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         name: Wait for Spark Connect server to start
-        run: scripts/spark-tests/wait-for-server.sh
+        run: |
+          scripts/spark-tests/wait-for-server.sh
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         name: Run Spark tests

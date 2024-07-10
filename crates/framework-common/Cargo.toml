@@ -13,3 +13,4 @@ datafusion-expr = { workspace = true }
 arrow = { workspace = true }
 arrow-cast = { workspace = true }
 glob = { workspace = true }
+pyo3 = { workspace = true }

@@ -1353,7 +1353,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         // TODO: Function arg for if pyspark_udtf or not
-        use framework_python::udf::pyspark_udtf::PySparkUDTF;
+        use framework_python_udf::udf::pyspark_udtf::PySparkUDTF;
 
         let spec::CommonInlineUserDefinedTableFunction {
             function_name,

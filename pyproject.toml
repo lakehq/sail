@@ -11,8 +11,12 @@ requires-python = ">=3.8"
 dependencies = []
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+# All Hatch environments are configured to be "detached",
+# otherwise Hatch triggers a fresh build to install the project, which can be slow.
+# To install the project as an editable package, run `hatch run [<env>:]maturin develop` instead.
 
 # We use `uv` in CI for faster package installation, but we still use `pip` for local development,
 # since the IDE may only support `pip`. Also, if we used `uv` for local development, the `pip` command
@@ -21,6 +25,7 @@ build-backend = "hatchling.build"
 # to the global Python installation.
 
 [tool.hatch.envs.default]
+detached = true
 path = ".venvs/default"
 python = "3.11"
 installer = "pip"
@@ -33,6 +38,7 @@ dependencies = [
 env.CI.installer = "uv"
 
 [tool.hatch.envs.test]
+detached = true
 path = ".venvs/test"
 python = "3.11"
 installer = "pip"
@@ -55,8 +61,13 @@ dependencies = [
     "pytest-timeout~=2.3.1",
     "pytest-reportlog~=0.4.0",
 ]
-post-install-commands = [
+
+[tool.hatch.envs.test.scripts]
+install-pyspark = [
     "{env:HATCH_UV} pip install opt/spark/python/dist/pyspark-3.5.1.tar.gz",
+    # https://issues.apache.org/jira/browse/SPARK-45201
+    # FIXME: handle this when building the PySpark package
+    "bash -c 'rm .venvs/test/lib/python*/site-packages/pyspark/jars/spark-connect-common_*.jar'",
 ]
 
 [tool.hatch.envs.test.overrides]
@@ -70,3 +81,9 @@ packages = ["python/framework"]
 
 [tool.pytest.ini_options]
 testpaths = ["python"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "framework._native"
+manifest-path = "crates/framework-python/Cargo.toml"
+features = ["pyo3/extension-module", "pyo3/abi3-py38"]
