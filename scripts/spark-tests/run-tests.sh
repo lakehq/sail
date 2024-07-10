@@ -61,7 +61,7 @@ pytest_args=("$@")
 if [ "${#pytest_args[@]}" -ne 0 ]; then
   run_pytest "test" "${pytest_args[@]}"
 else
-  pytest_args=("--tb=no" "-rN")
+  # pytest_args=("--tb=no" "-rN")
   run_pytest "test-connect" "--pyargs" "pyspark.sql.tests.connect" "${pytest_args[@]}"
   run_pytest "doctest-column" "--doctest-modules" "--pyargs" "pyspark.sql.column" "${pytest_args[@]}"
   run_pytest "doctest-dataframe" "--doctest-modules" "--pyargs" "pyspark.sql.dataframe" "${pytest_args[@]}"
