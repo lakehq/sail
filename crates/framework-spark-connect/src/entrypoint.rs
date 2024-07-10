@@ -56,6 +56,7 @@ where
         .add_service(reflect_server)
         .add_service(health_server)
         .add_service(SparkConnectServiceServer::new(server));
+
     match signal {
         None => {
             server.serve_with_incoming(incoming).await?;
@@ -66,5 +67,6 @@ where
                 .await?;
         }
     }
+
     Ok(())
 }

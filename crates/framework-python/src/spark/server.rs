@@ -27,6 +27,10 @@ struct SparkConnectServerState {
 }
 
 impl SparkConnectServerState {
+    /// Waits for the server to stop. If `shutdown` is `true`, sends a shutdown signal to the server
+    /// before waiting.
+    /// This method should be called within [Python::allow_threads]. Otherwise, the GIL is not
+    /// released, and Python UDFs will be blocked when the server handles client requests.
     fn wait(self, shutdown: bool) -> PyResult<()> {
         if shutdown {
             self.shutdown.send(()).map_err(|e| {
@@ -96,7 +100,9 @@ impl SparkConnectServer {
         })?;
         let address = SocketAddr::new(ip, self.port);
         let listener = self.runtime.block_on(TcpListener::bind(address))?;
-        self.state = Some(self.run(listener)?);
+        // TODO: configure Python logging to work with OpenTelemetry
+        let with_telemetry = !background;
+        self.state = Some(self.run(listener, with_telemetry)?);
         if !background {
             let state = self.state()?;
             py.allow_threads(move || state.wait(false))?;
@@ -132,11 +138,14 @@ impl SparkConnectServer {
         runtime: Arc<Runtime>,
         listener: TcpListener,
         rx: Receiver<()>,
+        with_telemetry: bool,
     ) -> PyResult<()> {
         runtime
             .block_on(async {
-                // FIXME: This affects the global telemetry configuration.
-                init_telemetry()?;
+                if with_telemetry {
+                    // FIXME: This affects the global telemetry configuration.
+                    init_telemetry()?;
+                }
                 serve(listener, Some(Self::shutdown(rx))).await
             })
             .map_err(|e| {
@@ -148,14 +157,18 @@ impl SparkConnectServer {
         Ok(())
     }
 
-    fn run(&self, listener: TcpListener) -> PyResult<SparkConnectServerState> {
+    fn run(
+        &self,
+        listener: TcpListener,
+        with_telemetry: bool,
+    ) -> PyResult<SparkConnectServerState> {
         // Get the actual listener address.
         // A port is assigned by the OS if the port is 0 when creating the listener.
         let address = listener.local_addr()?;
         let (tx, rx) = tokio::sync::oneshot::channel();
         let runtime = Arc::clone(&self.runtime);
-        let handle =
-            thread::Builder::new().spawn(move || Self::run_blocking(runtime, listener, rx))?;
+        let handle = thread::Builder::new()
+            .spawn(move || Self::run_blocking(runtime, listener, rx, with_telemetry))?;
         Ok(SparkConnectServerState {
             address,
             handle,

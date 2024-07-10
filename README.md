@@ -51,9 +51,8 @@ hatch run maturin develop
 
 The command installs the source code as an editable package in the Hatch environment, while
 The built `.so` native library is stored in the source directory. You can then use `hatch shell`
-to enter the Python environment and test the library. Any changes to the Python code will be reflected in the Python
-interpreter immediately. But if you make changes to the Rust code, you need to run the `develop` command again and
-restart the Python interpreter.
+to enter the Python environment and test the library. Any changes to the Python code will be reflected in the
+environment immediately. But if you make changes to the Rust code, you need to run the `develop` command again.
 
 #### Updating Test Gold Data
 
@@ -146,8 +145,8 @@ scripts/spark-tests/run-server.sh
 
 ### Running Spark Tests
 
-Before running Spark tests, please set up the `test` Hatch environment using the following commands.
-Note that you do not need to run `maturin develop` in the `test` environment after you make code changes.
+Before running Spark tests, please create the `test` Hatch environment using the following commands.
+Note that you do *not* need to run `maturin develop` in the `test` environment again after you make code changes.
 We only use the pytest plugins (pure Python code) from the project, which do not need to be rebuilt by Maturin.
 
 ```bash
