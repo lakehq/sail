@@ -30,13 +30,16 @@ export PYARROW_IGNORE_TIMEZONE="1"
 export SPARK_TESTING_REMOTE_PORT="${SPARK_TESTING_REMOTE_PORT-50051}"
 export SPARK_LOCAL_IP="${SPARK_LOCAL_IP-127.0.0.1}"
 
+# Use the environment directly to avoid the overhead of `hatch run`.
+source "$(env NO_COLOR="1" hatch env find test)/bin/activate"
+
 function run_pytest() {
   name="$1"
   args=("${@:2}")
 
   echo "Test suite: ${name}"
   # We ignore the pytext exit code so that the command can complete successfully.
-  hatch run test:pytest \
+  pytest \
     -p framework.testing.spark \
     -o "doctest_optionflags=ELLIPSIS NORMALIZE_WHITESPACE" \
     --basetemp="${pytest_tmp_dir}" \
