@@ -152,6 +152,7 @@ We only use the pytest plugins (pure Python code) from the project, which do not
 
 ```bash
 hatch env create test
+hatch run test:install-pyspark
 hatch run test:maturin develop
 ```
 

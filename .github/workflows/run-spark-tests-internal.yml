@@ -118,6 +118,7 @@ jobs:
         name: Set up Hatch environments
         run: |
           hatch env create test
+          hatch run test:install-pyspark
           hatch run test:bash -c '{env:HATCH_UV} pip install framework --no-index -f target/wheels --force-reinstall'
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
