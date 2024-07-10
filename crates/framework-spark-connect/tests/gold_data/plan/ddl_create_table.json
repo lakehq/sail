@@ -24,8 +24,8 @@
               "orReplace": false,
               "unbounded": false,
               "options": {
-                "p2": "v2",
-                "p1": "v1"
+                "p1": "v1",
+                "p2": "v2"
               },
               "query": {
                 "project": {
@@ -85,8 +85,8 @@
               "orReplace": false,
               "unbounded": false,
               "options": {
-                "p2": "v2",
-                "p1": "v1"
+                "p1": "v1",
+                "p2": "v2"
               },
               "query": {
                 "project": {

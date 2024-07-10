@@ -140,7 +140,7 @@ impl Session {
             spark_udf_config,
             default_bounded_table_file_format,
             default_warehouse_directory,
-            ..PlanConfig::default(),
+            ..PlanConfig::default()
         }))
     }
 

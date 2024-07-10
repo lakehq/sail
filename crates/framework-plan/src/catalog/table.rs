@@ -124,11 +124,7 @@ impl<'a> CatalogManager<'a> {
     }
 
     pub(crate) async fn create_table(&self, create_table: CatalogCommand) -> Result<()> {
-        if !matches!(create_table, CatalogCommand::CreateTable { .. }) {
-            return exec_err!("Expected CatalogCommand::CreateTable");
-        }
-
-        let CatalogCommand::CreateTable {
+        if let CatalogCommand::CreateTable {
             table,
             schema,
             comment: _, // TODO: support comment
@@ -144,27 +140,27 @@ impl<'a> CatalogManager<'a> {
             options,
             definition,
         } = create_table
-        else {
-            unreachable!()
-        };
-
-        let ddl = LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
-            schema,
-            name: table,
-            location,
-            file_type: file_format,
-            table_partition_cols,
-            if_not_exists,
-            definition,
-            order_exprs: file_sort_order,
-            unbounded,
-            options: options.into_iter().collect(),
-            constraints,
-            column_defaults: column_defaults.into_iter().collect(),
-        }));
-        // TODO: process the output
-        _ = self.ctx.execute_logical_plan(ddl).await?;
-        Ok(())
+        {
+            let ddl = LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
+                schema,
+                name: table,
+                location,
+                file_type: file_format,
+                table_partition_cols,
+                if_not_exists,
+                definition,
+                order_exprs: file_sort_order,
+                unbounded,
+                options: options.into_iter().collect(),
+                constraints,
+                column_defaults: column_defaults.into_iter().collect(),
+            }));
+            // TODO: process the output
+            _ = self.ctx.execute_logical_plan(ddl).await?;
+            Ok(())
+        } else {
+            exec_err!("Expected CatalogCommand::CreateTable")
+        }
     }
 
     pub(crate) async fn get_table(&self, table: TableReference) -> Result<Option<TableMetadata>> {
