@@ -36,6 +36,7 @@ env.CI.installer = "uv"
 path = ".venvs/test"
 python = "3.11"
 installer = "pip"
+detached = true
 dependencies = [
     "numpy~=1.15",
     "scipy~=1.14",

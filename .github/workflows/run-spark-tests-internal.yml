@@ -105,14 +105,6 @@ jobs:
           scripts/spark-tests/build-pyspark.sh
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@v4
-        name: Restore python package
-        id: restore-python-package
-        with:
-          path: target/wheels
-          key: python-package-${{ runner.os }}-${{ steps.info.outputs.commit_hash }}
-
-      - if: steps.cache-logs.outputs.cache-hit != 'true'
         uses: ./.github/actions/setup-rust
         name: Set up Rust
 

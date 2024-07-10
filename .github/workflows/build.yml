@@ -55,15 +55,6 @@ jobs:
       - name: Test
         run: cargo test
 
-      - name: Build Python package
-        uses: PyO3/maturin-action@v1
-
-      - name: Cache Python package
-        uses: actions/cache/save@v4
-        with:
-          path: target/wheels
-          key: python-package-${{ runner.os }}-${{ github.sha }}
-
   run-spark-tests:
     uses: ./.github/workflows/run-spark-tests.yml
     if: |
