@@ -14,6 +14,10 @@ dependencies = []
 requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
+# All Hatch environments are configured to be "detached",
+# otherwise Hatch triggers a fresh build to install the project, which can be slow.
+# To install the project as an editable package, run `hatch run [<env>:]maturin develop` instead.
+
 # We use `uv` in CI for faster package installation, but we still use `pip` for local development,
 # since the IDE may only support `pip`. Also, if we used `uv` for local development, the `pip` command
 # would then be associated with the global Python installation in the command line. In this case,
@@ -21,6 +25,7 @@ build-backend = "maturin"
 # to the global Python installation.
 
 [tool.hatch.envs.default]
+detached = true
 path = ".venvs/default"
 python = "3.11"
 installer = "pip"
@@ -33,6 +38,7 @@ dependencies = [
 env.CI.installer = "uv"
 
 [tool.hatch.envs.test]
+detached = true
 path = ".venvs/test"
 python = "3.11"
 installer = "pip"
@@ -61,7 +67,6 @@ post-install-commands = [
 
 [tool.hatch.envs.test.overrides]
 env.CI.installer = "uv"
-env.CI.detached = true
 
 [tool.hatch.build.targets.sdist]
 packages = ["python/framework"]

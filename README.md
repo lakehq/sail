@@ -146,6 +146,15 @@ scripts/spark-tests/run-server.sh
 
 ### Running Spark Tests
 
+Before running Spark tests, please set up the `test` Hatch environment using the following commands.
+Note that you do not need to run `maturin develop` in the `test` environment after you make code changes.
+We only use the pytest plugins (pure Python code) from the project, which do not need to be rebuilt by Maturin.
+
+```bash
+hatch env create test
+hatch run test:maturin develop
+```
+
 After running the Spark Connect server, start another terminal and use the following command to run the Spark tests.
 The test logs will be written to `tmp/spark-tests/<name>` where `<name>` is defined by
 the `TEST_RUN_NAME` environment variable whose default value is `latest`.
