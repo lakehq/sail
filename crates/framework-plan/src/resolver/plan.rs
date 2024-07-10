@@ -1494,20 +1494,25 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let spec::TableDefinition {
             schema,
-            comment: _,
+            comment,
             column_defaults,
             constraints,
-            location: _,
-            file_format: _,
-            table_partition_cols: _,
-            file_sort_order: _,
+            location,
+            file_format,
+            table_partition_cols,
+            file_sort_order,
             if_not_exists,
             or_replace,
-            unbounded: _,
-            options: _,
-            query: _,
-            definition: _,
+            unbounded,
+            options,
+            query: _, // TODO: handle query
+            definition,
         } = definition;
+        // TODO: handle query
+        //  1. Resolve query to get schema
+        //  2. (optional) if columns are specified in the definition, validate the schema
+        //  3. create external table
+        //  4. fill external table from query table (copy to)
         let fields = self.resolve_fields(schema.fields)?;
         let schema = DFSchema::from_unqualifed_fields(fields, HashMap::new())?;
         let column_defaults: Vec<(String, Expr)> = column_defaults
@@ -1515,13 +1520,48 @@ impl PlanResolver<'_> {
             .map(|(name, expr)| Ok((name, self.resolve_expression(expr, &schema, state)?)))
             .collect::<PlanResult<Vec<(String, Expr)>>>()?;
         let constraints = self.resolve_table_constraints(constraints, &schema)?;
+        let location = if let Some(location) = location {
+            location
+        } else {
+            self.config.default_warehouse_directory.clone()
+        };
+        let file_format = if let Some(file_format) = file_format {
+            file_format
+        } else if unbounded {
+            self.config.default_unbounded_table_file_format.clone()
+        } else {
+            self.config.default_bounded_table_file_format.clone()
+        };
+        let table_partition_cols: Vec<String> =
+            table_partition_cols.into_iter().map(String::from).collect();
+        let file_sort_order: Vec<Vec<Expr>> = file_sort_order
+            .into_iter()
+            .map(|order| {
+                order
+                    .into_iter()
+                    .map(|expr| self.resolve_expression(expr, &schema, state))
+                    .collect::<PlanResult<Vec<Expr>>>()
+            })
+            .collect::<PlanResult<Vec<Vec<Expr>>>>()?;
+        let options: Vec<(String, String)> = options
+            .into_iter()
+            .map(|(k, v)| Ok((k, v)))
+            .collect::<PlanResult<Vec<(String, String)>>>()?;
         let command = CatalogCommand::CreateTable {
             table: build_table_reference(table)?,
             schema: Arc::new(schema),
+            comment,
+            column_defaults,
             constraints,
+            location,
+            file_format,
+            table_partition_cols,
+            file_sort_order,
             if_not_exists,
             or_replace,
-            column_defaults,
+            unbounded,
+            options,
+            definition,
         };
         self.resolve_catalog_command(command)
     }

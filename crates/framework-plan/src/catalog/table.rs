@@ -5,12 +5,15 @@ use datafusion::datasource::TableProvider;
 use datafusion_common::{
     exec_err, Constraints, DFSchema, DFSchemaRef, Result, SchemaReference, TableReference,
 };
-use datafusion_expr::{CreateMemoryTable, DdlStatement, DropTable, Expr, LogicalPlan, TableType};
+use datafusion_expr::{
+    CreateExternalTable, CreateMemoryTable, DdlStatement, DropTable, Expr, LogicalPlan, TableType,
+};
 use framework_common::unwrap_or;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::utils::match_pattern;
 use crate::catalog::CatalogManager;
+use crate::extension::logical::CatalogCommand;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TableTypeName {
@@ -118,6 +121,46 @@ impl<'a> CatalogManager<'a> {
         // TODO: process the output
         _ = self.ctx.execute_logical_plan(ddl).await?;
         Ok(())
+    }
+
+    pub(crate) async fn create_table(&self, create_table: CatalogCommand) -> Result<()> {
+        if let CatalogCommand::CreateTable {
+            table,
+            schema,
+            comment: _, // TODO: support comment
+            column_defaults,
+            constraints,
+            location,
+            file_format,
+            table_partition_cols,
+            file_sort_order,
+            if_not_exists,
+            or_replace: _, // TODO: support or_replace
+            unbounded,
+            options,
+            definition,
+        } = create_table
+        {
+            let ddl = LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
+                schema,
+                name: table,
+                location,
+                file_type: file_format,
+                table_partition_cols,
+                if_not_exists,
+                definition,
+                order_exprs: file_sort_order,
+                unbounded,
+                options: options.into_iter().collect(),
+                constraints,
+                column_defaults: column_defaults.into_iter().collect(),
+            }));
+            // TODO: process the output
+            _ = self.ctx.execute_logical_plan(ddl).await?;
+            Ok(())
+        } else {
+            exec_err!("Expected CatalogCommand::CreateTable")
+        }
     }
 
     pub(crate) async fn get_table(&self, table: TableReference) -> Result<Option<TableMetadata>> {

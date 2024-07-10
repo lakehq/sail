@@ -25,6 +25,12 @@ pub struct PlanConfig<F: ?Sized = dyn PlanFormatter> {
     // TODO: Revisit how to handle spark_udf_config
     //  https://github.com/lakehq/framework/pull/53#discussion_r1643683600
     pub spark_udf_config: SparkUdfConfig,
+    /// The default file format for bounded tables.
+    pub default_bounded_table_file_format: String,
+    /// The default file format for unbounded tables.
+    pub default_unbounded_table_file_format: String,
+    /// The default location for managed databases and tables.
+    pub default_warehouse_directory: String,
 }
 
 impl Default for PlanConfig {
@@ -56,6 +62,9 @@ impl Default for PlanConfig {
                     value: None,
                 },
             },
+            default_bounded_table_file_format: "PARQUET".to_string(),
+            default_unbounded_table_file_format: "ARROW".to_string(),
+            default_warehouse_directory: "sail-warehouse".to_string(),
         }
     }
 }
