@@ -139,9 +139,8 @@ impl Session {
             plan_formatter: Arc::new(DefaultPlanFormatter),
             spark_udf_config,
             default_bounded_table_file_format,
-            default_unbounded_table_file_format: PlanConfig::default()
-                .default_unbounded_table_file_format,
             default_warehouse_directory,
+            ..PlanConfig::default(),
         }))
     }
 
