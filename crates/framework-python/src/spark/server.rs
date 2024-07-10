@@ -10,6 +10,7 @@ use pyo3::prelude::*;
 use tokio::net::TcpListener;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::oneshot::{Receiver, Sender};
+use tracing::info;
 
 pub(super) fn register_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     let module = PyModule::new_bound(parent.py(), "server")?;
@@ -33,16 +34,13 @@ impl SparkConnectServerState {
     /// released, and Python UDFs will be blocked when the server handles client requests.
     fn wait(self, shutdown: bool) -> PyResult<()> {
         if shutdown {
-            self.shutdown.send(()).map_err(|e| {
-                PyErr::new::<PyRuntimeError, _>(format!(
-                    "failed to send the shutdown signal: {:?}",
-                    e
-                ))
-            })?;
+            _ = self.shutdown.send(());
         }
         self.handle.join().map_err(|e| {
             PyErr::new::<PyRuntimeError, _>(format!("failed to join the server thread: {:?}", e))
-        })?
+        })??;
+        info!("The Spark Connect server has stopped.");
+        Ok(())
     }
 }
 
@@ -100,9 +98,7 @@ impl SparkConnectServer {
         })?;
         let address = SocketAddr::new(ip, self.port);
         let listener = self.runtime.block_on(TcpListener::bind(address))?;
-        // TODO: configure Python logging to work with OpenTelemetry
-        let with_telemetry = !background;
-        self.state = Some(self.run(listener, with_telemetry)?);
+        self.state = Some(self.run(listener)?);
         if !background {
             let state = self.state()?;
             py.allow_threads(move || state.wait(false))?;
@@ -114,6 +110,14 @@ impl SparkConnectServer {
         let state = self.state()?;
         py.allow_threads(move || state.wait(true))?;
         Ok(())
+    }
+
+    fn init_telemetry(&self) -> PyResult<()> {
+        // TODO: configure Python logging to work with OpenTelemetry
+        // FIXME: avoid affecting the global telemetry configuration
+        self.runtime
+            .block_on(async { init_telemetry() })
+            .map_err(|e| PyErr::new::<PyRuntimeError, _>(format!("{:?}", e)))
     }
 }
 
@@ -132,22 +136,16 @@ impl SparkConnectServer {
             _ = tokio::signal::ctrl_c() => { }
             _ = rx => { }
         }
+        info!("Shutting down the Spark Connect server...");
     }
 
     fn run_blocking(
         runtime: Arc<Runtime>,
         listener: TcpListener,
         rx: Receiver<()>,
-        with_telemetry: bool,
     ) -> PyResult<()> {
         runtime
-            .block_on(async {
-                if with_telemetry {
-                    // FIXME: This affects the global telemetry configuration.
-                    init_telemetry()?;
-                }
-                serve(listener, Some(Self::shutdown(rx))).await
-            })
+            .block_on(async { serve(listener, Some(Self::shutdown(rx))).await })
             .map_err(|e| {
                 PyErr::new::<PyRuntimeError, _>(format!(
                     "failed to run the Spark Connect server: {:?}",
@@ -157,18 +155,15 @@ impl SparkConnectServer {
         Ok(())
     }
 
-    fn run(
-        &self,
-        listener: TcpListener,
-        with_telemetry: bool,
-    ) -> PyResult<SparkConnectServerState> {
+    fn run(&self, listener: TcpListener) -> PyResult<SparkConnectServerState> {
         // Get the actual listener address.
         // A port is assigned by the OS if the port is 0 when creating the listener.
         let address = listener.local_addr()?;
         let (tx, rx) = tokio::sync::oneshot::channel();
         let runtime = Arc::clone(&self.runtime);
-        let handle = thread::Builder::new()
-            .spawn(move || Self::run_blocking(runtime, listener, rx, with_telemetry))?;
+        info!("Starting the Spark Connect server on {}...", address);
+        let handle =
+            thread::Builder::new().spawn(move || Self::run_blocking(runtime, listener, rx))?;
         Ok(SparkConnectServerState {
             address,
             handle,

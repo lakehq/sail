@@ -7,6 +7,7 @@ edition = "2021"
 pyo3 = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 framework-common = { path = "../framework-common" }
 framework-telemetry = { path = "../framework-telemetry" }
 framework-spark-connect = { path = "../framework-spark-connect" }

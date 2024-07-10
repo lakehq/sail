@@ -279,6 +279,9 @@ across environments. Please consider the following items.
    export PYO3_PYTHON="$(hatch env find)/bin/python"
    ```
 
+Note that the `maturin` command and the `cargo` command enables different features for PyO3 (e.g. `extension-module`).
+So if you alternate between the two build tools, the PyO3 library will still be rebuilt.
+
 If you run `hatch build`, it uses Maturin as the build system, and the build happens in an isolated Python environment.
 So the build does not interfere with the Cargo build cache in `target/`. However, it also means that a fresh build
 is performed every time, which can be slow. Therefore, it is not recommended to use `hatch build` for local development.

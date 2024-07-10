@@ -16,6 +16,7 @@ def main():
     args = parser.parse_args()
 
     server = SparkConnectServer(args.ip, args.port)
+    server.init_telemetry()
     server.start()
 
 

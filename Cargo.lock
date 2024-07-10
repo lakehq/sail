@@ -1223,6 +1223,7 @@ dependencies = [
  "futures",
  "pyo3",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
