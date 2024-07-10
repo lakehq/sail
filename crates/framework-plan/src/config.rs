@@ -64,7 +64,7 @@ impl Default for PlanConfig {
             },
             default_bounded_table_file_format: "PARQUET".to_string(),
             default_unbounded_table_file_format: "ARROW".to_string(),
-            default_warehouse_directory: "/sail-warehouse".to_string(),
+            default_warehouse_directory: "sail-warehouse".to_string(),
         }
     }
 }
