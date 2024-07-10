@@ -39,10 +39,6 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Format check
         run: cargo +nightly fmt -- --check
 

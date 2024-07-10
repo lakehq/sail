@@ -36,7 +36,6 @@ env.CI.installer = "uv"
 path = ".venvs/test"
 python = "3.11"
 installer = "pip"
-detached = true
 dependencies = [
     "numpy~=1.15",
     "scipy~=1.14",
@@ -62,6 +61,7 @@ post-install-commands = [
 
 [tool.hatch.envs.test.overrides]
 env.CI.installer = "uv"
+env.CI.detached = true
 
 [tool.hatch.build.targets.sdist]
 packages = ["python/framework"]
