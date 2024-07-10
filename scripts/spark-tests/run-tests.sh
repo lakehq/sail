@@ -30,16 +30,13 @@ export PYARROW_IGNORE_TIMEZONE="1"
 export SPARK_TESTING_REMOTE_PORT="${SPARK_TESTING_REMOTE_PORT-50051}"
 export SPARK_LOCAL_IP="${SPARK_LOCAL_IP-127.0.0.1}"
 
-# Use the environment directly to avoid the overhead of `hatch run`.
-source "$(env NO_COLOR="1" hatch env find test)/bin/activate"
-
 function run_pytest() {
   name="$1"
   args=("${@:2}")
 
   echo "Test suite: ${name}"
   # We ignore the pytext exit code so that the command can complete successfully.
-  pytest \
+  hatch run test:pytest \
     -p framework.testing.spark \
     -o "doctest_optionflags=ELLIPSIS NORMALIZE_WHITESPACE" \
     --basetemp="${pytest_tmp_dir}" \
@@ -61,7 +58,7 @@ pytest_args=("$@")
 if [ "${#pytest_args[@]}" -ne 0 ]; then
   run_pytest "test" "${pytest_args[@]}"
 else
-  # pytest_args=("--tb=no" "-rN")
+  pytest_args=("--tb=no" "-rN")
   run_pytest "test-connect" "--pyargs" "pyspark.sql.tests.connect" "${pytest_args[@]}"
   run_pytest "doctest-column" "--doctest-modules" "--pyargs" "pyspark.sql.column" "${pytest_args[@]}"
   run_pytest "doctest-dataframe" "--doctest-modules" "--pyargs" "pyspark.sql.dataframe" "${pytest_args[@]}"
