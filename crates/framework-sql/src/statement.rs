@@ -305,23 +305,68 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
         }
         Statement::Query(query) => Ok(spec::Plan::Query(from_ast_query(*query)?)),
         Statement::Insert(ast::Insert {
-            or: _,
-            ignore: _,
-            into: _,
-            table_name: _,
-            table_alias: _,
-            columns: _,
-            overwrite: _,
-            source: _,
-            partitioned: _,
-            after_columns: _,
-            table: _,
-            on: _,
-            returning: _,
-            replace_into: _,
-            priority: _,
-            insert_alias: _,
-        }) => Err(SqlError::todo("SQL insert")),
+            or,
+            ignore,
+            into,
+            table_name,
+            table_alias,
+            columns,
+            overwrite,
+            source,
+            partitioned,
+            after_columns,
+            table,
+            on,
+            returning,
+            replace_into,
+            priority,
+            insert_alias,
+        }) => {
+            if or.is_some() {
+                return Err(SqlError::invalid("Inserts with or clauses not supported"));
+            }
+            if partitioned.is_some() {
+                return Err(SqlError::invalid("Partitioned inserts not yet supported"));
+            }
+            if !after_columns.is_empty() {
+                return Err(SqlError::invalid("After-columns clause not supported"));
+            }
+            if table {
+                return Err(SqlError::invalid("Table clause not supported"));
+            }
+            if on.is_some() {
+                return Err(SqlError::invalid("Insert-on clause not supported"));
+            }
+            if returning.is_some() {
+                return Err(SqlError::invalid("Insert-returning clause not supported"));
+            }
+            if ignore {
+                return Err(SqlError::invalid("Insert-ignore clause not supported"));
+            }
+            let Some(source) = source else {
+                return Err(SqlError::invalid("Inserts without a source not supported"));
+            };
+            if let Some(table_alias) = table_alias {
+                return Err(SqlError::invalid(
+                    "Inserts with a table alias not supported: {table_alias:?}",
+                ));
+            }
+            if replace_into {
+                return Err(SqlError::invalid(
+                    "Inserts with a `REPLACE INTO` clause not supported",
+                ));
+            }
+            if let Some(priority) = priority {
+                return Err(SqlError::invalid(
+                    "Inserts with a `PRIORITY` clause not supported: {priority:?}",
+                ));
+            }
+            if insert_alias.is_some() {
+                return Err(SqlError::invalid("Inserts with an alias not supported"));
+            }
+            let _ = into;
+            Err(SqlError::todo("SQL Insert"))
+        }
         Statement::Call(ast::Function {
             name: _,
             parameters: _,
