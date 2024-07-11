@@ -63,12 +63,7 @@ dependencies = [
 ]
 
 [tool.hatch.envs.test.scripts]
-install-pyspark = [
-    "{env:HATCH_UV} pip install opt/spark/python/dist/pyspark-3.5.1.tar.gz",
-    # https://issues.apache.org/jira/browse/SPARK-45201
-    # FIXME: handle this when building the PySpark package
-    "bash -c 'rm .venvs/test/lib/python*/site-packages/pyspark/jars/spark-connect-common_*.jar'",
-]
+install-pyspark = "{env:HATCH_UV} pip install opt/spark/python/dist/pyspark-3.5.1.tar.gz"
 
 [tool.hatch.envs.test.overrides]
 env.CI.installer = "uv"

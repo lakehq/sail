@@ -36,7 +36,7 @@ index 00000000000..cce3acad34a
 +# limitations under the License.
 +#
 diff --git a/python/pyspark/sql/connect/client/core.py b/python/pyspark/sql/connect/client/core.py
-index 7b1aafbefeb..20ecc6f19a6 100644
+index 7b1aafbefeb..ed0883891c3 100644
 --- a/python/pyspark/sql/connect/client/core.py
 +++ b/python/pyspark/sql/connect/client/core.py
 @@ -176,6 +176,9 @@ class ChannelBuilder:
@@ -49,6 +49,15 @@ index 7b1aafbefeb..20ecc6f19a6 100644
  
                  jvm = PySparkSession._instantiatedSession._jvm  # type: ignore[union-attr]
                  return getattr(
+@@ -1005,6 +1008,8 @@ class SparkConnectClient(object):
+         """
+         Close the channel.
+         """
++        if self._closed:
++            return
+         ExecutePlanResponseReattachableIterator.shutdown()
+         self._channel.close()
+         self._closed = True
 diff --git a/python/pyspark/sql/tests/connect/test_connect_basic.py b/python/pyspark/sql/tests/connect/test_connect_basic.py
 index 2904eb42587..8fb660caff2 100644
 --- a/python/pyspark/sql/tests/connect/test_connect_basic.py
@@ -136,7 +145,7 @@ index 077d854b1dd..513a8f5d516 100644
      @classmethod
      def scalaUDT(cls):
 diff --git a/python/setup.py b/python/setup.py
-index b8e4c9a40e0..fcc98508d6e 100755
+index b8e4c9a40e0..b0b54b932f1 100755
 --- a/python/setup.py
 +++ b/python/setup.py
 @@ -183,6 +183,9 @@ try:
@@ -200,7 +209,7 @@ index b8e4c9a40e0..fcc98508d6e 100755
          ],
          include_package_data=True,
          package_dir={
-@@ -295,10 +335,28 @@ try:
+@@ -295,10 +335,34 @@ try:
                  "start-history-server.sh",
                  "stop-history-server.sh",
              ],
@@ -226,6 +235,12 @@ index b8e4c9a40e0..fcc98508d6e 100755
 +            "pyspark.ml.tests": ["typing/*.yml"],
 +            "pyspark.sql.tests": ["typing/*.yml"],
 +            "pyspark.tests": ["typing/*.yml"],
++        },
++        # The excluded files are still in the package
++        # but are excluded from the installation.
++        exclude_package_data={
++            # https://issues.apache.org/jira/browse/SPARK-45201
++            "pyspark.jars": ["spark-connect-common_*.jar"],
          },
          scripts=scripts,
          license="http://www.apache.org/licenses/LICENSE-2.0",

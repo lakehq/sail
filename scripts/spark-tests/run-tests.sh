@@ -39,6 +39,7 @@ function run_pytest() {
   hatch run test:pytest \
     -p framework.testing.spark \
     -o "doctest_optionflags=ELLIPSIS NORMALIZE_WHITESPACE" \
+    -o "faulthandler_timeout=30" \
     --basetemp="${pytest_tmp_dir}" \
     --disable-warnings \
     --report-log="${logs_dir}/${name}.jsonl" \
