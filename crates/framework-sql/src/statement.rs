@@ -291,6 +291,18 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
     use ast::Statement;
 
     match statement {
+        Statement::Explain { .. } => {
+            // This should never be called, as we handle EXPLAIN statements separately.
+            Err(SqlError::invalid("unexpected EXPLAIN statement"))
+        }
+        Statement::ExplainTable { .. } => {
+            // This should never be called, as we handle EXPLAIN TABLE statements separately.
+            Err(SqlError::invalid("unexpected EXPLAIN statement"))
+        }
+        Statement::CreateTable(_create_table) => {
+            // This should never be called, as we handle CREATE TABLE statements separately.
+            Err(SqlError::invalid("unexpected CREATE TABLE statement"))
+        }
         Statement::Query(query) => Ok(spec::Plan::Query(from_ast_query(*query)?)),
         Statement::Insert(ast::Insert {
             or: _,
@@ -327,10 +339,6 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             legacy_options: _,
             values: _,
         } => Err(SqlError::todo("SQL copy")),
-        Statement::Explain { .. } => {
-            // This should never be called, as we handle EXPLAIN statements separately.
-            Err(SqlError::invalid("unexpected EXPLAIN statement"))
-        }
         Statement::AlterTable {
             name: _,
             if_exists: _,
@@ -430,10 +438,6 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             nulls_distinct: _,
             predicate: _,
         }) => Err(SqlError::todo("SQL create index")),
-        Statement::CreateTable(_create_table) => {
-            // This should never be called, as we handle CREATE TABLE statements separately.
-            Err(SqlError::invalid("unexpected CREATE TABLE statement"))
-        }
         Statement::CreateView {
             or_replace: _,
             materialized: _,
@@ -508,7 +512,6 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::DropFunction { .. } => Err(SqlError::todo("SQL drop function")),
-        Statement::ExplainTable { .. } => Err(SqlError::todo("SQL explain table")),
         Statement::Merge { .. } => Err(SqlError::todo("SQL merge")),
         Statement::ShowCreate { .. } => Err(SqlError::todo("SQL show create")),
         Statement::ShowFunctions { .. } => Err(SqlError::todo("SQL show functions")),
