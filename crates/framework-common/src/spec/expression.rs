@@ -65,6 +65,9 @@ pub enum Expr {
     },
     // extensions
     Placeholder(String),
+    Rollup(Vec<Expr>),
+    Cube(Vec<Expr>),
+    GroupingSets(Vec<Vec<Expr>>),
 }
 
 /// An identifier with only one part.

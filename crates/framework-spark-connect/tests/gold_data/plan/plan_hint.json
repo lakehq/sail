@@ -632,8 +632,7 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "groupType": "groupBy",
-                  "groupingExpressions": [
+                  "grouping": [
                     {
                       "unresolvedAttribute": {
                         "name": [
@@ -643,7 +642,7 @@
                       }
                     }
                   ],
-                  "aggregateExpressions": [
+                  "aggregate": [
                     {
                       "unresolvedAttribute": {
                         "name": [
@@ -653,7 +652,7 @@
                       }
                     }
                   ],
-                  "pivot": null
+                  "having": null
                 },
                 "planId": null,
                 "sourceInfo": null
