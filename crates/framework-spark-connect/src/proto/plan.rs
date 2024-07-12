@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use framework_common::spec;
 use framework_sql::expression::{parse_expression, parse_object_name};
 use framework_sql::statement::parse_sql_statement;
@@ -144,7 +142,7 @@ impl TryFrom<RelType> for RelationNode {
                         } = x;
                         spec::ReadType::NamedTable(spec::ReadNamedTable {
                             name: parse_object_name(unparsed_identifier.as_str())?,
-                            options,
+                            options: options.into_iter().collect(),
                         })
                     }
                     ReadType::DataSource(x) => {
@@ -166,7 +164,7 @@ impl TryFrom<RelType> for RelationNode {
                         spec::ReadType::DataSource(spec::ReadDataSource {
                             format,
                             schema,
-                            options,
+                            options: options.into_iter().collect(),
                             paths,
                             predicates,
                         })
@@ -316,46 +314,75 @@ impl TryFrom<RelType> for RelationNode {
                     pivot,
                 } = *aggregate;
                 let input = input.required("aggregate input")?;
-                let group_type = match GroupType::try_from(group_type)? {
+                let input = (*input).try_into()?;
+                let grouping = grouping_expressions
+                    .into_iter()
+                    .map(|x| x.try_into())
+                    .collect::<SparkResult<Vec<_>>>()?;
+                let aggregate = aggregate_expressions
+                    .into_iter()
+                    .map(|x| x.try_into())
+                    .collect::<SparkResult<Vec<_>>>()?;
+                let node = match GroupType::try_from(group_type)? {
                     GroupType::Unspecified => {
                         return Err(SparkError::invalid("unspecified aggregate group type"))
                     }
-                    GroupType::Groupby => spec::GroupType::GroupBy,
-                    GroupType::Rollup => spec::GroupType::Rollup,
-                    GroupType::Cube => spec::GroupType::Cube,
-                    GroupType::Pivot => spec::GroupType::Pivot,
-                };
-                let grouping_expressions = grouping_expressions
-                    .into_iter()
-                    .map(|x| x.try_into())
-                    .collect::<SparkResult<Vec<_>>>()?;
-                let aggregate_expressions = aggregate_expressions
-                    .into_iter()
-                    .map(|x| x.try_into())
-                    .collect::<SparkResult<Vec<_>>>()?;
-                let pivot = pivot
-                    .map(|x| -> SparkResult<_> {
-                        let sc::aggregate::Pivot { col, values } = x;
+                    GroupType::Groupby => {
+                        if pivot.is_some() {
+                            return Err(SparkError::invalid("pivot with group-by"));
+                        }
+                        spec::QueryNode::Aggregate(spec::Aggregate {
+                            input: Box::new(input),
+                            grouping,
+                            aggregate,
+                            having: None,
+                        })
+                    }
+                    GroupType::Rollup => {
+                        if pivot.is_some() {
+                            return Err(SparkError::invalid("pivot with rollup"));
+                        }
+                        spec::QueryNode::Aggregate(spec::Aggregate {
+                            input: Box::new(input),
+                            grouping: vec![spec::Expr::Rollup(grouping)],
+                            aggregate,
+                            having: None,
+                        })
+                    }
+                    GroupType::Cube => {
+                        if pivot.is_some() {
+                            return Err(SparkError::invalid("pivot with cube"));
+                        }
+                        spec::QueryNode::Aggregate(spec::Aggregate {
+                            input: Box::new(input),
+                            grouping: vec![spec::Expr::Cube(grouping)],
+                            aggregate,
+                            having: None,
+                        })
+                    }
+                    GroupType::Pivot => {
+                        let pivot = pivot.required("pivot")?;
+                        let sc::aggregate::Pivot { col, values } = pivot;
                         let col = col.required("pivot column")?;
                         let values = values
                             .into_iter()
-                            .map(|x| x.try_into())
+                            .map(|x| {
+                                Ok(spec::PivotValue {
+                                    values: vec![x.try_into()?],
+                                    alias: None,
+                                })
+                            })
                             .collect::<SparkResult<Vec<_>>>()?;
-                        Ok(spec::Pivot {
-                            column: col.try_into()?,
+                        spec::QueryNode::Pivot(spec::Pivot {
+                            input: Box::new(input),
+                            grouping,
+                            aggregate,
+                            columns: vec![col.try_into()?],
                             values,
                         })
-                    })
-                    .transpose()?;
-                Ok(RelationNode::Query(spec::QueryNode::Aggregate(
-                    spec::Aggregate {
-                        input: Box::new((*input).try_into()?),
-                        group_type,
-                        grouping_expressions,
-                        aggregate_expressions,
-                        pivot,
-                    },
-                )))
+                    }
+                };
+                Ok(RelationNode::Query(node))
             }
             RelType::Sql(sql) => {
                 let sc::Sql {
@@ -372,7 +399,7 @@ impl TryFrom<RelType> for RelationNode {
                         let named_arguments = args
                             .into_iter()
                             .map(|(k, v)| Ok((k, v.try_into()?)))
-                            .collect::<SparkResult<HashMap<_, _>>>()?;
+                            .collect::<SparkResult<Vec<_>>>()?;
                         Ok(RelationNode::Query(spec::QueryNode::WithParameters {
                             input: Box::new(input),
                             positional_arguments,
@@ -617,7 +644,12 @@ impl TryFrom<RelType> for RelationNode {
                         let sc::unpivot::Values { values } = v;
                         values
                             .into_iter()
-                            .map(|x| x.try_into())
+                            .map(|x| {
+                                Ok(spec::UnpivotValue {
+                                    columns: vec![x.try_into()?],
+                                    alias: None,
+                                })
+                            })
                             .collect::<SparkResult<Vec<_>>>()
                     })
                     .transpose()?
@@ -625,10 +657,11 @@ impl TryFrom<RelType> for RelationNode {
                 Ok(RelationNode::Query(spec::QueryNode::Unpivot(
                     spec::Unpivot {
                         input: Box::new((*input).try_into()?),
-                        ids,
+                        ids: Some(ids),
                         values,
                         variable_column_name: variable_column_name.into(),
-                        value_column_name: value_column_name.into(),
+                        value_column_names: vec![value_column_name.into()],
+                        include_nulls: false,
                     },
                 )))
             }
@@ -717,7 +750,7 @@ impl TryFrom<RelType> for RelationNode {
                     input: Box::new((*input).try_into()?),
                     format,
                     schema: schema.map(|x| x.into_schema(DEFAULT_FIELD_NAME, true)),
-                    options,
+                    options: options.into_iter().collect(),
                 })))
             }
             RelType::GroupMap(group_map) => {
@@ -1198,7 +1231,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         if_not_exists: false,
                         or_replace: false,
                         unbounded: false,
-                        options,
+                        options: options.into_iter().collect(),
                         query: None,
                         definition: None,
                     },
@@ -1230,7 +1263,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         if_not_exists: false,
                         or_replace: false,
                         unbounded: false,
-                        options,
+                        options: options.into_iter().collect(),
                         query: None,
                         definition: None,
                     },

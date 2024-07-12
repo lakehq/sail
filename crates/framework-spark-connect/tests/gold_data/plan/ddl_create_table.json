@@ -23,10 +23,16 @@
               "ifNotExists": true,
               "orReplace": false,
               "unbounded": false,
-              "options": {
-                "p1": "v1",
-                "p2": "v2"
-              },
+              "options": [
+                [
+                  "p1",
+                  "v1"
+                ],
+                [
+                  "p2",
+                  "v2"
+                ]
+              ],
               "query": {
                 "project": {
                   "input": {
@@ -35,7 +41,7 @@
                         "name": [
                           "src"
                         ],
-                        "options": {}
+                        "options": []
                       },
                       "isStreaming": false
                     },
@@ -84,10 +90,16 @@
               "ifNotExists": true,
               "orReplace": false,
               "unbounded": false,
-              "options": {
-                "p1": "v1",
-                "p2": "v2"
-              },
+              "options": [
+                [
+                  "p1",
+                  "v1"
+                ],
+                [
+                  "p2",
+                  "v2"
+                ]
+              ],
               "query": {
                 "project": {
                   "input": {
@@ -96,7 +108,7 @@
                         "name": [
                           "src"
                         ],
-                        "options": {}
+                        "options": []
                       },
                       "isStreaming": false
                     },
@@ -150,11 +162,20 @@
               "ifNotExists": false,
               "orReplace": false,
               "unbounded": false,
-              "options": {
-                "a": "1",
-                "b": "0.1",
-                "c": "'TRUE'"
-              },
+              "options": [
+                [
+                  "a",
+                  "1"
+                ],
+                [
+                  "b",
+                  "0.1"
+                ],
+                [
+                  "c",
+                  "'TRUE'"
+                ]
+              ],
               "query": null,
               "definition": null
             },
@@ -211,7 +232,7 @@
               "ifNotExists": true,
               "orReplace": false,
               "unbounded": false,
-              "options": {},
+              "options": [],
               "query": null,
               "definition": null
             },
@@ -278,7 +299,7 @@
               "ifNotExists": false,
               "orReplace": false,
               "unbounded": false,
-              "options": {},
+              "options": [],
               "query": null,
               "definition": null
             },
@@ -343,7 +364,7 @@
               "ifNotExists": false,
               "orReplace": false,
               "unbounded": false,
-              "options": {},
+              "options": [],
               "query": null,
               "definition": null
             },
@@ -391,7 +412,7 @@
               "ifNotExists": false,
               "orReplace": false,
               "unbounded": false,
-              "options": {},
+              "options": [],
               "query": null,
               "definition": null
             },
@@ -467,7 +488,7 @@
               "ifNotExists": false,
               "orReplace": false,
               "unbounded": false,
-              "options": {},
+              "options": [],
               "query": null,
               "definition": null
             },
@@ -526,7 +547,7 @@
               "ifNotExists": false,
               "orReplace": false,
               "unbounded": false,
-              "options": {},
+              "options": [],
               "query": null,
               "definition": null
             },
@@ -578,7 +599,7 @@
               "ifNotExists": false,
               "orReplace": false,
               "unbounded": false,
-              "options": {},
+              "options": [],
               "query": null,
               "definition": null
             },
@@ -640,7 +661,7 @@
               "ifNotExists": false,
               "orReplace": false,
               "unbounded": false,
-              "options": {},
+              "options": [],
               "query": null,
               "definition": null
             },
@@ -694,7 +715,7 @@
               "ifNotExists": false,
               "orReplace": false,
               "unbounded": false,
-              "options": {},
+              "options": [],
               "query": null,
               "definition": null
             },
@@ -749,7 +770,7 @@
               "ifNotExists": false,
               "orReplace": false,
               "unbounded": false,
-              "options": {},
+              "options": [],
               "query": null,
               "definition": null
             },
@@ -803,7 +824,7 @@
               "ifNotExists": false,
               "orReplace": false,
               "unbounded": false,
-              "options": {},
+              "options": [],
               "query": null,
               "definition": null
             },
@@ -917,7 +938,7 @@
               "ifNotExists": false,
               "orReplace": false,
               "unbounded": false,
-              "options": {},
+              "options": [],
               "query": null,
               "definition": null
             },
@@ -962,7 +983,7 @@
               "ifNotExists": false,
               "orReplace": false,
               "unbounded": false,
-              "options": {},
+              "options": [],
               "query": null,
               "definition": null
             },
@@ -1007,9 +1028,12 @@
               "ifNotExists": false,
               "orReplace": false,
               "unbounded": false,
-              "options": {
-                "test": "test"
-              },
+              "options": [
+                [
+                  "test",
+                  "test"
+                ]
+              ],
               "query": null,
               "definition": null
             },

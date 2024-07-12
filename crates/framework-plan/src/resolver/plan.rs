@@ -222,6 +222,7 @@ impl PlanResolver<'_> {
                 self.resolve_query_hint(*input, name, parameters, state)
                     .await?
             }
+            QueryNode::Pivot(pivot) => self.resolve_query_pivot(pivot, state).await?,
             QueryNode::Unpivot(unpivot) => self.resolve_query_unpivot(unpivot, state).await?,
             QueryNode::ToSchema { input, schema } => {
                 self.resolve_query_to_schema(*input, schema, state).await?
@@ -788,33 +789,21 @@ impl PlanResolver<'_> {
         aggregate: spec::Aggregate,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        use spec::GroupType;
-
         let spec::Aggregate {
             input,
-            group_type,
-            grouping_expressions,
-            aggregate_expressions,
-            pivot,
+            grouping,
+            aggregate,
+            having: _,
         } = aggregate;
-        if pivot.is_some() {
-            return Err(PlanError::todo("pivot"));
-        }
-        if group_type != GroupType::GroupBy {
-            return Err(PlanError::todo("unsupported aggregate group type"));
-        }
         let input = self.resolve_query_plan(*input, state).await?;
         let schema = input.schema();
-        let grouping_expressions =
-            self.resolve_named_expressions(grouping_expressions, schema, state)?;
-        let grouping_expressions = self.rewrite_named_expressions(grouping_expressions, state)?;
-        let aggregate_expressions =
-            self.resolve_named_expressions(aggregate_expressions, schema, state)?;
-        let aggregate_expressions = self.rewrite_named_expressions(aggregate_expressions, state)?;
+        let grouping = self.resolve_expressions(grouping, schema, state)?;
+        let aggregate = self.resolve_named_expressions(aggregate, schema, state)?;
+        let aggregate = self.rewrite_named_expressions(aggregate, state)?;
         Ok(LogicalPlan::Aggregate(Aggregate::try_new(
             Arc::new(input),
-            grouping_expressions,
-            aggregate_expressions,
+            grouping,
+            aggregate,
         )?))
     }
 
@@ -822,7 +811,7 @@ impl PlanResolver<'_> {
         &self,
         input: spec::QueryPlan,
         positional: Vec<spec::Literal>,
-        named: HashMap<String, spec::Literal>,
+        named: Vec<(String, spec::Literal)>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
@@ -1038,7 +1027,7 @@ impl PlanResolver<'_> {
     async fn resolve_query_with_columns_renamed(
         &self,
         input: spec::QueryPlan,
-        rename_columns_map: HashMap<spec::Identifier, spec::Identifier>,
+        rename_columns_map: Vec<(spec::Identifier, spec::Identifier)>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
@@ -1190,6 +1179,14 @@ impl PlanResolver<'_> {
         _state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         Err(PlanError::todo("hint"))
+    }
+
+    async fn resolve_query_pivot(
+        &self,
+        _pivot: spec::Pivot,
+        _state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        Err(PlanError::todo("pivot"))
     }
 
     async fn resolve_query_unpivot(

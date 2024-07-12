@@ -3,25 +3,408 @@
     {
       "input": "SELECT * FROM t1 JOIN (t2 UNPIVOT (val FOR col in (a, b)))",
       "output": {
-        "failure": "not implemented: UNPIVOT"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t1"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "unpivot": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t2"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "ids": null,
+                      "values": [
+                        {
+                          "columns": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "a"
+                                ],
+                                "planId": null
+                              }
+                            }
+                          ],
+                          "alias": null
+                        },
+                        {
+                          "columns": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "b"
+                                ],
+                                "planId": null
+                              }
+                            }
+                          ],
+                          "alias": null
+                        }
+                      ],
+                      "variableColumnName": "col",
+                      "valueColumnNames": [
+                        "val"
+                      ],
+                      "includeNulls": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "inner",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM t1 JOIN t2 UNPIVOT (val FOR col in (a, b))",
       "output": {
-        "failure": "not implemented: UNPIVOT"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t1"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "unpivot": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t2"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "ids": null,
+                      "values": [
+                        {
+                          "columns": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "a"
+                                ],
+                                "planId": null
+                              }
+                            }
+                          ],
+                          "alias": null
+                        },
+                        {
+                          "columns": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "b"
+                                ],
+                                "planId": null
+                              }
+                            }
+                          ],
+                          "alias": null
+                        }
+                      ],
+                      "variableColumnName": "col",
+                      "valueColumnNames": [
+                        "val"
+                      ],
+                      "includeNulls": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "inner",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM t1 UNPIVOT (val FOR col in (a, b)) JOIN t2",
       "output": {
-        "failure": "not implemented: UNPIVOT"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "unpivot": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t1"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "ids": null,
+                      "values": [
+                        {
+                          "columns": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "a"
+                                ],
+                                "planId": null
+                              }
+                            }
+                          ],
+                          "alias": null
+                        },
+                        {
+                          "columns": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "b"
+                                ],
+                                "planId": null
+                              }
+                            }
+                          ],
+                          "alias": null
+                        }
+                      ],
+                      "variableColumnName": "col",
+                      "valueColumnNames": [
+                        "val"
+                      ],
+                      "includeNulls": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t2"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "inner",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM t1, t2 JOIN t3 UNPIVOT (val FOR col in (a, b))",
       "output": {
-        "failure": "not implemented: UNPIVOT"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t1"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "join": {
+                      "left": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t2"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "right": {
+                        "unpivot": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "name": [
+                                  "t3"
+                                ],
+                                "options": []
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null,
+                            "sourceInfo": null
+                          },
+                          "ids": null,
+                          "values": [
+                            {
+                              "columns": [
+                                {
+                                  "unresolvedAttribute": {
+                                    "name": [
+                                      "a"
+                                    ],
+                                    "planId": null
+                                  }
+                                }
+                              ],
+                              "alias": null
+                            },
+                            {
+                              "columns": [
+                                {
+                                  "unresolvedAttribute": {
+                                    "name": [
+                                      "b"
+                                    ],
+                                    "planId": null
+                                  }
+                                }
+                              ],
+                              "alias": null
+                            }
+                          ],
+                          "variableColumnName": "col",
+                          "valueColumnNames": [
+                            "val"
+                          ],
+                          "includeNulls": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "joinCondition": null,
+                      "joinType": "inner",
+                      "usingColumns": [],
+                      "joinDataType": null
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "cross",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     }
   ]

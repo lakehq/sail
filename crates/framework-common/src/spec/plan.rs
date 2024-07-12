@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
 use crate::spec::data_type::Schema;
@@ -129,7 +127,7 @@ pub enum QueryNode {
     },
     WithColumnsRenamed {
         input: Box<QueryPlan>,
-        rename_columns_map: HashMap<Identifier, Identifier>,
+        rename_columns_map: Vec<(Identifier, Identifier)>,
     },
     Drop {
         input: Box<QueryPlan>,
@@ -149,6 +147,7 @@ pub enum QueryNode {
         name: String,
         parameters: Vec<Expr>,
     },
+    Pivot(Pivot),
     Unpivot(Unpivot),
     ToSchema {
         input: Box<QueryPlan>,
@@ -248,7 +247,7 @@ pub enum QueryNode {
     WithParameters {
         input: Box<QueryPlan>,
         positional_arguments: Vec<Literal>,
-        named_arguments: HashMap<String, Literal>,
+        named_arguments: Vec<(String, Literal)>,
     },
     Values(Vec<Vec<Expr>>),
     TableAlias {
@@ -397,7 +396,7 @@ pub enum ReadType {
 #[serde(rename_all = "camelCase")]
 pub struct ReadNamedTable {
     pub name: ObjectName,
-    pub options: HashMap<String, String>,
+    pub options: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -405,7 +404,7 @@ pub struct ReadNamedTable {
 pub struct ReadUdtf {
     pub name: ObjectName,
     pub arguments: Vec<Expr>,
-    pub options: HashMap<String, String>,
+    pub options: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -413,7 +412,7 @@ pub struct ReadUdtf {
 pub struct ReadDataSource {
     pub format: Option<String>,
     pub schema: Option<Schema>,
-    pub options: HashMap<String, String>,
+    pub options: Vec<(String, String)>,
     pub paths: Vec<String>,
     pub predicates: Vec<Expr>,
 }
@@ -444,10 +443,9 @@ pub struct SetOperation {
 #[serde(rename_all = "camelCase")]
 pub struct Aggregate {
     pub input: Box<QueryPlan>,
-    pub group_type: GroupType,
-    pub grouping_expressions: Vec<Expr>,
-    pub aggregate_expressions: Vec<Expr>,
-    pub pivot: Option<Pivot>,
+    pub grouping: Vec<Expr>,
+    pub aggregate: Vec<Expr>,
+    pub having: Option<Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -490,12 +488,41 @@ pub struct ShowString {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct Pivot {
+    pub input: Box<QueryPlan>,
+    /// The group-by columns for the pivot operation (only supported in the DataFrame API).
+    /// When the list is empty (for SQL statements), all the remaining columns are included.
+    pub grouping: Vec<Expr>,
+    pub aggregate: Vec<Expr>,
+    pub columns: Vec<Expr>,
+    pub values: Vec<PivotValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PivotValue {
+    pub values: Vec<Literal>,
+    pub alias: Option<Identifier>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Unpivot {
     pub input: Box<QueryPlan>,
-    pub ids: Vec<Expr>,
-    pub values: Vec<Expr>,
+    /// When `ids` is [None] (for SQL statements), all remaining columns are included.
+    /// When `ids` is [Some] (for the DataFrame API), only the specified columns are included.
+    pub ids: Option<Vec<Expr>>,
+    pub values: Vec<UnpivotValue>,
     pub variable_column_name: Identifier,
-    pub value_column_name: Identifier,
+    pub value_column_names: Vec<Identifier>,
+    pub include_nulls: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnpivotValue {
+    pub columns: Vec<Expr>,
+    pub alias: Option<Identifier>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -504,7 +531,7 @@ pub struct Parse {
     pub input: Box<QueryPlan>,
     pub format: ParseFormat,
     pub schema: Option<Schema>,
-    pub options: HashMap<String, String>,
+    pub options: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -575,7 +602,7 @@ pub struct TableDefinition {
     pub if_not_exists: bool,
     pub or_replace: bool,
     pub unbounded: bool,
-    pub options: HashMap<String, String>,
+    pub options: Vec<(String, String)>,
     /// The query for `CREATE TABLE ... AS SELECT ...` (CTAS) statements.
     pub query: Option<Box<QueryPlan>>,
     pub definition: Option<String>,
@@ -587,13 +614,13 @@ pub struct DatabaseDefinition {
     pub if_not_exists: bool,
     pub comment: Option<String>,
     pub location: Option<String>,
-    pub properties: HashMap<String, String>,
+    pub properties: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogDefinition {
-    pub options: HashMap<String, String>,
+    pub options: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -614,8 +641,8 @@ pub struct Write {
     pub sort_columns: Vec<Identifier>,
     pub partitioning_columns: Vec<Identifier>,
     pub bucket_by: Option<SaveBucketBy>,
-    pub options: HashMap<String, String>,
-    pub table_properties: HashMap<String, String>,
+    pub options: Vec<(String, String)>,
+    pub table_properties: Vec<(String, String)>,
     pub overwrite_condition: Option<Expr>,
 }
 
@@ -687,15 +714,6 @@ pub enum SetOpType {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum GroupType {
-    GroupBy,
-    Rollup,
-    Cube,
-    Pivot,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub enum ParseFormat {
     Unspecified,
     Csv,
@@ -707,13 +725,6 @@ pub enum ParseFormat {
 pub struct Fraction {
     pub stratum: Literal,
     pub fraction: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Pivot {
-    pub column: Expr,
-    pub values: Vec<Literal>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

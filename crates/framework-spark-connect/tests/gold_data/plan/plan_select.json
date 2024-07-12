@@ -12,7 +12,7 @@
                     "name": [
                       "a"
                     ],
-                    "options": {}
+                    "options": []
                   },
                   "isStreaming": false
                 },
@@ -80,7 +80,7 @@
                             "name": [
                               "t"
                             ],
-                            "options": {}
+                            "options": []
                           },
                           "isStreaming": false
                         },
@@ -167,7 +167,7 @@
                     "name": [
                       "a"
                     ],
-                    "options": {}
+                    "options": []
                   },
                   "isStreaming": false
                 },
@@ -362,7 +362,7 @@
                             }
                           }
                         ],
-                        "options": {}
+                        "options": []
                       },
                       "isStreaming": false
                     },
@@ -410,7 +410,7 @@
                             }
                           }
                         ],
-                        "options": {}
+                        "options": []
                       },
                       "isStreaming": false
                     },
@@ -453,7 +453,7 @@
                         "name": [
                           "testData"
                         ],
-                        "options": {}
+                        "options": []
                       },
                       "isStreaming": false
                     },
@@ -497,7 +497,7 @@
                       "db",
                       "tab"
                     ],
-                    "options": {}
+                    "options": []
                   },
                   "isStreaming": false
                 },
@@ -1027,7 +1027,7 @@
                             "name": [
                               "t"
                             ],
-                            "options": {}
+                            "options": []
                           },
                           "isStreaming": false
                         },
@@ -1120,7 +1120,7 @@
                     "name": [
                       "a"
                     ],
-                    "options": {}
+                    "options": []
                   },
                   "isStreaming": false
                 },
@@ -1186,7 +1186,7 @@
                     "name": [
                       "a"
                     ],
-                    "options": {}
+                    "options": []
                   },
                   "isStreaming": false
                 },
@@ -1240,7 +1240,7 @@
                         }
                       }
                     ],
-                    "options": {}
+                    "options": []
                   },
                   "isStreaming": false
                 },
@@ -1335,7 +1335,7 @@
                         }
                       }
                     ],
-                    "options": {}
+                    "options": []
                   },
                   "isStreaming": false
                 },
@@ -1378,7 +1378,7 @@
                         }
                       }
                     ],
-                    "options": {}
+                    "options": []
                   },
                   "isStreaming": false
                 },
@@ -1411,7 +1411,7 @@
                     "name": [
                       "t"
                     ],
-                    "options": {}
+                    "options": []
                   },
                   "isStreaming": false
                 },
@@ -1454,7 +1454,7 @@
                             "name": [
                               "t"
                             ],
-                            "options": {}
+                            "options": []
                           },
                           "isStreaming": false
                         },
@@ -1473,7 +1473,7 @@
                         "name": [
                           "u"
                         ],
-                        "options": {}
+                        "options": []
                       },
                       "isStreaming": false
                     },
@@ -1535,7 +1535,7 @@
                         "name": [
                           "t"
                         ],
-                        "options": {}
+                        "options": []
                       },
                       "isStreaming": false
                     },
@@ -1729,7 +1729,7 @@
                       "db",
                       "c"
                     ],
-                    "options": {}
+                    "options": []
                   },
                   "isStreaming": false
                 },
@@ -1764,7 +1764,69 @@
     {
       "input": "select a, b from db.c having x < 1",
       "output": {
-        "failure": "not supported: HAVING without GROUP BY"
+        "success": {
+          "query": {
+            "aggregate": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "db",
+                      "c"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "grouping": [],
+              "aggregate": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                }
+              ],
+              "having": {
+                "unresolvedFunction": {
+                  "functionName": "<",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "x"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "literal": {
+                        "integer": 1
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -1794,7 +1856,7 @@
                           "db",
                           "c"
                         ],
-                        "options": {}
+                        "options": []
                       },
                       "isStreaming": false
                     },
@@ -1865,7 +1927,7 @@
                       "db",
                       "c"
                     ],
-                    "options": {}
+                    "options": []
                   },
                   "isStreaming": false
                 },
@@ -1910,7 +1972,7 @@
                       "db",
                       "c"
                     ],
-                    "options": {}
+                    "options": []
                   },
                   "isStreaming": false
                 },
@@ -1993,7 +2055,7 @@
                       "db",
                       "c"
                     ],
-                    "options": {}
+                    "options": []
                   },
                   "isStreaming": false
                 },
@@ -2040,7 +2102,7 @@
                           "db",
                           "c"
                         ],
-                        "options": {}
+                        "options": []
                       },
                       "isStreaming": false
                     },
@@ -2097,7 +2159,7 @@
                     "name": [
                       "t0"
                     ],
-                    "options": {}
+                    "options": []
                   },
                   "isStreaming": false
                 },
@@ -2133,7 +2195,7 @@
                     "name": [
                       "t0"
                     ],
-                    "options": {}
+                    "options": []
                   },
                   "isStreaming": false
                 },

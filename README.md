@@ -91,7 +91,7 @@ Python tests are also included in the patched package.
 scripts/spark-tests/build-pyspark.sh
 ```
 
-### Additional Notes
+#### Additional Notes
 
 Here are some notes about the `build-pyspark.sh` script.
 
@@ -113,7 +113,7 @@ When you run Hatch commands, environments are created in `.venvs/` in the projec
 You can also run `hatch env create` to create the `default` environment explicitly, and then configure your IDE
 to use this environment (`.venvs/default`) for Python development.
 
-### Additional Notes
+#### Additional Notes
 
 1. Some environments depend on the patched PySpark package created in the previous section.
    The patched PySpark package will be installed automatically during the environment creation.

@@ -1,5 +1,6 @@
 use framework_common::spec;
 use sqlparser::ast;
+use sqlparser::ast::PivotValueSource;
 
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{from_ast_expression, from_ast_object_name, from_ast_order_by};
@@ -161,61 +162,53 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
         plan
     };
 
-    let plan = match group_by {
-        GroupByExpr::All => return Err(SqlError::unsupported("GROUP BY ALL")),
-        GroupByExpr::Expressions(group_by) => {
-            let projection = projection
-                .into_iter()
-                .map(|p| match p {
-                    SelectItem::UnnamedExpr(expr) => from_ast_expression(expr),
-                    SelectItem::ExprWithAlias {
-                        expr,
-                        alias: ast::Ident { value, .. },
-                    } => {
-                        let expr = from_ast_expression(expr)?;
-                        Ok(spec::Expr::Alias {
-                            expr: Box::new(expr),
-                            name: vec![value.into()],
-                            metadata: None,
-                        })
-                    }
-                    SelectItem::QualifiedWildcard(name, _) => Ok(spec::Expr::UnresolvedStar {
-                        target: Some(from_ast_object_name(name)?),
-                    }),
-                    SelectItem::Wildcard(_) => Ok(spec::Expr::UnresolvedStar { target: None }),
+    let projection = projection
+        .into_iter()
+        .map(|p| match p {
+            SelectItem::UnnamedExpr(expr) => from_ast_expression(expr),
+            SelectItem::ExprWithAlias {
+                expr,
+                alias: ast::Ident { value, .. },
+            } => {
+                let expr = from_ast_expression(expr)?;
+                Ok(spec::Expr::Alias {
+                    expr: Box::new(expr),
+                    name: vec![value.into()],
+                    metadata: None,
                 })
-                .collect::<SqlResult<_>>()?;
-            if group_by.is_empty() {
-                if having.is_some() {
-                    return Err(SqlError::unsupported("HAVING without GROUP BY"));
-                }
-                spec::QueryPlan::new(spec::QueryNode::Project {
-                    input: Some(Box::new(plan)),
-                    expressions: projection,
-                })
-            } else {
-                let group_by: Vec<spec::Expr> = group_by
-                    .into_iter()
-                    .map(from_ast_expression)
-                    .collect::<SqlResult<_>>()?;
-                let aggregate = spec::QueryPlan::new(spec::QueryNode::Aggregate(spec::Aggregate {
-                    input: Box::new(plan),
-                    group_type: spec::GroupType::GroupBy,
-                    grouping_expressions: group_by,
-                    aggregate_expressions: projection,
-                    pivot: None,
-                }));
-                if let Some(having) = having {
-                    let having = from_ast_expression(having)?;
-                    spec::QueryPlan::new(spec::QueryNode::Filter {
-                        input: Box::new(aggregate),
-                        condition: having,
-                    })
-                } else {
-                    aggregate
-                }
             }
-        }
+            SelectItem::QualifiedWildcard(name, _) => Ok(spec::Expr::UnresolvedStar {
+                target: Some(from_ast_object_name(name)?),
+            }),
+            SelectItem::Wildcard(_) => Ok(spec::Expr::UnresolvedStar { target: None }),
+        })
+        .collect::<SqlResult<_>>()?;
+
+    let group_by = match group_by {
+        GroupByExpr::All => return Err(SqlError::unsupported("GROUP BY ALL")),
+        GroupByExpr::Expressions(group_by) => group_by
+            .into_iter()
+            .map(from_ast_expression)
+            .collect::<SqlResult<Vec<spec::Expr>>>()?,
+    };
+
+    let having = match having {
+        None => None,
+        Some(having) => Some(from_ast_expression(having)?),
+    };
+
+    let plan = if group_by.is_empty() && having.is_none() {
+        spec::QueryPlan::new(spec::QueryNode::Project {
+            input: Some(Box::new(plan)),
+            expressions: projection,
+        })
+    } else {
+        spec::QueryPlan::new(spec::QueryNode::Aggregate(spec::Aggregate {
+            input: Box::new(plan),
+            grouping: group_by,
+            aggregate: projection,
+            having,
+        }))
     };
 
     let plan = if !sort_by.is_empty() {
@@ -439,8 +432,7 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
                     }),
                 })
             };
-            let plan = with_ast_table_alias(plan, alias)?;
-            Ok(plan)
+            with_ast_table_alias(plan, alias)
         }
         TableFactor::Derived {
             lateral,
@@ -451,16 +443,109 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
                 return Err(SqlError::unsupported("LATERAL in derived table factor"));
             }
             let plan = from_ast_query(*subquery)?;
-            let plan = with_ast_table_alias(plan, alias)?;
-            Ok(plan)
+            with_ast_table_alias(plan, alias)
         }
         TableFactor::TableFunction { .. } => Err(SqlError::todo("table function in table factor")),
         TableFactor::Function { .. } => Err(SqlError::todo("function in table factor")),
         TableFactor::UNNEST { .. } => Err(SqlError::todo("UNNEST")),
         TableFactor::JsonTable { .. } => Err(SqlError::todo("JSON_TABLE")),
         TableFactor::NestedJoin { .. } => Err(SqlError::todo("nested join")),
-        TableFactor::Pivot { .. } => Err(SqlError::todo("PIVOT")),
-        TableFactor::Unpivot { .. } => Err(SqlError::todo("UNPIVOT")),
+        TableFactor::Pivot {
+            table,
+            aggregate_functions,
+            value_column,
+            value_source,
+            default_on_null,
+            alias,
+        } => {
+            let plan = from_ast_table_factor(*table)?;
+            if default_on_null.is_some() {
+                return Err(SqlError::unsupported("PIVOT default on null"));
+            }
+            let aggregate = aggregate_functions
+                .into_iter()
+                .map(|expr| {
+                    let ast::ExprWithAlias { expr, alias } = expr;
+                    let expr = from_ast_expression(expr)?;
+                    match alias {
+                        Some(ast::Ident { value, .. }) => Ok(spec::Expr::Alias {
+                            expr: Box::new(expr),
+                            name: vec![value.into()],
+                            metadata: None,
+                        }),
+                        None => Ok(expr),
+                    }
+                })
+                .collect::<SqlResult<Vec<_>>>()?;
+            let columns = value_column
+                .into_iter()
+                .map(|c| spec::Expr::UnresolvedAttribute {
+                    name: spec::ObjectName::new_unqualified(c.value.into()),
+                    plan_id: None,
+                })
+                .collect();
+            let values = match value_source {
+                PivotValueSource::List(expr) => expr
+                    .into_iter()
+                    .map(|e| {
+                        let ast::ExprWithAlias { expr, alias } = e;
+                        let expr = match expr {
+                            ast::Expr::Tuple(expr) => expr,
+                            _ => vec![expr],
+                        };
+                        let values = expr
+                            .into_iter()
+                            .map(|x| match from_ast_expression(x)? {
+                                spec::Expr::Literal(literal) => Ok(literal),
+                                _ => Err(SqlError::invalid("non-literal value in PIVOT")),
+                            })
+                            .collect::<SqlResult<Vec<_>>>()?;
+                        let alias = alias.map(|ast::Ident { value, .. }| value.into());
+                        Ok(spec::PivotValue { values, alias })
+                    })
+                    .collect::<SqlResult<Vec<_>>>()?,
+                PivotValueSource::Any(_) => return Err(SqlError::unsupported("PIVOT ANY")),
+                PivotValueSource::Subquery(_) => {
+                    return Err(SqlError::unsupported("PIVOT subquery"))
+                }
+            };
+            let plan = spec::QueryPlan::new(spec::QueryNode::Pivot(spec::Pivot {
+                input: Box::new(plan),
+                grouping: vec![],
+                aggregate,
+                columns,
+                values,
+            }));
+            with_ast_table_alias(plan, alias)
+        }
+        TableFactor::Unpivot {
+            table,
+            value,
+            name,
+            columns,
+            alias,
+        } => {
+            let plan = from_ast_table_factor(*table)?;
+            let values = columns
+                .into_iter()
+                .map(|c| spec::UnpivotValue {
+                    columns: vec![spec::Expr::UnresolvedAttribute {
+                        name: spec::ObjectName::new_unqualified(c.value.into()),
+                        plan_id: None,
+                    }],
+                    alias: None,
+                })
+                .collect::<Vec<_>>();
+            let plan = spec::QueryPlan::new(spec::QueryNode::Unpivot(spec::Unpivot {
+                input: Box::new(plan),
+                ids: None,
+                values,
+                variable_column_name: name.value.into(),
+                value_column_names: vec![value.value.into()],
+                include_nulls: false,
+            }));
+            with_ast_table_alias(plan, alias)
+        }
         TableFactor::MatchRecognize { .. } => Err(SqlError::todo("MATCH_RECOGNIZE")),
     }
 }
