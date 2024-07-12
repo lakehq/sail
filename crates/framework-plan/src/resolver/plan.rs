@@ -822,7 +822,7 @@ impl PlanResolver<'_> {
         &self,
         input: spec::QueryPlan,
         positional: Vec<spec::Literal>,
-        named: HashMap<String, spec::Literal>,
+        named: Vec<(String, spec::Literal)>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
@@ -1038,7 +1038,7 @@ impl PlanResolver<'_> {
     async fn resolve_query_with_columns_renamed(
         &self,
         input: spec::QueryPlan,
-        rename_columns_map: HashMap<spec::Identifier, spec::Identifier>,
+        rename_columns_map: Vec<(spec::Identifier, spec::Identifier)>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;

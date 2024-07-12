@@ -77,7 +77,7 @@
                         "name": [
                           "t"
                         ],
-                        "options": {}
+                        "options": []
                       },
                       "isStreaming": false
                     },
@@ -145,7 +145,7 @@
                             "name": [
                               "t"
                             ],
-                            "options": {}
+                            "options": []
                           },
                           "isStreaming": false
                         },

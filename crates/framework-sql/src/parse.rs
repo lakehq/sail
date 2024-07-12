@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use sqlparser::ast;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::{Token, Word};
@@ -61,13 +59,13 @@ pub fn parse_option_value(parser: &mut Parser) -> SqlResult<String> {
 }
 
 /// [Credit]: <https://github.com/apache/datafusion/blob/13cb65e44136711befb87dd75fb8b41f814af16f/datafusion/sql/src/parser.rs#L849>
-pub fn parse_value_options(parser: &mut Parser) -> SqlResult<HashMap<String, String>> {
-    let mut options = HashMap::new();
+pub fn parse_value_options(parser: &mut Parser) -> SqlResult<Vec<(String, String)>> {
+    let mut options = vec![];
     parser.expect_token(&Token::LParen)?;
     loop {
         let key = parse_option_key(parser)?;
         let value = parse_option_value(parser)?;
-        options.insert(key, value);
+        options.push((key, value));
         let comma = parser.consume_token(&Token::Comma);
         if parser.consume_token(&Token::RParen) {
             // allow a trailing comma, even though it's not in standard

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use framework_common::spec;
 use framework_sql::expression::{parse_expression, parse_object_name};
 use framework_sql::statement::parse_sql_statement;
@@ -144,7 +142,7 @@ impl TryFrom<RelType> for RelationNode {
                         } = x;
                         spec::ReadType::NamedTable(spec::ReadNamedTable {
                             name: parse_object_name(unparsed_identifier.as_str())?,
-                            options,
+                            options: options.into_iter().collect(),
                         })
                     }
                     ReadType::DataSource(x) => {
@@ -166,7 +164,7 @@ impl TryFrom<RelType> for RelationNode {
                         spec::ReadType::DataSource(spec::ReadDataSource {
                             format,
                             schema,
-                            options,
+                            options: options.into_iter().collect(),
                             paths,
                             predicates,
                         })
@@ -372,7 +370,7 @@ impl TryFrom<RelType> for RelationNode {
                         let named_arguments = args
                             .into_iter()
                             .map(|(k, v)| Ok((k, v.try_into()?)))
-                            .collect::<SparkResult<HashMap<_, _>>>()?;
+                            .collect::<SparkResult<Vec<_>>>()?;
                         Ok(RelationNode::Query(spec::QueryNode::WithParameters {
                             input: Box::new(input),
                             positional_arguments,
@@ -717,7 +715,7 @@ impl TryFrom<RelType> for RelationNode {
                     input: Box::new((*input).try_into()?),
                     format,
                     schema: schema.map(|x| x.into_schema(DEFAULT_FIELD_NAME, true)),
-                    options,
+                    options: options.into_iter().collect(),
                 })))
             }
             RelType::GroupMap(group_map) => {
@@ -1198,7 +1196,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         if_not_exists: false,
                         or_replace: false,
                         unbounded: false,
-                        options,
+                        options: options.into_iter().collect(),
                         query: None,
                         definition: None,
                     },
@@ -1230,7 +1228,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         if_not_exists: false,
                         or_replace: false,
                         unbounded: false,
-                        options,
+                        options: options.into_iter().collect(),
                         query: None,
                         definition: None,
                     },

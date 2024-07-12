@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
 use crate::spec::data_type::Schema;
@@ -129,7 +127,7 @@ pub enum QueryNode {
     },
     WithColumnsRenamed {
         input: Box<QueryPlan>,
-        rename_columns_map: HashMap<Identifier, Identifier>,
+        rename_columns_map: Vec<(Identifier, Identifier)>,
     },
     Drop {
         input: Box<QueryPlan>,
@@ -248,7 +246,7 @@ pub enum QueryNode {
     WithParameters {
         input: Box<QueryPlan>,
         positional_arguments: Vec<Literal>,
-        named_arguments: HashMap<String, Literal>,
+        named_arguments: Vec<(String, Literal)>,
     },
     Values(Vec<Vec<Expr>>),
     TableAlias {
@@ -397,7 +395,7 @@ pub enum ReadType {
 #[serde(rename_all = "camelCase")]
 pub struct ReadNamedTable {
     pub name: ObjectName,
-    pub options: HashMap<String, String>,
+    pub options: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -405,7 +403,7 @@ pub struct ReadNamedTable {
 pub struct ReadUdtf {
     pub name: ObjectName,
     pub arguments: Vec<Expr>,
-    pub options: HashMap<String, String>,
+    pub options: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -413,7 +411,7 @@ pub struct ReadUdtf {
 pub struct ReadDataSource {
     pub format: Option<String>,
     pub schema: Option<Schema>,
-    pub options: HashMap<String, String>,
+    pub options: Vec<(String, String)>,
     pub paths: Vec<String>,
     pub predicates: Vec<Expr>,
 }
@@ -504,7 +502,7 @@ pub struct Parse {
     pub input: Box<QueryPlan>,
     pub format: ParseFormat,
     pub schema: Option<Schema>,
-    pub options: HashMap<String, String>,
+    pub options: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -575,7 +573,7 @@ pub struct TableDefinition {
     pub if_not_exists: bool,
     pub or_replace: bool,
     pub unbounded: bool,
-    pub options: HashMap<String, String>,
+    pub options: Vec<(String, String)>,
     /// The query for `CREATE TABLE ... AS SELECT ...` (CTAS) statements.
     pub query: Option<Box<QueryPlan>>,
     pub definition: Option<String>,
@@ -587,13 +585,13 @@ pub struct DatabaseDefinition {
     pub if_not_exists: bool,
     pub comment: Option<String>,
     pub location: Option<String>,
-    pub properties: HashMap<String, String>,
+    pub properties: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogDefinition {
-    pub options: HashMap<String, String>,
+    pub options: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -614,8 +612,8 @@ pub struct Write {
     pub sort_columns: Vec<Identifier>,
     pub partitioning_columns: Vec<Identifier>,
     pub bucket_by: Option<SaveBucketBy>,
-    pub options: HashMap<String, String>,
-    pub table_properties: HashMap<String, String>,
+    pub options: Vec<(String, String)>,
+    pub table_properties: Vec<(String, String)>,
     pub overwrite_condition: Option<Expr>,
 }
 
