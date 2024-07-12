@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use framework_common::spec;
 use sqlparser::ast;
 use sqlparser::keywords::Keyword;
@@ -144,7 +142,7 @@ fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement> {
 
     let mut file_format: Option<String> = None;
     let mut comment: Option<String> = None;
-    let mut options: HashMap<String, String> = HashMap::new();
+    let mut options: Vec<(String, String)> = vec![];
     let mut table_partition_cols: Vec<spec::Identifier> = vec![];
     let mut location: Option<String> = None;
     let mut table_properties: Vec<ast::SqlOption> = vec![];
