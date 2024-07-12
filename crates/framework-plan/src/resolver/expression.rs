@@ -284,6 +284,11 @@ impl PlanResolver<'_> {
                 arguments,
             } => self.resolve_expression_call_function(function_name, arguments, schema, state),
             Expr::Placeholder(placeholder) => self.resolve_expression_placeholder(placeholder),
+            Expr::Rollup(rollup) => self.resolve_expression_rollup(rollup, schema, state),
+            Expr::Cube(cube) => self.resolve_expression_cube(cube, schema, state),
+            Expr::GroupingSets(grouping_sets) => {
+                self.resolve_expression_grouping_sets(grouping_sets, schema, state)
+            }
         }
     }
 
@@ -738,6 +743,48 @@ impl PlanResolver<'_> {
         let name = placeholder.clone();
         let expr = expr::Expr::Placeholder(expr::Placeholder::new(placeholder, None));
         Ok(NamedExpr::new(vec![name], expr))
+    }
+
+    fn resolve_expression_rollup(
+        &self,
+        rollup: Vec<spec::Expr>,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let expr = self.resolve_expressions(rollup, schema, state)?;
+        Ok(NamedExpr::new(
+            vec![],
+            expr::Expr::GroupingSet(expr::GroupingSet::Rollup(expr)),
+        ))
+    }
+
+    fn resolve_expression_cube(
+        &self,
+        cube: Vec<spec::Expr>,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let expr = self.resolve_expressions(cube, schema, state)?;
+        Ok(NamedExpr::new(
+            vec![],
+            expr::Expr::GroupingSet(expr::GroupingSet::Cube(expr)),
+        ))
+    }
+
+    fn resolve_expression_grouping_sets(
+        &self,
+        grouping_sets: Vec<Vec<spec::Expr>>,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let expr = grouping_sets
+            .into_iter()
+            .map(|x| self.resolve_expressions(x, schema, state))
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok(NamedExpr::new(
+            vec![],
+            expr::Expr::GroupingSet(expr::GroupingSet::GroupingSets(expr)),
+        ))
     }
 }
 
