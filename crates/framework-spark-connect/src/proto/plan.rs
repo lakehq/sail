@@ -327,24 +327,39 @@ impl TryFrom<RelType> for RelationNode {
                     GroupType::Unspecified => {
                         return Err(SparkError::invalid("unspecified aggregate group type"))
                     }
-                    GroupType::Groupby => spec::QueryNode::Aggregate(spec::Aggregate {
-                        input: Box::new(input),
-                        grouping,
-                        aggregate,
-                        having: None,
-                    }),
-                    GroupType::Rollup => spec::QueryNode::Aggregate(spec::Aggregate {
-                        input: Box::new(input),
-                        grouping: vec![spec::Expr::Rollup(grouping)],
-                        aggregate,
-                        having: None,
-                    }),
-                    GroupType::Cube => spec::QueryNode::Aggregate(spec::Aggregate {
-                        input: Box::new(input),
-                        grouping: vec![spec::Expr::Cube(grouping)],
-                        aggregate,
-                        having: None,
-                    }),
+                    GroupType::Groupby => {
+                        if pivot.is_some() {
+                            return Err(SparkError::invalid("pivot with group-by"));
+                        }
+                        spec::QueryNode::Aggregate(spec::Aggregate {
+                            input: Box::new(input),
+                            grouping,
+                            aggregate,
+                            having: None,
+                        })
+                    }
+                    GroupType::Rollup => {
+                        if pivot.is_some() {
+                            return Err(SparkError::invalid("pivot with rollup"));
+                        }
+                        spec::QueryNode::Aggregate(spec::Aggregate {
+                            input: Box::new(input),
+                            grouping: vec![spec::Expr::Rollup(grouping)],
+                            aggregate,
+                            having: None,
+                        })
+                    }
+                    GroupType::Cube => {
+                        if pivot.is_some() {
+                            return Err(SparkError::invalid("pivot with cube"));
+                        }
+                        spec::QueryNode::Aggregate(spec::Aggregate {
+                            input: Box::new(input),
+                            grouping: vec![spec::Expr::Cube(grouping)],
+                            aggregate,
+                            having: None,
+                        })
+                    }
                     GroupType::Pivot => {
                         let pivot = pivot.required("pivot")?;
                         let sc::aggregate::Pivot { col, values } = pivot;
