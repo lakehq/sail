@@ -307,7 +307,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
         Statement::Insert(ast::Insert {
             or,
             ignore,
-            into,
+            into: _,
             table_name,
             table_alias,
             columns,
@@ -322,17 +322,22 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             priority,
             insert_alias,
         }) => {
+            // Spark Syntax reference:
+            //  https://docs.databricks.com/en/sql/language-manual/sql-ref-syntax-dml-insert-into.html
+            //  https://spark.apache.org/docs/3.5.1/sql-ref-syntax-dml-insert-table.html#content
+            let Some(source) = source else {
+                return Err(SqlError::invalid("Inserts without a source not supported"));
+            };
             if or.is_some() {
                 return Err(SqlError::invalid("Inserts with or clauses not supported"));
             }
-            if partitioned.is_some() {
-                return Err(SqlError::invalid("Partitioned inserts not yet supported"));
+            if ignore {
+                return Err(SqlError::invalid("Insert-ignore clause not supported"));
             }
-            if !after_columns.is_empty() {
-                return Err(SqlError::invalid("After-columns clause not supported"));
-            }
-            if table {
-                return Err(SqlError::invalid("Table clause not supported"));
+            if table_alias.is_some() {
+                return Err(SqlError::invalid(
+                    "Inserts with a table alias not supported: {table_alias:?}",
+                ));
             }
             if on.is_some() {
                 return Err(SqlError::invalid("Insert-on clause not supported"));
@@ -340,23 +345,12 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             if returning.is_some() {
                 return Err(SqlError::invalid("Insert-returning clause not supported"));
             }
-            if ignore {
-                return Err(SqlError::invalid("Insert-ignore clause not supported"));
-            }
-            let Some(source) = source else {
-                return Err(SqlError::invalid("Inserts without a source not supported"));
-            };
-            if let Some(table_alias) = table_alias {
-                return Err(SqlError::invalid(
-                    "Inserts with a table alias not supported: {table_alias:?}",
-                ));
-            }
             if replace_into {
                 return Err(SqlError::invalid(
                     "Inserts with a `REPLACE INTO` clause not supported",
                 ));
             }
-            if let Some(priority) = priority {
+            if priority.is_some() {
                 return Err(SqlError::invalid(
                     "Inserts with a `PRIORITY` clause not supported: {priority:?}",
                 ));
@@ -364,7 +358,6 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             if insert_alias.is_some() {
                 return Err(SqlError::invalid("Inserts with an alias not supported"));
             }
-            let _ = into;
             Err(SqlError::todo("SQL Insert"))
         }
         Statement::Call(ast::Function {
