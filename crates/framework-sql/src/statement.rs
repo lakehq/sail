@@ -324,37 +324,43 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             //  https://docs.databricks.com/en/sql/language-manual/sql-ref-syntax-dml-insert-into.html
             //  https://spark.apache.org/docs/3.5.1/sql-ref-syntax-dml-insert-table.html#content
             let Some(source) = source else {
-                return Err(SqlError::invalid("Inserts without a source not supported"));
+                return Err(SqlError::invalid("INSERT without source is not supported."));
             };
             if or.is_some() {
-                return Err(SqlError::invalid("Inserts with or clauses not supported"));
-            }
-            if ignore {
-                return Err(SqlError::invalid("Insert-ignore clause not supported"));
-            }
-            if table_alias.is_some() {
                 return Err(SqlError::invalid(
-                    "Inserts with a table alias not supported: {table_alias:?}",
+                    "INSERT with `OR` clause is not supported.",
                 ));
             }
+            if ignore {
+                return Err(SqlError::invalid(
+                    "INSERT `IGNORE` clause is not supported.",
+                ));
+            }
+            if table_alias.is_some() {
+                return Err(SqlError::invalid(format!(
+                    "INSERT with a table alias is not supported: {table_alias:?}.",
+                )));
+            }
             if on.is_some() {
-                return Err(SqlError::invalid("Insert-on clause not supported"));
+                return Err(SqlError::invalid("INSERT `ON` clause is not supported."));
             }
             if returning.is_some() {
-                return Err(SqlError::invalid("Insert-returning clause not supported"));
+                return Err(SqlError::invalid(
+                    "INSERT `RETURNING` clause is not supported.",
+                ));
             }
             if replace_into {
                 return Err(SqlError::invalid(
-                    "Inserts with a `REPLACE INTO` clause not supported",
+                    "INSERT with a `REPLACE INTO` clause is not supported.",
                 ));
             }
             if priority.is_some() {
-                return Err(SqlError::invalid(
-                    "Inserts with a `PRIORITY` clause not supported: {priority:?}",
-                ));
+                return Err(SqlError::invalid(format!(
+                    "INSERT with a `PRIORITY` clause is not supported: {priority:?}.",
+                )));
             }
             if insert_alias.is_some() {
-                return Err(SqlError::invalid("Inserts with an alias not supported"));
+                return Err(SqlError::invalid("INSERT with an alias is not supported."));
             }
             Err(SqlError::todo("SQL Insert"))
         }
