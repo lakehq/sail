@@ -3,19 +3,19 @@
     {
       "input": "INSERT INTO s SELECT /*+ REPARTITION(100), COALESCE(500), COALESCE(10) */ * FROM t",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "not implemented: SQL Insert"
       }
     },
     {
       "input": "insert into s select * from t",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "not implemented: SQL Insert"
       }
     },
     {
       "input": "insert into table s partition (c = 'd', e = 1) select * from t",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "not implemented: SQL Insert"
       }
     }
   ]

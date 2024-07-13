@@ -306,14 +306,14 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             or,
             ignore,
             into: _,
-            table_name,
+            table_name: _, // using
             table_alias,
-            columns,
-            overwrite,
+            columns: _,   // using
+            overwrite: _, // using
             source,
-            partitioned,
-            after_columns,
-            table,
+            partitioned: _,   // using
+            after_columns: _, // using
+            table: _,         // using
             on,
             returning,
             replace_into,
@@ -323,7 +323,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             // Spark Syntax reference:
             //  https://docs.databricks.com/en/sql/language-manual/sql-ref-syntax-dml-insert-into.html
             //  https://spark.apache.org/docs/3.5.1/sql-ref-syntax-dml-insert-table.html#content
-            let Some(source) = source else {
+            let Some(_source) = source else {
                 return Err(SqlError::invalid("INSERT without source is not supported."));
             };
             if or.is_some() {

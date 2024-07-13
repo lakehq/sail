@@ -3,7 +3,7 @@
     {
       "input": "\nINSERT INTO testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2)\nSELECT * FROM source\n      ",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "not implemented: SQL Insert"
       }
     },
     {
@@ -29,7 +29,7 @@
     {
       "input": "INSERT INTO TABLE testcat.ns1.ns2.tbl (a, b) SELECT * FROM source",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "not implemented: SQL Insert"
       }
     },
     {
@@ -41,61 +41,61 @@
     {
       "input": "INSERT INTO TABLE testcat.ns1.ns2.tbl SELECT * FROM source",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "not implemented: SQL Insert"
       }
     },
     {
       "input": "INSERT INTO TABLE testcat.ns1.ns2.tbl SELECT * FROM testcat2.db.tbl",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "not implemented: SQL Insert"
       }
     },
     {
       "input": "INSERT INTO t PARTITION(part = X'537061726B2053514C') VALUES('a')",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "not implemented: SQL Insert"
       }
     },
     {
       "input": "INSERT INTO t PARTITION(part = date'2019-01-02') VALUES ('a', DEFAULT)",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "not implemented: SQL Insert"
       }
     },
     {
       "input": "INSERT INTO t PARTITION(part = date'2019-01-02') VALUES('a')",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "not implemented: SQL Insert"
       }
     },
     {
       "input": "INSERT INTO t PARTITION(part = interval'1 day 2 hour 3 minute 4.123456 second 5 millisecond 6 microsecond') VALUES('a')",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "not implemented: SQL Insert"
       }
     },
     {
       "input": "INSERT INTO t PARTITION(part = interval'1 year 2 month') VALUES('a')",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "not implemented: SQL Insert"
       }
     },
     {
       "input": "INSERT INTO t PARTITION(part = interval'7 months 1 days 0.001 seconds') VALUES('a')",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "not implemented: SQL Insert"
       }
     },
     {
       "input": "INSERT INTO t PARTITION(part = timestamp'2019-01-02 11:11:11') VALUES('a')",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "not implemented: SQL Insert"
       }
     },
     {
       "input": "INSERT INTO testcat.ns1.ns2.tbl (a, b) SELECT * FROM source",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "not implemented: SQL Insert"
       }
     },
     {
@@ -107,7 +107,7 @@
     {
       "input": "INSERT INTO testcat.ns1.ns2.tbl SELECT * FROM source",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "not implemented: SQL Insert"
       }
     }
   ]

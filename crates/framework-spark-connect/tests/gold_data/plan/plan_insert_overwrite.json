@@ -9,7 +9,7 @@
     {
       "input": "insert overwrite table s select * from t",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "not implemented: SQL Insert"
       }
     }
   ]
