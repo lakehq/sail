@@ -68,6 +68,16 @@ install-pyspark = "{env:HATCH_UV} pip install opt/spark/python/dist/pyspark-3.5.
 [tool.hatch.envs.test.overrides]
 env.CI.installer = "uv"
 
+[tool.hatch.envs.notebook]
+detached = true
+path = ".venvs/notebook"
+python = "3.11"
+installer = "pip"
+dependencies = [
+    "pyspark[connect,sql]==3.5.1",
+    "jupyter",
+]
+
 [tool.hatch.build.targets.sdist]
 packages = ["python/framework"]
 
