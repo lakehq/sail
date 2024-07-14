@@ -323,6 +323,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             // Spark Syntax reference:
             //  https://docs.databricks.com/en/sql/language-manual/sql-ref-syntax-dml-insert-into.html
             //  https://spark.apache.org/docs/3.5.1/sql-ref-syntax-dml-insert-table.html#content
+            // TODO: Custom parsing to fully sport Spark's INSERT syntax
             let Some(_source) = source else {
                 return Err(SqlError::invalid("INSERT without source is not supported."));
             };
