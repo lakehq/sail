@@ -31,6 +31,7 @@ python = "3.11"
 installer = "pip"
 dependencies = [
     "pyspark[connect,sql]==3.5.1",
+    "ibis-framework[pyspark]~=9.1",
     "pytest~=8.2",
 ]
 
@@ -43,6 +44,8 @@ path = ".venvs/test"
 python = "3.11"
 installer = "pip"
 dependencies = [
+    # PySpark dependencies
+    # PySpark itself is not added here since we install our patched version.
     "numpy~=1.15",
     "scipy~=1.14",
     "pandas==2.0.3",
@@ -56,10 +59,22 @@ dependencies = [
     "grpcio>=1.56,<1.57",
     "grpcio-status>=1.56,<1.57",
     "googleapis-common-protos==1.56.4",
+    # pytest and plugins
     "pytest~=8.2",
     "pytest-xdist~=3.6.1",
     "pytest-timeout~=2.3.1",
     "pytest-reportlog~=0.4.0",
+    # Ibis and its test dependencies
+    "ibis-framework[pyspark]~=9.1",
+    "filelock>=3.7.0,<4",
+    "hypothesis>=6.58.0,<7",
+    "packaging>=21.3,<25",
+    "requests>=2,<3",
+    "tomli>=2.0.1,<3",
+    "pytest-httpserver>=1.0.5,<2",
+    "pytest-mock>=3.6.1,<4",
+    "pytest-repeat>=0.9.1,<0.10",
+    "pytest-snapshot>=0.9.0,<1",
 ]
 
 [tool.hatch.envs.test.scripts]

@@ -365,8 +365,7 @@ impl PlanResolver<'_> {
             .ok_or_else(|| PlanError::invalid(format!("empty attribute: {:?}", name)))?;
         let last = name
             .last()
-            .ok_or_else(|| PlanError::invalid(format!("empty attribute: {:?}", name)))?
-            .clone();
+            .ok_or_else(|| PlanError::invalid(format!("empty attribute: {:?}", name)))?;
         let column = if let Some(plan_id) = plan_id {
             let field = state.get_resolved_field_name_in_plan(plan_id, first)?;
             schema.columns_with_unqualified_name(field)
@@ -374,7 +373,7 @@ impl PlanResolver<'_> {
             schema
                 .iter()
                 .filter_map(|(qualifier, field)| {
-                    if state.get_field_name(field.name()).is_ok_and(|f| f == first) {
+                    if state.get_field_name(field.name()).is_ok_and(|f| f == last) {
                         Some(Column::new(qualifier.cloned(), field.name()))
                     } else {
                         None
@@ -388,7 +387,7 @@ impl PlanResolver<'_> {
         let column = column
             .one()
             .map_err(|_| plan_datafusion_err!("cannot resolve attribute: {:?}", name))?;
-        Ok(NamedExpr::new(vec![last], expr::Expr::Column(column)))
+        Ok(NamedExpr::new(vec![last.clone()], expr::Expr::Column(column)))
     }
 
     fn resolve_expression_function(

@@ -19,6 +19,15 @@ On macOS, you can install these tools via Homebrew.
 brew install protobuf hatch maturin
 ```
 
+### Dependency Projects
+
+Run the following command to clone the optional dependency projects to the `opt` directory.
+
+```bash
+git clone git@github.com:apache/spark.git opt/spark
+git clone git@github.com:ibis-project/testing-data.git opt/ibis-testing-data
+```
+
 ### Building the Project
 
 Run the following commands to verify the code before committing changes.
@@ -76,12 +85,6 @@ either
 (1) the location of `javac` (for Linux), or (2) the output of `/usr/libexec/java_home` (for macOS).
 
 ### Spark Setup
-
-Run the following command to clone the Spark project.
-
-```bash
-git clone git@github.com:apache/spark.git opt/spark
-```
 
 Run the following command to build the Spark project.
 The command creates a patched PySpark package containing Python code along with the JAR files.
