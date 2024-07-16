@@ -1511,7 +1511,7 @@ impl PlanResolver<'_> {
         //  3. create external table
         //  4. fill external table from query table (copy to)
         let fields = self.resolve_fields(schema.fields)?;
-        let schema = DFSchema::from_unqualifed_fields(fields, HashMap::new())?;
+        let schema = DFSchema::from_unqualified_fields(fields, HashMap::new())?;
         let column_defaults: Vec<(String, Expr)> = column_defaults
             .into_iter()
             .map(|(name, expr)| Ok((name, self.resolve_expression(expr, &schema, state)?)))

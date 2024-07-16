@@ -15,7 +15,7 @@ opentelemetry-otlp = { version = "0.16.0", features = ["trace", "metrics", "grpc
 opentelemetry-proto = { version = "0.6.0" }
 opentelemetry-stdout = { version = "0.4.0", features = ["trace"] }
 opentelemetry-resource-detectors = "0.2.0"
-thiserror = { version = "1.0.61" }
+thiserror = { version = "1.0.62" }
 tokio = { version = "1.38.0", features = ["full"] }
 tokio-stream = "0.1.15"
 tonic = { version = "0.11", features = ["tls", "tls-roots"] }
@@ -30,7 +30,7 @@ pbjson-types = "0.6"
 pbjson-build = "0.6"
 tower = { version = "0.4", features = ["full"] }
 tower-http = { version = "0.4", features = ["full"] }
-uuid = { version = "1.9.0", features = ["v4"] }
+uuid = { version = "1.10.0", features = ["v4"] }
 async-trait = "0.1.81"
 async-recursion = "1.1.0"
 async-stream = "0.3"
@@ -46,7 +46,7 @@ chrono-tz = "0.9"
 futures = "0.3"
 comfy-table = "7.1"
 html-escape = "0.2"
-syn = "2.0.69"
+syn = "2.0.71"
 quote = "1.0.36"
 prettyplease = "0.2.20"
 phf = { version = "0.11.2", features = ["macros"] }
@@ -55,26 +55,20 @@ either = "1.12.0"
 #
 # The versions of the following dependencies are managed manually.
 #
-datafusion = { version = "39.0.0", features = ["serde", "pyarrow"] }
-datafusion-common = { version = "39.0.0", features = ["object_store", "pyarrow"] }
-datafusion-expr = "39.0.0"
-datafusion-functions-array = "39.0.0"
+datafusion = { version = "40.0.0", features = ["serde", "pyarrow"] }
+datafusion-common = { version = "40.0.0", features = ["object_store", "pyarrow"] }
+datafusion-expr = "40.0.0"
+datafusion-functions-array = "40.0.0"
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 # 0.21 breaks when datafusion has pyarrow enabled
 pyo3 = { version = "0.21.2", features = ["auto-initialize", "serde"] }
 # Should be the equivalent of enabling the pyarrow feature in datafusion since we already have pyo3 in the workspace
-arrow = { version = "52.0.0", features = ["ffi", "pyarrow"] }
-arrow-cast = { version = "52.0.0" }
+arrow = { version = "52.1.0", features = ["ffi", "pyarrow"] }
+arrow-cast = { version = "52.1.0" }
 # We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.
 sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "f631629", features = ["serde", "visitor"] }
-serde_arrow = { version = "0.11", features = ["arrow-52"] }
+serde_arrow = { version = "0.11.6", features = ["arrow-52"] }
 
 [patch.crates-io]
 # Override dependencies to use our forked versions.
 # You can use `path = "..."` to temporarily point to your local copy of the crates to speed up local development.
-
-# Use datafusion patch until version 40.0.0 is released
-datafusion = { git = "https://github.com/apache/datafusion.git", rev = "49aee89" }
-datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "49aee89" }
-datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "49aee89" }
-datafusion-functions-array = { git = "https://github.com/apache/datafusion.git", rev = "49aee89" }
