@@ -387,7 +387,10 @@ impl PlanResolver<'_> {
         let column = column
             .one()
             .map_err(|_| plan_datafusion_err!("cannot resolve attribute: {:?}", name))?;
-        Ok(NamedExpr::new(vec![last.clone()], expr::Expr::Column(column)))
+        Ok(NamedExpr::new(
+            vec![last.clone()],
+            expr::Expr::Column(column),
+        ))
     }
 
     fn resolve_expression_function(
