@@ -72,6 +72,7 @@ impl PlanResolver<'_> {
                 Ok(ScalarValue::List(ScalarValue::new_list_from_iter(
                     scalars.into_iter(),
                     &element_type,
+                    true,
                 )))
             }
             Literal::Map { .. } => Err(PlanError::invalid("map literal")),
