@@ -1216,6 +1216,7 @@ dependencies = [
  "futures",
  "html-escape",
  "lazy_static",
+ "num-traits",
  "pyo3",
  "regex",
  "ryu",

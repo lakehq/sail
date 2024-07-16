@@ -52,6 +52,7 @@ prettyplease = "0.2.20"
 phf = { version = "0.11.2", features = ["macros"] }
 ryu = "1.0.18"
 either = "1.12.0"
+num-traits = "0.2.19"
 #
 # The versions of the following dependencies are managed manually.
 #
