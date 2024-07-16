@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use datafusion::execution::context::SessionState;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{exec_datafusion_err, Result, SchemaReference, TableReference};
+use datafusion_common::{Result, SchemaReference, TableReference};
 use serde::{Deserialize, Serialize};
 
 use crate::config::PlanConfig;
@@ -22,42 +21,6 @@ pub(crate) struct EmptyMetadata {}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SingleValueMetadata<T> {
     pub(crate) value: T,
-}
-
-trait SessionContextExt {
-    fn read_state<T, F>(&self, f: F) -> Result<T>
-    where
-        F: FnOnce(&SessionState) -> Result<T>;
-
-    fn write_state<T, F>(&self, f: F) -> Result<T>
-    where
-        F: FnOnce(&mut SessionState) -> Result<T>;
-}
-
-impl SessionContextExt for SessionContext {
-    fn read_state<T, F>(&self, f: F) -> Result<T>
-    where
-        F: FnOnce(&SessionState) -> Result<T>,
-    {
-        let state_ref = self
-            .state_weak_ref()
-            .upgrade()
-            .ok_or_else(|| exec_datafusion_err!("failed to read session context state"))?;
-        let state = state_ref.read();
-        f(&state)
-    }
-
-    fn write_state<T, F>(&self, f: F) -> Result<T>
-    where
-        F: FnOnce(&mut SessionState) -> Result<T>,
-    {
-        let state_ref = self
-            .state_weak_ref()
-            .upgrade()
-            .ok_or_else(|| exec_datafusion_err!("failed to write session context state"))?;
-        let mut state = state_ref.write();
-        f(&mut state)
-    }
 }
 
 pub(crate) struct CatalogManager<'a> {

@@ -5,10 +5,15 @@ use std::task::{Context, Poll};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
-use datafusion::common::{FileType, TableReference};
+use datafusion::common::TableReference;
 use datafusion::dataframe::DataFrame;
+use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
+use datafusion::datasource::file_format::csv::CsvFormatFactory;
+use datafusion::datasource::file_format::json::JsonFormatFactory;
+use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
+use datafusion::datasource::file_format::{format_as_file_type, FileFormatFactory};
 use datafusion::logical_expr::LogicalPlanBuilder;
-use datafusion_common::config::{FormatOptions, TableOptions};
+use datafusion_common::config::{ConfigFileType, TableOptions};
 use datafusion_expr::ScalarUDF;
 use framework_common::spec::{
     CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction, FunctionDefinition,
@@ -199,9 +204,7 @@ pub(crate) async fn handle_execute_write_operation(
         return Err(SparkError::unsupported("bucketing"));
     }
 
-    // TODO: option compatibility
     let mut table_options = TableOptions::default_from_session_config(ctx.state().config_options());
-    table_options.alter_with_string_hash_map(&write.options)?;
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
     let NamedPlan { plan, fields } = resolver.resolve_named_plan(relation.try_into()?).await?;
     let plan = if let Some(fields) = fields {
@@ -218,23 +221,26 @@ pub(crate) async fn handle_execute_write_operation(
                 format!("{}/", path)
             };
             let source = write.source.required("source")?;
-            let format_options = match source.as_str() {
+            // FIXME: option compatibility
+            let format_factory: Arc<dyn FileFormatFactory> = match source.as_str() {
                 "json" => {
-                    table_options.set_file_format(FileType::JSON);
-                    FormatOptions::JSON(table_options.json)
+                    table_options.set_config_format(ConfigFileType::JSON);
+                    table_options.alter_with_string_hash_map(&write.options)?;
+                    Arc::new(JsonFormatFactory::new_with_options(table_options.json))
                 }
                 "parquet" => {
-                    table_options.set_file_format(FileType::PARQUET);
-                    FormatOptions::PARQUET(table_options.parquet)
+                    table_options.set_config_format(ConfigFileType::PARQUET);
+                    table_options.alter_with_string_hash_map(&write.options)?;
+                    Arc::new(ParquetFormatFactory::new_with_options(
+                        table_options.parquet,
+                    ))
                 }
                 "csv" => {
-                    table_options.set_file_format(FileType::CSV);
-                    FormatOptions::CSV(table_options.csv)
+                    table_options.set_config_format(ConfigFileType::CSV);
+                    table_options.alter_with_string_hash_map(&write.options)?;
+                    Arc::new(CsvFormatFactory::new_with_options(table_options.csv))
                 }
-                "arrow" => {
-                    table_options.set_file_format(FileType::ARROW);
-                    FormatOptions::ARROW
-                }
+                "arrow" => Arc::new(ArrowFormatFactory::new()),
                 _ => {
                     return Err(SparkError::invalid(format!(
                         "unsupported source: {}",
@@ -245,7 +251,7 @@ pub(crate) async fn handle_execute_write_operation(
             LogicalPlanBuilder::copy_to(
                 plan,
                 path,
-                format_options,
+                format_as_file_type(format_factory),
                 write.options,
                 write.partitioning_columns,
             )

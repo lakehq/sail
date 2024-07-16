@@ -4,7 +4,7 @@ use framework_common::unwrap_or;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::utils::match_pattern;
-use crate::catalog::{CatalogManager, SessionContextExt};
+use crate::catalog::CatalogManager;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DatabaseMetadata {
@@ -27,8 +27,9 @@ impl DatabaseMetadata {
 
 impl<'a> CatalogManager<'a> {
     pub(crate) fn default_database(&self) -> Result<String> {
-        self.ctx
-            .read_state(|state| Ok(state.config().options().catalog.default_schema.clone()))
+        let state = self.ctx.state_ref();
+        let state = state.read();
+        Ok(state.config().options().catalog.default_schema.clone())
     }
 
     pub(crate) fn set_default_database(&self, database_name: String) -> Result<()> {
@@ -40,10 +41,10 @@ impl<'a> CatalogManager<'a> {
         if database.is_none() {
             return exec_err!("database does not exist: {}", database_name);
         }
-        self.ctx.write_state(move |state| {
-            state.config_mut().options_mut().catalog.default_schema = database_name;
-            Ok(())
-        })
+        let state = self.ctx.state_ref();
+        let mut state = state.write();
+        state.config_mut().options_mut().catalog.default_schema = database_name;
+        Ok(())
     }
 
     pub(crate) fn get_database(
