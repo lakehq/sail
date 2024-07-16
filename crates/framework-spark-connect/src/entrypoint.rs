@@ -1,11 +1,9 @@
 use std::future::Future;
 
 use tokio::net::TcpListener;
-use tonic::codegen::http;
 use tonic::transport::server::TcpIncoming;
 use tower::ServiceBuilder;
-use tower_http::trace::{DefaultMakeSpan, TraceLayer};
-use tracing::{debug, Span};
+use tower_http::trace::TraceLayer;
 
 use crate::server::SparkConnectServer;
 use crate::spark::connect::spark_connect_service_server::SparkConnectServiceServer;
@@ -33,16 +31,7 @@ where
     let server = SparkConnectServer::default();
 
     let layer = ServiceBuilder::new()
-        .layer(
-            TraceLayer::new_for_grpc()
-                .make_span_with(DefaultMakeSpan::new().include_headers(true))
-                .on_request(|request: &http::Request<_>, _: &Span| {
-                    debug!("{:?}", request);
-                })
-                .on_response(|response: &http::response::Response<_>, _, _: &Span| {
-                    debug!("{:?}", response);
-                }),
-        )
+        .layer(TraceLayer::new_for_grpc())
         .into_inner();
 
     let nodelay = true;
