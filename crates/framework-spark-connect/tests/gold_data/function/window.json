@@ -182,7 +182,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Internal(\"Cannot convert Int32(2) to i64\")"
+        "success": "ok"
       }
     },
     {
@@ -219,7 +219,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Cannot convert Int32(2) to i64.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "success": "ok"
       }
     },
     {

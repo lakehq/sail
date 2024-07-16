@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::functions_aggregate::{
-    average, bit_and_or_xor, bool_and_or, correlation, count, covariance, first_last, median, regr,
-    stddev, sum, variance,
+    average, bit_and_or_xor, bool_and_or, correlation, count, covariance, first_last, grouping,
+    median, regr, stddev, sum, variance,
 };
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::{expr, AggregateFunction, AggregateUDF};
@@ -60,7 +60,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggregateFunctionDe
         ("every", F::udaf(bool_and_or::bool_and_udaf())),
         ("first", F::udaf(first_last::first_value_udaf())),
         ("first_value", F::udaf(first_last::first_value_udaf())),
-        ("grouping", F::agg(AggregateFunction::Grouping)),
+        ("grouping", F::udaf(grouping::grouping_udaf())),
         ("grouping_id", F::unknown("grouping_id")),
         ("histogram_numeric", F::unknown("histogram_numeric")),
         ("hll_sketch_agg", F::unknown("hll_sketch_agg")),

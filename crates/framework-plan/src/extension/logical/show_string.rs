@@ -240,7 +240,7 @@ impl ShowStringNode {
             names,
             limit,
             format: format.clone(),
-            schema: Arc::new(DFSchema::from_unqualifed_fields(
+            schema: Arc::new(DFSchema::from_unqualified_fields(
                 format.schema().fields.clone(),
                 HashMap::new(),
             )?),
