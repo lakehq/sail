@@ -76,6 +76,7 @@ fn build_table_reference(name: spec::ObjectName) -> PlanResult<TableReference> {
     }
 }
 
+#[derive(Debug)]
 pub struct NamedPlan {
     pub plan: LogicalPlan,
     /// The user-facing fields for query plan,
