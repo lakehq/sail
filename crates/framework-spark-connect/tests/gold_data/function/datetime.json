@@ -82,7 +82,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: when"
+        "failure": "not implemented: function: session_window"
       }
     },
     {
