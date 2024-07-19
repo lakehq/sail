@@ -12,6 +12,7 @@ fn case(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
             when_then_expr.push((Box::new(condition), Box::new(result)));
         } else {
             else_expr = Some(Box::new(condition));
+            break;
         }
     }
     Ok(expr::Expr::Case(expr::Case {
