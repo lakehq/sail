@@ -2524,7 +2524,70 @@
     {
       "input": "exists (select 1 from b where b.x = a.x)",
       "output": {
-        "failure": "not supported: expression: Exists { subquery: Query { with: None, body: Select(Select { distinct: None, top: None, projection: [UnnamedExpr(Value(Number(\"1\", None)))], into: None, from: [TableWithJoins { relation: Table { name: ObjectName([Ident { value: \"b\", quote_style: None }]), alias: None, args: None, with_hints: [], version: None, partitions: [] }, joins: [] }], lateral_views: [], selection: Some(BinaryOp { left: CompoundIdentifier([Ident { value: \"b\", quote_style: None }, Ident { value: \"x\", quote_style: None }]), op: Eq, right: CompoundIdentifier([Ident { value: \"a\", quote_style: None }, Ident { value: \"x\", quote_style: None }]) }), group_by: Expressions([]), cluster_by: [], distribute_by: [], sort_by: [], having: None, named_window: [], qualify: None, window_before_qualify: false, value_table_mode: None, connect_by: None }), order_by: [], limit: None, limit_by: [], offset: None, fetch: None, locks: [], for_clause: None }, negated: false }"
+        "success": {
+          "exists": {
+            "subquery": {
+              "project": {
+                "input": {
+                  "filter": {
+                    "input": {
+                      "read": {
+                        "namedTable": {
+                          "name": [
+                            "b"
+                          ],
+                          "options": []
+                        },
+                        "isStreaming": false
+                      },
+                      "planId": null,
+                      "sourceInfo": null
+                    },
+                    "condition": {
+                      "unresolvedFunction": {
+                        "functionName": "==",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "b",
+                                "x"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a",
+                                "x"
+                              ],
+                              "planId": null
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    }
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "literal": {
+                      "integer": 1
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "negated": false
+          }
+        }
       }
     },
     {

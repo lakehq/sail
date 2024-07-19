@@ -732,6 +732,10 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         Expr::Subquery(subquery) => Ok(spec::Expr::ScalarSubquery {
             subquery: Box::new(from_ast_query(*subquery)?),
         }),
+        Expr::Exists { subquery, negated } => Ok(spec::Expr::Exists {
+            subquery: Box::new(from_ast_query(*subquery)?),
+            negated,
+        }),
         Expr::JsonAccess { .. }
         | Expr::IsUnknown(_)
         | Expr::IsNotUnknown(_)
@@ -746,7 +750,6 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         | Expr::Position { .. }
         | Expr::Collate { .. }
         | Expr::IntroducedString { .. }
-        | Expr::Exists { .. }
         | Expr::GroupingSets(_)
         | Expr::Cube(_)
         | Expr::Rollup(_)

@@ -425,6 +425,10 @@ impl PlanResolver<'_> {
                 self.resolve_expression_scalar_subquery(*subquery, schema, state)
                     .await
             }
+            Expr::Exists { subquery, negated } => {
+                self.resolve_expression_exists(*subquery, negated, schema, state)
+                    .await
+            }
         }
     }
 
@@ -964,7 +968,7 @@ impl PlanResolver<'_> {
         } else {
             expr_fn::not_in_subquery(expr, Arc::new(subquery))
         };
-        Ok(NamedExpr::new(vec![], in_subquery))
+        Ok(NamedExpr::new(vec!["in_subquery".to_string()], in_subquery))
     }
 
     async fn resolve_expression_scalar_subquery(
@@ -975,9 +979,25 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let subquery = self.resolve_query_plan(subquery, state).await?;
         Ok(NamedExpr::new(
-            vec![],
+            vec!["subquery".to_string()],
             expr_fn::scalar_subquery(Arc::new(subquery)),
         ))
+    }
+
+    async fn resolve_expression_exists(
+        &self,
+        subquery: spec::QueryPlan,
+        negated: bool,
+        _schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let subquery = self.resolve_query_plan(subquery, state).await?;
+        let exists = if !negated {
+            expr_fn::exists(Arc::new(subquery))
+        } else {
+            expr_fn::not_exists(Arc::new(subquery))
+        };
+        Ok(NamedExpr::new(vec!["exists".to_string()], exists))
     }
 }
 

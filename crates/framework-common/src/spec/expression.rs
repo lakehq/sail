@@ -77,6 +77,10 @@ pub enum Expr {
     ScalarSubquery {
         subquery: Box<QueryPlan>,
     },
+    Exists {
+        subquery: Box<QueryPlan>,
+        negated: bool,
+    },
 }
 
 /// An identifier with only one part.
