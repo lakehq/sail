@@ -482,9 +482,10 @@ impl PlanResolver<'_> {
             CommandNode::RegisterTableFunction(_) => {
                 Err(PlanError::todo("register table function"))
             }
-            CommandNode::CreateTemporaryView { .. } => {
-                Err(PlanError::todo("create temporary view"))
-            }
+            CommandNode::CreateTemporaryView {
+                view: _,
+                definition: _,
+            } => Err(PlanError::todo("create temporary view")),
             CommandNode::Write { .. } => Err(PlanError::todo("write")),
             CommandNode::Explain { mode, input } => {
                 self.resolve_command_explain(*input, mode, state).await
