@@ -52,7 +52,7 @@ impl<T: Debug> ItemTaker for Vec<T> {
         Ok((first, second, third))
     }
 
-    fn at_least_one(mut self) -> Result<(T, Vec<T>)> {
+    fn at_least_one(self) -> Result<(T, Vec<T>)> {
         if self.is_empty() {
             return plan_err!("at least one value expected: {:?}", self);
         }

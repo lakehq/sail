@@ -2835,7 +2835,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Int32, Utf8] to the signature OneOf([Exact([Utf8, Int64]), Exact([LargeUtf8, Int64]), Exact([Utf8, Int64, Int64]), Exact([LargeUtf8, Int64, Int64])]) failed. No function matches the given name and argument types 'substr(Int32, Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tsubstr(Utf8, Int64)\n\tsubstr(LargeUtf8, Int64)\n\tsubstr(Utf8, Int64, Int64)\n\tsubstr(LargeUtf8, Int64, Int64)"
+        "success": "ok"
       }
     },
     {
@@ -2901,7 +2901,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Int32, Utf8] to the signature OneOf([Exact([Utf8, Int64]), Exact([LargeUtf8, Int64]), Exact([Utf8, Int64, Int64]), Exact([LargeUtf8, Int64, Int64])]) failed. No function matches the given name and argument types 'substr(Int32, Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tsubstr(Utf8, Int64)\n\tsubstr(LargeUtf8, Int64)\n\tsubstr(Utf8, Int64, Int64)\n\tsubstr(LargeUtf8, Int64, Int64)"
+        "success": "ok"
       }
     },
     {
@@ -2989,7 +2989,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Int32, Utf8] to the signature OneOf([Exact([Utf8, Int64]), Exact([LargeUtf8, Int64]), Exact([Utf8, Int64, Int64]), Exact([LargeUtf8, Int64, Int64])]) failed. No function matches the given name and argument types 'substr(Int32, Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tsubstr(Utf8, Int64)\n\tsubstr(LargeUtf8, Int64)\n\tsubstr(Utf8, Int64, Int64)\n\tsubstr(LargeUtf8, Int64, Int64)"
+        "success": "ok"
       }
     },
     {
@@ -3033,7 +3033,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Utf8, Utf8] to the signature OneOf([Exact([Utf8, Utf8, Int64]), Exact([LargeUtf8, LargeUtf8, Int64])]) failed. No function matches the given name and argument types 'substr_index(Int32, Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tsubstr_index(Utf8, Utf8, Int64)\n\tsubstr_index(LargeUtf8, LargeUtf8, Int64)"
+        "success": "ok"
       }
     },
     {
