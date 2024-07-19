@@ -438,8 +438,8 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         Expr::Extract { field, expr } => Ok(spec::Expr::from(Function {
             name: "extract".to_string(),
             args: vec![
-                from_ast_expression(*expr)?,
                 LiteralValue(from_ast_date_time_field(field)?).try_into()?,
+                from_ast_expression(*expr)?,
             ],
         })),
         Expr::Substring {
