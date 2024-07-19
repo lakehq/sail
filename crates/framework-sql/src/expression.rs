@@ -723,16 +723,15 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         Expr::InSubquery {
             expr,
             subquery,
-            negated: _,
-        } => {
-            let _expr = from_ast_expression(*expr)?;
-            let _subquery = from_ast_query(*subquery)?;
-            Err(SqlError::unsupported("Expr::InSubquery"))
-        }
-        Expr::Subquery(query) => {
-            let _query = from_ast_query(*query)?;
-            Err(SqlError::unsupported("Expr::Subquery"))
-        }
+            negated,
+        } => Ok(spec::Expr::InSubquery {
+            expr: Box::new(from_ast_expression(*expr)?),
+            subquery: Box::new(from_ast_query(*subquery)?),
+            negated,
+        }),
+        Expr::Subquery(subquery) => Ok(spec::Expr::ScalarSubquery {
+            subquery: Box::new(from_ast_query(*subquery)?),
+        }),
         Expr::JsonAccess { .. }
         | Expr::IsUnknown(_)
         | Expr::IsNotUnknown(_)

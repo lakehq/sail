@@ -7,7 +7,7 @@ use datafusion::common::{DFSchema, Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion_common::{plan_datafusion_err, plan_err, Column, DataFusionError};
-use datafusion_expr::{expr, window_frame, ExprSchemable, ScalarUDF};
+use datafusion_expr::{expr, expr_fn, window_frame, ExprSchemable, ScalarUDF};
 use framework_common::spec;
 use framework_python_udf::cereal::partial_pyspark_udf::{
     deserialize_partial_pyspark_udf, PartialPySparkUDF,
@@ -377,6 +377,14 @@ impl PlanResolver<'_> {
             Expr::Cube(cube) => self.resolve_expression_cube(cube, schema, state),
             Expr::GroupingSets(grouping_sets) => {
                 self.resolve_expression_grouping_sets(grouping_sets, schema, state)
+            }
+            Expr::InSubquery {
+                expr,
+                subquery,
+                negated,
+            } => self.resolve_expression_in_subquery(*expr, *subquery, negated, schema, state),
+            Expr::ScalarSubquery { subquery } => {
+                self.resolve_expression_scalar_subquery(*subquery, schema, state)
             }
         }
     }
@@ -880,6 +888,37 @@ impl PlanResolver<'_> {
         Ok(NamedExpr::new(
             vec![],
             expr::Expr::GroupingSet(expr::GroupingSet::GroupingSets(expr)),
+        ))
+    }
+
+    async fn resolve_expression_in_subquery(
+        &self,
+        expr: spec::Expr,
+        subquery: spec::QueryPlan,
+        negated: bool,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let expr = self.resolve_expression(expr, schema, state)?;
+        let subquery = self.resolve_query_plan(subquery, state).await?;
+        let in_subquery = if !negated {
+            expr_fn::in_subquery(expr, Arc::new(subquery))
+        } else {
+            expr_fn::not_in_subquery(expr, Arc::new(subquery))
+        };
+        Ok(NamedExpr::new(vec![], in_subquery))
+    }
+
+    async fn resolve_expression_scalar_subquery(
+        &self,
+        subquery: spec::QueryPlan,
+        _schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let subquery = self.resolve_query_plan(subquery, state).await?;
+        Ok(NamedExpr::new(
+            vec![],
+            expr_fn::scalar_subquery(Arc::new(subquery)),
         ))
     }
 }
