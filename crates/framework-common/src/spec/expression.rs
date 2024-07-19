@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::spec::data_type::DataType;
 use crate::spec::literal::Literal;
+use crate::spec::QueryPlan;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -68,6 +69,18 @@ pub enum Expr {
     Rollup(Vec<Expr>),
     Cube(Vec<Expr>),
     GroupingSets(Vec<Vec<Expr>>),
+    InSubquery {
+        expr: Box<Expr>,
+        subquery: Box<QueryPlan>,
+        negated: bool,
+    },
+    ScalarSubquery {
+        subquery: Box<QueryPlan>,
+    },
+    Exists {
+        subquery: Box<QueryPlan>,
+        negated: bool,
+    },
 }
 
 /// An identifier with only one part.

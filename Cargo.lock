@@ -1224,6 +1224,7 @@ dependencies = [
  "serde_arrow",
  "serde_json",
  "thiserror",
+ "tokio",
  "tokio-stream",
 ]
 
