@@ -8,6 +8,7 @@ use datafusion_expr::{expr, ScalarUDF};
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::contains::Contains;
 use crate::function::common::Function;
+use crate::utils::ItemTaker;
 
 fn regexp_replace(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     if args.len() != 3 {
@@ -23,6 +24,18 @@ fn regexp_replace(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
         )),
         args,
     }))
+}
+
+fn substr(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    if args.len() == 2 {
+        let (first, second) = args.two()?;
+        return Ok(expr_fn::substr(first, second));
+    }
+    if args.len() == 3 {
+        let (first, second, third) = args.three()?;
+        return Ok(expr_fn::substring(first, second, third));
+    }
+    Err(PlanError::invalid("substr requires 2 or 3 arguments"))
 }
 
 pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> {
@@ -79,10 +92,10 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("space", F::unknown("space")),
         ("split", F::unknown("split")),
         ("split_part", F::unknown("split_part")),
-        ("startswith", F::binary(functions::expr_fn::starts_with)),
-        ("substr", F::unknown("substr")),
-        ("substring", F::unknown("substring")),
-        ("substring_index", F::unknown("substring_index")),
+        ("startswith", F::binary(expr_fn::starts_with)),
+        ("substr", F::custom(substr)),
+        ("substring", F::custom(substr)),
+        ("substring_index", F::ternary(expr_fn::substr_index)),
         ("to_binary", F::unknown("to_binary")),
         ("to_char", F::unknown("to_char")),
         ("to_number", F::unknown("to_number")),
