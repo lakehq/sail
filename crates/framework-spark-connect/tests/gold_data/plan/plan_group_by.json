@@ -146,7 +146,7 @@
     {
       "input": "select g from t group by g having a > (select b from s)",
       "output": {
-        "failure": "not supported: expression: Subquery(Query { with: None, body: Select(Select { distinct: None, top: None, projection: [UnnamedExpr(Identifier(Ident { value: \"b\", quote_style: None }))], into: None, from: [TableWithJoins { relation: Table { name: ObjectName([Ident { value: \"s\", quote_style: None }]), alias: None, args: None, with_hints: [], version: None, partitions: [] }, joins: [] }], lateral_views: [], selection: None, group_by: Expressions([]), cluster_by: [], distribute_by: [], sort_by: [], having: None, named_window: [], qualify: None, window_before_qualify: false, value_table_mode: None, connect_by: None }), order_by: [], limit: None, limit_by: [], offset: None, fetch: None, locks: [], for_clause: None })"
+        "failure": "not supported: Expr::Subquery"
       }
     }
   ]

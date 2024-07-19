@@ -7,6 +7,7 @@ use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
 use crate::literal::{parse_date_string, parse_timestamp_string, LiteralValue, Signed};
 use crate::parser::{fail_on_extra_token, SparkDialect};
+use crate::query::from_ast_query;
 
 struct Function {
     name: String,
@@ -719,10 +720,22 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
             name: vec![name.value.into()],
             metadata: None,
         }),
+        Expr::InSubquery {
+            expr,
+            subquery,
+            negated: _,
+        } => {
+            let _expr = from_ast_expression(*expr)?;
+            let _subquery = from_ast_query(*subquery)?;
+            Err(SqlError::unsupported("Expr::InSubquery"))
+        }
+        Expr::Subquery(query) => {
+            let _query = from_ast_query(*query)?;
+            Err(SqlError::unsupported("Expr::Subquery"))
+        }
         Expr::JsonAccess { .. }
         | Expr::IsUnknown(_)
         | Expr::IsNotUnknown(_)
-        | Expr::InSubquery { .. }
         | Expr::InUnnest { .. }
         | Expr::SimilarTo { .. }
         | Expr::AnyOp { .. }
@@ -735,7 +748,6 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         | Expr::Collate { .. }
         | Expr::IntroducedString { .. }
         | Expr::Exists { .. }
-        | Expr::Subquery(_)
         | Expr::GroupingSets(_)
         | Expr::Cube(_)
         | Expr::Rollup(_)
