@@ -6,6 +6,7 @@ use crate::function::common::Function;
 fn case(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     let mut when_then_expr = Vec::new();
     let mut iter = args.into_iter();
+    // FIXME: Add more validation on the number of arguments.
     while let (Some(condition), Some(result)) = (iter.next(), iter.next()) {
         when_then_expr.push((Box::new(condition), Box::new(result)));
     }

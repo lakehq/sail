@@ -29,6 +29,8 @@ class TpchBenchmark:
     def _run_query(self, spark: SparkSession, query: int):
         with open(f"{self.query_path}/q{query}.sql") as f:
             for sql in f.read().split(";"):
+                if not sql.strip():
+                    continue
                 sql = sql.strip().replace("create view", "create temp view")
                 df = spark.sql(sql)
                 _ = df.collect()
