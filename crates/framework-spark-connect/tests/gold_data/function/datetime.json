@@ -304,7 +304,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: curdate"
+        "success": "ok"
       }
     },
     {
@@ -326,7 +326,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: current_date"
+        "success": "ok"
       }
     },
     {
@@ -348,7 +348,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: current_date"
+        "success": "ok"
       }
     },
     {
@@ -546,7 +546,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_part"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Duration(Microsecond)] to the signature OneOf([Exact([Utf8, Timestamp(Nanosecond, None)]), Exact([Utf8, Timestamp(Nanosecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Millisecond, None)]), Exact([Utf8, Timestamp(Millisecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Microsecond, None)]), Exact([Utf8, Timestamp(Microsecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Second, None)]), Exact([Utf8, Timestamp(Second, Some(\"+TZ\"))]), Exact([Utf8, Date64]), Exact([Utf8, Date32]), Exact([Utf8, Time32(Second)]), Exact([Utf8, Time32(Millisecond)]), Exact([Utf8, Time64(Microsecond)]), Exact([Utf8, Time64(Nanosecond)])]) failed. No function matches the given name and argument types 'date_part(Utf8, Duration(Microsecond))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdate_part(Utf8, Timestamp(Nanosecond, None))\n\tdate_part(Utf8, Timestamp(Nanosecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Millisecond, None))\n\tdate_part(Utf8, Timestamp(Millisecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Microsecond, None))\n\tdate_part(Utf8, Timestamp(Microsecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Second, None))\n\tdate_part(Utf8, Timestamp(Second, Some(\"+TZ\")))\n\tdate_part(Utf8, Date64)\n\tdate_part(Utf8, Date32)\n\tdate_part(Utf8, Time32(Second))\n\tdate_part(Utf8, Time32(Millisecond))\n\tdate_part(Utf8, Time64(Microsecond))\n\tdate_part(Utf8, Time64(Nanosecond))"
       }
     },
     {
@@ -568,7 +568,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_part"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Interval(YearMonth)] to the signature OneOf([Exact([Utf8, Timestamp(Nanosecond, None)]), Exact([Utf8, Timestamp(Nanosecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Millisecond, None)]), Exact([Utf8, Timestamp(Millisecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Microsecond, None)]), Exact([Utf8, Timestamp(Microsecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Second, None)]), Exact([Utf8, Timestamp(Second, Some(\"+TZ\"))]), Exact([Utf8, Date64]), Exact([Utf8, Date32]), Exact([Utf8, Time32(Second)]), Exact([Utf8, Time32(Millisecond)]), Exact([Utf8, Time64(Microsecond)]), Exact([Utf8, Time64(Nanosecond)])]) failed. No function matches the given name and argument types 'date_part(Utf8, Interval(YearMonth))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdate_part(Utf8, Timestamp(Nanosecond, None))\n\tdate_part(Utf8, Timestamp(Nanosecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Millisecond, None))\n\tdate_part(Utf8, Timestamp(Millisecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Microsecond, None))\n\tdate_part(Utf8, Timestamp(Microsecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Second, None))\n\tdate_part(Utf8, Timestamp(Second, Some(\"+TZ\")))\n\tdate_part(Utf8, Date64)\n\tdate_part(Utf8, Date32)\n\tdate_part(Utf8, Time32(Second))\n\tdate_part(Utf8, Time32(Millisecond))\n\tdate_part(Utf8, Time64(Microsecond))\n\tdate_part(Utf8, Time64(Nanosecond))"
       }
     },
     {
@@ -590,7 +590,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_part"
+        "failure": "error in DataFusion: Execution error: Date part 'SECONDS' not supported"
       }
     },
     {
@@ -612,7 +612,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_part"
+        "success": "ok"
       }
     },
     {
@@ -634,7 +634,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_part"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Duration(Microsecond)] to the signature OneOf([Exact([Utf8, Timestamp(Nanosecond, None)]), Exact([Utf8, Timestamp(Nanosecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Millisecond, None)]), Exact([Utf8, Timestamp(Millisecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Microsecond, None)]), Exact([Utf8, Timestamp(Microsecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Second, None)]), Exact([Utf8, Timestamp(Second, Some(\"+TZ\"))]), Exact([Utf8, Date64]), Exact([Utf8, Date32]), Exact([Utf8, Time32(Second)]), Exact([Utf8, Time32(Millisecond)]), Exact([Utf8, Time64(Microsecond)]), Exact([Utf8, Time64(Nanosecond)])]) failed. No function matches the given name and argument types 'date_part(Utf8, Duration(Microsecond))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdate_part(Utf8, Timestamp(Nanosecond, None))\n\tdate_part(Utf8, Timestamp(Nanosecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Millisecond, None))\n\tdate_part(Utf8, Timestamp(Millisecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Microsecond, None))\n\tdate_part(Utf8, Timestamp(Microsecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Second, None))\n\tdate_part(Utf8, Timestamp(Second, Some(\"+TZ\")))\n\tdate_part(Utf8, Date64)\n\tdate_part(Utf8, Date32)\n\tdate_part(Utf8, Time32(Second))\n\tdate_part(Utf8, Time32(Millisecond))\n\tdate_part(Utf8, Time64(Microsecond))\n\tdate_part(Utf8, Time64(Nanosecond))"
       }
     },
     {
@@ -656,7 +656,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_part"
+        "success": "ok"
       }
     },
     {
@@ -678,7 +678,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_part"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Duration(Microsecond)] to the signature OneOf([Exact([Utf8, Timestamp(Nanosecond, None)]), Exact([Utf8, Timestamp(Nanosecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Millisecond, None)]), Exact([Utf8, Timestamp(Millisecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Microsecond, None)]), Exact([Utf8, Timestamp(Microsecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Second, None)]), Exact([Utf8, Timestamp(Second, Some(\"+TZ\"))]), Exact([Utf8, Date64]), Exact([Utf8, Date32]), Exact([Utf8, Time32(Second)]), Exact([Utf8, Time32(Millisecond)]), Exact([Utf8, Time64(Microsecond)]), Exact([Utf8, Time64(Nanosecond)])]) failed. No function matches the given name and argument types 'date_part(Utf8, Duration(Microsecond))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdate_part(Utf8, Timestamp(Nanosecond, None))\n\tdate_part(Utf8, Timestamp(Nanosecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Millisecond, None))\n\tdate_part(Utf8, Timestamp(Millisecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Microsecond, None))\n\tdate_part(Utf8, Timestamp(Microsecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Second, None))\n\tdate_part(Utf8, Timestamp(Second, Some(\"+TZ\")))\n\tdate_part(Utf8, Date64)\n\tdate_part(Utf8, Date32)\n\tdate_part(Utf8, Time32(Second))\n\tdate_part(Utf8, Time32(Millisecond))\n\tdate_part(Utf8, Time64(Microsecond))\n\tdate_part(Utf8, Time64(Nanosecond))"
       }
     },
     {
@@ -700,7 +700,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_part"
+        "success": "ok"
       }
     },
     {
@@ -744,7 +744,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_trunc"
+        "failure": "error in DataFusion: Execution error: Unsupported date_trunc granularity: dd"
       }
     },
     {
@@ -766,7 +766,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_trunc"
+        "success": "ok"
       }
     },
     {
@@ -788,7 +788,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_trunc"
+        "success": "ok"
       }
     },
     {
@@ -810,7 +810,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_trunc"
+        "failure": "error in DataFusion: Execution error: Unsupported date_trunc granularity: mm"
       }
     },
     {
@@ -832,7 +832,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_trunc"
+        "success": "ok"
       }
     },
     {
@@ -920,7 +920,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: datepart"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Duration(Microsecond)] to the signature OneOf([Exact([Utf8, Timestamp(Nanosecond, None)]), Exact([Utf8, Timestamp(Nanosecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Millisecond, None)]), Exact([Utf8, Timestamp(Millisecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Microsecond, None)]), Exact([Utf8, Timestamp(Microsecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Second, None)]), Exact([Utf8, Timestamp(Second, Some(\"+TZ\"))]), Exact([Utf8, Date64]), Exact([Utf8, Date32]), Exact([Utf8, Time32(Second)]), Exact([Utf8, Time32(Millisecond)]), Exact([Utf8, Time64(Microsecond)]), Exact([Utf8, Time64(Nanosecond)])]) failed. No function matches the given name and argument types 'date_part(Utf8, Duration(Microsecond))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdate_part(Utf8, Timestamp(Nanosecond, None))\n\tdate_part(Utf8, Timestamp(Nanosecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Millisecond, None))\n\tdate_part(Utf8, Timestamp(Millisecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Microsecond, None))\n\tdate_part(Utf8, Timestamp(Microsecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Second, None))\n\tdate_part(Utf8, Timestamp(Second, Some(\"+TZ\")))\n\tdate_part(Utf8, Date64)\n\tdate_part(Utf8, Date32)\n\tdate_part(Utf8, Time32(Second))\n\tdate_part(Utf8, Time32(Millisecond))\n\tdate_part(Utf8, Time64(Microsecond))\n\tdate_part(Utf8, Time64(Nanosecond))"
       }
     },
     {
@@ -942,7 +942,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: datepart"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Interval(YearMonth)] to the signature OneOf([Exact([Utf8, Timestamp(Nanosecond, None)]), Exact([Utf8, Timestamp(Nanosecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Millisecond, None)]), Exact([Utf8, Timestamp(Millisecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Microsecond, None)]), Exact([Utf8, Timestamp(Microsecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Second, None)]), Exact([Utf8, Timestamp(Second, Some(\"+TZ\"))]), Exact([Utf8, Date64]), Exact([Utf8, Date32]), Exact([Utf8, Time32(Second)]), Exact([Utf8, Time32(Millisecond)]), Exact([Utf8, Time64(Microsecond)]), Exact([Utf8, Time64(Nanosecond)])]) failed. No function matches the given name and argument types 'date_part(Utf8, Interval(YearMonth))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdate_part(Utf8, Timestamp(Nanosecond, None))\n\tdate_part(Utf8, Timestamp(Nanosecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Millisecond, None))\n\tdate_part(Utf8, Timestamp(Millisecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Microsecond, None))\n\tdate_part(Utf8, Timestamp(Microsecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Second, None))\n\tdate_part(Utf8, Timestamp(Second, Some(\"+TZ\")))\n\tdate_part(Utf8, Date64)\n\tdate_part(Utf8, Date32)\n\tdate_part(Utf8, Time32(Second))\n\tdate_part(Utf8, Time32(Millisecond))\n\tdate_part(Utf8, Time64(Microsecond))\n\tdate_part(Utf8, Time64(Nanosecond))"
       }
     },
     {
@@ -964,7 +964,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: datepart"
+        "failure": "error in DataFusion: Execution error: Date part 'SECONDS' not supported"
       }
     },
     {
@@ -986,7 +986,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: datepart"
+        "success": "ok"
       }
     },
     {
@@ -1008,7 +1008,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: datepart"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Duration(Microsecond)] to the signature OneOf([Exact([Utf8, Timestamp(Nanosecond, None)]), Exact([Utf8, Timestamp(Nanosecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Millisecond, None)]), Exact([Utf8, Timestamp(Millisecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Microsecond, None)]), Exact([Utf8, Timestamp(Microsecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Second, None)]), Exact([Utf8, Timestamp(Second, Some(\"+TZ\"))]), Exact([Utf8, Date64]), Exact([Utf8, Date32]), Exact([Utf8, Time32(Second)]), Exact([Utf8, Time32(Millisecond)]), Exact([Utf8, Time64(Microsecond)]), Exact([Utf8, Time64(Nanosecond)])]) failed. No function matches the given name and argument types 'date_part(Utf8, Duration(Microsecond))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdate_part(Utf8, Timestamp(Nanosecond, None))\n\tdate_part(Utf8, Timestamp(Nanosecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Millisecond, None))\n\tdate_part(Utf8, Timestamp(Millisecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Microsecond, None))\n\tdate_part(Utf8, Timestamp(Microsecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Second, None))\n\tdate_part(Utf8, Timestamp(Second, Some(\"+TZ\")))\n\tdate_part(Utf8, Date64)\n\tdate_part(Utf8, Date32)\n\tdate_part(Utf8, Time32(Second))\n\tdate_part(Utf8, Time32(Millisecond))\n\tdate_part(Utf8, Time64(Microsecond))\n\tdate_part(Utf8, Time64(Nanosecond))"
       }
     },
     {
@@ -1030,7 +1030,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: datepart"
+        "success": "ok"
       }
     },
     {
@@ -1052,7 +1052,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: datepart"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Duration(Microsecond)] to the signature OneOf([Exact([Utf8, Timestamp(Nanosecond, None)]), Exact([Utf8, Timestamp(Nanosecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Millisecond, None)]), Exact([Utf8, Timestamp(Millisecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Microsecond, None)]), Exact([Utf8, Timestamp(Microsecond, Some(\"+TZ\"))]), Exact([Utf8, Timestamp(Second, None)]), Exact([Utf8, Timestamp(Second, Some(\"+TZ\"))]), Exact([Utf8, Date64]), Exact([Utf8, Date32]), Exact([Utf8, Time32(Second)]), Exact([Utf8, Time32(Millisecond)]), Exact([Utf8, Time64(Microsecond)]), Exact([Utf8, Time64(Nanosecond)])]) failed. No function matches the given name and argument types 'date_part(Utf8, Duration(Microsecond))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdate_part(Utf8, Timestamp(Nanosecond, None))\n\tdate_part(Utf8, Timestamp(Nanosecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Millisecond, None))\n\tdate_part(Utf8, Timestamp(Millisecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Microsecond, None))\n\tdate_part(Utf8, Timestamp(Microsecond, Some(\"+TZ\")))\n\tdate_part(Utf8, Timestamp(Second, None))\n\tdate_part(Utf8, Timestamp(Second, Some(\"+TZ\")))\n\tdate_part(Utf8, Date64)\n\tdate_part(Utf8, Date32)\n\tdate_part(Utf8, Time32(Second))\n\tdate_part(Utf8, Time32(Millisecond))\n\tdate_part(Utf8, Time64(Microsecond))\n\tdate_part(Utf8, Time64(Nanosecond))"
       }
     },
     {
@@ -1074,7 +1074,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: datepart"
+        "success": "ok"
       }
     },
     {
@@ -1184,7 +1184,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: extract"
+        "failure": "error in DataFusion: Arrow error: Parser error: Error parsing timestamp from 'MINUTE': timestamp must contain at least 10 characters"
       }
     },
     {
@@ -1206,7 +1206,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: extract"
+        "failure": "error in DataFusion: Arrow error: Parser error: Error parsing timestamp from 'MONTH': timestamp must contain at least 10 characters"
       }
     },
     {
@@ -1228,7 +1228,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: extract"
+        "failure": "error in DataFusion: Arrow error: Parser error: Error parsing timestamp from 'SECONDS': timestamp must contain at least 10 characters"
       }
     },
     {
@@ -1250,7 +1250,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: extract"
+        "failure": "error in DataFusion: Arrow error: Parser error: Error parsing timestamp from 'YEAR': timestamp must contain at least 10 characters"
       }
     },
     {
@@ -1272,7 +1272,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: extract"
+        "failure": "error in DataFusion: Arrow error: Parser error: Error parsing timestamp from 'DAYS': timestamp must contain at least 10 characters"
       }
     },
     {
@@ -1294,7 +1294,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: extract"
+        "failure": "error in DataFusion: Arrow error: Parser error: Error parsing timestamp from 'DOY': timestamp must contain at least 10 characters"
       }
     },
     {
@@ -1316,7 +1316,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: extract"
+        "failure": "error in DataFusion: Arrow error: Parser error: Error parsing timestamp from 'SECONDS': timestamp must contain at least 10 characters"
       }
     },
     {
@@ -1338,7 +1338,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: extract"
+        "failure": "error in DataFusion: Arrow error: Parser error: Error parsing timestamp from 'WEEK': timestamp must contain at least 10 characters"
       }
     },
     {

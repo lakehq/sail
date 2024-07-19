@@ -42,7 +42,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("decode", F::unknown("decode")),
         ("elt", F::unknown("elt")),
         ("encode", F::unknown("encode")),
-        ("endswith", F::binary(functions::expr_fn::ends_with)),
+        ("endswith", F::binary(expr_fn::ends_with)),
         ("find_in_set", F::unknown("find_in_set")),
         ("format_number", F::unknown("format_number")),
         ("format_string", F::unknown("format_string")),
