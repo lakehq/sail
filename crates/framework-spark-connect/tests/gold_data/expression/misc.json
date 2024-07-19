@@ -86,7 +86,48 @@
     {
       "input": "(a) in (select b from c)",
       "output": {
-        "failure": "not supported: Expr::InSubquery"
+        "success": {
+          "inSubquery": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "subquery": {
+              "project": {
+                "input": {
+                  "read": {
+                    "namedTable": {
+                      "name": [
+                        "c"
+                      ],
+                      "options": []
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "b"
+                      ],
+                      "planId": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "negated": false
+          }
+        }
       }
     },
     {
@@ -116,7 +157,65 @@
     {
       "input": "(select max(val) from tbl) > current",
       "output": {
-        "failure": "not supported: Expr::Subquery"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": ">",
+            "arguments": [
+              {
+                "scalarSubquery": {
+                  "subquery": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "tbl"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedFunction": {
+                            "functionName": "max",
+                            "arguments": [
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "val"
+                                  ],
+                                  "planId": null
+                                }
+                              }
+                            ],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  }
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "current"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
@@ -985,7 +1084,56 @@
     {
       "input": "a = (select b from s)",
       "output": {
-        "failure": "not supported: Expr::Subquery"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "==",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "scalarSubquery": {
+                  "subquery": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "s"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "b"
+                            ],
+                            "planId": null
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  }
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
@@ -1608,7 +1756,48 @@
     {
       "input": "a in (select b from c)",
       "output": {
-        "failure": "not supported: Expr::InSubquery"
+        "success": {
+          "inSubquery": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "subquery": {
+              "project": {
+                "input": {
+                  "read": {
+                    "namedTable": {
+                      "name": [
+                        "c"
+                      ],
+                      "options": []
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "b"
+                      ],
+                      "planId": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "negated": false
+          }
+        }
       }
     },
     {

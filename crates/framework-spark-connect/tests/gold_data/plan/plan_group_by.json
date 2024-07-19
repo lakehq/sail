@@ -146,7 +146,97 @@
     {
       "input": "select g from t group by g having a > (select b from s)",
       "output": {
-        "failure": "not supported: Expr::Subquery"
+        "success": {
+          "query": {
+            "aggregate": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "grouping": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "g"
+                    ],
+                    "planId": null
+                  }
+                }
+              ],
+              "aggregate": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "g"
+                    ],
+                    "planId": null
+                  }
+                }
+              ],
+              "having": {
+                "unresolvedFunction": {
+                  "functionName": ">",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "scalarSubquery": {
+                        "subquery": {
+                          "project": {
+                            "input": {
+                              "read": {
+                                "namedTable": {
+                                  "name": [
+                                    "s"
+                                  ],
+                                  "options": []
+                                },
+                                "isStreaming": false
+                              },
+                              "planId": null,
+                              "sourceInfo": null
+                            },
+                            "expressions": [
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "b"
+                                  ],
+                                  "planId": null
+                                }
+                              }
+                            ]
+                          },
+                          "planId": null,
+                          "sourceInfo": null
+                        }
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     }
   ]

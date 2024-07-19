@@ -1144,7 +1144,79 @@
     {
       "input": "select (select max(b) from s) ss from t",
       "output": {
-        "failure": "not supported: Expr::Subquery"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "alias": {
+                    "expr": {
+                      "scalarSubquery": {
+                        "subquery": {
+                          "project": {
+                            "input": {
+                              "read": {
+                                "namedTable": {
+                                  "name": [
+                                    "s"
+                                  ],
+                                  "options": []
+                                },
+                                "isStreaming": false
+                              },
+                              "planId": null,
+                              "sourceInfo": null
+                            },
+                            "expressions": [
+                              {
+                                "unresolvedFunction": {
+                                  "functionName": "max",
+                                  "arguments": [
+                                    {
+                                      "unresolvedAttribute": {
+                                        "name": [
+                                          "b"
+                                        ],
+                                        "planId": null
+                                      }
+                                    }
+                                  ],
+                                  "isDistinct": false,
+                                  "isUserDefinedFunction": false
+                                }
+                              }
+                            ]
+                          },
+                          "planId": null,
+                          "sourceInfo": null
+                        }
+                      }
+                    },
+                    "name": [
+                      "ss"
+                    ],
+                    "metadata": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -1603,7 +1675,90 @@
     {
       "input": "select * from t where a = (select b from s)",
       "output": {
-        "failure": "not supported: Expr::Subquery"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "filter": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "condition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "a"
+                            ],
+                            "planId": null
+                          }
+                        },
+                        {
+                          "scalarSubquery": {
+                            "subquery": {
+                              "project": {
+                                "input": {
+                                  "read": {
+                                    "namedTable": {
+                                      "name": [
+                                        "s"
+                                      ],
+                                      "options": []
+                                    },
+                                    "isStreaming": false
+                                  },
+                                  "planId": null,
+                                  "sourceInfo": null
+                                },
+                                "expressions": [
+                                  {
+                                    "unresolvedAttribute": {
+                                      "name": [
+                                        "b"
+                                      ],
+                                      "planId": null
+                                    }
+                                  }
+                                ]
+                              },
+                              "planId": null,
+                              "sourceInfo": null
+                            }
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
