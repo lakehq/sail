@@ -6,13 +6,16 @@ use crate::function::common::Function;
 fn case(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     let mut when_then_expr = Vec::new();
     let mut iter = args.into_iter();
-    // FIXME: Add more validation on the number of arguments.
-    while let (Some(condition), Some(result)) = (iter.next(), iter.next()) {
-        when_then_expr.push((Box::new(condition), Box::new(result)));
+    let mut else_expr: Option<Box<expr::Expr>> = None;
+    while let Some(condition) = iter.next() {
+        if let Some(result) = iter.next() {
+            when_then_expr.push((Box::new(condition), Box::new(result)));
+        } else {
+            else_expr = Some(Box::new(condition));
+        }
     }
-    let else_expr = iter.next().map(Box::new); // The last element, if any, is the else expression
     Ok(expr::Expr::Case(expr::Case {
-        expr: None, // Expr::Case in from_ast_expression incorporates this into the when_then_expr
+        expr: None, // Expr::Case in from_ast_expression incorporates into when_then_expr
         when_then_expr,
         else_expr,
     }))
