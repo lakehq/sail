@@ -31,3 +31,4 @@ chrono = { workspace = true }
 ryu = { workspace = true }
 either = { workspace = true }
 num-traits = { workspace = true }
+tokio = { workspace = true }

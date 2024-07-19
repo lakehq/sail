@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
+use async_recursion::async_recursion;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DFSchema, Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
@@ -104,7 +105,7 @@ impl NamedExpr {
 }
 
 impl PlanResolver<'_> {
-    pub(super) fn resolve_sort_order(
+    pub(super) async fn resolve_sort_order(
         &self,
         sort: spec::SortOrder,
         schema: &DFSchema,
@@ -128,21 +129,24 @@ impl PlanResolver<'_> {
             NullOrdering::Unspecified => asc,
         };
         Ok(expr::Expr::Sort(expr::Sort {
-            expr: Box::new(self.resolve_expression(*child, schema, state)?),
+            expr: Box::new(self.resolve_expression(*child, schema, state).await?),
             asc,
             nulls_first,
         }))
     }
 
-    pub(super) fn resolve_sort_orders(
+    pub(super) async fn resolve_sort_orders(
         &self,
         sort: Vec<spec::SortOrder>,
         schema: &DFSchema,
         state: &mut PlanResolverState,
     ) -> PlanResult<Vec<expr::Expr>> {
-        sort.into_iter()
-            .map(|x| self.resolve_sort_order(x, schema, state))
-            .collect::<PlanResult<Vec<_>>>()
+        let mut results: Vec<expr::Expr> = Vec::with_capacity(sort.len());
+        for s in sort {
+            let expr = self.resolve_sort_order(s, schema, state).await?;
+            results.push(expr);
+        }
+        Ok(results)
     }
 
     fn resolve_window_frame(
@@ -291,7 +295,8 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub(super) fn resolve_named_expression(
+    #[async_recursion]
+    pub(super) async fn resolve_named_expression(
         &self,
         expr: spec::Expr,
         schema: &DFSchema,
@@ -309,137 +314,180 @@ impl PlanResolver<'_> {
                 arguments,
                 is_distinct,
                 is_user_defined_function: _, // FIXME: is_user_defined_function is always false.
-            } => self.resolve_expression_function(
-                function_name,
-                arguments,
-                is_distinct,
-                schema,
-                state,
-            ),
+            } => {
+                self.resolve_expression_function(
+                    function_name,
+                    arguments,
+                    is_distinct,
+                    schema,
+                    state,
+                )
+                .await
+            }
             Expr::UnresolvedStar { target } => {
                 self.resolve_expression_wildcard(target, schema, state)
+                    .await
             }
             Expr::Alias {
                 expr,
                 name,
                 metadata,
-            } => self.resolve_expression_alias(*expr, name, metadata, schema, state),
+            } => {
+                self.resolve_expression_alias(*expr, name, metadata, schema, state)
+                    .await
+            }
             Expr::Cast { expr, cast_to_type } => {
                 self.resolve_expression_cast(*expr, cast_to_type, schema, state)
+                    .await
             }
             Expr::UnresolvedRegex { col_name, plan_id } => {
                 self.resolve_expression_regex(col_name, plan_id, schema, state)
+                    .await
             }
-            Expr::SortOrder(sort) => self.resolve_expression_sort_order(sort, schema, state),
+            Expr::SortOrder(sort) => {
+                self.resolve_expression_sort_order(sort, schema, state)
+                    .await
+            }
             Expr::LambdaFunction {
                 function,
                 arguments,
-            } => self.resolve_expression_lambda_function(*function, arguments, schema, state),
+            } => {
+                self.resolve_expression_lambda_function(*function, arguments, schema, state)
+                    .await
+            }
             Expr::Window {
                 window_function,
                 partition_spec,
                 order_spec,
                 frame_spec,
-            } => self.resolve_expression_window(
-                *window_function,
-                partition_spec,
-                order_spec,
-                frame_spec,
-                schema,
-                state,
-            ),
+            } => {
+                self.resolve_expression_window(
+                    *window_function,
+                    partition_spec,
+                    order_spec,
+                    frame_spec,
+                    schema,
+                    state,
+                )
+                .await
+            }
             Expr::UnresolvedExtractValue { child, extraction } => {
                 self.resolve_expression_extract_value(*child, *extraction, schema, state)
+                    .await
             }
             Expr::UpdateFields {
                 struct_expression,
                 field_name,
                 value_expression,
-            } => self.resolve_expression_update_fields(
-                *struct_expression,
-                field_name,
-                value_expression.map(|x| *x),
-                schema,
-                state,
-            ),
+            } => {
+                self.resolve_expression_update_fields(
+                    *struct_expression,
+                    field_name,
+                    value_expression.map(|x| *x),
+                    schema,
+                    state,
+                )
+                .await
+            }
             Expr::UnresolvedNamedLambdaVariable(variable) => {
                 self.resolve_expression_named_lambda_variable(variable, schema, state)
+                    .await
             }
             Expr::CommonInlineUserDefinedFunction(function) => {
                 self.resolve_expression_common_inline_udf(function, schema, state)
+                    .await
             }
             Expr::CallFunction {
                 function_name,
                 arguments,
-            } => self.resolve_expression_call_function(function_name, arguments, schema, state),
-            Expr::Placeholder(placeholder) => self.resolve_expression_placeholder(placeholder),
-            Expr::Rollup(rollup) => self.resolve_expression_rollup(rollup, schema, state),
-            Expr::Cube(cube) => self.resolve_expression_cube(cube, schema, state),
+            } => {
+                self.resolve_expression_call_function(function_name, arguments, schema, state)
+                    .await
+            }
+            Expr::Placeholder(placeholder) => {
+                self.resolve_expression_placeholder(placeholder).await
+            }
+            Expr::Rollup(rollup) => self.resolve_expression_rollup(rollup, schema, state).await,
+            Expr::Cube(cube) => self.resolve_expression_cube(cube, schema, state).await,
             Expr::GroupingSets(grouping_sets) => {
                 self.resolve_expression_grouping_sets(grouping_sets, schema, state)
+                    .await
             }
             Expr::InSubquery {
                 expr,
                 subquery,
                 negated,
-            } => self.resolve_expression_in_subquery(*expr, *subquery, negated, schema, state),
+            } => {
+                self.resolve_expression_in_subquery(*expr, *subquery, negated, schema, state)
+                    .await
+            }
             Expr::ScalarSubquery { subquery } => {
                 self.resolve_expression_scalar_subquery(*subquery, schema, state)
+                    .await
             }
         }
     }
 
-    pub(super) fn resolve_named_expressions(
+    pub(super) async fn resolve_named_expressions(
         &self,
         expressions: Vec<spec::Expr>,
         schema: &DFSchema,
         state: &mut PlanResolverState,
     ) -> PlanResult<Vec<NamedExpr>> {
-        expressions
-            .into_iter()
-            .map(|x| self.resolve_named_expression(x, schema, state))
-            .collect::<PlanResult<Vec<_>>>()
+        let mut results: Vec<NamedExpr> = Vec::with_capacity(expressions.len());
+        for expression in expressions {
+            let named_expr = self
+                .resolve_named_expression(expression, schema, state)
+                .await?;
+            results.push(named_expr);
+        }
+        Ok(results)
     }
 
-    pub(super) fn resolve_expression(
+    pub(super) async fn resolve_expression(
         &self,
         expressions: spec::Expr,
         schema: &DFSchema,
         state: &mut PlanResolverState,
     ) -> PlanResult<expr::Expr> {
-        let NamedExpr { expr, .. } = self.resolve_named_expression(expressions, schema, state)?;
+        let NamedExpr { expr, .. } = self
+            .resolve_named_expression(expressions, schema, state)
+            .await?;
         Ok(expr)
     }
 
-    pub(super) fn resolve_expressions(
+    pub(super) async fn resolve_expressions(
         &self,
         expressions: Vec<spec::Expr>,
         schema: &DFSchema,
         state: &mut PlanResolverState,
     ) -> PlanResult<Vec<expr::Expr>> {
-        expressions
-            .into_iter()
-            .map(|x| self.resolve_expression(x, schema, state))
-            .collect::<PlanResult<Vec<_>>>()
+        let mut results: Vec<expr::Expr> = Vec::with_capacity(expressions.len());
+        for expression in expressions {
+            let expr = self.resolve_expression(expression, schema, state).await?;
+            results.push(expr);
+        }
+        Ok(results)
     }
 
-    pub(super) fn resolve_alias_expressions_and_names(
+    pub(super) async fn resolve_alias_expressions_and_names(
         &self,
         expressions: Vec<spec::Expr>,
         schema: &DFSchema,
         state: &mut PlanResolverState,
     ) -> PlanResult<(Vec<String>, Vec<expr::Expr>)> {
-        Ok(expressions
-            .into_iter()
-            .map(|x| {
-                let expr = self.resolve_named_expression(x, schema, state)?;
-                let name = expr.name.clone().one()?;
-                let expr = expr.into_alias_expr()?;
-                Ok((name, expr))
-            })
-            .collect::<PlanResult<Vec<(String, expr::Expr)>>>()?
-            .into_iter()
-            .unzip())
+        let mut names: Vec<String> = Vec::with_capacity(expressions.len());
+        let mut exprs: Vec<expr::Expr> = Vec::with_capacity(expressions.len());
+        for expression in expressions {
+            let named_expr = self
+                .resolve_named_expression(expression, schema, state)
+                .await?;
+            let name = named_expr.name.clone().one()?;
+            let expr = named_expr.into_alias_expr()?;
+            names.push(name);
+            exprs.push(expr);
+        }
+        Ok((names, exprs))
     }
 
     fn resolve_expression_literal(&self, literal: spec::Literal) -> PlanResult<NamedExpr> {
@@ -490,7 +538,7 @@ impl PlanResolver<'_> {
         ))
     }
 
-    fn resolve_expression_function(
+    async fn resolve_expression_function(
         &self,
         function_name: String,
         arguments: Vec<spec::Expr>,
@@ -498,8 +546,9 @@ impl PlanResolver<'_> {
         schema: &DFSchema,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let (argument_names, arguments) =
-            self.resolve_alias_expressions_and_names(arguments, schema, state)?;
+        let (argument_names, arguments) = self
+            .resolve_alias_expressions_and_names(arguments, schema, state)
+            .await?;
         let input_types: Vec<DataType> = arguments
             .iter()
             .map(|arg| arg.get_type(schema))
@@ -574,7 +623,7 @@ impl PlanResolver<'_> {
         Ok(NamedExpr::new(vec![name], func))
     }
 
-    fn resolve_expression_alias(
+    async fn resolve_expression_alias(
         &self,
         expr: spec::Expr,
         name: Vec<spec::Identifier>,
@@ -582,7 +631,7 @@ impl PlanResolver<'_> {
         schema: &DFSchema,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let expr = self.resolve_expression(expr, schema, state)?;
+        let expr = self.resolve_expression(expr, schema, state).await?;
         let name = name.into_iter().map(|x| x.into()).collect::<Vec<String>>();
         let expr = if let [n] = name.as_slice() {
             expr.alias(n)
@@ -596,7 +645,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn resolve_expression_cast(
+    async fn resolve_expression_cast(
         &self,
         expr: spec::Expr,
         cast_to_type: spec::DataType,
@@ -604,7 +653,8 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let data_type = self.resolve_data_type(cast_to_type)?;
-        let NamedExpr { expr, name, .. } = self.resolve_named_expression(expr, schema, state)?;
+        let NamedExpr { expr, name, .. } =
+            self.resolve_named_expression(expr, schema, state).await?;
         let expr = expr::Expr::Cast(expr::Cast {
             expr: Box::new(expr),
             data_type,
@@ -612,17 +662,17 @@ impl PlanResolver<'_> {
         Ok(NamedExpr::new(name, expr))
     }
 
-    fn resolve_expression_sort_order(
+    async fn resolve_expression_sort_order(
         &self,
         sort: spec::SortOrder,
         schema: &DFSchema,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let sort = self.resolve_sort_order(sort, schema, state);
-        Ok(NamedExpr::new(vec![], sort?))
+        let sort = self.resolve_sort_order(sort, schema, state).await?;
+        Ok(NamedExpr::new(vec![], sort))
     }
 
-    fn resolve_expression_regex(
+    async fn resolve_expression_regex(
         &self,
         _col_name: String,
         _plan_id: Option<i64>,
@@ -632,7 +682,7 @@ impl PlanResolver<'_> {
         Err(PlanError::todo("unresolved regex"))
     }
 
-    fn resolve_expression_lambda_function(
+    async fn resolve_expression_lambda_function(
         &self,
         _function: spec::Expr,
         _arguments: Vec<spec::UnresolvedNamedLambdaVariable>,
@@ -642,7 +692,7 @@ impl PlanResolver<'_> {
         Err(PlanError::todo("lambda function"))
     }
 
-    fn resolve_expression_window(
+    async fn resolve_expression_window(
         &self,
         window_function: spec::Expr,
         partition_spec: Vec<spec::Expr>,
@@ -664,8 +714,9 @@ impl PlanResolver<'_> {
                 if is_distinct {
                     return Err(PlanError::unsupported("distinct window function"));
                 }
-                let (argument_names, arguments) =
-                    self.resolve_alias_expressions_and_names(arguments, schema, state)?;
+                let (argument_names, arguments) = self
+                    .resolve_alias_expressions_and_names(arguments, schema, state)
+                    .await?;
                 (function_name, argument_names, arguments)
             }
             spec::Expr::CommonInlineUserDefinedFunction(_) => {
@@ -680,8 +731,10 @@ impl PlanResolver<'_> {
                 )));
             }
         };
-        let partition_by = self.resolve_expressions(partition_spec, schema, state)?;
-        let order_by = self.resolve_sort_orders(order_spec, schema, state)?;
+        let partition_by = self
+            .resolve_expressions(partition_spec, schema, state)
+            .await?;
+        let order_by = self.resolve_sort_orders(order_spec, schema, state).await?;
         let window_frame = if let Some(frame) = frame_spec {
             self.resolve_window_frame(frame, &order_by, schema)?
         } else {
@@ -707,7 +760,7 @@ impl PlanResolver<'_> {
         Ok(NamedExpr::new(vec![name], window))
     }
 
-    fn resolve_expression_wildcard(
+    async fn resolve_expression_wildcard(
         &self,
         target: Option<spec::ObjectName>,
         _schema: &DFSchema,
@@ -725,7 +778,7 @@ impl PlanResolver<'_> {
         Ok(NamedExpr::new(vec!["*".to_string()], expr))
     }
 
-    fn resolve_expression_extract_value(
+    async fn resolve_expression_extract_value(
         &self,
         child: spec::Expr,
         extraction: spec::Expr,
@@ -740,12 +793,13 @@ impl PlanResolver<'_> {
         };
         let extraction_name = self.config.plan_formatter.literal_to_string(&extraction)?;
         let extraction = self.resolve_literal(extraction)?;
-        let NamedExpr { name, expr, .. } = self.resolve_named_expression(child, schema, state)?;
+        let NamedExpr { name, expr, .. } =
+            self.resolve_named_expression(child, schema, state).await?;
         let name = format!("{}[{}]", name.one()?, extraction_name);
         Ok(NamedExpr::new(vec![name], expr.field(extraction)))
     }
 
-    fn resolve_expression_common_inline_udf(
+    async fn resolve_expression_common_inline_udf(
         &self,
         function: spec::CommonInlineUserDefinedFunction,
         schema: &DFSchema,
@@ -765,8 +819,9 @@ impl PlanResolver<'_> {
         } = function;
 
         let function_name: &str = function_name.as_str();
-        let (argument_names, arguments) =
-            self.resolve_alias_expressions_and_names(arguments, schema, state)?;
+        let (argument_names, arguments) = self
+            .resolve_alias_expressions_and_names(arguments, schema, state)
+            .await?;
         let input_types: Vec<DataType> = arguments
             .iter()
             .map(|arg| arg.get_type(schema))
@@ -813,7 +868,7 @@ impl PlanResolver<'_> {
         Ok(NamedExpr::new(vec![name], func))
     }
 
-    fn resolve_expression_update_fields(
+    async fn resolve_expression_update_fields(
         &self,
         _struct_expression: spec::Expr,
         _field_name: spec::ObjectName,
@@ -824,7 +879,7 @@ impl PlanResolver<'_> {
         Err(PlanError::todo("update fields"))
     }
 
-    fn resolve_expression_named_lambda_variable(
+    async fn resolve_expression_named_lambda_variable(
         &self,
         _variable: spec::UnresolvedNamedLambdaVariable,
         _schema: &DFSchema,
@@ -833,7 +888,7 @@ impl PlanResolver<'_> {
         Err(PlanError::todo("named lambda variable"))
     }
 
-    fn resolve_expression_call_function(
+    async fn resolve_expression_call_function(
         &self,
         _function_name: String,
         _arguments: Vec<spec::Expr>,
@@ -843,51 +898,54 @@ impl PlanResolver<'_> {
         Err(PlanError::todo("call function"))
     }
 
-    fn resolve_expression_placeholder(&self, placeholder: String) -> PlanResult<NamedExpr> {
+    async fn resolve_expression_placeholder(&self, placeholder: String) -> PlanResult<NamedExpr> {
         let name = placeholder.clone();
         let expr = expr::Expr::Placeholder(expr::Placeholder::new(placeholder, None));
         Ok(NamedExpr::new(vec![name], expr))
     }
 
-    fn resolve_expression_rollup(
+    async fn resolve_expression_rollup(
         &self,
         rollup: Vec<spec::Expr>,
         schema: &DFSchema,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let expr = self.resolve_expressions(rollup, schema, state)?;
+        let expr = self.resolve_expressions(rollup, schema, state).await?;
         Ok(NamedExpr::new(
             vec![],
             expr::Expr::GroupingSet(expr::GroupingSet::Rollup(expr)),
         ))
     }
 
-    fn resolve_expression_cube(
+    async fn resolve_expression_cube(
         &self,
         cube: Vec<spec::Expr>,
         schema: &DFSchema,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let expr = self.resolve_expressions(cube, schema, state)?;
+        let expr = self.resolve_expressions(cube, schema, state).await?;
         Ok(NamedExpr::new(
             vec![],
             expr::Expr::GroupingSet(expr::GroupingSet::Cube(expr)),
         ))
     }
 
-    fn resolve_expression_grouping_sets(
+    async fn resolve_expression_grouping_sets(
         &self,
         grouping_sets: Vec<Vec<spec::Expr>>,
         schema: &DFSchema,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let expr = grouping_sets
-            .into_iter()
-            .map(|x| self.resolve_expressions(x, schema, state))
-            .collect::<PlanResult<Vec<_>>>()?;
+        let mut results: Vec<Vec<expr::Expr>> = Vec::with_capacity(grouping_sets.len());
+        for grouping_set in grouping_sets {
+            let expr = self
+                .resolve_expressions(grouping_set, schema, state)
+                .await?;
+            results.push(expr)
+        }
         Ok(NamedExpr::new(
             vec![],
-            expr::Expr::GroupingSet(expr::GroupingSet::GroupingSets(expr)),
+            expr::Expr::GroupingSet(expr::GroupingSet::GroupingSets(results)),
         ))
     }
 
@@ -899,7 +957,7 @@ impl PlanResolver<'_> {
         schema: &DFSchema,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let expr = self.resolve_expression(expr, schema, state)?;
+        let expr = self.resolve_expression(expr, schema, state).await?;
         let subquery = self.resolve_query_plan(subquery, state).await?;
         let in_subquery = if !negated {
             expr_fn::in_subquery(expr, Arc::new(subquery))
@@ -1032,25 +1090,28 @@ mod tests {
     use crate::resolver::state::PlanResolverState;
     use crate::resolver::PlanResolver;
 
-    #[test]
-    fn test_resolve_expression_with_name() -> PlanResult<()> {
+    #[tokio::test]
+    async fn test_resolve_expression_with_name() -> PlanResult<()> {
         let ctx = SessionContext::default();
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::default()));
-        let resolve = |expr| {
-            resolver.resolve_named_expression(
-                expr,
-                &DFSchema::empty(),
-                &mut PlanResolverState::new(),
-            )
-        };
+
+        async fn resolve(resolver: &PlanResolver<'_>, expr: spec::Expr) -> PlanResult<NamedExpr> {
+            resolver
+                .resolve_named_expression(expr, &DFSchema::empty(), &mut PlanResolverState::new())
+                .await
+        }
 
         assert_eq!(
-            resolve(spec::Expr::UnresolvedFunction {
-                function_name: "not".to_string(),
-                arguments: vec![spec::Expr::Literal(spec::Literal::Boolean(true))],
-                is_distinct: false,
-                is_user_defined_function: false,
-            })?,
+            resolve(
+                &resolver,
+                spec::Expr::UnresolvedFunction {
+                    function_name: "not".to_string(),
+                    arguments: vec![spec::Expr::Literal(spec::Literal::Boolean(true))],
+                    is_distinct: false,
+                    is_user_defined_function: false,
+                }
+            )
+            .await?,
             NamedExpr {
                 name: vec!["(NOT true)".to_string()],
                 expr: Expr::Not(Box::new(Expr::Literal(ScalarValue::Boolean(Some(true))))),
@@ -1059,33 +1120,37 @@ mod tests {
         );
 
         assert_eq!(
-            resolve(spec::Expr::Alias {
-                // This name "b" is overridden by the outer name "c".
-                expr: Box::new(spec::Expr::Alias {
-                    // The resolver assigns a name (a human-readable string) for the function,
-                    // and is then overridden by the explicitly specified outer name.
-                    expr: Box::new(spec::Expr::UnresolvedFunction {
-                        function_name: "+".to_string(),
-                        arguments: vec![
-                            spec::Expr::Alias {
-                                // The resolver assigns a name "1" for the literal,
-                                // and is then overridden by the explicitly specified name.
-                                expr: Box::new(spec::Expr::Literal(spec::Literal::Integer(1))),
-                                name: vec!["a".to_string().into()],
-                                metadata: None,
-                            },
-                            // The resolver assigns a name "2" for the literal.
-                            spec::Expr::Literal(spec::Literal::Integer(2)),
-                        ],
-                        is_distinct: false,
-                        is_user_defined_function: false,
+            resolve(
+                &resolver,
+                spec::Expr::Alias {
+                    // This name "b" is overridden by the outer name "c".
+                    expr: Box::new(spec::Expr::Alias {
+                        // The resolver assigns a name (a human-readable string) for the function,
+                        // and is then overridden by the explicitly specified outer name.
+                        expr: Box::new(spec::Expr::UnresolvedFunction {
+                            function_name: "+".to_string(),
+                            arguments: vec![
+                                spec::Expr::Alias {
+                                    // The resolver assigns a name "1" for the literal,
+                                    // and is then overridden by the explicitly specified name.
+                                    expr: Box::new(spec::Expr::Literal(spec::Literal::Integer(1))),
+                                    name: vec!["a".to_string().into()],
+                                    metadata: None,
+                                },
+                                // The resolver assigns a name "2" for the literal.
+                                spec::Expr::Literal(spec::Literal::Integer(2)),
+                            ],
+                            is_distinct: false,
+                            is_user_defined_function: false,
+                        }),
+                        name: vec!["b".to_string().into()],
+                        metadata: None,
                     }),
-                    name: vec!["b".to_string().into()],
+                    name: vec!["c".to_string().into()],
                     metadata: None,
-                }),
-                name: vec!["c".to_string().into()],
-                metadata: None,
-            })?,
+                }
+            )
+            .await?,
             NamedExpr {
                 name: vec!["c".to_string()],
                 expr: Expr::Alias(Alias {
