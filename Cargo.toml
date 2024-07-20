@@ -73,3 +73,7 @@ serde_arrow = { version = "0.11.6", features = ["arrow-52"] }
 [patch.crates-io]
 # Override dependencies to use our forked versions.
 # You can use `path = "..."` to temporarily point to your local copy of the crates to speed up local development.
+
+[profile.release]
+lto = true
+codegen-units = 1

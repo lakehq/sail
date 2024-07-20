@@ -59,7 +59,7 @@
                 "planId": null,
                 "sourceInfo": null
               },
-              "definition": "SELECT * FROM src"
+              "definition": null
             },
             "planId": null,
             "sourceInfo": null
@@ -126,7 +126,7 @@
                 "planId": null,
                 "sourceInfo": null
               },
-              "definition": "SELECT * FROM src"
+              "definition": null
             },
             "planId": null,
             "sourceInfo": null

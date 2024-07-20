@@ -422,11 +422,11 @@ impl PlanResolver<'_> {
                     .await
             }
             Expr::ScalarSubquery { subquery } => {
-                self.resolve_expression_scalar_subquery(*subquery, schema, state)
+                self.resolve_expression_scalar_subquery(*subquery, state)
                     .await
             }
             Expr::Exists { subquery, negated } => {
-                self.resolve_expression_exists(*subquery, negated, schema, state)
+                self.resolve_expression_exists(*subquery, negated, state)
                     .await
             }
         }
@@ -974,7 +974,6 @@ impl PlanResolver<'_> {
     async fn resolve_expression_scalar_subquery(
         &self,
         subquery: spec::QueryPlan,
-        _schema: &DFSchema,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let subquery = self.resolve_query_plan(subquery, state).await?;
@@ -988,7 +987,6 @@ impl PlanResolver<'_> {
         &self,
         subquery: spec::QueryPlan,
         negated: bool,
-        _schema: &DFSchema,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let subquery = self.resolve_query_plan(subquery, state).await?;

@@ -11,7 +11,7 @@
       "input": "CREATE VIEW testView AS INSERT INTO jt VALUES(1, 1)",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'INSERT'.(line 1, pos 24)\n\n== SQL ==\nCREATE VIEW testView AS INSERT INTO jt VALUES(1, 1)\n------------------------^^^\n",
       "output": {
-        "failure": "not implemented: SQL create view"
+        "failure": "not supported: INSERT statement in set expression"
       }
     }
   ]
