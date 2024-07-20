@@ -27,7 +27,7 @@ use datafusion_expr::utils::{
     columnize_expr, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
     find_aggregate_exprs,
 };
-use datafusion_expr::{build_join_schema, LogicalPlanBuilder};
+use datafusion_expr::{build_join_schema, col, LogicalPlanBuilder};
 use framework_common::spec;
 use framework_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 
@@ -482,10 +482,10 @@ impl PlanResolver<'_> {
             CommandNode::RegisterTableFunction(_) => {
                 Err(PlanError::todo("register table function"))
             }
-            CommandNode::CreateTemporaryView {
-                view: _,
-                definition: _,
-            } => Err(PlanError::todo("create temporary view")),
+            CommandNode::CreateTemporaryView { view, definition } => {
+                self.resolve_catalog_create_temp_view(view, definition, state)
+                    .await
+            }
             CommandNode::Write { .. } => Err(PlanError::todo("write")),
             CommandNode::Explain { mode, input } => {
                 self.resolve_command_explain(*input, mode, state).await
@@ -1642,6 +1642,52 @@ impl PlanResolver<'_> {
             comment,
             location,
             properties,
+        };
+        self.resolve_catalog_command(command)
+    }
+
+    async fn resolve_catalog_create_temp_view(
+        &self,
+        view: spec::ObjectName,
+        view_definition: spec::TemporaryViewDefinition,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let spec::TemporaryViewDefinition {
+            input,
+            columns,
+            is_global,
+            replace,
+            definition,
+        } = view_definition;
+        let columns: Vec<String> = columns.into_iter().map(String::from).collect();
+        let input = self.resolve_query_plan(*input, state).await?;
+        let input = if !columns.is_empty() {
+            // Not sure if we need to do this but this is what datafusion does
+            let fields = input.schema().fields().clone();
+            if columns.len() != fields.len() {
+                return Err(PlanError::invalid(format!(
+                    "Source table contains {} columns but only {} names given as column alias",
+                    fields.len(),
+                    columns.len()
+                )));
+            }
+            LogicalPlanBuilder::from(input)
+                .project(
+                    fields
+                        .iter()
+                        .zip(columns.into_iter())
+                        .map(|(field, column)| col(field.name()).alias(column)),
+                )?
+                .build()?
+        } else {
+            input
+        };
+        let command = CatalogCommand::CreateTemporaryView {
+            input: Arc::new(input),
+            view: build_table_reference(view)?,
+            is_global,
+            replace,
+            definition,
         };
         self.resolve_catalog_command(command)
     }

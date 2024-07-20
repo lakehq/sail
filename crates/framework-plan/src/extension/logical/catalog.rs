@@ -137,6 +137,13 @@ pub(crate) enum CatalogCommand {
         view: TableReference,
         if_exists: bool,
     },
+    CreateTemporaryView {
+        input: Arc<LogicalPlan>,
+        view: TableReference,
+        is_global: bool,
+        replace: bool,
+        definition: Option<String>,
+    },
 }
 
 fn build_record_batch<T: Serialize>(schema: SchemaRef, items: &[T]) -> Result<RecordBatch> {
@@ -177,6 +184,7 @@ impl CatalogCommand {
             CatalogCommand::DropFunction { .. } => "DropFunction",
             CatalogCommand::DropTemporaryView { .. } => "DropTemporaryView",
             CatalogCommand::DropView { .. } => "DropView",
+            CatalogCommand::CreateTemporaryView { .. } => "CreateTemporaryView",
         }
     }
 
@@ -200,7 +208,8 @@ impl CatalogCommand {
             CatalogCommand::SetCurrentCatalog { .. }
             | CatalogCommand::SetCurrentDatabase { .. }
             | CatalogCommand::CreateDatabase { .. }
-            | CatalogCommand::CreateTable { .. } => {
+            | CatalogCommand::CreateTable { .. }
+            | CatalogCommand::CreateTemporaryView { .. } => {
                 Vec::<FieldRef>::from_type::<EmptyMetadata>(TracingOptions::default())
             }
             CatalogCommand::CurrentCatalog | CatalogCommand::CurrentDatabase => {
@@ -381,6 +390,20 @@ impl CatalogCommand {
             }
             CatalogCommand::DropView { view, if_exists } => {
                 let value = manager.drop_view(view, if_exists).await.is_ok();
+                let rows = vec![SingleValueMetadata { value }];
+                build_record_batch(command_schema, &rows)?
+            }
+            CatalogCommand::CreateTemporaryView {
+                input,
+                view,
+                is_global,
+                replace,
+                definition,
+            } => {
+                let value = manager
+                    .create_view(input, view, is_global, replace, definition)
+                    .await
+                    .is_ok();
                 let rows = vec![SingleValueMetadata { value }];
                 build_record_batch(command_schema, &rows)?
             }
