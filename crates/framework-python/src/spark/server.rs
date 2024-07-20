@@ -60,8 +60,8 @@ impl SparkConnectServer {
     #[pyo3(signature = (ip="0.0.0.0", port=50051))]
     fn new(ip: &str, port: u16) -> PyResult<Self> {
         let runtime = Builder::new_multi_thread()
+            // FIXME: make thread count and stack size configurable
             .worker_threads(1)
-            // FIXME: make the stack size configurable
             .thread_stack_size(SPARK_CONNECT_STACK_SIZE)
             .enable_all()
             .build()?;

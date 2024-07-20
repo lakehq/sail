@@ -4,5 +4,8 @@ set -euo 'pipefail'
 
 source "$(dirname "$0")/prepare-server.sh"
 
-cargo build -r -p framework-spark-connect
-cargo run -r -p framework-spark-connect
+if [[ -z "${BENCHMARK:-}" ]]; then
+  cargo run -p framework-spark-connect
+else
+  cargo run -p framework-spark-connect -r
+fi

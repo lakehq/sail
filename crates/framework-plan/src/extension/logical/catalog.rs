@@ -208,8 +208,7 @@ impl CatalogCommand {
             CatalogCommand::SetCurrentCatalog { .. }
             | CatalogCommand::SetCurrentDatabase { .. }
             | CatalogCommand::CreateDatabase { .. }
-            | CatalogCommand::CreateTable { .. }
-            | CatalogCommand::CreateTemporaryView { .. } => {
+            | CatalogCommand::CreateTable { .. } => {
                 Vec::<FieldRef>::from_type::<EmptyMetadata>(TracingOptions::default())
             }
             CatalogCommand::CurrentCatalog | CatalogCommand::CurrentDatabase => {
@@ -218,6 +217,7 @@ impl CatalogCommand {
             CatalogCommand::DatabaseExists { .. }
             | CatalogCommand::TableExists { .. }
             | CatalogCommand::FunctionExists { .. }
+            | CatalogCommand::CreateTemporaryView { .. }
             | CatalogCommand::DropDatabase { .. }
             | CatalogCommand::DropTable { .. }
             | CatalogCommand::DropFunction { .. }
