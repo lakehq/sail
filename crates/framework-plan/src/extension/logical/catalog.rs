@@ -189,6 +189,7 @@ impl CatalogCommand {
     }
 
     pub(crate) fn schema(&self) -> Result<SchemaRef> {
+        // TODO: make sure we return the same schema as Spark for each command
         let fields = match self {
             CatalogCommand::ListCatalogs { .. } => {
                 Vec::<FieldRef>::from_type::<CatalogMetadata>(TracingOptions::default())
@@ -206,9 +207,7 @@ impl CatalogCommand {
                 Vec::<FieldRef>::from_type::<FunctionMetadata>(TracingOptions::default())
             }
             CatalogCommand::SetCurrentCatalog { .. }
-            | CatalogCommand::SetCurrentDatabase { .. }
-            | CatalogCommand::CreateDatabase { .. }
-            | CatalogCommand::CreateTable { .. } => {
+            | CatalogCommand::SetCurrentDatabase { .. } => {
                 Vec::<FieldRef>::from_type::<EmptyMetadata>(TracingOptions::default())
             }
             CatalogCommand::CurrentCatalog | CatalogCommand::CurrentDatabase => {
@@ -217,6 +216,8 @@ impl CatalogCommand {
             CatalogCommand::DatabaseExists { .. }
             | CatalogCommand::TableExists { .. }
             | CatalogCommand::FunctionExists { .. }
+            | CatalogCommand::CreateDatabase { .. }
+            | CatalogCommand::CreateTable { .. }
             | CatalogCommand::CreateTemporaryView { .. }
             | CatalogCommand::DropDatabase { .. }
             | CatalogCommand::DropTable { .. }
