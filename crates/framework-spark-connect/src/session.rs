@@ -46,7 +46,12 @@ impl Session {
         let config = SessionConfig::new()
             .with_create_default_catalog_and_schema(true)
             .with_default_catalog_and_schema(DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA)
-            .with_information_schema(true);
+            .with_information_schema(true)
+            .set_bool("datafusion.optimizer.filter_null_join_keys", true)
+            .set_bool("datafusion.optimizer.prefer_existing_sort", true)
+            .set_bool("datafusion.optimizer.prefer_existing_union", true)
+            .set_bool("datafusion.execution.parquet.pushdown_filters", true)
+            .set_bool("datafusion.execution.parquet.reorder_filters", true);
         let runtime = Arc::new(RuntimeEnv::default());
         let state = SessionState::new_with_config_rt(config, runtime);
         let state = state.with_query_planner(new_query_planner());

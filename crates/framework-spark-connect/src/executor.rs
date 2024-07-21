@@ -1,11 +1,10 @@
 use std::collections::VecDeque;
 use std::io::Cursor;
 use std::mem;
-use std::sync::Arc;
 
 use arrow::ipc::writer::StreamWriter;
 use datafusion::arrow::array::RecordBatch;
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::SessionContext;
 use framework_common::utils::rename_physical_plan;
@@ -82,7 +81,7 @@ impl ExecutorTaskContext {
             stream,
             // TODO: use "spark.connect.execute.reattachable.observerRetryBufferSize"
             // TODO: limit the size based on serialized message size instead of element count
-            buffer: VecDeque::with_capacity(128),
+            buffer: VecDeque::with_capacity(8192),
         }
     }
 
@@ -240,7 +239,7 @@ pub(crate) async fn execute_plan(
     } else {
         plan
     };
-    Ok(execute_stream(plan, Arc::new(TaskContext::default()))?)
+    Ok(execute_stream(plan, ctx.task_ctx())?)
 }
 
 pub(crate) async fn read_stream(
@@ -272,6 +271,7 @@ pub(crate) async fn execute_query(
     query: &str,
 ) -> SparkResult<Vec<RecordBatch>> {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use framework_plan::config::PlanConfig;
     use framework_plan::resolver::PlanResolver;
