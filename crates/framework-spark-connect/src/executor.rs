@@ -81,7 +81,7 @@ impl ExecutorTaskContext {
             stream,
             // TODO: use "spark.connect.execute.reattachable.observerRetryBufferSize"
             // TODO: limit the size based on serialized message size instead of element count
-            buffer: VecDeque::with_capacity(8192),
+            buffer: VecDeque::with_capacity(128),
         }
     }
 
