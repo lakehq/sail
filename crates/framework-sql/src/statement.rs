@@ -260,7 +260,6 @@ fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement> {
         .collect::<SqlResult<Vec<_>>>()?;
     let column_defaults: Vec<(String, spec::Expr)> = build_column_defaults(&columns)?;
     let schema: spec::Schema = build_schema_from_columns(columns)?;
-    let definition: Option<String> = query.as_ref().map(|q| q.to_string());
     let query: Option<Box<spec::QueryPlan>> =
         query.map(|q| from_ast_query(*q)).transpose()?.map(Box::new);
 
@@ -280,13 +279,14 @@ fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement> {
             unbounded,
             options,
             query,
-            definition,
+            definition: None,
         },
     })
 }
 
 fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
     use ast::Statement;
+    let statement_sql = Some(statement.to_string());
 
     match statement {
         Statement::Explain { .. } => {
@@ -501,11 +501,11 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             predicate: _,
         }) => Err(SqlError::todo("SQL create index")),
         Statement::CreateView {
-            or_replace: _,
+            or_replace,
             materialized: _,
-            name: _,
-            columns: _,
-            query: _,
+            name,
+            columns,
+            query,
             options: _,
             cluster_by: _,
             comment: _,
@@ -513,7 +513,38 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             if_not_exists: _,
             temporary: _,
             to: _,
-        } => Err(SqlError::todo("SQL create view")),
+        } => {
+            // TODO: Parse Spark Syntax:
+            //  https://spark.apache.org/docs/latest/sql-ref-syntax-ddl-create-view.html
+            let columns: Vec<spec::Identifier> = columns
+                .into_iter()
+                .map(|view_column_def| {
+                    if let Some(options) = view_column_def.options {
+                        Err(SqlError::unsupported(format!(
+                            "Options not supported for view columns: {options:?}"
+                        )))
+                    } else {
+                        Ok(spec::Identifier::from(normalize_ident(
+                            view_column_def.name,
+                        )))
+                    }
+                })
+                .collect::<SqlResult<Vec<_>>>()?;
+            let query = from_ast_query(*query)?;
+            let name = from_ast_object_name(name)?;
+
+            let node = spec::CommandNode::CreateTemporaryView {
+                view: name,
+                definition: spec::TemporaryViewDefinition {
+                    input: Box::new(query),
+                    columns,
+                    is_global: true,
+                    replace: or_replace,
+                    definition: statement_sql,
+                },
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::Delete(ast::Delete {
             tables: _,
             from: _,

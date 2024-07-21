@@ -627,8 +627,10 @@ pub struct CatalogDefinition {
 #[serde(rename_all = "camelCase")]
 pub struct TemporaryViewDefinition {
     pub input: Box<QueryPlan>,
+    pub columns: Vec<Identifier>,
     pub is_global: bool,
     pub replace: bool,
+    pub definition: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

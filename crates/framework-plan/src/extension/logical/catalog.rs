@@ -137,6 +137,13 @@ pub(crate) enum CatalogCommand {
         view: TableReference,
         if_exists: bool,
     },
+    CreateTemporaryView {
+        input: Arc<LogicalPlan>,
+        view: TableReference,
+        is_global: bool,
+        replace: bool,
+        definition: Option<String>,
+    },
 }
 
 fn build_record_batch<T: Serialize>(schema: SchemaRef, items: &[T]) -> Result<RecordBatch> {
@@ -177,10 +184,12 @@ impl CatalogCommand {
             CatalogCommand::DropFunction { .. } => "DropFunction",
             CatalogCommand::DropTemporaryView { .. } => "DropTemporaryView",
             CatalogCommand::DropView { .. } => "DropView",
+            CatalogCommand::CreateTemporaryView { .. } => "CreateTemporaryView",
         }
     }
 
     pub(crate) fn schema(&self) -> Result<SchemaRef> {
+        // TODO: make sure we return the same schema as Spark for each command
         let fields = match self {
             CatalogCommand::ListCatalogs { .. } => {
                 Vec::<FieldRef>::from_type::<CatalogMetadata>(TracingOptions::default())
@@ -198,9 +207,7 @@ impl CatalogCommand {
                 Vec::<FieldRef>::from_type::<FunctionMetadata>(TracingOptions::default())
             }
             CatalogCommand::SetCurrentCatalog { .. }
-            | CatalogCommand::SetCurrentDatabase { .. }
-            | CatalogCommand::CreateDatabase { .. }
-            | CatalogCommand::CreateTable { .. } => {
+            | CatalogCommand::SetCurrentDatabase { .. } => {
                 Vec::<FieldRef>::from_type::<EmptyMetadata>(TracingOptions::default())
             }
             CatalogCommand::CurrentCatalog | CatalogCommand::CurrentDatabase => {
@@ -209,6 +216,9 @@ impl CatalogCommand {
             CatalogCommand::DatabaseExists { .. }
             | CatalogCommand::TableExists { .. }
             | CatalogCommand::FunctionExists { .. }
+            | CatalogCommand::CreateDatabase { .. }
+            | CatalogCommand::CreateTable { .. }
+            | CatalogCommand::CreateTemporaryView { .. }
             | CatalogCommand::DropDatabase { .. }
             | CatalogCommand::DropTable { .. }
             | CatalogCommand::DropFunction { .. }
@@ -381,6 +391,20 @@ impl CatalogCommand {
             }
             CatalogCommand::DropView { view, if_exists } => {
                 let value = manager.drop_view(view, if_exists).await.is_ok();
+                let rows = vec![SingleValueMetadata { value }];
+                build_record_batch(command_schema, &rows)?
+            }
+            CatalogCommand::CreateTemporaryView {
+                input,
+                view,
+                is_global,
+                replace,
+                definition,
+            } => {
+                let value = manager
+                    .create_view(input, view, is_global, replace, definition)
+                    .await
+                    .is_ok();
                 let rows = vec![SingleValueMetadata { value }];
                 build_record_batch(command_schema, &rows)?
             }

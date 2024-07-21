@@ -16,15 +16,18 @@ use datafusion::logical_expr::{
     logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
 };
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
-use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
     ToDFSchema,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::normalize_col;
-use datafusion_expr::utils::{columnize_expr, expand_qualified_wildcard, expand_wildcard};
-use datafusion_expr::{build_join_schema, LogicalPlanBuilder};
+use datafusion_expr::utils::{
+    columnize_expr, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
+    find_aggregate_exprs,
+};
+use datafusion_expr::{build_join_schema, col, LogicalPlanBuilder};
 use framework_common::spec;
 use framework_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 
@@ -76,6 +79,7 @@ fn build_table_reference(name: spec::ObjectName) -> PlanResult<TableReference> {
     }
 }
 
+#[derive(Debug)]
 pub struct NamedPlan {
     pub plan: LogicalPlan,
     /// The user-facing fields for query plan,
@@ -405,6 +409,7 @@ impl PlanResolver<'_> {
             }
             CommandNode::CreateTable { table, definition } => {
                 self.resolve_catalog_create_table(table, definition, state)
+                    .await
             }
             CommandNode::DropTemporaryView {
                 view,
@@ -477,8 +482,9 @@ impl PlanResolver<'_> {
             CommandNode::RegisterTableFunction(_) => {
                 Err(PlanError::todo("register table function"))
             }
-            CommandNode::CreateTemporaryView { .. } => {
-                Err(PlanError::todo("create temporary view"))
+            CommandNode::CreateTemporaryView { view, definition } => {
+                self.resolve_catalog_create_temp_view(view, definition, state)
+                    .await
             }
             CommandNode::Write { .. } => Err(PlanError::todo("write")),
             CommandNode::Explain { mode, input } => {
@@ -520,7 +526,9 @@ impl PlanResolver<'_> {
         let function_name = build_table_reference(name)?;
         let function_name = function_name.table();
         let schema = DFSchema::empty();
-        let (_, arguments) = self.resolve_alias_expressions_and_names(arguments, &schema, state)?;
+        let (_, arguments) = self
+            .resolve_alias_expressions_and_names(arguments, &schema, state)
+            .await?;
         let table_function = self.ctx.table_function(function_name)?;
         let table_provider = table_function.create_table_provider(&arguments)?;
         let names = state.register_fields(&table_provider.schema());
@@ -594,7 +602,7 @@ impl PlanResolver<'_> {
             }),
         };
         let schema = input.schema();
-        let expr = self.resolve_named_expressions(expr, schema, state)?;
+        let expr = self.resolve_named_expressions(expr, schema, state).await?;
         let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
@@ -629,7 +637,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
-        let predicate = self.resolve_expression(condition, schema, state)?;
+        let predicate = self.resolve_expression(condition, schema, state).await?;
         let filter = plan::Filter::try_new(predicate, Arc::new(input))?;
         Ok(LogicalPlan::Filter(filter))
     }
@@ -683,9 +691,10 @@ impl PlanResolver<'_> {
         // See `LogicalPlanBuilder` for details about such logic.
         let (on, filter, join_constraint) = if join_condition.is_some() && using_columns.is_empty()
         {
-            let condition = join_condition
-                .map(|c| self.resolve_expression(c, &schema, state))
-                .transpose()?;
+            let condition = match join_condition {
+                Some(condition) => Some(self.resolve_expression(condition, &schema, state).await?),
+                None => None,
+            };
             (vec![], condition, plan::JoinConstraint::On)
         } else if join_condition.is_none() && !using_columns.is_empty() {
             let on = using_columns
@@ -755,7 +764,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
-        let expr = self.resolve_sort_orders(order, schema, state)?;
+        let expr = self.resolve_sort_orders(order, schema, state).await?;
         if is_global {
             Ok(LogicalPlan::Sort(plan::Sort {
                 expr,
@@ -792,19 +801,56 @@ impl PlanResolver<'_> {
         let spec::Aggregate {
             input,
             grouping,
-            aggregate,
-            having: _,
+            aggregate: projections,
+            having,
         } = aggregate;
         let input = self.resolve_query_plan(*input, state).await?;
         let schema = input.schema();
-        let grouping = self.resolve_expressions(grouping, schema, state)?;
-        let aggregate = self.resolve_named_expressions(aggregate, schema, state)?;
-        let aggregate = self.rewrite_named_expressions(aggregate, state)?;
-        Ok(LogicalPlan::Aggregate(Aggregate::try_new(
-            Arc::new(input),
-            grouping,
-            aggregate,
-        )?))
+        let grouping = self.resolve_expressions(grouping, schema, state).await?;
+        let projections = self
+            .resolve_named_expressions(projections, schema, state)
+            .await?;
+        let having = match having {
+            Some(having) => Some(self.resolve_expression(having, schema, state).await?),
+            None => None,
+        };
+        let mut aggregate_candidates = projections
+            .iter()
+            .map(|x| x.expr.clone())
+            .collect::<Vec<_>>();
+        if let Some(having) = having.as_ref() {
+            aggregate_candidates.push(having.clone());
+        }
+        let aggregate = find_aggregate_exprs(&aggregate_candidates);
+        let plan = LogicalPlanBuilder::from(input)
+            .aggregate(grouping, aggregate.clone())?
+            .build()?;
+        let projections = projections
+            .into_iter()
+            .map(|x| {
+                let NamedExpr {
+                    name,
+                    expr,
+                    metadata,
+                } = x;
+                Ok(NamedExpr {
+                    name,
+                    expr: rebase_expression(expr, &aggregate, &plan)?,
+                    metadata,
+                })
+            })
+            .collect::<PlanResult<_>>()?;
+        let having = match having {
+            Some(having) => Some(rebase_expression(having.clone(), &aggregate, &plan)?),
+            None => None,
+        };
+        let projections = self.rewrite_named_expressions(projections, state)?;
+        let builder = LogicalPlanBuilder::from(plan).project(projections)?;
+        let builder = match having {
+            Some(having) => builder.filter(having)?,
+            None => builder,
+        };
+        Ok(builder.build()?)
     }
 
     async fn resolve_query_with_parameters(
@@ -1121,10 +1167,10 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
-        let mut aliases: HashMap<String, (Expr, bool)> = aliases
-            .into_iter()
-            .map(|expr| {
-                let (name, expr) = match expr {
+        let mut aliases: HashMap<String, (Expr, bool)> = async {
+            let mut results: HashMap<String, (Expr, bool)> = HashMap::new();
+            for alias in aliases {
+                let (name, expr) = match alias {
                     // TODO: handle alias metadata
                     spec::Expr::Alias {
                         name,
@@ -1138,10 +1184,12 @@ impl PlanResolver<'_> {
                     }
                     _ => return Err(PlanError::invalid("alias expression expected for column")),
                 };
-                let expr = self.resolve_expression(expr, schema, state)?;
-                Ok((name.into(), (expr, false)))
-            })
-            .collect::<PlanResult<_>>()?;
+                let expr = self.resolve_expression(expr, schema, state).await?;
+                results.insert(name.into(), (expr, false));
+            }
+            Ok(results) as PlanResult<_>
+        }
+        .await?;
         let mut expr = schema
             .columns()
             .into_iter()
@@ -1215,7 +1263,9 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
-        let expr = self.resolve_expressions(partition_expressions, schema, state)?;
+        let expr = self
+            .resolve_expressions(partition_expressions, schema, state)
+            .await?;
         let num_partitions = num_partitions
             .ok_or_else(|| PlanError::todo("rebalance partitioning by expression"))?;
         Ok(LogicalPlan::Repartition(plan::Repartition {
@@ -1290,10 +1340,15 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let schema = DFSchema::empty();
-        let values = values
-            .into_iter()
-            .map(|row| self.resolve_expressions(row, &schema, state))
-            .collect::<PlanResult<Vec<_>>>()?;
+        let values = async {
+            let mut results: Vec<Vec<Expr>> = Vec::with_capacity(values.len());
+            for value in values {
+                let value = self.resolve_expressions(value, &schema, state).await?;
+                results.push(value);
+            }
+            Ok(results) as PlanResult<_>
+        }
+        .await?;
         let plan = LogicalPlanBuilder::values(values)?.build()?;
         let expr = plan
             .schema()
@@ -1360,7 +1415,7 @@ impl PlanResolver<'_> {
         } = udtf;
 
         let schema = DFSchema::empty();
-        let arguments = self.resolve_expressions(arguments, &schema, state)?;
+        let arguments = self.resolve_expressions(arguments, &schema, state).await?;
 
         let (return_type, _eval_type, _command, _python_version) = match &function {
             spec::TableFunctionDefinition::PythonUdtf {
@@ -1483,7 +1538,7 @@ impl PlanResolver<'_> {
         }))
     }
 
-    fn resolve_catalog_create_table(
+    async fn resolve_catalog_create_table(
         &self,
         table: spec::ObjectName,
         definition: spec::TableDefinition,
@@ -1512,10 +1567,16 @@ impl PlanResolver<'_> {
         //  4. fill external table from query table (copy to)
         let fields = self.resolve_fields(schema.fields)?;
         let schema = DFSchema::from_unqualified_fields(fields, HashMap::new())?;
-        let column_defaults: Vec<(String, Expr)> = column_defaults
-            .into_iter()
-            .map(|(name, expr)| Ok((name, self.resolve_expression(expr, &schema, state)?)))
-            .collect::<PlanResult<Vec<(String, Expr)>>>()?;
+        let column_defaults: Vec<(String, Expr)> = async {
+            let mut results: Vec<(String, Expr)> = Vec::with_capacity(column_defaults.len());
+            for column_default in column_defaults {
+                let (name, expr) = column_default;
+                let expr = self.resolve_expression(expr, &schema, state).await?;
+                results.push((name, expr));
+            }
+            Ok(results) as PlanResult<_>
+        }
+        .await?;
         let constraints = self.resolve_table_constraints(constraints, &schema)?;
         let location = if let Some(location) = location {
             location
@@ -1531,15 +1592,15 @@ impl PlanResolver<'_> {
         };
         let table_partition_cols: Vec<String> =
             table_partition_cols.into_iter().map(String::from).collect();
-        let file_sort_order: Vec<Vec<Expr>> = file_sort_order
-            .into_iter()
-            .map(|order| {
-                order
-                    .into_iter()
-                    .map(|expr| self.resolve_expression(expr, &schema, state))
-                    .collect::<PlanResult<Vec<Expr>>>()
-            })
-            .collect::<PlanResult<Vec<Vec<Expr>>>>()?;
+        let file_sort_order: Vec<Vec<Expr>> = async {
+            let mut results: Vec<Vec<Expr>> = Vec::with_capacity(file_sort_order.len());
+            for order in file_sort_order {
+                let order = self.resolve_expressions(order, &schema, state).await?;
+                results.push(order);
+            }
+            Ok(results) as PlanResult<_>
+        }
+        .await?;
         let options: Vec<(String, String)> = options
             .into_iter()
             .map(|(k, v)| Ok((k, v)))
@@ -1581,6 +1642,52 @@ impl PlanResolver<'_> {
             comment,
             location,
             properties,
+        };
+        self.resolve_catalog_command(command)
+    }
+
+    async fn resolve_catalog_create_temp_view(
+        &self,
+        view: spec::ObjectName,
+        view_definition: spec::TemporaryViewDefinition,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let spec::TemporaryViewDefinition {
+            input,
+            columns,
+            is_global,
+            replace,
+            definition,
+        } = view_definition;
+        let columns: Vec<String> = columns.into_iter().map(String::from).collect();
+        let input = self.resolve_query_plan(*input, state).await?;
+        let input = if !columns.is_empty() {
+            // Not sure if we need to do this but this is what datafusion does
+            let fields = input.schema().fields().clone();
+            if columns.len() != fields.len() {
+                return Err(PlanError::invalid(format!(
+                    "Source table contains {} columns but only {} names given as column alias",
+                    fields.len(),
+                    columns.len()
+                )));
+            }
+            LogicalPlanBuilder::from(input)
+                .project(
+                    fields
+                        .iter()
+                        .zip(columns.into_iter())
+                        .map(|(field, column)| col(field.name()).alias(column)),
+                )?
+                .build()?
+        } else {
+            input
+        };
+        let command = CatalogCommand::CreateTemporaryView {
+            input: Arc::new(input),
+            view: build_table_reference(view)?,
+            is_global,
+            replace,
+            definition,
         };
         self.resolve_catalog_command(command)
     }
@@ -1757,4 +1864,17 @@ impl PlanResolver<'_> {
             })
             .collect()
     }
+}
+
+/// Reference: [datafusion_sql::utils::rebase_expr]
+fn rebase_expression(expr: Expr, base: &[Expr], plan: &LogicalPlan) -> PlanResult<Expr> {
+    Ok(expr
+        .transform_down(|e| {
+            if base.contains(&e) {
+                Ok(Transformed::yes(expr_as_column_expr(&e, plan)?))
+            } else {
+                Ok(Transformed::no(e))
+            }
+        })
+        .data()?)
 }

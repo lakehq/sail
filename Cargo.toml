@@ -69,7 +69,19 @@ arrow-cast = { version = "52.1.0" }
 # We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.
 sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "f631629", features = ["serde", "visitor"] }
 serde_arrow = { version = "0.11.6", features = ["arrow-52"] }
+mimalloc = { version = "0.1.43", features = ["local_dynamic_tls"] }
 
 [patch.crates-io]
 # Override dependencies to use our forked versions.
 # You can use `path = "..."` to temporarily point to your local copy of the crates to speed up local development.
+
+[profile.release]
+# https://doc.rust-lang.org/cargo/reference/profiles.html#release
+opt-level = 3
+debug = false
+debug-assertions = false
+overflow-checks = false
+lto = true
+panic = 'unwind'
+incremental = false
+codegen-units = 1

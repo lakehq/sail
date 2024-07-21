@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fmt::Debug;
 
 use datafusion_common::{plan_err, Result};
@@ -36,27 +37,29 @@ impl<T: Debug> ItemTaker for Vec<T> {
         if self.len() != 2 {
             return plan_err!("two values expected: {:?}", self);
         }
-        let right = self.pop().unwrap();
-        let left = self.pop().unwrap();
-        Ok((left, right))
+        let second = self.pop().unwrap();
+        let first = self.pop().unwrap();
+        Ok((first, second))
     }
 
     fn three(mut self) -> Result<(T, T, T)> {
         if self.len() != 3 {
             return plan_err!("three values expected: {:?}", self);
         }
-        let first = self.pop().unwrap();
-        let second = self.pop().unwrap();
         let third = self.pop().unwrap();
+        let second = self.pop().unwrap();
+        let first = self.pop().unwrap();
         Ok((first, second, third))
     }
 
-    fn at_least_one(mut self) -> Result<(T, Vec<T>)> {
+    fn at_least_one(self) -> Result<(T, Vec<T>)> {
         if self.is_empty() {
             return plan_err!("at least one value expected: {:?}", self);
         }
-        let first = self.pop().unwrap();
-        Ok((first, self))
+        let mut deque: VecDeque<T> = VecDeque::from(self);
+        let first = deque.pop_front().unwrap();
+        let vec: Vec<T> = Vec::from(deque);
+        Ok((first, vec))
     }
 
     fn one_or_more(mut self) -> Result<Either<T, Vec<T>>> {

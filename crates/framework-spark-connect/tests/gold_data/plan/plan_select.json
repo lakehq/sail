@@ -1144,7 +1144,79 @@
     {
       "input": "select (select max(b) from s) ss from t",
       "output": {
-        "failure": "not supported: expression: Subquery(Query { with: None, body: Select(Select { distinct: None, top: None, projection: [UnnamedExpr(Function(Function { name: ObjectName([Ident { value: \"max\", quote_style: None }]), parameters: None, args: List(FunctionArgumentList { duplicate_treatment: None, args: [Unnamed(Expr(Identifier(Ident { value: \"b\", quote_style: None })))], clauses: [] }), filter: None, null_treatment: None, over: None, within_group: [] }))], into: None, from: [TableWithJoins { relation: Table { name: ObjectName([Ident { value: \"s\", quote_style: None }]), alias: None, args: None, with_hints: [], version: None, partitions: [] }, joins: [] }], lateral_views: [], selection: None, group_by: Expressions([]), cluster_by: [], distribute_by: [], sort_by: [], having: None, named_window: [], qualify: None, window_before_qualify: false, value_table_mode: None, connect_by: None }), order_by: [], limit: None, limit_by: [], offset: None, fetch: None, locks: [], for_clause: None })"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "alias": {
+                    "expr": {
+                      "scalarSubquery": {
+                        "subquery": {
+                          "project": {
+                            "input": {
+                              "read": {
+                                "namedTable": {
+                                  "name": [
+                                    "s"
+                                  ],
+                                  "options": []
+                                },
+                                "isStreaming": false
+                              },
+                              "planId": null,
+                              "sourceInfo": null
+                            },
+                            "expressions": [
+                              {
+                                "unresolvedFunction": {
+                                  "functionName": "max",
+                                  "arguments": [
+                                    {
+                                      "unresolvedAttribute": {
+                                        "name": [
+                                          "b"
+                                        ],
+                                        "planId": null
+                                      }
+                                    }
+                                  ],
+                                  "isDistinct": false,
+                                  "isUserDefinedFunction": false
+                                }
+                              }
+                            ]
+                          },
+                          "planId": null,
+                          "sourceInfo": null
+                        }
+                      }
+                    },
+                    "name": [
+                      "ss"
+                    ],
+                    "metadata": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -1603,7 +1675,90 @@
     {
       "input": "select * from t where a = (select b from s)",
       "output": {
-        "failure": "not supported: expression: Subquery(Query { with: None, body: Select(Select { distinct: None, top: None, projection: [UnnamedExpr(Identifier(Ident { value: \"b\", quote_style: None }))], into: None, from: [TableWithJoins { relation: Table { name: ObjectName([Ident { value: \"s\", quote_style: None }]), alias: None, args: None, with_hints: [], version: None, partitions: [] }, joins: [] }], lateral_views: [], selection: None, group_by: Expressions([]), cluster_by: [], distribute_by: [], sort_by: [], having: None, named_window: [], qualify: None, window_before_qualify: false, value_table_mode: None, connect_by: None }), order_by: [], limit: None, limit_by: [], offset: None, fetch: None, locks: [], for_clause: None })"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "filter": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "condition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "a"
+                            ],
+                            "planId": null
+                          }
+                        },
+                        {
+                          "scalarSubquery": {
+                            "subquery": {
+                              "project": {
+                                "input": {
+                                  "read": {
+                                    "namedTable": {
+                                      "name": [
+                                        "s"
+                                      ],
+                                      "options": []
+                                    },
+                                    "isStreaming": false
+                                  },
+                                  "planId": null,
+                                  "sourceInfo": null
+                                },
+                                "expressions": [
+                                  {
+                                    "unresolvedAttribute": {
+                                      "name": [
+                                        "b"
+                                      ],
+                                      "planId": null
+                                    }
+                                  }
+                                ]
+                              },
+                              "planId": null,
+                              "sourceInfo": null
+                            }
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
