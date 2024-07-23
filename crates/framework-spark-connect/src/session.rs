@@ -46,7 +46,15 @@ impl Session {
         let config = SessionConfig::new()
             .with_create_default_catalog_and_schema(true)
             .with_default_catalog_and_schema(DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA)
-            .with_information_schema(true);
+            .with_information_schema(true)
+            .set_usize(
+                "datafusion.execution.parquet.maximum_parallel_row_group_writers",
+                2,
+            )
+            .set_usize(
+                "datafusion.execution.parquet.maximum_buffered_record_batches_per_stream",
+                16,
+            );
         let runtime = Arc::new(RuntimeEnv::default());
         let state = SessionState::new_with_config_rt(config, runtime);
         let state = state.with_query_planner(new_query_planner());
