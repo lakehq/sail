@@ -260,9 +260,9 @@ impl Executor {
         let buffer = match state.deref() {
             ExecutorState::Running(task) => &task.buffer,
             ExecutorState::Pending(context) => &context.buffer,
-            ExecutorState::Idle => return Err(SparkError::internal("task is not running")),
-            ExecutorState::Failed(_) => return Err(SparkError::internal("task is failed")),
-            ExecutorState::Pausing => return Err(SparkError::internal("task is being paused")),
+            ExecutorState::Idle | ExecutorState::Failed(_) | ExecutorState::Pausing => {
+                return Ok(())
+            }
         };
         if let Some(response_id) = response_id {
             buffer.lock()?.remove_until(&response_id);
