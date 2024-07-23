@@ -30,9 +30,7 @@ use tonic::Status;
 use tracing::debug;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::executor::{
-    execute_plan, Executor, ExecutorBatch, ExecutorMetadata, ExecutorOutput, ExecutorTaskContext,
-};
+use crate::executor::{execute_plan, Executor, ExecutorBatch, ExecutorMetadata, ExecutorOutput};
 use crate::session::Session;
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::{ResponseType, ResultComplete};
@@ -116,8 +114,8 @@ async fn handle_execute_plan(
     let ctx = session.context();
     let operation_id = metadata.operation_id.clone();
     let stream = execute_plan(ctx, plan).await?;
-    let mut executor = Executor::new(metadata, ExecutorTaskContext::new(stream));
-    let rx = executor.start().await?;
+    let executor = Executor::new(metadata, stream);
+    let rx = executor.start()?;
     session.add_executor(executor)?;
     let session_id = session.session_id().to_string();
     Ok(ExecutePlanResponseStream::new(session_id, operation_id, rx))
@@ -432,35 +430,24 @@ pub(crate) async fn handle_execute_register_table_function(
 }
 
 pub(crate) async fn handle_interrupt_all(session: Arc<Session>) -> SparkResult<Vec<String>> {
-    let out = session
-        .remove_all_executors()?
-        .iter()
-        .map(|executor| executor.metadata.operation_id.clone())
-        .collect();
-    Ok(out)
+    // FIXME: interrupt
+    session.remove_all_executors()
 }
 
 pub(crate) async fn handle_interrupt_tag(
     session: Arc<Session>,
     tag: String,
 ) -> SparkResult<Vec<String>> {
-    let out = session
-        .remove_executors_by_tag(tag.as_str())?
-        .iter()
-        .map(|executor| executor.metadata.operation_id.clone())
-        .collect();
-    Ok(out)
+    session.remove_executors_by_tag(tag.as_str())
 }
 
 pub(crate) async fn handle_interrupt_operation_id(
     session: Arc<Session>,
     operation_id: String,
 ) -> SparkResult<Vec<String>> {
-    let executor = session.remove_executor(operation_id.as_str())?;
-    if executor.is_some() {
-        Ok(vec![operation_id])
-    } else {
-        Ok(vec![])
+    match session.remove_executor(operation_id.as_str())? {
+        Some(x) => Ok(vec![x]),
+        None => Ok(vec![]),
     }
 }
 
@@ -469,8 +456,8 @@ pub(crate) async fn handle_reattach_execute(
     operation_id: String,
     response_id: Option<String>,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    let mut executor = session
-        .remove_executor(operation_id.as_str())?
+    let executor = session
+        .get_executor(operation_id.as_str())?
         .ok_or_else(|| SparkError::invalid(format!("operation not found: {}", operation_id)))?;
     if !executor.metadata.reattachable {
         return Err(SparkError::invalid(format!(
@@ -478,9 +465,9 @@ pub(crate) async fn handle_reattach_execute(
             operation_id
         )));
     }
-    executor.release(response_id).await?;
-    let rx = executor.start().await?;
-    session.add_executor(executor)?;
+    executor.pause_if_running().await?;
+    executor.release(response_id)?;
+    let rx = executor.start()?;
     let session_id = session.session_id().to_string();
     Ok(ExecutePlanResponseStream::new(session_id, operation_id, rx))
 }
@@ -490,10 +477,10 @@ pub(crate) async fn handle_release_execute(
     operation_id: String,
     response_id: Option<String>,
 ) -> SparkResult<()> {
-    let executor = session.remove_executor(operation_id.as_str())?;
-    if let Some(mut executor) = executor {
-        executor.release(response_id).await?;
-        session.add_executor(executor)?;
+    // Some operations may not have an executor (e.g. DDL statements),
+    // so it is a no-op if the executor is not found.
+    if let Some(executor) = session.get_executor(operation_id.as_str())? {
+        executor.release(response_id)?;
     }
     Ok(())
 }

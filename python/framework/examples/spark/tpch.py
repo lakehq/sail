@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import time
 
 from pyspark.sql import SparkSession
 
@@ -54,9 +55,11 @@ class TpchBenchmark:
                         for (line,) in df.collect():
                             print(line)
                 else:
+                    start_time = time.time()
                     df = spark.sql(sql)
                     rows = df.collect()
-                    print(f"The query returned {len(rows)} rows.")
+                    end_time = time.time()
+                    print(f"The query returned {len(rows)} rows and took {end_time - start_time} seconds.")
 
     def run(self, query: int | None = None, explain: bool = False):
         with self.spark_session() as spark:

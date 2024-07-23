@@ -21,8 +21,7 @@ async fn shutdown() {
     info!("Shutting down the Spark Connect server...");
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     init_telemetry()?;
 
     // A secure connection can be handled by a gateway in production.
@@ -33,5 +32,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     serve(listener, Some(shutdown())).await?;
     info!("The Spark Connect server has stopped.");
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(run())?;
+    // Shutdown the runtime with a timeout.
+    // When the timeout is reached, the `main()` function returns and
+    // the process exits immediately (though the exit code is still zero).
+    // TODO: understand why some tasks are still running after the DataFusion stream is dropped.
+    runtime.shutdown_timeout(std::time::Duration::from_secs(5));
     Ok(())
 }
