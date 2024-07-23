@@ -218,33 +218,39 @@ impl Session {
         Ok(state.executors.get(id).cloned())
     }
 
-    pub(crate) fn remove_executor(&self, id: &str) -> SparkResult<Option<String>> {
+    pub(crate) fn remove_executor(&self, id: &str) -> SparkResult<Option<Arc<Executor>>> {
         let mut state = self.state.lock()?;
-        Ok(state.executors.remove_entry(id).map(|(id, _)| id))
+        Ok(state
+            .executors
+            .remove_entry(id)
+            .map(|(_, executor)| executor))
     }
 
-    pub(crate) fn remove_all_executors(&self) -> SparkResult<Vec<String>> {
+    pub(crate) fn remove_all_executors(&self) -> SparkResult<Vec<Arc<Executor>>> {
         let mut state = self.state.lock()?;
         let mut out = Vec::new();
-        for (key, _) in state.executors.drain() {
-            out.push(key);
+        for (_, executor) in state.executors.drain() {
+            out.push(executor);
         }
         Ok(out)
     }
 
-    pub(crate) fn remove_executors_by_tag(&self, tag: &str) -> SparkResult<Vec<String>> {
+    pub(crate) fn remove_executors_by_tag(&self, tag: &str) -> SparkResult<Vec<Arc<Executor>>> {
         let mut state = self.state.lock()?;
         let tag = tag.to_string();
         let mut ids = Vec::new();
+        let mut removed = Vec::new();
         for (key, executor) in &state.executors {
             if executor.metadata.tags.contains(&tag) {
                 ids.push(key.clone());
             }
         }
         for key in ids.iter() {
-            state.executors.remove(key);
+            if let Some(executor) = state.executors.remove(key) {
+                removed.push(executor);
+            }
         }
-        Ok(ids)
+        Ok(removed)
     }
 }
 

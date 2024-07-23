@@ -430,15 +430,24 @@ pub(crate) async fn handle_execute_register_table_function(
 }
 
 pub(crate) async fn handle_interrupt_all(session: Arc<Session>) -> SparkResult<Vec<String>> {
-    // FIXME: interrupt
-    session.remove_all_executors()
+    let mut results = vec![];
+    for executor in session.remove_all_executors()? {
+        executor.pause_if_running().await?;
+        results.push(executor.metadata.operation_id.clone());
+    }
+    Ok(results)
 }
 
 pub(crate) async fn handle_interrupt_tag(
     session: Arc<Session>,
     tag: String,
 ) -> SparkResult<Vec<String>> {
-    session.remove_executors_by_tag(tag.as_str())
+    let mut results = vec![];
+    for executor in session.remove_executors_by_tag(tag.as_str())? {
+        executor.pause_if_running().await?;
+        results.push(executor.metadata.operation_id.clone());
+    }
+    Ok(results)
 }
 
 pub(crate) async fn handle_interrupt_operation_id(
@@ -446,7 +455,10 @@ pub(crate) async fn handle_interrupt_operation_id(
     operation_id: String,
 ) -> SparkResult<Vec<String>> {
     match session.remove_executor(operation_id.as_str())? {
-        Some(x) => Ok(vec![x]),
+        Some(executor) => {
+            executor.pause_if_running().await?;
+            Ok(vec![executor.metadata.operation_id.clone()])
+        }
         None => Ok(vec![]),
     }
 }
