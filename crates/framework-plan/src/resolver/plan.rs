@@ -1798,6 +1798,8 @@ impl PlanResolver<'_> {
         let projections = self.rewrite_named_expressions(projections, state)?;
         let builder = LogicalPlanBuilder::from(plan);
         match having {
+            // We must apply the `HAVING` clause as a filter before the projection.
+            // It is incorrect to filter after projection due to column renaming.
             Some(having) => Ok(builder.filter(having)?.project(projections)?.build()?),
             None => Ok(builder.project(projections)?.build()?),
         }
