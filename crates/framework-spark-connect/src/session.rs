@@ -209,16 +209,24 @@ impl Session {
     pub(crate) fn add_executor(&self, executor: Executor) -> SparkResult<()> {
         let mut state = self.state.lock()?;
         let id = executor.metadata.operation_id.clone();
-        state.executors.insert(id, executor);
+        state.executors.insert(id, Arc::new(executor));
         Ok(())
     }
 
-    pub(crate) fn remove_executor(&self, id: &str) -> SparkResult<Option<Executor>> {
-        let mut state = self.state.lock()?;
-        Ok(state.executors.remove(id))
+    pub(crate) fn get_executor(&self, id: &str) -> SparkResult<Option<Arc<Executor>>> {
+        let state = self.state.lock()?;
+        Ok(state.executors.get(id).cloned())
     }
 
-    pub(crate) fn remove_all_executors(&self) -> SparkResult<Vec<Executor>> {
+    pub(crate) fn remove_executor(&self, id: &str) -> SparkResult<Option<Arc<Executor>>> {
+        let mut state = self.state.lock()?;
+        Ok(state
+            .executors
+            .remove_entry(id)
+            .map(|(_, executor)| executor))
+    }
+
+    pub(crate) fn remove_all_executors(&self) -> SparkResult<Vec<Arc<Executor>>> {
         let mut state = self.state.lock()?;
         let mut out = Vec::new();
         for (_, executor) in state.executors.drain() {
@@ -227,7 +235,7 @@ impl Session {
         Ok(out)
     }
 
-    pub(crate) fn remove_executors_by_tag(&self, tag: &str) -> SparkResult<Vec<Executor>> {
+    pub(crate) fn remove_executors_by_tag(&self, tag: &str) -> SparkResult<Vec<Arc<Executor>>> {
         let mut state = self.state.lock()?;
         let tag = tag.to_string();
         let mut ids = Vec::new();
@@ -237,8 +245,8 @@ impl Session {
                 ids.push(key.clone());
             }
         }
-        for key in ids {
-            if let Some(executor) = state.executors.remove(&key) {
+        for key in ids.iter() {
+            if let Some(executor) = state.executors.remove(key) {
                 removed.push(executor);
             }
         }
@@ -248,7 +256,7 @@ impl Session {
 
 struct SparkSessionState {
     config: SparkRuntimeConfig,
-    executors: HashMap<String, Executor>,
+    executors: HashMap<String, Arc<Executor>>,
 }
 
 impl SparkSessionState {
