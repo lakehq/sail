@@ -490,8 +490,22 @@ impl PlanResolver<'_> {
             CommandNode::Explain { mode, input } => {
                 self.resolve_command_explain(*input, mode, state).await
             }
-            CommandNode::InsertInto { input, table, columns, insert_from_table, overwrite } => {
-                self.resolve_command_insert_into(*input, table, columns, insert_from_table, overwrite).await
+            CommandNode::InsertInto {
+                input,
+                table,
+                columns,
+                insert_from_table,
+                overwrite,
+            } => {
+                self.resolve_command_insert_into(
+                    *input,
+                    table,
+                    columns,
+                    insert_from_table,
+                    overwrite,
+                    state,
+                )
+                .await
             }
         }
     }
@@ -1702,8 +1716,38 @@ impl PlanResolver<'_> {
         columns: Vec<spec::Identifier>,
         insert_from_table: bool,
         overwrite: bool,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        return Err(PlanError::todo("insert into"));
+        if insert_from_table {
+            return Err(PlanError::todo("TABLE clause not supported yet."));
+        }
+
+        let input = self.resolve_query_plan(input, state).await?;
+        let table_reference = build_table_reference(table)?;
+        let table_plan = self.resolve_catalog_command(CatalogCommand::GetTable {
+            table: table_reference.clone(),
+        })?;
+        let table_schema = table_plan.schema();
+        let columns: Vec<String> = columns.into_iter().map(String::from).collect();
+        let arrow_schema = if columns.is_empty() {
+            table_plan.schema().as_arrow()
+        } else {
+            let fields = columns
+                .into_iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let column_index = table_schema
+                        .index_of_column_by_name(None, &c)
+                        .ok_or_else(|| PlanError::invalid(format!("Column {} not found", c)))?;
+                    Ok(table_schema.field(column_index).clone())
+                })
+                .collect::<PlanResult<Vec<_>>>()?;
+            &adt::Schema::new(adt::Fields::from(fields))
+        };
+        let plan =
+            LogicalPlanBuilder::insert_into(input, table_reference, &arrow_schema, overwrite)?
+                .build()?;
+        Ok(plan)
     }
 
     fn verify_query_plan(&self, plan: &LogicalPlan, state: &PlanResolverState) -> PlanResult<()> {
