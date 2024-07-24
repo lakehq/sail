@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes as adt;
-use datafusion::dataframe::DataFrame;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -12,9 +11,7 @@ use datafusion::datasource::function::TableFunction;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::execution::context::DataFilePaths;
-use datafusion::logical_expr::{
-    logical_plan as plan, Aggregate, Expr, Extension, LogicalPlan, UNNAMED_TABLE,
-};
+use datafusion::logical_expr::{logical_plan as plan, Expr, Extension, LogicalPlan, UNNAMED_TABLE};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
@@ -29,7 +26,7 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{build_join_schema, col, LogicalPlanBuilder};
 use framework_common::spec;
-use framework_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
+use framework_common::utils::{cast_record_batch, read_record_batches};
 
 use crate::catalog::CatalogManager;
 use crate::error::{PlanError, PlanResult};
@@ -521,10 +518,16 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("table options"));
         }
         let table_reference = build_table_reference(name)?;
-        let df: DataFrame = self.ctx.table(table_reference).await?;
-        let plan = df.into_optimized_plan()?;
-        let names = state.register_fields(plan.schema().inner());
-        Ok(rename_logical_plan(plan, &names)?)
+        let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
+        let names = state.register_fields(&table_provider.schema());
+        let table_provider = RenameTableProvider::try_new(table_provider, names)?;
+        Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+            table_reference,
+            provider_as_source(Arc::new(table_provider)),
+            None,
+            vec![],
+            None,
+        )?))
     }
 
     async fn resolve_query_read_udtf(
@@ -593,12 +596,12 @@ impl PlanResolver<'_> {
         let config = ListingTableConfig::new_with_multi_paths(urls)
             .with_listing_options(options)
             .with_schema(schema);
-        let provider = Arc::new(ListingTable::try_new(config)?);
-        let names = state.register_fields(&provider.schema());
-        let provider = RenameTableProvider::try_new(provider, names)?;
+        let table_provider = Arc::new(ListingTable::try_new(config)?);
+        let names = state.register_fields(&table_provider.schema());
+        let table_provider = RenameTableProvider::try_new(table_provider, names)?;
         Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
             UNNAMED_TABLE,
-            provider_as_source(Arc::new(provider)),
+            provider_as_source(Arc::new(table_provider)),
             None,
             vec![],
             None,
@@ -625,21 +628,18 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
-        let expr = self.rewrite_named_expressions(expr, state)?;
         let has_aggregate = expr.iter().any(|e| {
-            e.exists(|e| match e {
-                Expr::AggregateFunction(_) => Ok(true),
-                _ => Ok(false),
-            })
-            .unwrap_or(false)
+            e.expr
+                .exists(|e| match e {
+                    Expr::AggregateFunction(_) => Ok(true),
+                    _ => Ok(false),
+                })
+                .unwrap_or(false)
         });
         if has_aggregate {
-            Ok(LogicalPlan::Aggregate(Aggregate::try_new(
-                Arc::new(input),
-                vec![],
-                expr,
-            )?))
+            self.rewrite_aggregate(input, expr, vec![], None, state)
         } else {
+            let expr = self.rewrite_named_expressions(expr, state)?;
             Ok(LogicalPlan::Projection(plan::Projection::try_new(
                 expr,
                 Arc::new(input),
@@ -832,43 +832,7 @@ impl PlanResolver<'_> {
             Some(having) => Some(self.resolve_expression(having, schema, state).await?),
             None => None,
         };
-        let mut aggregate_candidates = projections
-            .iter()
-            .map(|x| x.expr.clone())
-            .collect::<Vec<_>>();
-        if let Some(having) = having.as_ref() {
-            aggregate_candidates.push(having.clone());
-        }
-        let aggregate = find_aggregate_exprs(&aggregate_candidates);
-        let plan = LogicalPlanBuilder::from(input)
-            .aggregate(grouping, aggregate.clone())?
-            .build()?;
-        let projections = projections
-            .into_iter()
-            .map(|x| {
-                let NamedExpr {
-                    name,
-                    expr,
-                    metadata,
-                } = x;
-                Ok(NamedExpr {
-                    name,
-                    expr: rebase_expression(expr, &aggregate, &plan)?,
-                    metadata,
-                })
-            })
-            .collect::<PlanResult<_>>()?;
-        let having = match having {
-            Some(having) => Some(rebase_expression(having.clone(), &aggregate, &plan)?),
-            None => None,
-        };
-        let projections = self.rewrite_named_expressions(projections, state)?;
-        let builder = LogicalPlanBuilder::from(plan).project(projections)?;
-        let builder = match having {
-            Some(having) => builder.filter(having)?,
-            None => builder,
-        };
-        Ok(builder.build()?)
+        self.rewrite_aggregate(input, projections, grouping, having, state)
     }
 
     async fn resolve_query_with_parameters(
@@ -1791,6 +1755,52 @@ impl PlanResolver<'_> {
             }
         }
         Ok(())
+    }
+
+    fn rewrite_aggregate(
+        &self,
+        input: LogicalPlan,
+        projections: Vec<NamedExpr>,
+        grouping: Vec<Expr>,
+        having: Option<Expr>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let mut aggregate_candidates = projections
+            .iter()
+            .map(|x| x.expr.clone())
+            .collect::<Vec<_>>();
+        if let Some(having) = having.as_ref() {
+            aggregate_candidates.push(having.clone());
+        }
+        let aggregate = find_aggregate_exprs(&aggregate_candidates);
+        let plan = LogicalPlanBuilder::from(input)
+            .aggregate(grouping, aggregate.clone())?
+            .build()?;
+        let projections = projections
+            .into_iter()
+            .map(|x| {
+                let NamedExpr {
+                    name,
+                    expr,
+                    metadata,
+                } = x;
+                Ok(NamedExpr {
+                    name,
+                    expr: rebase_expression(expr, &aggregate, &plan)?,
+                    metadata,
+                })
+            })
+            .collect::<PlanResult<_>>()?;
+        let having = match having {
+            Some(having) => Some(rebase_expression(having.clone(), &aggregate, &plan)?),
+            None => None,
+        };
+        let projections = self.rewrite_named_expressions(projections, state)?;
+        let builder = LogicalPlanBuilder::from(plan);
+        match having {
+            Some(having) => Ok(builder.filter(having)?.project(projections)?.build()?),
+            None => Ok(builder.project(projections)?.build()?),
+        }
     }
 
     fn rewrite_wildcard(
