@@ -490,6 +490,9 @@ impl PlanResolver<'_> {
             CommandNode::Explain { mode, input } => {
                 self.resolve_command_explain(*input, mode, state).await
             }
+            CommandNode::InsertInto { input, table, columns, insert_from_table, overwrite } => {
+                self.resolve_command_insert_into(*input, table, columns, insert_from_table, overwrite).await
+            }
         }
     }
 
@@ -1690,6 +1693,17 @@ impl PlanResolver<'_> {
             definition,
         };
         self.resolve_catalog_command(command)
+    }
+
+    async fn resolve_command_insert_into(
+        &self,
+        input: spec::QueryPlan,
+        table: spec::ObjectName,
+        columns: Vec<spec::Identifier>,
+        insert_from_table: bool,
+        overwrite: bool,
+    ) -> PlanResult<LogicalPlan> {
+        return Err(PlanError::todo("insert into"));
     }
 
     fn verify_query_plan(&self, plan: &LogicalPlan, state: &PlanResolverState) -> PlanResult<()> {

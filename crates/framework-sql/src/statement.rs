@@ -342,6 +342,16 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
                     "INSERT with a table alias is not supported: {table_alias:?}.",
                 )));
             }
+            if partitioned.is_some() {
+                return Err(SqlError::invalid(
+                    "Partitioned INSERT not supported yet.",
+                ));
+            }
+            if !after_columns.is_empty() {
+                return Err(SqlError::invalid(
+                    "After-columns clause not supported yet.",
+                ));
+            }
             if on.is_some() {
                 return Err(SqlError::invalid("INSERT `ON` clause is not supported."));
             }
@@ -364,25 +374,20 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
                 return Err(SqlError::invalid("INSERT with an alias is not supported."));
             }
 
-            let source = from_ast_query(*source)?;
             let table_name = from_ast_object_name(table_name)?;
             let columns: Vec<spec::Identifier> = columns
                 .iter()
                 .map(|x| spec::Identifier::from(normalize_ident(x.clone())))
                 .collect();
-            let after_columns: Vec<spec::Identifier> = after_columns
-                .iter()
-                .map(|x| spec::Identifier::from(normalize_ident(x.clone())))
-                .collect();
-            let partitioned = match partitioned {
-                Some(partitioned_vec) => partitioned_vec
-                    .into_iter()
-                    .map(from_ast_expression)
-                    .collect::<SqlResult<Vec<_>>>()?,
-                None => Vec::new(),
-            };
 
-            Err(SqlError::todo("SQL Insert"))
+            let node = spec::CommandNode::InsertInto {
+                input: Box::new(from_ast_query(*source)?),
+                table: table_name,
+                columns,
+                insert_from_table: table,
+                overwrite,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::Call(ast::Function {
             name: _,
