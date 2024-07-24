@@ -9,7 +9,46 @@
     {
       "input": "insert overwrite table s select * from t",
       "output": {
-        "failure": "not implemented: SQL Insert"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "s"
+              ],
+              "columns": [],
+              "partitionSpec": [],
+              "overwrite": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     }
   ]

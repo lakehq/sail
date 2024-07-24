@@ -386,7 +386,7 @@ pub enum CommandNode {
         input: Box<QueryPlan>,
         table: ObjectName,
         columns: Vec<Identifier>,
-        insert_from_table: bool,
+        partition_spec: Vec<Expr>,
         overwrite: bool,
     },
 }

@@ -494,14 +494,14 @@ impl PlanResolver<'_> {
                 input,
                 table,
                 columns,
-                insert_from_table,
+                partition_spec,
                 overwrite,
             } => {
                 self.resolve_command_insert_into(
                     *input,
                     table,
                     columns,
-                    insert_from_table,
+                    partition_spec,
                     overwrite,
                     state,
                 )
@@ -1714,14 +1714,13 @@ impl PlanResolver<'_> {
         input: spec::QueryPlan,
         table: spec::ObjectName,
         columns: Vec<spec::Identifier>,
-        insert_from_table: bool,
+        partition_spec: Vec<spec::Expr>,
         overwrite: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        if insert_from_table {
-            return Err(PlanError::todo("TABLE clause not supported yet."));
+        if !partition_spec.is_empty() {
+            return Err(PlanError::todo("partitioned insert"));
         }
-
         let input = self.resolve_query_plan(input, state).await?;
         let table_reference = build_table_reference(table)?;
         let table_plan = self.resolve_catalog_command(CatalogCommand::GetTable {
@@ -1734,8 +1733,7 @@ impl PlanResolver<'_> {
         } else {
             let fields = columns
                 .into_iter()
-                .enumerate()
-                .map(|(i, c)| {
+                .map(|c| {
                     let column_index = table_schema
                         .index_of_column_by_name(None, &c)
                         .ok_or_else(|| PlanError::invalid(format!("Column {} not found", c)))?;
@@ -1745,7 +1743,7 @@ impl PlanResolver<'_> {
             &adt::Schema::new(adt::Fields::from(fields))
         };
         let plan =
-            LogicalPlanBuilder::insert_into(input, table_reference, &arrow_schema, overwrite)?
+            LogicalPlanBuilder::insert_into(input, table_reference, arrow_schema, overwrite)?
                 .build()?;
         Ok(plan)
     }
