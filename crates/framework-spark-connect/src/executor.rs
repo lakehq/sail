@@ -63,7 +63,7 @@ impl ExecutorBuffer {
     }
 
     fn add(&mut self, output: ExecutorOutput) {
-        if self.inner.len() == self.inner.capacity() {
+        if self.inner.len() >= self.inner.capacity() {
             self.inner.pop_front();
         }
         self.inner.push_back(output);
