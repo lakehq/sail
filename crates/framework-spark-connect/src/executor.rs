@@ -20,12 +20,15 @@ use uuid::Uuid;
 
 use crate::error::{SparkError, SparkResult};
 use crate::schema::to_spark_schema;
-use crate::spark::connect::execute_plan_response::{ArrowBatch, Metrics, ObservedMetrics};
+use crate::spark::connect::execute_plan_response::{
+    ArrowBatch, Metrics, ObservedMetrics, SqlCommandResult,
+};
 use crate::spark::connect::DataType;
 
 #[derive(Clone, Debug)]
 pub(crate) enum ExecutorBatch {
     ArrowBatch(ArrowBatch),
+    SqlCommandResult(SqlCommandResult),
     Schema(DataType),
     #[allow(dead_code)]
     Metrics(Metrics),
@@ -46,6 +49,10 @@ impl ExecutorOutput {
             id: Uuid::new_v4().to_string(),
             batch,
         }
+    }
+
+    pub(crate) fn complete() -> Self {
+        Self::new(ExecutorBatch::Complete)
     }
 }
 
