@@ -382,6 +382,13 @@ pub enum CommandNode {
         mode: ExplainMode,
         input: Box<QueryPlan>,
     },
+    InsertInto {
+        input: Box<QueryPlan>,
+        table: ObjectName,
+        columns: Vec<Identifier>,
+        partition_spec: Vec<Expr>,
+        overwrite: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

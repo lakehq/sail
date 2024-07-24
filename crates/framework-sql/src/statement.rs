@@ -289,25 +289,113 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
     let statement_sql = Some(statement.to_string());
 
     match statement {
+        Statement::Explain { .. } => {
+            // This should never be called, as we handle EXPLAIN statements separately.
+            Err(SqlError::invalid("unexpected EXPLAIN statement"))
+        }
+        Statement::ExplainTable { .. } => {
+            // This should never be called, as we handle EXPLAIN TABLE statements separately.
+            Err(SqlError::invalid("unexpected EXPLAIN statement"))
+        }
+        Statement::CreateTable(_create_table) => {
+            // This should never be called, as we handle CREATE TABLE statements separately.
+            Err(SqlError::invalid("unexpected CREATE TABLE statement"))
+        }
         Statement::Query(query) => Ok(spec::Plan::Query(from_ast_query(*query)?)),
         Statement::Insert(ast::Insert {
-            or: _,
-            ignore: _,
+            or,
+            ignore,
             into: _,
-            table_name: _,
-            table_alias: _,
-            columns: _,
-            overwrite: _,
-            source: _,
-            partitioned: _,
-            after_columns: _,
+            table_name,
+            table_alias,
+            columns,
+            overwrite,
+            source,
+            partitioned,
+            after_columns,
             table: _,
-            on: _,
-            returning: _,
-            replace_into: _,
-            priority: _,
-            insert_alias: _,
-        }) => Err(SqlError::todo("SQL insert")),
+            on,
+            returning,
+            replace_into,
+            priority,
+            insert_alias,
+        }) => {
+            // Spark Syntax reference:
+            //  https://docs.databricks.com/en/sql/language-manual/sql-ref-syntax-dml-insert-into.html
+            //  https://spark.apache.org/docs/3.5.1/sql-ref-syntax-dml-insert-table.html#content
+            // TODO: Custom parsing to fully sport Spark's INSERT syntax
+            let Some(source) = source else {
+                return Err(SqlError::invalid("INSERT without source is not supported."));
+            };
+            if or.is_some() {
+                return Err(SqlError::invalid(
+                    "INSERT with `OR` clause is not supported.",
+                ));
+            }
+            if ignore {
+                return Err(SqlError::invalid(
+                    "INSERT `IGNORE` clause is not supported.",
+                ));
+            }
+            if table_alias.is_some() {
+                return Err(SqlError::invalid(format!(
+                    "INSERT with a table alias is not supported: {table_alias:?}.",
+                )));
+            }
+            if on.is_some() {
+                return Err(SqlError::invalid("INSERT `ON` clause is not supported."));
+            }
+            if returning.is_some() {
+                return Err(SqlError::invalid(
+                    "INSERT `RETURNING` clause is not supported.",
+                ));
+            }
+            if replace_into {
+                return Err(SqlError::invalid(
+                    "INSERT with a `REPLACE INTO` clause is not supported.",
+                ));
+            }
+            if priority.is_some() {
+                return Err(SqlError::invalid(format!(
+                    "INSERT with a `PRIORITY` clause is not supported: {priority:?}.",
+                )));
+            }
+            if insert_alias.is_some() {
+                return Err(SqlError::invalid("INSERT with an alias is not supported."));
+            }
+
+            let table_name = from_ast_object_name(table_name)?;
+            let columns: Vec<spec::Identifier> = columns
+                .iter()
+                .map(|x| spec::Identifier::from(normalize_ident(x.clone())))
+                .collect();
+            let partitioned: Vec<spec::Expr> = match partitioned {
+                Some(partitioned_vec) => partitioned_vec
+                    .into_iter()
+                    .map(from_ast_expression)
+                    .collect::<SqlResult<Vec<_>>>()?,
+                None => Vec::new(),
+            };
+            let after_columns: Vec<spec::Identifier> = after_columns
+                .iter()
+                .map(|x| spec::Identifier::from(normalize_ident(x.clone())))
+                .collect();
+            let columns = if columns.is_empty() && !after_columns.is_empty() {
+                // after_columns and columns are the same. SQLParser just parses this weird.
+                after_columns
+            } else {
+                columns
+            };
+
+            let node = spec::CommandNode::InsertInto {
+                input: Box::new(from_ast_query(*source)?),
+                table: table_name,
+                columns,
+                partition_spec: partitioned,
+                overwrite,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::Call(ast::Function {
             name: _,
             parameters: _,
@@ -325,10 +413,6 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             legacy_options: _,
             values: _,
         } => Err(SqlError::todo("SQL copy")),
-        Statement::Explain { .. } => {
-            // This should never be called, as we handle EXPLAIN statements separately.
-            Err(SqlError::invalid("unexpected EXPLAIN statement"))
-        }
         Statement::AlterTable {
             name: _,
             if_exists: _,
@@ -428,10 +512,6 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             nulls_distinct: _,
             predicate: _,
         }) => Err(SqlError::todo("SQL create index")),
-        Statement::CreateTable(_create_table) => {
-            // This should never be called, as we handle CREATE TABLE statements separately.
-            Err(SqlError::invalid("unexpected CREATE TABLE statement"))
-        }
         Statement::CreateView {
             or_replace,
             materialized: _,
@@ -537,7 +617,6 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::DropFunction { .. } => Err(SqlError::todo("SQL drop function")),
-        Statement::ExplainTable { .. } => Err(SqlError::todo("SQL explain table")),
         Statement::Merge { .. } => Err(SqlError::todo("SQL merge")),
         Statement::ShowCreate { .. } => Err(SqlError::todo("SQL show create")),
         Statement::ShowFunctions { .. } => Err(SqlError::todo("SQL show functions")),

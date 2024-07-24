@@ -31,6 +31,7 @@ use datafusion_expr::{build_join_schema, col, LogicalPlanBuilder};
 use framework_common::spec;
 use framework_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 
+use crate::catalog::CatalogManager;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
@@ -489,6 +490,23 @@ impl PlanResolver<'_> {
             CommandNode::Write { .. } => Err(PlanError::todo("write")),
             CommandNode::Explain { mode, input } => {
                 self.resolve_command_explain(*input, mode, state).await
+            }
+            CommandNode::InsertInto {
+                input,
+                table,
+                columns,
+                partition_spec,
+                overwrite,
+            } => {
+                self.resolve_command_insert_into(
+                    *input,
+                    table,
+                    columns,
+                    partition_spec,
+                    overwrite,
+                    state,
+                )
+                .await
             }
         }
     }
@@ -1690,6 +1708,50 @@ impl PlanResolver<'_> {
             definition,
         };
         self.resolve_catalog_command(command)
+    }
+
+    async fn resolve_command_insert_into(
+        &self,
+        input: spec::QueryPlan,
+        table: spec::ObjectName,
+        columns: Vec<spec::Identifier>,
+        partition_spec: Vec<spec::Expr>,
+        overwrite: bool,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        if !partition_spec.is_empty() {
+            return Err(PlanError::todo("partitioned insert"));
+        }
+        let input = self.resolve_query_plan(input, state).await?;
+        let table_reference = build_table_reference(table)?;
+        let manager = CatalogManager::new(self.ctx, self.config.clone());
+        let table_schema = manager
+            .get_table_schema(table_reference.clone())
+            .await?
+            .ok_or_else(|| PlanError::invalid(format!("Table {} not found", table_reference)))?;
+        let columns: Vec<String> = columns.into_iter().map(String::from).collect();
+        let arrow_schema = if columns.is_empty() {
+            &table_schema
+        } else {
+            let fields = columns
+                .into_iter()
+                .map(|c| {
+                    let df_schema = DFSchema::try_from_qualified_schema(
+                        table_reference.clone(),
+                        table_schema.as_ref(),
+                    )?;
+                    let column_index = df_schema
+                        .index_of_column_by_name(None, &c)
+                        .ok_or_else(|| PlanError::invalid(format!("Column {} not found", c)))?;
+                    Ok(table_schema.field(column_index).clone())
+                })
+                .collect::<PlanResult<Vec<_>>>()?;
+            &adt::Schema::new(adt::Fields::from(fields))
+        };
+        let plan =
+            LogicalPlanBuilder::insert_into(input, table_reference, arrow_schema, overwrite)?
+                .build()?;
+        Ok(plan)
     }
 
     fn verify_query_plan(&self, plan: &LogicalPlan, state: &PlanResolverState) -> PlanResult<()> {

@@ -19,6 +19,13 @@ On macOS, you can install these tools via Homebrew.
 brew install protobuf hatch maturin
 ```
 
+If Homebrew overrides your default Rust installation,
+you can prioritize the rustup-managed Rust by adding the following line to your shell profile.
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
 ### Building the Project
 
 Run the following commands to verify the code before committing changes.
@@ -33,6 +40,15 @@ while the nightly toolchain is required for formatting the code.
 Please make sure there are no warnings in the output.
 The GitHub Actions workflow runs `cargo clippy` with the `-D warnings` option,
 so that the build will fail if there are any warnings from either the compiler or the linter.
+
+#### Updating Test Gold Data
+
+If the test fails due to mismatched gold data, use the following command to update the gold data
+and commit the changes.
+
+```bash
+env FRAMEWORK_UPDATE_GOLD_DATA=1 cargo test
+```
 
 #### Building the Python Library
 
@@ -53,15 +69,6 @@ The command installs the source code as an editable package in the Hatch environ
 The built `.so` native library is stored in the source directory. You can then use `hatch shell`
 to enter the Python environment and test the library. Any changes to the Python code will be reflected in the
 environment immediately. But if you make changes to the Rust code, you need to run the `develop` command again.
-
-#### Updating Test Gold Data
-
-If the test fails due to mismatched gold data, use the following command to update the gold data
-and commit the changes.
-
-```bash
-env FRAMEWORK_UPDATE_GOLD_DATA=1 cargo test
-```
 
 ## Development Notes
 
@@ -240,13 +247,14 @@ In **Run** > **Edit Configurations**, add a new **Cargo** configuration with the
 1. Name: **Run Spark Connect server** (You can use any name you like.)
 2. Command: `run -p framework-spark-connect`
 3. Environment Variables:
-   - (required) `PYTHONPATH`: `.venvs/default/lib/python<version>/site-packages` (Please replace `<version>` with the
-     actual Python version, e.g. `3.11`.)
-   - (required) `PYO3_PYTHON`: `<project>/.venvs/default/bin/python` (Please replace `<project>` with the actual project
-     path. **This must be an absolute path.**)
-   - (required) `RUST_MIN_STACK`: `8388608`
-   - (optional) `RUST_BACKTRACE`: `full`
-   - (optional) `RUST_LOG`: `framework_spark_connect=debug`
+    - (required) `PYTHONPATH`: `.venvs/default/lib/python<version>/site-packages` (Please replace `<version>` with the
+      actual Python version, e.g. `3.11`.)
+    - (required) `PYO3_PYTHON`: `<project>/.venvs/default/bin/python` (Please replace `<project>` with the actual
+      project
+      path. **This must be an absolute path.**)
+    - (required) `RUST_MIN_STACK`: `8388608`
+    - (optional) `RUST_BACKTRACE`: `full`
+    - (optional) `RUST_LOG`: `framework_spark_connect=debug`
 
 When entering environment variables, you can click on the button on the right side of the input box to open the dialog
 and add the environment variables one by one.

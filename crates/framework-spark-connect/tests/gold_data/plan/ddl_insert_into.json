@@ -3,7 +3,80 @@
     {
       "input": "\nINSERT INTO testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2)\nSELECT * FROM source\n      ",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [],
+              "partitionSpec": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "==",
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "p1"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 3
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "p2"
+                    ],
+                    "planId": null
+                  }
+                }
+              ],
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -29,7 +102,52 @@
     {
       "input": "INSERT INTO TABLE testcat.ns1.ns2.tbl (a, b) SELECT * FROM source",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [
+                "a",
+                "b"
+              ],
+              "partitionSpec": [],
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -41,61 +159,514 @@
     {
       "input": "INSERT INTO TABLE testcat.ns1.ns2.tbl SELECT * FROM source",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [],
+              "partitionSpec": [],
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "INSERT INTO TABLE testcat.ns1.ns2.tbl SELECT * FROM testcat2.db.tbl",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "testcat2",
+                          "db",
+                          "tbl"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [],
+              "partitionSpec": [],
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "INSERT INTO t PARTITION(part = X'537061726B2053514C') VALUES('a')",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "values": [
+                  [
+                    {
+                      "literal": {
+                        "string": "a"
+                      }
+                    }
+                  ]
+                ],
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "t"
+              ],
+              "columns": [],
+              "partitionSpec": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "==",
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "part"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      {
+                        "literal": {
+                          "binary": [
+                            83,
+                            112,
+                            97,
+                            114,
+                            107,
+                            32,
+                            83,
+                            81,
+                            76
+                          ]
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ],
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "INSERT INTO t PARTITION(part = date'2019-01-02') VALUES ('a', DEFAULT)",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "values": [
+                  [
+                    {
+                      "literal": {
+                        "string": "a"
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "DEFAULT"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ]
+                ],
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "t"
+              ],
+              "columns": [],
+              "partitionSpec": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "==",
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "part"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      {
+                        "literal": {
+                          "date": {
+                            "days": 17898
+                          }
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ],
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "INSERT INTO t PARTITION(part = date'2019-01-02') VALUES('a')",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "values": [
+                  [
+                    {
+                      "literal": {
+                        "string": "a"
+                      }
+                    }
+                  ]
+                ],
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "t"
+              ],
+              "columns": [],
+              "partitionSpec": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "==",
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "part"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      {
+                        "literal": {
+                          "date": {
+                            "days": 17898
+                          }
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ],
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "INSERT INTO t PARTITION(part = interval'1 day 2 hour 3 minute 4.123456 second 5 millisecond 6 microsecond') VALUES('a')",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "values": [
+                  [
+                    {
+                      "literal": {
+                        "string": "a"
+                      }
+                    }
+                  ]
+                ],
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "t"
+              ],
+              "columns": [],
+              "partitionSpec": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "==",
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "part"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      {
+                        "literal": {
+                          "dayTimeInterval": {
+                            "microseconds": 93784128462
+                          }
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ],
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "INSERT INTO t PARTITION(part = interval'1 year 2 month') VALUES('a')",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "values": [
+                  [
+                    {
+                      "literal": {
+                        "string": "a"
+                      }
+                    }
+                  ]
+                ],
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "t"
+              ],
+              "columns": [],
+              "partitionSpec": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "==",
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "part"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      {
+                        "literal": {
+                          "yearMonthInterval": {
+                            "months": 14
+                          }
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ],
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "INSERT INTO t PARTITION(part = interval'7 months 1 days 0.001 seconds') VALUES('a')",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
       }
     },
     {
       "input": "INSERT INTO t PARTITION(part = timestamp'2019-01-02 11:11:11') VALUES('a')",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "values": [
+                  [
+                    {
+                      "literal": {
+                        "string": "a"
+                      }
+                    }
+                  ]
+                ],
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "t"
+              ],
+              "columns": [],
+              "partitionSpec": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "==",
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "part"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      {
+                        "literal": {
+                          "timestampNtz": {
+                            "microseconds": 1546427471000000
+                          }
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ],
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "INSERT INTO testcat.ns1.ns2.tbl (a, b) SELECT * FROM source",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [
+                "a",
+                "b"
+              ],
+              "partitionSpec": [],
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -107,7 +678,49 @@
     {
       "input": "INSERT INTO testcat.ns1.ns2.tbl SELECT * FROM source",
       "output": {
-        "failure": "not implemented: SQL insert"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [],
+              "partitionSpec": [],
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     }
   ]
