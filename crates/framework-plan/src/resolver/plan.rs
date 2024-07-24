@@ -31,6 +31,7 @@ use datafusion_expr::{build_join_schema, col, LogicalPlanBuilder};
 use framework_common::spec;
 use framework_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 
+use crate::catalog::CatalogManager;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
@@ -1723,18 +1724,23 @@ impl PlanResolver<'_> {
         }
         let input = self.resolve_query_plan(input, state).await?;
         let table_reference = build_table_reference(table)?;
-        let table_plan = self.resolve_catalog_command(CatalogCommand::GetTable {
-            table: table_reference.clone(),
-        })?;
-        let table_schema = table_plan.schema();
+        let manager = CatalogManager::new(self.ctx, self.config.clone());
+        let table_schema = manager
+            .get_table_schema(table_reference.clone())
+            .await?
+            .ok_or_else(|| PlanError::invalid(format!("Table {} not found", table_reference)))?;
         let columns: Vec<String> = columns.into_iter().map(String::from).collect();
         let arrow_schema = if columns.is_empty() {
-            table_plan.schema().as_arrow()
+            &table_schema
         } else {
             let fields = columns
                 .into_iter()
                 .map(|c| {
-                    let column_index = table_schema
+                    let df_schema = DFSchema::try_from_qualified_schema(
+                        table_reference.clone(),
+                        table_schema.as_ref(),
+                    )?;
+                    let column_index = df_schema
                         .index_of_column_by_name(None, &c)
                         .ok_or_else(|| PlanError::invalid(format!("Column {} not found", c)))?;
                     Ok(table_schema.field(column_index).clone())
