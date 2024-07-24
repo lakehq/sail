@@ -2,6 +2,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use arrow::compute::concat_batches;
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
@@ -15,10 +16,7 @@ use datafusion::datasource::file_format::{format_as_file_type, FileFormatFactory
 use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion_common::config::{ConfigFileType, TableOptions};
 use datafusion_expr::ScalarUDF;
-use framework_common::spec::{
-    CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction, FunctionDefinition,
-    TableFunctionDefinition,
-};
+use framework_common::spec;
 use framework_common::utils::rename_logical_plan;
 use framework_plan::resolver::plan::NamedPlan;
 use framework_plan::resolver::PlanResolver;
@@ -30,18 +28,23 @@ use tonic::Status;
 use tracing::debug;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::executor::{execute_plan, Executor, ExecutorBatch, ExecutorMetadata, ExecutorOutput};
+use crate::executor::{
+    execute_plan, read_stream, to_arrow_batch, Executor, ExecutorBatch, ExecutorMetadata,
+    ExecutorOutput,
+};
 use crate::session::Session;
 use crate::spark::connect as sc;
-use crate::spark::connect::execute_plan_response::{ResponseType, ResultComplete};
+use crate::spark::connect::execute_plan_response::{
+    ResponseType, ResultComplete, SqlCommandResult,
+};
 use crate::spark::connect::write_operation::save_table::TableSaveMethod;
 use crate::spark::connect::write_operation::{SaveMode, SaveType};
 use crate::spark::connect::{
     relation, CommonInlineUserDefinedFunction as SCCommonInlineUserDefinedFunction,
     CommonInlineUserDefinedTableFunction as SCCommonInlineUserDefinedTableFunction,
-    CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, Relation, SqlCommand,
-    StreamingQueryCommand, StreamingQueryManagerCommand, WriteOperation, WriteOperationV2,
-    WriteStreamOperationStart,
+    CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, LocalRelation, Relation,
+    SqlCommand, StreamingQueryCommand, StreamingQueryManagerCommand, WriteOperation,
+    WriteOperationV2, WriteStreamOperationStart,
 };
 
 pub struct ExecutePlanResponseStream {
@@ -80,6 +83,9 @@ impl Stream for ExecutePlanResponseStream {
                 match item.batch {
                     ExecutorBatch::ArrowBatch(batch) => {
                         response.response_type = Some(ResponseType::ArrowBatch(batch));
+                    }
+                    ExecutorBatch::SqlCommandResult(result) => {
+                        response.response_type = Some(ResponseType::SqlCommandResult(result));
                     }
                     ExecutorBatch::Schema(schema) => {
                         response.schema = Some(schema);
@@ -141,8 +147,8 @@ pub(crate) async fn handle_execute_register_function(
     let ctx = session.context();
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
 
-    let udf: CommonInlineUserDefinedFunction = udf.try_into()?;
-    let CommonInlineUserDefinedFunction {
+    let udf: spec::CommonInlineUserDefinedFunction = udf.try_into()?;
+    let spec::CommonInlineUserDefinedFunction {
         function_name,
         deterministic,
         arguments: _,
@@ -151,7 +157,7 @@ pub(crate) async fn handle_execute_register_function(
     let function_name: &str = function_name.as_str();
 
     let (output_type, _eval_type, _command, _python_version) = match &function {
-        FunctionDefinition::PythonUdf {
+        spec::FunctionDefinition::PythonUdf {
             output_type,
             eval_type,
             command,
@@ -174,8 +180,9 @@ pub(crate) async fn handle_execute_register_function(
     ctx.register_udf(scalar_udf);
 
     let (tx, rx) = tokio::sync::mpsc::channel(1);
-    tx.send(ExecutorOutput::new(ExecutorBatch::Complete))
-        .await?;
+    if metadata.reattachable {
+        tx.send(ExecutorOutput::complete()).await?;
+    }
     Ok(ExecutePlanResponseStream::new(
         session.session_id().to_string(),
         metadata.operation_id,
@@ -311,8 +318,9 @@ pub(crate) async fn handle_execute_create_dataframe_view(
     }
     ctx.register_table(table_ref, df.into_view())?;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
-    tx.send(ExecutorOutput::new(ExecutorBatch::Complete))
-        .await?;
+    if metadata.reattachable {
+        tx.send(ExecutorOutput::complete()).await?;
+    }
     Ok(ExecutePlanResponseStream::new(
         session.session_id().to_string(),
         metadata.operation_id,
@@ -340,7 +348,39 @@ pub(crate) async fn handle_execute_sql_command(
             pos_args: sql.pos_args,
         })),
     };
-    handle_execute_relation(session, relation, metadata).await
+    let plan: spec::Plan = relation.clone().try_into()?;
+    let relation = match plan {
+        spec::Plan::Query(_) => relation,
+        command @ spec::Plan::Command(_) => {
+            let ctx = session.context();
+            let resolver = PlanResolver::new(ctx, session.plan_config()?);
+            let plan = resolver.resolve_named_plan(command).await?;
+            let stream = execute_plan(ctx, plan).await?;
+            let schema = stream.schema();
+            let data = read_stream(stream).await?;
+            let data = concat_batches(&schema, data.iter())?;
+            Relation {
+                common: None,
+                rel_type: Some(relation::RelType::LocalRelation(LocalRelation {
+                    data: Some(to_arrow_batch(&data)?.data),
+                    schema: None,
+                })),
+            }
+        }
+    };
+    let result = ExecutorBatch::SqlCommandResult(SqlCommandResult {
+        relation: Some(relation),
+    });
+    let (tx, rx) = tokio::sync::mpsc::channel(2);
+    tx.send(ExecutorOutput::new(result)).await?;
+    if metadata.reattachable {
+        tx.send(ExecutorOutput::complete()).await?;
+    }
+    Ok(ExecutePlanResponseStream::new(
+        session.session_id().to_string(),
+        metadata.operation_id,
+        ReceiverStream::new(rx),
+    ))
 }
 
 pub(crate) async fn handle_execute_write_stream_operation_start(
@@ -380,8 +420,8 @@ pub(crate) async fn handle_execute_register_table_function(
     let ctx = session.context();
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
 
-    let udtf: CommonInlineUserDefinedTableFunction = udtf.try_into()?;
-    let CommonInlineUserDefinedTableFunction {
+    let udtf: spec::CommonInlineUserDefinedTableFunction = udtf.try_into()?;
+    let spec::CommonInlineUserDefinedTableFunction {
         function_name,
         deterministic,
         arguments: _,
@@ -389,7 +429,7 @@ pub(crate) async fn handle_execute_register_table_function(
     } = udtf;
 
     let (return_type, _eval_type, _command, _python_version) = match &function {
-        TableFunctionDefinition::PythonUdtf {
+        spec::TableFunctionDefinition::PythonUdtf {
             return_type,
             eval_type,
             command,
@@ -420,8 +460,9 @@ pub(crate) async fn handle_execute_register_table_function(
     ctx.register_udtf(&function_name, Arc::new(python_udtf));
 
     let (tx, rx) = tokio::sync::mpsc::channel(1);
-    tx.send(ExecutorOutput::new(ExecutorBatch::Complete))
-        .await?;
+    if metadata.reattachable {
+        tx.send(ExecutorOutput::complete()).await?;
+    }
     Ok(ExecutePlanResponseStream::new(
         session.session_id().to_string(),
         metadata.operation_id,
