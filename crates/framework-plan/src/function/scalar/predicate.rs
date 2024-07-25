@@ -35,7 +35,7 @@ fn rlike(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
     })
 }
 
-fn in_list(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+fn is_in_list(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     let (value, list) = args.at_least_one()?;
     Ok(expr::Expr::InList(expr::InList {
         expr: Box::new(value),
@@ -59,7 +59,7 @@ pub(super) fn list_built_in_predicate_functions() -> Vec<(&'static str, Function
         (">=", F::binary_op(Operator::GtEq)),
         ("and", F::binary_op(Operator::And)),
         ("ilike", F::binary(ilike)),
-        ("in", F::custom(in_list)),
+        ("in", F::custom(is_in_list)), // Spark passes isin as in
         ("isnan", F::unary(expr_fn::isnan)),
         (
             "isnotnull",

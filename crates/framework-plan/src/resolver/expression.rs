@@ -429,6 +429,14 @@ impl PlanResolver<'_> {
                 self.resolve_expression_exists(*subquery, negated, state)
                     .await
             }
+            Expr::InList {
+                expr,
+                list,
+                negated,
+            } => {
+                self.resolve_expression_in_list(*expr, list, negated, schema, state)
+                    .await
+            }
         }
     }
 
@@ -999,6 +1007,22 @@ impl PlanResolver<'_> {
             expr_fn::not_exists(Arc::new(subquery))
         };
         Ok(NamedExpr::new(vec!["exists".to_string()], exists))
+    }
+
+    async fn resolve_expression_in_list(
+        &self,
+        expr: spec::Expr,
+        list: Vec<spec::Expr>,
+        negated: bool,
+        schema: &DFSchema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let expr = Box::new(self.resolve_expression(expr, schema, state).await?);
+        let list = self.resolve_expressions(list, schema, state).await?;
+        Ok(NamedExpr::new(
+            vec!["in_list".to_string()],
+            expr::Expr::InList(expr::InList::new(expr, list, negated)),
+        ))
     }
 }
 

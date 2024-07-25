@@ -323,22 +323,14 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
             expr,
             list,
             negated,
-        } => {
-            let result = spec::Expr::from(Function {
-                name: "array_contains".to_string(),
-                args: vec![
-                    spec::Expr::from(Function {
-                        name: "array".to_string(),
-                        args: list
-                            .into_iter()
-                            .map(from_ast_expression)
-                            .collect::<SqlResult<Vec<_>>>()?,
-                    }),
-                    from_ast_expression(*expr)?,
-                ],
-            });
-            Ok(negate_expression(result, negated))
-        }
+        } => Ok(spec::Expr::InList {
+            expr: Box::new(from_ast_expression(*expr)?),
+            list: list
+                .into_iter()
+                .map(from_ast_expression)
+                .collect::<SqlResult<Vec<_>>>()?,
+            negated,
+        }),
         Expr::Between {
             expr,
             negated,

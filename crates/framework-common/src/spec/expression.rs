@@ -81,6 +81,11 @@ pub enum Expr {
         subquery: Box<QueryPlan>,
         negated: bool,
     },
+    InList {
+        expr: Box<Expr>,
+        list: Vec<Expr>,
+        negated: bool,
+    },
 }
 
 /// An identifier with only one part.
