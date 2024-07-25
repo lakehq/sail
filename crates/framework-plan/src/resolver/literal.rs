@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::datatypes::IntervalMonthDayNanoType;
+use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNanoType};
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::ScalarValue;
 use framework_common::spec;
@@ -47,18 +47,32 @@ impl PlanResolver<'_> {
                 days,
                 microseconds,
             } => {
-                let nanos = microseconds
+                let nanoseconds = microseconds
                     .checked_mul(1000)
                     .ok_or(PlanError::invalid("calendar interval microseconds"))?;
                 Ok(ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(months, days, nanos),
+                    IntervalMonthDayNanoType::make_value(months, days, nanoseconds),
                 )))
             }
             Literal::YearMonthInterval { months } => {
                 Ok(ScalarValue::IntervalYearMonth(Some(months)))
             }
+            // TODO: add tests for negative values etc.
             Literal::DayTimeInterval { microseconds } => {
-                Ok(ScalarValue::DurationMicrosecond(Some(microseconds)))
+                let days = microseconds / (24 * 60 * 60 * 1_000_000);
+                let microseconds = microseconds % (24 * 60 * 60 * 1_000_000);
+                if microseconds % 1_000 == 0 {
+                    let milliseconds = microseconds / 1_000;
+                    Ok(ScalarValue::IntervalDayTime(Some(IntervalDayTime::new(
+                        days as i32,
+                        milliseconds as i32,
+                    ))))
+                } else {
+                    let nanoseconds = microseconds * 1_000;
+                    Ok(ScalarValue::IntervalMonthDayNano(Some(
+                        IntervalMonthDayNanoType::make_value(0, days as i32, nanoseconds),
+                    )))
+                }
             }
             Literal::Array {
                 element_type,
