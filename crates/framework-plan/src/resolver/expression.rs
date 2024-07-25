@@ -1064,7 +1064,7 @@ impl PlanResolver<'_> {
         expr: spec::Expr,
         list: Vec<spec::Expr>,
         negated: bool,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let expr = Box::new(self.resolve_expression(expr, schema, state).await?);
