@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use datafusion_common::DFSchemaRef;
 use serde_arrow::_impl::arrow::_raw::schema::SchemaRef;
 
 use crate::error::{PlanError, PlanResult};
@@ -13,6 +14,8 @@ pub(super) struct PlanResolverState {
     next_id: usize,
     fields: HashMap<ResolvedFieldName, FieldName>,
     attributes: HashMap<(PlanId, FieldName), ResolvedFieldName>,
+    /// The outer query schema for the current subquery.
+    outer_query_schema: Option<DFSchemaRef>,
 }
 
 impl Default for PlanResolverState {
@@ -27,6 +30,7 @@ impl PlanResolverState {
             next_id: 0,
             fields: HashMap::new(),
             attributes: HashMap::new(),
+            outer_query_schema: None,
         }
     }
 
@@ -90,5 +94,39 @@ impl PlanResolverState {
             .ok_or_else(|| {
                 PlanError::internal(format!("unknown attribute in plan {plan_id}: {name}"))
             })
+    }
+
+    pub fn get_outer_query_schema(&self) -> Option<&DFSchemaRef> {
+        self.outer_query_schema.as_ref()
+    }
+
+    pub fn enter_query_scope(&mut self, schema: DFSchemaRef) -> QueryScope {
+        QueryScope::new(self, schema)
+    }
+}
+
+pub(crate) struct QueryScope<'a> {
+    state: &'a mut PlanResolverState,
+    previous_outer_query_schema: Option<DFSchemaRef>,
+}
+
+impl<'a> QueryScope<'a> {
+    fn new(state: &'a mut PlanResolverState, schema: DFSchemaRef) -> Self {
+        let previous_outer_query_schema =
+            std::mem::replace(&mut state.outer_query_schema, Some(schema));
+        Self {
+            state,
+            previous_outer_query_schema,
+        }
+    }
+
+    pub(crate) fn state(&mut self) -> &mut PlanResolverState {
+        self.state
+    }
+}
+
+impl<'a> Drop for QueryScope<'a> {
+    fn drop(&mut self) {
+        self.state.outer_query_schema = self.previous_outer_query_schema.take();
     }
 }

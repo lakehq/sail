@@ -546,7 +546,7 @@ impl PlanResolver<'_> {
         // TODO: Handle qualified table reference.
         let function_name = build_table_reference(name)?;
         let function_name = function_name.table();
-        let schema = DFSchema::empty();
+        let schema = Arc::new(DFSchema::empty());
         let (_, arguments) = self
             .resolve_alias_expressions_and_names(arguments, &schema, state)
             .await?;
@@ -687,7 +687,11 @@ impl PlanResolver<'_> {
             // use inner join type to build the schema for cross join
             JoinType::Cross => (plan::JoinType::Inner, true),
         };
-        let schema = build_join_schema(left.schema(), right.schema(), &join_type)?;
+        let schema = Arc::new(build_join_schema(
+            left.schema(),
+            right.schema(),
+            &join_type,
+        )?);
         if is_cross_join {
             if join_condition.is_some() {
                 return Err(PlanError::invalid("cross join with join condition"));
@@ -701,7 +705,7 @@ impl PlanResolver<'_> {
             return Ok(LogicalPlan::CrossJoin(plan::CrossJoin {
                 left: Arc::new(left),
                 right: Arc::new(right),
-                schema: Arc::new(schema),
+                schema,
             }));
         }
         // FIXME: resolve using columns
@@ -735,7 +739,7 @@ impl PlanResolver<'_> {
             filter,
             join_type,
             join_constraint,
-            schema: Arc::new(schema),
+            schema,
             null_equals_null: false,
         }))
     }
@@ -1321,7 +1325,7 @@ impl PlanResolver<'_> {
         values: Vec<Vec<spec::Expr>>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let schema = DFSchema::empty();
+        let schema = Arc::new(DFSchema::empty());
         let values = async {
             let mut results: Vec<Vec<Expr>> = Vec::with_capacity(values.len());
             for value in values {
@@ -1396,7 +1400,7 @@ impl PlanResolver<'_> {
             function,
         } = udtf;
 
-        let schema = DFSchema::empty();
+        let schema = Arc::new(DFSchema::empty());
         let arguments = self.resolve_expressions(arguments, &schema, state).await?;
 
         let (return_type, _eval_type, _command, _python_version) = match &function {
@@ -1548,7 +1552,7 @@ impl PlanResolver<'_> {
         //  3. create external table
         //  4. fill external table from query table (copy to)
         let fields = self.resolve_fields(schema.fields)?;
-        let schema = DFSchema::from_unqualified_fields(fields, HashMap::new())?;
+        let schema = Arc::new(DFSchema::from_unqualified_fields(fields, HashMap::new())?);
         let column_defaults: Vec<(String, Expr)> = async {
             let mut results: Vec<(String, Expr)> = Vec::with_capacity(column_defaults.len());
             for column_default in column_defaults {
@@ -1589,7 +1593,7 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<(String, String)>>>()?;
         let command = CatalogCommand::CreateTable {
             table: build_table_reference(table)?,
-            schema: Arc::new(schema),
+            schema,
             comment,
             column_defaults,
             constraints,
