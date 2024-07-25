@@ -81,11 +81,11 @@ impl TableProvider for RenameTableProvider {
     }
 
     fn get_table_definition(&self) -> Option<&str> {
-        self.inner.get_table_definition()
+        None
     }
 
     fn get_logical_plan(&self) -> Option<&LogicalPlan> {
-        self.inner.get_logical_plan()
+        None
     }
 
     fn get_column_default(&self, column: &str) -> Option<&Expr> {

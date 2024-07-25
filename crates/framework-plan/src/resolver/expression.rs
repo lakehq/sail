@@ -522,7 +522,10 @@ impl PlanResolver<'_> {
             schema
                 .iter()
                 .filter_map(|(qualifier, field)| {
-                    if state.get_field_name(field.name()).is_ok_and(|f| f == last) {
+                    if state.get_field_name(field.name()).is_ok_and(|f| f == last)
+                        && (name.len() == 1
+                            || name.len() == 2 && qualifier.is_some_and(|q| q.table() == first))
+                    {
                         Some(Column::new(qualifier.cloned(), field.name()))
                     } else {
                         None
