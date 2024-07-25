@@ -1020,6 +1020,7 @@ impl PlanResolver<'_> {
         let expr = Box::new(self.resolve_expression(expr, schema, state).await?);
         let list = self.resolve_expressions(list, schema, state).await?;
         Ok(NamedExpr::new(
+            // TODO: Construct better names for the expression (e.g. a IN (b, c))
             vec!["in_list".to_string()],
             expr::Expr::InList(expr::InList::new(expr, list, negated)),
         ))

@@ -59,6 +59,10 @@ pub(super) fn list_built_in_predicate_functions() -> Vec<(&'static str, Function
         (">=", F::binary_op(Operator::GtEq)),
         ("and", F::binary_op(Operator::And)),
         ("ilike", F::binary(ilike)),
+        // TODO:
+        //  If we want to prevent `IN` as a function in SQL,
+        //  we can remove that from the built-in functions,
+        //  and instead resolve it to spec::Expr::InList in the proto converter.
         ("in", F::custom(is_in_list)), // Spark passes isin as in
         ("isnan", F::unary(expr_fn::isnan)),
         (
