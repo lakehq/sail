@@ -52,7 +52,7 @@ pub(super) fn list_built_in_predicate_functions() -> Vec<(&'static str, Function
         ("!=", F::binary_op(Operator::NotEq)),
         ("<", F::binary_op(Operator::Lt)),
         ("<=", F::binary_op(Operator::LtEq)),
-        ("<=>", F::unknown("null-safe equal")),
+        ("<=>", F::binary_op(Operator::IsNotDistinctFrom)),
         ("=", F::binary_op(Operator::Eq)),
         ("==", F::binary_op(Operator::Eq)),
         (">", F::binary_op(Operator::Gt)),

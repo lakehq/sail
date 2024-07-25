@@ -1170,37 +1170,30 @@
       "input": "a = b is not null",
       "output": {
         "success": {
-          "unresolvedFunction": {
-            "functionName": "isnotnull",
-            "arguments": [
-              {
-                "unresolvedFunction": {
-                  "functionName": "==",
-                  "arguments": [
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null
-                      }
-                    },
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "b"
-                        ],
-                        "planId": null
-                      }
-                    }
-                  ],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false
+          "isNotNull": {
+            "unresolvedFunction": {
+              "functionName": "==",
+              "arguments": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
                 }
-              }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
+              ],
+              "isDistinct": false,
+              "isUserDefinedFunction": false
+            }
           }
         }
       }
@@ -1209,37 +1202,30 @@
       "input": "a = b is null",
       "output": {
         "success": {
-          "unresolvedFunction": {
-            "functionName": "isnull",
-            "arguments": [
-              {
-                "unresolvedFunction": {
-                  "functionName": "==",
-                  "arguments": [
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null
-                      }
-                    },
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "b"
-                        ],
-                        "planId": null
-                      }
-                    }
-                  ],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false
+          "isNull": {
+            "unresolvedFunction": {
+              "functionName": "==",
+              "arguments": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
                 }
-              }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
+              ],
+              "isDistinct": false,
+              "isUserDefinedFunction": false
+            }
           }
         }
       }
@@ -1638,62 +1624,32 @@
       "input": "a between b and c",
       "output": {
         "success": {
-          "unresolvedFunction": {
-            "functionName": "and",
-            "arguments": [
-              {
-                "unresolvedFunction": {
-                  "functionName": ">=",
-                  "arguments": [
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null
-                      }
-                    },
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "b"
-                        ],
-                        "planId": null
-                      }
-                    }
-                  ],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false
-                }
-              },
-              {
-                "unresolvedFunction": {
-                  "functionName": "<=",
-                  "arguments": [
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null
-                      }
-                    },
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "c"
-                        ],
-                        "planId": null
-                      }
-                    }
-                  ],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false
-                }
+          "between": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
               }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
+            },
+            "negated": false,
+            "low": {
+              "unresolvedAttribute": {
+                "name": [
+                  "b"
+                ],
+                "planId": null
+              }
+            },
+            "high": {
+              "unresolvedAttribute": {
+                "name": [
+                  "c"
+                ],
+                "planId": null
+              }
+            }
           }
         }
       }
@@ -1793,37 +1749,23 @@
       "input": "a is distinct from b",
       "output": {
         "success": {
-          "unresolvedFunction": {
-            "functionName": "not",
-            "arguments": [
-              {
-                "unresolvedFunction": {
-                  "functionName": "<=>",
-                  "arguments": [
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null
-                      }
-                    },
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "b"
-                        ],
-                        "planId": null
-                      }
-                    }
-                  ],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false
-                }
+          "isDistinctFrom": {
+            "left": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
               }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
+            },
+            "right": {
+              "unresolvedAttribute": {
+                "name": [
+                  "b"
+                ],
+                "planId": null
+              }
+            }
           }
         }
       }
@@ -1832,28 +1774,23 @@
       "input": "a is not distinct from b",
       "output": {
         "success": {
-          "unresolvedFunction": {
-            "functionName": "<=>",
-            "arguments": [
-              {
-                "unresolvedAttribute": {
-                  "name": [
-                    "a"
-                  ],
-                  "planId": null
-                }
-              },
-              {
-                "unresolvedAttribute": {
-                  "name": [
-                    "b"
-                  ],
-                  "planId": null
-                }
+          "isNotDistinctFrom": {
+            "left": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
               }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
+            },
+            "right": {
+              "unresolvedAttribute": {
+                "name": [
+                  "b"
+                ],
+                "planId": null
+              }
+            }
           }
         }
       }
@@ -1862,20 +1799,13 @@
       "input": "a is not null",
       "output": {
         "success": {
-          "unresolvedFunction": {
-            "functionName": "isnotnull",
-            "arguments": [
-              {
-                "unresolvedAttribute": {
-                  "name": [
-                    "a"
-                  ],
-                  "planId": null
-                }
-              }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
+          "isNotNull": {
+            "unresolvedAttribute": {
+              "name": [
+                "a"
+              ],
+              "planId": null
+            }
           }
         }
       }
@@ -1884,20 +1814,13 @@
       "input": "a is null",
       "output": {
         "success": {
-          "unresolvedFunction": {
-            "functionName": "isnull",
-            "arguments": [
-              {
-                "unresolvedAttribute": {
-                  "name": [
-                    "a"
-                  ],
-                  "planId": null
-                }
-              }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
+          "isNull": {
+            "unresolvedAttribute": {
+              "name": [
+                "a"
+              ],
+              "planId": null
+            }
           }
         }
       }
@@ -1906,71 +1829,32 @@
       "input": "a not between b and c",
       "output": {
         "success": {
-          "unresolvedFunction": {
-            "functionName": "not",
-            "arguments": [
-              {
-                "unresolvedFunction": {
-                  "functionName": "and",
-                  "arguments": [
-                    {
-                      "unresolvedFunction": {
-                        "functionName": ">=",
-                        "arguments": [
-                          {
-                            "unresolvedAttribute": {
-                              "name": [
-                                "a"
-                              ],
-                              "planId": null
-                            }
-                          },
-                          {
-                            "unresolvedAttribute": {
-                              "name": [
-                                "b"
-                              ],
-                              "planId": null
-                            }
-                          }
-                        ],
-                        "isDistinct": false,
-                        "isUserDefinedFunction": false
-                      }
-                    },
-                    {
-                      "unresolvedFunction": {
-                        "functionName": "<=",
-                        "arguments": [
-                          {
-                            "unresolvedAttribute": {
-                              "name": [
-                                "a"
-                              ],
-                              "planId": null
-                            }
-                          },
-                          {
-                            "unresolvedAttribute": {
-                              "name": [
-                                "c"
-                              ],
-                              "planId": null
-                            }
-                          }
-                        ],
-                        "isDistinct": false,
-                        "isUserDefinedFunction": false
-                      }
-                    }
-                  ],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false
-                }
+          "between": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
               }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
+            },
+            "negated": true,
+            "low": {
+              "unresolvedAttribute": {
+                "name": [
+                  "b"
+                ],
+                "planId": null
+              }
+            },
+            "high": {
+              "unresolvedAttribute": {
+                "name": [
+                  "c"
+                ],
+                "planId": null
+              }
+            }
           }
         }
       }

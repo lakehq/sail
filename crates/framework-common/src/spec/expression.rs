@@ -86,6 +86,28 @@ pub enum Expr {
         list: Vec<Expr>,
         negated: bool,
     },
+    IsFalse(Box<Expr>),
+    IsNotFalse(Box<Expr>),
+    IsTrue(Box<Expr>),
+    IsNotTrue(Box<Expr>),
+    IsNull(Box<Expr>),
+    IsNotNull(Box<Expr>),
+    IsUnknown(Box<Expr>),
+    IsNotUnknown(Box<Expr>),
+    Between {
+        expr: Box<Expr>,
+        negated: bool,
+        low: Box<Expr>,
+        high: Box<Expr>,
+    },
+    IsDistinctFrom {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    IsNotDistinctFrom {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
 }
 
 /// An identifier with only one part.

@@ -295,30 +295,18 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
             name: from_ast_object_name(ast::ObjectName(x))?,
             plan_id: None,
         }),
-        Expr::IsFalse(e) => Ok(spec::Expr::from(Function {
-            name: "<=>".to_string(),
-            args: vec![from_ast_expression(*e)?, LiteralValue(false).try_into()?],
-        })),
-        Expr::IsNotFalse(e) => Ok(negate_expression(
-            from_ast_expression(Expr::IsFalse(e))?,
-            true,
-        )),
-        Expr::IsTrue(e) => Ok(spec::Expr::from(Function {
-            name: "<=>".to_string(),
-            args: vec![from_ast_expression(*e)?, LiteralValue(true).try_into()?],
-        })),
-        Expr::IsNotTrue(e) => Ok(negate_expression(
-            from_ast_expression(Expr::IsTrue(e))?,
-            true,
-        )),
-        Expr::IsNull(e) => Ok(spec::Expr::from(Function {
-            name: "isnull".to_string(),
-            args: vec![from_ast_expression(*e)?],
-        })),
-        Expr::IsNotNull(e) => Ok(spec::Expr::from(Function {
-            name: "isnotnull".to_string(),
-            args: vec![from_ast_expression(*e)?],
-        })),
+        Expr::IsFalse(expr) => Ok(spec::Expr::IsFalse(Box::new(from_ast_expression(*expr)?))),
+        Expr::IsNotFalse(expr) => Ok(spec::Expr::IsNotFalse(Box::new(from_ast_expression(
+            *expr,
+        )?))),
+        Expr::IsTrue(expr) => Ok(spec::Expr::IsTrue(Box::new(from_ast_expression(*expr)?))),
+        Expr::IsNotTrue(expr) => Ok(spec::Expr::IsNotTrue(Box::new(from_ast_expression(*expr)?))),
+        Expr::IsNull(expr) => Ok(spec::Expr::IsNull(Box::new(from_ast_expression(*expr)?))),
+        Expr::IsNotNull(expr) => Ok(spec::Expr::IsNotNull(Box::new(from_ast_expression(*expr)?))),
+        Expr::IsUnknown(expr) => Ok(spec::Expr::IsUnknown(Box::new(from_ast_expression(*expr)?))),
+        Expr::IsNotUnknown(expr) => Ok(spec::Expr::IsNotUnknown(Box::new(from_ast_expression(
+            *expr,
+        )?))),
         Expr::InList {
             expr,
             list,
@@ -336,25 +324,12 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
             negated,
             low,
             high,
-        } => {
-            let result = spec::Expr::from(Function {
-                name: "and".to_string(),
-                args: vec![
-                    spec::Expr::from(Function {
-                        name: ">=".to_string(),
-                        args: vec![
-                            from_ast_expression(*expr.clone())?,
-                            from_ast_expression(*low)?,
-                        ],
-                    }),
-                    spec::Expr::from(Function {
-                        name: "<=".to_string(),
-                        args: vec![from_ast_expression(*expr)?, from_ast_expression(*high)?],
-                    }),
-                ],
-            });
-            Ok(negate_expression(result, negated))
-        }
+        } => Ok(spec::Expr::Between {
+            expr: Box::new(from_ast_expression(*expr)?),
+            negated,
+            low: Box::new(from_ast_expression(*low)?),
+            high: Box::new(from_ast_expression(*high)?),
+        }),
         Expr::BinaryOp { left, op, right } => {
             let op = from_ast_binary_operator(op)?;
             Ok(spec::Expr::from(Function {
@@ -696,17 +671,14 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
             };
             Ok(expr)
         }
-        Expr::IsDistinctFrom(a, b) => {
-            let result = spec::Expr::from(Function {
-                name: "<=>".to_string(),
-                args: vec![from_ast_expression(*a)?, from_ast_expression(*b)?],
-            });
-            Ok(negate_expression(result, true))
-        }
-        Expr::IsNotDistinctFrom(a, b) => Ok(spec::Expr::from(Function {
-            name: "<=>".to_string(),
-            args: vec![from_ast_expression(*a)?, from_ast_expression(*b)?],
-        })),
+        Expr::IsDistinctFrom(a, b) => Ok(spec::Expr::IsDistinctFrom {
+            left: Box::new(from_ast_expression(*a)?),
+            right: Box::new(from_ast_expression(*b)?),
+        }),
+        Expr::IsNotDistinctFrom(a, b) => Ok(spec::Expr::IsNotDistinctFrom {
+            left: Box::new(from_ast_expression(*a)?),
+            right: Box::new(from_ast_expression(*b)?),
+        }),
         Expr::Named { expr, name } => Ok(spec::Expr::Alias {
             expr: Box::new(from_ast_expression(*expr)?),
             name: vec![name.value.into()],
@@ -729,8 +701,6 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
             negated,
         }),
         Expr::JsonAccess { .. }
-        | Expr::IsUnknown(_)
-        | Expr::IsNotUnknown(_)
         | Expr::InUnnest { .. }
         | Expr::SimilarTo { .. }
         | Expr::AnyOp { .. }

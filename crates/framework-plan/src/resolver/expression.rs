@@ -8,7 +8,7 @@ use datafusion::common::{Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion_common::{plan_err, Column, DFSchemaRef, DataFusionError};
-use datafusion_expr::{expr, expr_fn, window_frame, ExprSchemable, ScalarUDF};
+use datafusion_expr::{expr, expr_fn, window_frame, ExprSchemable, Operator, ScalarUDF};
 use framework_common::spec;
 use framework_python_udf::cereal::partial_pyspark_udf::{
     deserialize_partial_pyspark_udf, PartialPySparkUDF,
@@ -435,6 +435,46 @@ impl PlanResolver<'_> {
                 negated,
             } => {
                 self.resolve_expression_in_list(*expr, list, negated, schema, state)
+                    .await
+            }
+            Expr::IsFalse(expr) => self.resolve_expression_is_false(*expr, schema, state).await,
+            Expr::IsNotFalse(expr) => {
+                self.resolve_expression_is_not_false(*expr, schema, state)
+                    .await
+            }
+            Expr::IsTrue(expr) => self.resolve_expression_is_true(*expr, schema, state).await,
+            Expr::IsNotTrue(expr) => {
+                self.resolve_expression_is_not_true(*expr, schema, state)
+                    .await
+            }
+            Expr::IsNull(expr) => self.resolve_expression_is_null(*expr, schema, state).await,
+            Expr::IsNotNull(expr) => {
+                self.resolve_expression_is_not_null(*expr, schema, state)
+                    .await
+            }
+            Expr::IsUnknown(expr) => {
+                self.resolve_expression_is_unknown(*expr, schema, state)
+                    .await
+            }
+            Expr::IsNotUnknown(expr) => {
+                self.resolve_expression_is_not_unknown(*expr, schema, state)
+                    .await
+            }
+            Expr::Between {
+                expr,
+                negated,
+                low,
+                high,
+            } => {
+                self.resolve_expression_between(*expr, negated, *low, *high, schema, state)
+                    .await
+            }
+            Expr::IsDistinctFrom { left, right } => {
+                self.resolve_expression_is_distinct_from(*left, *right, schema, state)
+                    .await
+            }
+            Expr::IsNotDistinctFrom { left, right } => {
+                self.resolve_expression_is_not_distinct_from(*left, *right, schema, state)
                     .await
             }
         }
@@ -1059,6 +1099,8 @@ impl PlanResolver<'_> {
         Ok(NamedExpr::new(vec!["exists".to_string()], exists))
     }
 
+    // TODO: Construct better names for the expression (e.g. a IN (b, c)) for all functions below.
+
     async fn resolve_expression_in_list(
         &self,
         expr: spec::Expr,
@@ -1070,9 +1112,173 @@ impl PlanResolver<'_> {
         let expr = Box::new(self.resolve_expression(expr, schema, state).await?);
         let list = self.resolve_expressions(list, schema, state).await?;
         Ok(NamedExpr::new(
-            // TODO: Construct better names for the expression (e.g. a IN (b, c))
             vec!["in_list".to_string()],
             expr::Expr::InList(expr::InList::new(expr, list, negated)),
+        ))
+    }
+
+    async fn resolve_expression_is_false(
+        &self,
+        expr: spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let expr = self.resolve_expression(expr, schema, state).await?;
+        Ok(NamedExpr::new(
+            vec!["is_false".to_string()],
+            expr::Expr::IsFalse(Box::new(expr)),
+        ))
+    }
+
+    async fn resolve_expression_is_not_false(
+        &self,
+        expr: spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let expr = self.resolve_expression(expr, schema, state).await?;
+        Ok(NamedExpr::new(
+            vec!["is_not_false".to_string()],
+            expr::Expr::IsNotFalse(Box::new(expr)),
+        ))
+    }
+
+    async fn resolve_expression_is_true(
+        &self,
+        expr: spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let expr = self.resolve_expression(expr, schema, state).await?;
+        Ok(NamedExpr::new(
+            vec!["is_true".to_string()],
+            expr::Expr::IsTrue(Box::new(expr)),
+        ))
+    }
+
+    async fn resolve_expression_is_not_true(
+        &self,
+        expr: spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let expr = self.resolve_expression(expr, schema, state).await?;
+        Ok(NamedExpr::new(
+            vec!["is_not_true".to_string()],
+            expr::Expr::IsNotTrue(Box::new(expr)),
+        ))
+    }
+
+    async fn resolve_expression_is_null(
+        &self,
+        expr: spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let expr = self.resolve_expression(expr, schema, state).await?;
+        Ok(NamedExpr::new(
+            vec!["is_null".to_string()],
+            expr::Expr::IsNull(Box::new(expr)),
+        ))
+    }
+
+    async fn resolve_expression_is_not_null(
+        &self,
+        expr: spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let expr = self.resolve_expression(expr, schema, state).await?;
+        Ok(NamedExpr::new(
+            vec!["is_not_null".to_string()],
+            expr::Expr::IsNotNull(Box::new(expr)),
+        ))
+    }
+
+    async fn resolve_expression_is_unknown(
+        &self,
+        expr: spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let expr = self.resolve_expression(expr, schema, state).await?;
+        Ok(NamedExpr::new(
+            vec!["is_unknown".to_string()],
+            expr::Expr::IsUnknown(Box::new(expr)),
+        ))
+    }
+
+    async fn resolve_expression_is_not_unknown(
+        &self,
+        expr: spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let expr = self.resolve_expression(expr, schema, state).await?;
+        Ok(NamedExpr::new(
+            vec!["is_not_unknown".to_string()],
+            expr::Expr::IsNotUnknown(Box::new(expr)),
+        ))
+    }
+
+    async fn resolve_expression_between(
+        &self,
+        expr: spec::Expr,
+        negated: bool,
+        low: spec::Expr,
+        high: spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let expr = self.resolve_expression(expr, schema, state).await?;
+        let low = self.resolve_expression(low, schema, state).await?;
+        let high = self.resolve_expression(high, schema, state).await?;
+        Ok(NamedExpr::new(
+            vec!["between".to_string()],
+            expr::Expr::Between(expr::Between::new(
+                Box::new(expr),
+                negated,
+                Box::new(low),
+                Box::new(high),
+            )),
+        ))
+    }
+
+    async fn resolve_expression_is_distinct_from(
+        &self,
+        left: spec::Expr,
+        right: spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let left = self.resolve_expression(left, schema, state).await?;
+        let right = self.resolve_expression(right, schema, state).await?;
+        Ok(NamedExpr::new(
+            vec!["is_distinct_from".to_string()],
+            expr::Expr::BinaryExpr(expr::BinaryExpr {
+                left: Box::new(left),
+                op: Operator::IsDistinctFrom,
+                right: Box::new(right),
+            }),
+        ))
+    }
+
+    async fn resolve_expression_is_not_distinct_from(
+        &self,
+        left: spec::Expr,
+        right: spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let left = self.resolve_expression(left, schema, state).await?;
+        let right = self.resolve_expression(right, schema, state).await?;
+        Ok(NamedExpr::new(
+            vec!["is_not_distinct_from".to_string()],
+            expr::Expr::BinaryExpr(expr::BinaryExpr {
+                left: Box::new(left),
+                op: Operator::IsNotDistinctFrom,
+                right: Box::new(right),
+            }),
         ))
     }
 }
