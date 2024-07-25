@@ -283,7 +283,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: null-safe equal"
+        "success": "ok"
       }
     },
     {
@@ -503,7 +503,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: null-safe equal"
+        "success": "ok"
       }
     },
     {
@@ -657,7 +657,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: null-safe equal"
+        "success": "ok"
       }
     },
     {
@@ -1317,7 +1317,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: null-safe equal"
+        "success": "ok"
       }
     },
     {
