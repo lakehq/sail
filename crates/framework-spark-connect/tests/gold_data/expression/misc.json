@@ -1702,53 +1702,42 @@
       "input": "a in (b, c, d)",
       "output": {
         "success": {
-          "unresolvedFunction": {
-            "functionName": "array_contains",
-            "arguments": [
+          "inList": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "list": [
               {
-                "unresolvedFunction": {
-                  "functionName": "array",
-                  "arguments": [
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "b"
-                        ],
-                        "planId": null
-                      }
-                    },
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "c"
-                        ],
-                        "planId": null
-                      }
-                    },
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "d"
-                        ],
-                        "planId": null
-                      }
-                    }
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
                   ],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "planId": null
                 }
               },
               {
                 "unresolvedAttribute": {
                   "name": [
-                    "a"
+                    "c"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "d"
                   ],
                   "planId": null
                 }
               }
             ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
+            "negated": false
           }
         }
       }
@@ -1990,62 +1979,42 @@
       "input": "a not in (b, c, d)",
       "output": {
         "success": {
-          "unresolvedFunction": {
-            "functionName": "not",
-            "arguments": [
+          "inList": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "list": [
               {
-                "unresolvedFunction": {
-                  "functionName": "array_contains",
-                  "arguments": [
-                    {
-                      "unresolvedFunction": {
-                        "functionName": "array",
-                        "arguments": [
-                          {
-                            "unresolvedAttribute": {
-                              "name": [
-                                "b"
-                              ],
-                              "planId": null
-                            }
-                          },
-                          {
-                            "unresolvedAttribute": {
-                              "name": [
-                                "c"
-                              ],
-                              "planId": null
-                            }
-                          },
-                          {
-                            "unresolvedAttribute": {
-                              "name": [
-                                "d"
-                              ],
-                              "planId": null
-                            }
-                          }
-                        ],
-                        "isDistinct": false,
-                        "isUserDefinedFunction": false
-                      }
-                    },
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null
-                      }
-                    }
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
                   ],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "c"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "d"
+                  ],
+                  "planId": null
                 }
               }
             ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
+            "negated": true
           }
         }
       }
