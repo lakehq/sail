@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes::DataType;
-use datafusion::common::{DFSchema, Result, ScalarValue};
+use datafusion::common::{Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
-use datafusion_common::{plan_datafusion_err, plan_err, Column, DataFusionError};
+use datafusion_common::{plan_err, Column, DFSchemaRef, DataFusionError};
 use datafusion_expr::{expr, expr_fn, window_frame, ExprSchemable, ScalarUDF};
 use framework_common::spec;
 use framework_python_udf::cereal::partial_pyspark_udf::{
@@ -108,7 +108,7 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_sort_order(
         &self,
         sort: spec::SortOrder,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<expr::Expr> {
         use spec::{NullOrdering, SortDirection};
@@ -138,7 +138,7 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_sort_orders(
         &self,
         sort: Vec<spec::SortOrder>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<Vec<expr::Expr>> {
         let mut results: Vec<expr::Expr> = Vec::with_capacity(sort.len());
@@ -153,7 +153,7 @@ impl PlanResolver<'_> {
         &self,
         frame: spec::WindowFrame,
         order_by: &[expr::Expr],
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
     ) -> PlanResult<window_frame::WindowFrame> {
         use spec::WindowFrameType;
         use window_frame::WindowFrameUnits;
@@ -254,7 +254,7 @@ impl PlanResolver<'_> {
         value: spec::WindowFrameBoundary,
         kind: WindowBoundaryKind,
         order_by: &[expr::Expr],
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
     ) -> PlanResult<window_frame::WindowFrameBound> {
         let unbounded = || match kind {
             WindowBoundaryKind::Lower => {
@@ -299,7 +299,7 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_named_expression(
         &self,
         expr: spec::Expr,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         use spec::Expr;
@@ -422,11 +422,11 @@ impl PlanResolver<'_> {
                     .await
             }
             Expr::ScalarSubquery { subquery } => {
-                self.resolve_expression_scalar_subquery(*subquery, state)
+                self.resolve_expression_scalar_subquery(*subquery, schema, state)
                     .await
             }
             Expr::Exists { subquery, negated } => {
-                self.resolve_expression_exists(*subquery, negated, state)
+                self.resolve_expression_exists(*subquery, negated, schema, state)
                     .await
             }
             Expr::InList {
@@ -443,7 +443,7 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_named_expressions(
         &self,
         expressions: Vec<spec::Expr>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<Vec<NamedExpr>> {
         let mut results: Vec<NamedExpr> = Vec::with_capacity(expressions.len());
@@ -459,7 +459,7 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_expression(
         &self,
         expressions: spec::Expr,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<expr::Expr> {
         let NamedExpr { expr, .. } = self
@@ -471,7 +471,7 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_expressions(
         &self,
         expressions: Vec<spec::Expr>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<Vec<expr::Expr>> {
         let mut results: Vec<expr::Expr> = Vec::with_capacity(expressions.len());
@@ -485,7 +485,7 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_alias_expressions_and_names(
         &self,
         expressions: Vec<spec::Expr>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<(Vec<String>, Vec<expr::Expr>)> {
         let mut names: Vec<String> = Vec::with_capacity(expressions.len());
@@ -512,20 +512,64 @@ impl PlanResolver<'_> {
         &self,
         name: spec::ObjectName,
         plan_id: Option<i64>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        let candidates =
+            self.resolve_expression_attribute_candicates(&name, plan_id, schema, state)?;
+        if candidates.len() > 1 {
+            return plan_err!("ambiguous attribute: {:?}", name)?;
+        }
+        if !candidates.is_empty() {
+            let (name, _, column) = candidates.one()?;
+            return Ok(NamedExpr::new(vec![name], expr::Expr::Column(column)));
+        }
+        let candidates = if let Some(schema) = state.get_outer_query_schema().cloned() {
+            self.resolve_expression_attribute_candicates(&name, None, &schema, state)?
+        } else {
+            vec![]
+        };
+        if candidates.len() > 1 {
+            return plan_err!("ambiguous outer attribute: {:?}", name)?;
+        }
+        if !candidates.is_empty() {
+            let (name, dt, column) = candidates.one()?;
+            return Ok(NamedExpr::new(
+                vec![name],
+                expr::Expr::OuterReferenceColumn(dt, column),
+            ));
+        }
+        plan_err!("cannot resolve attribute: {:?}", name)?
+    }
+
+    fn resolve_expression_attribute_candicates(
+        &self,
+        name: &spec::ObjectName,
+        plan_id: Option<i64>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<(String, DataType, Column)>> {
         // TODO: handle qualifier and nested fields
-        let name: Vec<String> = name.into();
+        let name: Vec<String> = name.clone().into();
         let first = name
             .first()
             .ok_or_else(|| PlanError::invalid(format!("empty attribute: {:?}", name)))?;
         let last = name
             .last()
             .ok_or_else(|| PlanError::invalid(format!("empty attribute: {:?}", name)))?;
-        let column = if let Some(plan_id) = plan_id {
+        let candidates = if let Some(plan_id) = plan_id {
             let field = state.get_resolved_field_name_in_plan(plan_id, first)?;
-            schema.columns_with_unqualified_name(field)
+            schema
+                .qualified_fields_with_unqualified_name(field)
+                .iter()
+                .map(|(qualifier, field)| {
+                    (
+                        last.clone(),
+                        field.data_type().clone(),
+                        Column::new(qualifier.cloned(), field.name()),
+                    )
+                })
+                .collect::<Vec<_>>()
         } else {
             schema
                 .iter()
@@ -534,23 +578,18 @@ impl PlanResolver<'_> {
                         && (name.len() == 1
                             || name.len() == 2 && qualifier.is_some_and(|q| q.table() == first))
                     {
-                        Some(Column::new(qualifier.cloned(), field.name()))
+                        Some((
+                            last.clone(),
+                            field.data_type().clone(),
+                            Column::new(qualifier.cloned(), field.name()),
+                        ))
                     } else {
                         None
                     }
                 })
                 .collect::<Vec<_>>()
         };
-        if column.len() > 1 {
-            return plan_err!("ambiguous attribute: {:?}", name)?;
-        }
-        let column = column
-            .one()
-            .map_err(|_| plan_datafusion_err!("cannot resolve attribute: {:?}", name))?;
-        Ok(NamedExpr::new(
-            vec![last.clone()],
-            expr::Expr::Column(column),
-        ))
+        Ok(candidates)
     }
 
     async fn resolve_expression_function(
@@ -558,7 +597,7 @@ impl PlanResolver<'_> {
         function_name: String,
         arguments: Vec<spec::Expr>,
         is_distinct: bool,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let (argument_names, arguments) = self
@@ -643,7 +682,7 @@ impl PlanResolver<'_> {
         expr: spec::Expr,
         name: Vec<spec::Identifier>,
         metadata: Option<HashMap<String, String>>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let expr = self.resolve_expression(expr, schema, state).await?;
@@ -664,7 +703,7 @@ impl PlanResolver<'_> {
         &self,
         expr: spec::Expr,
         cast_to_type: spec::DataType,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let data_type = self.resolve_data_type(cast_to_type)?;
@@ -680,7 +719,7 @@ impl PlanResolver<'_> {
     async fn resolve_expression_sort_order(
         &self,
         sort: spec::SortOrder,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let sort = self.resolve_sort_order(sort, schema, state).await?;
@@ -691,7 +730,7 @@ impl PlanResolver<'_> {
         &self,
         _col_name: String,
         _plan_id: Option<i64>,
-        _schema: &DFSchema,
+        _schema: &DFSchemaRef,
         _state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         Err(PlanError::todo("unresolved regex"))
@@ -701,7 +740,7 @@ impl PlanResolver<'_> {
         &self,
         _function: spec::Expr,
         _arguments: Vec<spec::UnresolvedNamedLambdaVariable>,
-        _schema: &DFSchema,
+        _schema: &DFSchemaRef,
         _state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         Err(PlanError::todo("lambda function"))
@@ -713,7 +752,7 @@ impl PlanResolver<'_> {
         partition_spec: Vec<spec::Expr>,
         order_spec: Vec<spec::SortOrder>,
         frame_spec: Option<spec::WindowFrame>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let (function_name, argument_names, arguments) = match window_function {
@@ -778,7 +817,7 @@ impl PlanResolver<'_> {
     async fn resolve_expression_wildcard(
         &self,
         target: Option<spec::ObjectName>,
-        _schema: &DFSchema,
+        _schema: &DFSchemaRef,
         _state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         // FIXME: column reference is parsed as qualifier
@@ -797,7 +836,7 @@ impl PlanResolver<'_> {
         &self,
         child: spec::Expr,
         extraction: spec::Expr,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let extraction = match extraction {
@@ -817,7 +856,7 @@ impl PlanResolver<'_> {
     async fn resolve_expression_common_inline_udf(
         &self,
         function: spec::CommonInlineUserDefinedFunction,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         // TODO: Function arg for if pyspark_udf or not.
@@ -888,7 +927,7 @@ impl PlanResolver<'_> {
         _struct_expression: spec::Expr,
         _field_name: spec::ObjectName,
         _value_expression: Option<spec::Expr>,
-        _schema: &DFSchema,
+        _schema: &DFSchemaRef,
         _state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         Err(PlanError::todo("update fields"))
@@ -897,7 +936,7 @@ impl PlanResolver<'_> {
     async fn resolve_expression_named_lambda_variable(
         &self,
         _variable: spec::UnresolvedNamedLambdaVariable,
-        _schema: &DFSchema,
+        _schema: &DFSchemaRef,
         _state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         Err(PlanError::todo("named lambda variable"))
@@ -907,7 +946,7 @@ impl PlanResolver<'_> {
         &self,
         _function_name: String,
         _arguments: Vec<spec::Expr>,
-        _schema: &DFSchema,
+        _schema: &DFSchemaRef,
         _state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         Err(PlanError::todo("call function"))
@@ -922,7 +961,7 @@ impl PlanResolver<'_> {
     async fn resolve_expression_rollup(
         &self,
         rollup: Vec<spec::Expr>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let expr = self.resolve_expressions(rollup, schema, state).await?;
@@ -935,7 +974,7 @@ impl PlanResolver<'_> {
     async fn resolve_expression_cube(
         &self,
         cube: Vec<spec::Expr>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let expr = self.resolve_expressions(cube, schema, state).await?;
@@ -948,7 +987,7 @@ impl PlanResolver<'_> {
     async fn resolve_expression_grouping_sets(
         &self,
         grouping_sets: Vec<Vec<spec::Expr>>,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let mut results: Vec<Vec<expr::Expr>> = Vec::with_capacity(grouping_sets.len());
@@ -969,11 +1008,14 @@ impl PlanResolver<'_> {
         expr: spec::Expr,
         subquery: spec::QueryPlan,
         negated: bool,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let expr = self.resolve_expression(expr, schema, state).await?;
-        let subquery = self.resolve_query_plan(subquery, state).await?;
+        let subquery = {
+            let mut scope = state.enter_query_scope(Arc::clone(schema));
+            self.resolve_query_plan(subquery, scope.state()).await?
+        };
         let in_subquery = if !negated {
             expr_fn::in_subquery(expr, Arc::new(subquery))
         } else {
@@ -985,9 +1027,13 @@ impl PlanResolver<'_> {
     async fn resolve_expression_scalar_subquery(
         &self,
         subquery: spec::QueryPlan,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let subquery = self.resolve_query_plan(subquery, state).await?;
+        let subquery = {
+            let mut scope = state.enter_query_scope(Arc::clone(schema));
+            self.resolve_query_plan(subquery, scope.state()).await?
+        };
         Ok(NamedExpr::new(
             vec!["subquery".to_string()],
             expr_fn::scalar_subquery(Arc::new(subquery)),
@@ -998,9 +1044,13 @@ impl PlanResolver<'_> {
         &self,
         subquery: spec::QueryPlan,
         negated: bool,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let subquery = self.resolve_query_plan(subquery, state).await?;
+        let subquery = {
+            let mut scope = state.enter_query_scope(Arc::clone(schema));
+            self.resolve_query_plan(subquery, scope.state()).await?
+        };
         let exists = if !negated {
             expr_fn::exists(Arc::new(subquery))
         } else {
@@ -1014,7 +1064,7 @@ impl PlanResolver<'_> {
         expr: spec::Expr,
         list: Vec<spec::Expr>,
         negated: bool,
-        schema: &DFSchema,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let expr = Box::new(self.resolve_expression(expr, schema, state).await?);
@@ -1143,7 +1193,11 @@ mod tests {
 
         async fn resolve(resolver: &PlanResolver<'_>, expr: spec::Expr) -> PlanResult<NamedExpr> {
             resolver
-                .resolve_named_expression(expr, &DFSchema::empty(), &mut PlanResolverState::new())
+                .resolve_named_expression(
+                    expr,
+                    &Arc::new(DFSchema::empty()),
+                    &mut PlanResolverState::new(),
+                )
                 .await
         }
 
