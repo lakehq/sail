@@ -12,13 +12,6 @@ use tokio::runtime::{Builder, Runtime};
 use tokio::sync::oneshot::{Receiver, Sender};
 use tracing::info;
 
-pub(super) fn register_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
-    let module = PyModule::new_bound(parent.py(), "server")?;
-    module.add_class::<SparkConnectServer>()?;
-    parent.add_submodule(&module)?;
-    Ok(())
-}
-
 const SPARK_CONNECT_STACK_SIZE: usize = 1024 * 1024 * 8;
 
 struct SparkConnectServerState {
@@ -45,7 +38,7 @@ impl SparkConnectServerState {
 }
 
 #[pyclass]
-struct SparkConnectServer {
+pub(super) struct SparkConnectServer {
     #[pyo3(get)]
     ip: String,
     #[pyo3(get)]
@@ -61,7 +54,6 @@ impl SparkConnectServer {
     fn new(ip: &str, port: u16) -> PyResult<Self> {
         let runtime = Builder::new_multi_thread()
             // FIXME: make thread count and stack size configurable
-            .worker_threads(1)
             .thread_stack_size(SPARK_CONNECT_STACK_SIZE)
             .enable_all()
             .build()?;

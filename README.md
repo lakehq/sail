@@ -227,8 +227,7 @@ You can use the following commands to start a local PySpark session.
 hatch run pyspark
 
 # Run the PySpark shell using the Spark Connect implementation.
-# You can ignore the "sparkContext() is not implemented" error when the shell starts.
-env SPARK_REMOTE="sc://localhost:50051" hatch run pyspark
+env SPARK_CONNECT_MODE_ENABLED=1 SPARK_REMOTE="sc://localhost:50051" hatch run pyspark
 ```
 
 ### Running Spark Tests in GitHub Actions
