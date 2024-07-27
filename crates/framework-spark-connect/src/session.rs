@@ -53,7 +53,7 @@ impl Session {
             )
             .set_usize(
                 "datafusion.execution.parquet.maximum_buffered_record_batches_per_stream",
-                16, // TODO: Make this configurable with default value
+                128, // TODO: Make this configurable with default value
             );
         let runtime = Arc::new(RuntimeEnv::default());
         let state = SessionState::new_with_config_rt(config, runtime);
