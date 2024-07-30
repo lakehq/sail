@@ -26,7 +26,7 @@ def run_spark_shell(port: int):
       /_/
 
 Using Python version {python_version} ({build_number}, {build_date})
-Client connected to the Spark Connect server at localhost:{port}
+Client connected to the Sail Spark Connect server at localhost:{port}
 SparkSession available as 'spark'."""
     code.interact(local=namespace, banner=banner, exitmsg="")
 
