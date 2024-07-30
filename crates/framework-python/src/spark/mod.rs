@@ -4,7 +4,7 @@ pub(crate) mod server;
 
 pub(super) fn register_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     let module = PyModule::new_bound(parent.py(), "spark")?;
-    server::register_module(&module)?;
+    module.add_class::<server::SparkConnectServer>()?;
     parent.add_submodule(&module)?;
     Ok(())
 }
