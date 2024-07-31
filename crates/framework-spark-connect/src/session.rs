@@ -42,18 +42,33 @@ impl Debug for Session {
 }
 
 impl Session {
-    pub(crate) fn new(user_id: Option<String>, session_id: String) -> Self {
+    pub(crate) fn try_new(user_id: Option<String>, session_id: String) -> SparkResult<Self> {
+        // TODO: support more systematic configuration
+        // TODO: return error on invalid environment variables
         let config = SessionConfig::new()
             .with_create_default_catalog_and_schema(true)
             .with_default_catalog_and_schema(DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA)
             .with_information_schema(true)
             .set_usize(
+                "datafusion.execution.batch_size",
+                std::env::var("DATAFUSION_BATCH_SIZE")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(8192),
+            )
+            .set_usize(
                 "datafusion.execution.parquet.maximum_parallel_row_group_writers",
-                2, // TODO: Make this configurable with default value
+                std::env::var("DATAFUSION_PARQUET_MAX_PARALLEL_ROW_GROUP_WRITERS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(2),
             )
             .set_usize(
                 "datafusion.execution.parquet.maximum_buffered_record_batches_per_stream",
-                16, // TODO: Make this configurable with default value
+                std::env::var("DATAFUSION_PARQUET_MAX_BUFFERED_RECORD_BATCHES_PER_STREAM")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(16),
             );
         let runtime = Arc::new(RuntimeEnv::default());
         let state = SessionState::new_with_config_rt(config, runtime);
@@ -66,12 +81,12 @@ impl Session {
             context.deregister_udf(name);
         }
 
-        Self {
+        Ok(Self {
             user_id,
             session_id,
             context,
             state: Mutex::new(SparkSessionState::new()),
-        }
+        })
     }
 
     pub(crate) fn session_id(&self) -> &str {
@@ -289,11 +304,20 @@ impl SessionManager {
     }
 
     pub(crate) fn get_session(&self, key: SessionKey) -> SparkResult<Arc<Session>> {
+        use std::collections::hash_map::Entry;
+
         let mut sessions = self.sessions.lock()?;
-        let session = sessions.entry(key).or_insert_with_key(|k| {
-            Arc::new(Session::new(k.user_id.clone(), k.session_id.clone()))
-        });
-        Ok(session.clone())
+        let entry = sessions.entry(key);
+        match entry {
+            Entry::Occupied(o) => Ok(o.get().clone()),
+            Entry::Vacant(v) => {
+                let session = Arc::new(Session::try_new(
+                    v.key().user_id.clone(),
+                    v.key().session_id.clone(),
+                )?);
+                Ok(v.insert(session).clone())
+            }
+        }
     }
 
     #[allow(dead_code)]
