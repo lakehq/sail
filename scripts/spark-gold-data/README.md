@@ -37,8 +37,8 @@ save the test output every time you modify the behavior of the code.
 Please commit the gold data changes so that they can be part of the code review.
 
 ```bash
-env FRAMEWORK_UPDATE_GOLD_DATA=1 cargo test
+env SAIL_UPDATE_GOLD_DATA=1 cargo test
 ```
 
-Now you can run `cargo test` without the `FRAMEWORK_UPDATE_GOLD_DATA` environment variable
+Now you can run `cargo test` without the `SAIL_UPDATE_GOLD_DATA` environment variable
 to make sure the code produces the same test output as the gold data.

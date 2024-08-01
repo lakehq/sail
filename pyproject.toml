@@ -1,7 +1,7 @@
 [project]
-name = "framework"
+name = "PySail"
 version = "0.0.1"
-description = "LakeSail framework Python library"
+description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
 ]
@@ -69,18 +69,18 @@ install-pyspark = "{env:HATCH_UV} pip install opt/spark/python/dist/pyspark-3.5.
 env.CI.installer = "uv"
 
 [tool.hatch.build.targets.sdist]
-packages = ["python/framework"]
+packages = ["python/pysail"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["python/framework"]
+packages = ["python/pysail"]
 
 [tool.pytest.ini_options]
 testpaths = ["python"]
 
 [tool.maturin]
 python-source = "python"
-module-name = "framework._native"
-manifest-path = "crates/framework-python/Cargo.toml"
+module-name = "pysail._native"
+manifest-path = "crates/sail-python/Cargo.toml"
 features = [
     "pyo3/extension-module",
     "pyo3/abi3-py38",

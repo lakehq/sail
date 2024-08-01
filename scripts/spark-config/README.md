@@ -10,5 +10,5 @@ Run the following command **in the project root directory** to update the data f
 Please commit the changes if any.
 
 ```bash
-poetry -C python run scripts/spark-config/generate.py -o crates/framework-spark-connect/data/spark_config.json
+poetry -C python run scripts/spark-config/generate.py -o crates/sail-spark-connect/data/spark_config.json
 ```

@@ -119,12 +119,12 @@ jobs:
         run: |
           hatch env create test
           hatch run test:install-pyspark
-          hatch run test:bash -c '{env:HATCH_UV} pip install framework --no-index -f target/wheels --force-reinstall'
+          hatch run test:bash -c '{env:HATCH_UV} pip install pysail --no-index -f target/wheels --force-reinstall'
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         name: Run Spark Connect server
         run: |
-          nohup hatch run test:python -m framework.spark server > /dev/null 2>&1 < /dev/null &
+          nohup hatch run test:python -m pysail.spark server > /dev/null 2>&1 < /dev/null &
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         name: Wait for Spark Connect server to start

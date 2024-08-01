@@ -37,7 +37,7 @@ function run_pytest() {
   echo "Test suite: ${name}"
   # We ignore the pytext exit code so that the command can complete successfully.
   hatch run test:pytest \
-    -p framework.testing.spark \
+    -p pysail.testing.spark \
     -o "doctest_optionflags=ELLIPSIS NORMALIZE_WHITESPACE" \
     -o "faulthandler_timeout=30" \
     --basetemp="${pytest_tmp_dir}" \

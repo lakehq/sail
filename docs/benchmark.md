@@ -3,15 +3,15 @@
 You can use the following command to run individual queries from the TPC-H benchmark.
 
 ```shell
-python -m framework.examples.spark.tpch \
+python -m pysail.examples.spark.tpch \
   --data-path "$BENCHMARK_PATH"/tpch/data \
   --query-path "$BENCHMARK_PATH"/tpch/queries \
   --query 1
 ```
 
-You need to run this in a Python virtual environment with the framework library and PySpark installed.
+You need to run this in a Python virtual environment with PySail and PySpark installed.
 If you are in the project source directory, you can use Hatch to set up the environment.
-Run `hatch run maturin develop` to build and install the framework library for the default Hatch environment,
+Run `hatch run maturin develop` to build and install PySail for the default Hatch environment,
 and then run `hatch shell` to enter the environment.
 
 `BENCHMARK_PATH` is the absolute path of the [DataFusion benchmarks repository](https://github.com/apache/datafusion-benchmarks).

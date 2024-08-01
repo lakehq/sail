@@ -1,5 +1,5 @@
 def file_group:
-    if test("/crates/framework-spark-connect/") then "spark"
+    if test("/crates/sail-spark-connect/") then "spark"
     else "unknown"
     end;
 

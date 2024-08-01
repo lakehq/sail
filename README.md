@@ -1,4 +1,4 @@
-# LakeSail
+# Sail
 
 ## Getting Started
 
@@ -48,7 +48,7 @@ If the test fails due to mismatched gold data, use the following command to upda
 and commit the changes.
 
 ```bash
-env FRAMEWORK_UPDATE_GOLD_DATA=1 cargo test
+env SAIL_UPDATE_GOLD_DATA=1 cargo test
 ```
 
 #### Building the Python Package
@@ -173,7 +173,7 @@ to use this environment (`.venvs/default`) for Python development.
 
 ### Running the Spark Connect Server
 
-Use the following commands to build and run the Spark Connect server powered by the framework.
+Use the following commands to build and run the Spark Connect server powered by Sail.
 
 ```bash
 scripts/spark-tests/run-server.sh
@@ -273,7 +273,7 @@ RustRover.
 In **Run** > **Edit Configurations**, add a new **Cargo** configuration with the following settings:
 
 1. Name: **Run Spark Connect server** (You can use any name you like.)
-2. Command: `run -p framework-spark-connect --example server`
+2. Command: `run -p sail-spark-connect --example server`
 3. Environment Variables:
     - (required) `PYTHONPATH`: `.venvs/default/lib/python<version>/site-packages` (Please replace `<version>` with the
       actual Python version, e.g. `3.11`.)
@@ -282,7 +282,7 @@ In **Run** > **Edit Configurations**, add a new **Cargo** configuration with the
       path. **This must be an absolute path.**)
     - (required) `RUST_MIN_STACK`: `8388608`
     - (optional) `RUST_BACKTRACE`: `full`
-    - (optional) `RUST_LOG`: `framework_spark_connect=debug`
+    - (optional) `RUST_LOG`: `sail_spark_connect=debug`
 
 When entering environment variables, you can click on the button on the right side of the input box to open the dialog
 and add the environment variables one by one.
