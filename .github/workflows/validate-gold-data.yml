@@ -40,7 +40,7 @@ jobs:
 
       - name: Update gold data
         run: |
-          env FRAMEWORK_UPDATE_GOLD_DATA=1 cargo test
+          env SAIL_UPDATE_GOLD_DATA=1 cargo test
 
       - name: Detect uncommitted changes
         run: |

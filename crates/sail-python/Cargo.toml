@@ -1,0 +1,16 @@
+[package]
+name = "sail-python"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pyo3 = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+sail-common = { path = "../sail-common" }
+sail-telemetry = { path = "../sail-telemetry" }
+sail-spark-connect = { path = "../sail-spark-connect" }
+
+[lib]
+crate-type = ["cdylib"]

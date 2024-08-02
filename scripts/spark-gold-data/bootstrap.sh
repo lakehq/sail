@@ -11,7 +11,7 @@ project_path="$(git rev-parse --show-toplevel)"
 
 scripts_path="${project_path}/scripts/spark-gold-data"
 logs_path="${project_path}/tmp/spark-gold-data"
-output_path="${project_path}/crates/framework-spark-connect/tests/gold_data"
+output_path="${project_path}/crates/sail-spark-connect/tests/gold_data"
 
 source "${project_path}/scripts/shell-tools/git-patch.sh"
 

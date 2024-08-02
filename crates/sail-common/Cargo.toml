@@ -1,0 +1,16 @@
+[package]
+name = "sail-common"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+arrow = { workspace = true }
+arrow-cast = { workspace = true }
+glob = { workspace = true }
+pyo3 = { workspace = true }

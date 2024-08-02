@@ -10,13 +10,13 @@ kind create cluster # --config=k8s/kind-config.yaml
 ## Build
 
 ```shell
-docker/build-lakesail-docker.sh
+docker/build-sail-docker.sh
 ```
 
 ## Deploy
 
 ```shell
-kind load docker-image lakesail-framework:latest
+kind load docker-image sail:latest
 
 cd k8s/lakesail
 helm dependency build . # OR helm dependency update .
