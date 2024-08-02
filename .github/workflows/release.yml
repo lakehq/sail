@@ -17,10 +17,11 @@ jobs:
       - name: Install Hatch
         uses: pypa/hatch@install
       - name: Verify tag
+        shell: bash
         run: |
           tag="${{ github.ref }}"
           version="$(hatch version)"
-          if [ "${tag}" != "refs/tags/v${version}" || "${tag}" != "refs/tags/test/v${version}" ]; then
+          if [[ "${tag}" != "refs/tags/v${version}" && "${tag}" != "refs/tags/test/v${version}" ]]; then
             echo "The Git tag '${tag}' does not match the project version '${version}'."
             exit 1
           fi
