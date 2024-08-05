@@ -7,17 +7,34 @@
 You need the Rust toolchain (both stable and nightly) to build the project.
 You can use [rustup](https://rustup.rs/) to manage the Rust toolchain in your local environment.
 
+You need Node.js to build the documentation.
+
+On macOS, you can install rustup and the Node.js runtime via Homebrew.
+
+```bash
+brew install rustup
+brew install node
+```
+
+Use the following commands to install the Rust toolchains via rustup.
+
+```bash
+rustup toolchain install stable --component rustfmt clippy
+rustup toolchain install nightly --component rustfmt
+```
+
 You also need the following tools when working on the project.
 
 1. The [Protocol Buffers](https://protobuf.dev/) compiler (`protoc`).
 2. [Hatch](https://hatch.pypa.io/latest/).
 3. [Maturin](https://www.maturin.rs/).
 4. [Zig](https://ziglang.org/).
+5. [pnpm](https://pnpm.io/).
 
 On macOS, you can install these tools via Homebrew.
 
 ```bash
-brew install protobuf hatch maturin
+brew install protobuf hatch maturin zig pnpm
 ```
 
 If Homebrew overrides your default Rust installation,
@@ -182,7 +199,7 @@ scripts/spark-tests/run-server.sh
 ### Running Spark Tests
 
 Before running Spark tests, please create the `test` Hatch environment using the following commands.
-Note that you do *not* need to run `maturin develop` in the `test` environment again after you make code changes.
+Note that you do _not_ need to run `maturin develop` in the `test` environment again after you make code changes.
 We only use the pytest plugins (pure Python code) from the project, which do not need to be rebuilt by Maturin.
 
 ```bash
@@ -275,14 +292,14 @@ In **Run** > **Edit Configurations**, add a new **Cargo** configuration with the
 1. Name: **Run Spark Connect server** (You can use any name you like.)
 2. Command: `run -p sail-spark-connect --example server`
 3. Environment Variables:
-    - (required) `PYTHONPATH`: `.venvs/default/lib/python<version>/site-packages` (Please replace `<version>` with the
-      actual Python version, e.g. `3.11`.)
-    - (required) `PYO3_PYTHON`: `<project>/.venvs/default/bin/python` (Please replace `<project>` with the actual
-      project
-      path. **This must be an absolute path.**)
-    - (required) `RUST_MIN_STACK`: `8388608`
-    - (optional) `RUST_BACKTRACE`: `full`
-    - (optional) `RUST_LOG`: `sail_spark_connect=debug`
+   - (required) `PYTHONPATH`: `.venvs/default/lib/python<version>/site-packages` (Please replace `<version>` with the
+     actual Python version, e.g. `3.11`.)
+   - (required) `PYO3_PYTHON`: `<project>/.venvs/default/bin/python` (Please replace `<project>` with the actual
+     project
+     path. **This must be an absolute path.**)
+   - (required) `RUST_MIN_STACK`: `8388608`
+   - (optional) `RUST_BACKTRACE`: `full`
+   - (optional) `RUST_LOG`: `sail_spark_connect=debug`
 
 When entering environment variables, you can click on the button on the right side of the input box to open the dialog
 and add the environment variables one by one.

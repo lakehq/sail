@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --vp-sidebar-width: 280px;
+}
+
+a.footnote-backref {
+  @apply no-underline;
+  /* change font family to prevent special unicode characters shown as emoji in Chrome */
+  @apply font-mono;
+}
+
+kbd {
+  @apply inline-block rounded border px-2 py-1 align-middle font-mono text-sm;
+  @apply bg-zinc-200 dark:bg-zinc-700;
+  @apply text-zinc-800 dark:text-zinc-100;
+  @apply border-zinc-400 dark:border-zinc-500;
+  @apply shadow-zinc-400 dark:shadow-zinc-500;
+  box-shadow: inset 0 -1px 0 var(--tw-shadow-color);
+}
+
+dl dt {
+  @apply mt-8 font-bold leading-7;
+}
+
+dl dd {
+  @apply ml-8 leading-7;
+}
