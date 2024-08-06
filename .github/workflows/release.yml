@@ -3,8 +3,8 @@ name: Release Python package
 on:
   push:
     tags:
-      - 'v*'
-      - 'test/v*'
+      - "v*"
+      - "test/v*"
 
 permissions:
   contents: read

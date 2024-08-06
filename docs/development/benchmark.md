@@ -17,9 +17,9 @@ and then run `hatch shell` to enter the environment.
 `BENCHMARK_PATH` is the absolute path of the [DataFusion benchmarks repository](https://github.com/apache/datafusion-benchmarks).
 Please follow the README in that repository to generate the TPC-H data.
 
-* You can use `--console` instead of `--query [N]` to start a PySpark console and explore the TPC-H data interactively. 
-* You can use `--url` to specify the Spark URL. Use `local` for Spark local mode (JVM) and use `sc://localhost:50051` for Spark Connect (the default).
-* You can use `--help` to see all the supported arguments.
+- You can use `--console` instead of `--query [N]` to start a PySpark console and explore the TPC-H data interactively.
+- You can use `--url` to specify the Spark URL. Use `local` for Spark local mode (JVM) and use `sc://localhost:50051` for Spark Connect (the default).
+- You can use `--help` to see all the supported arguments.
 
 Please use the following command to run the Spark Connect server.
 It runs the server in release mode without debug logs.

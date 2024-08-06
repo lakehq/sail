@@ -1,0 +1,7 @@
+{
+  "compilerOptions": {
+    "esModuleInterop": true,
+    "baseUrl": "."
+  },
+  "include": ["docs/.vitepress/theme/**/*"]
+}

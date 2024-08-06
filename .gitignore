@@ -77,3 +77,11 @@ venvs/
 
 # Python Poetry files
 poetry.lock
+
+# Node modules
+node_modules/
+
+# VitePress build and cache directories
+docs/.vitepress/dist
+docs/.vitepress/cache
+docs/.vitepress/.temp
