@@ -1,8 +1,11 @@
 use arrow::datatypes::DataType;
 use datafusion::functions_array::expr_fn;
-use datafusion_expr::expr;
+use datafusion_common::ScalarValue;
+use datafusion_expr::{expr, lit, BinaryExpr, Operator};
 
+use crate::error::{PlanError, PlanResult};
 use crate::function::common::Function;
+use crate::utils::ItemTaker;
 
 fn array_repeat(element: expr::Expr, count: expr::Expr) -> expr::Expr {
     let count = expr::Expr::Cast(expr::Cast {
@@ -12,13 +15,59 @@ fn array_repeat(element: expr::Expr, count: expr::Expr) -> expr::Expr {
     expr_fn::array_repeat(element, count)
 }
 
+fn array_compact(array: expr::Expr) -> expr::Expr {
+    expr_fn::array_remove_all(array, lit(ScalarValue::Null))
+}
+
+fn slice(array: expr::Expr, start: expr::Expr, length: expr::Expr) -> expr::Expr {
+    let start = expr::Expr::Cast(expr::Cast {
+        expr: Box::new(start),
+        data_type: DataType::Int64,
+    });
+    let length = expr::Expr::Cast(expr::Cast {
+        expr: Box::new(length),
+        data_type: DataType::Int64,
+    });
+    let end = expr::Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(start.clone()),
+        op: Operator::Plus,
+        right: Box::new(expr::Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(length),
+            op: Operator::Minus,
+            right: Box::new(lit(ScalarValue::Int64(Some(1)))),
+        })),
+    });
+    expr_fn::array_slice(array, start, end, None)
+}
+
+fn sort_array(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    let (array, asc) = args.two()?;
+    let (sort, nulls) = if asc == lit(ScalarValue::Boolean(Some(true))) {
+        (
+            lit(ScalarValue::Utf8(Some("ASC".to_string()))),
+            lit(ScalarValue::Utf8(Some("NULLS FIRST".to_string()))),
+        )
+    } else if asc == lit(ScalarValue::Boolean(Some(false))) {
+        (
+            lit(ScalarValue::Utf8(Some("DESC".to_string()))),
+            lit(ScalarValue::Utf8(Some("NULLS LAST".to_string()))),
+        )
+    } else {
+        return Err(PlanError::invalid(format!(
+            "Invalid asc value for sort_array: {:?}",
+            asc
+        )));
+    };
+    Ok(expr_fn::array_sort(array, sort, nulls))
+}
+
 pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
     vec![
         ("array", F::var_arg(expr_fn::make_array)),
         ("array_append", F::binary(expr_fn::array_append)),
-        ("array_compact", F::unknown("array_compact")),
+        ("array_compact", F::unary(array_compact)),
         ("array_contains", F::binary(expr_fn::array_has)),
         ("array_distinct", F::unary(expr_fn::array_distinct)),
         ("array_except", F::binary(expr_fn::array_except)),
@@ -38,7 +87,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
         ("get", F::binary(expr_fn::array_element)),
         ("sequence", F::ternary(expr_fn::gen_series)),
         ("shuffle", F::unknown("shuffle")),
-        ("slice", F::unknown("slice")),
-        ("sort_array", F::unknown("sort_array")),
+        ("slice", F::ternary(slice)),
+        ("sort_array", F::custom(sort_array)),
     ]
 }
