@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "esModuleInterop": true,
+    "skipLibCheck": true,
     "baseUrl": "."
   },
   "include": ["docs/.vitepress/theme/**/*"]

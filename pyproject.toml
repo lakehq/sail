@@ -32,7 +32,11 @@ installer = "pip"
 dependencies = [
     "pyspark[connect,sql]==3.5.1",
     "pytest~=8.2",
+    "sphinx~=8.0",
 ]
+
+[tool.hatch.envs.default.scripts]
+docs-build = "sphinx-build python/pysail/docs python/pysail/docs/_build -b json"
 
 [tool.hatch.envs.default.overrides]
 env.CI.installer = "uv"
