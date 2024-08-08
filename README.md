@@ -11,6 +11,8 @@ You need Node.js to build the documentation.
 
 On macOS, you can install rustup and the Node.js runtime via Homebrew.
 
+<!-- TODO: make it clear that the following is an alternative way to install rustup -->
+
 ```bash
 brew install rustup
 brew install node
@@ -32,6 +34,8 @@ You also need the following tools when working on the project.
 5. [pnpm](https://pnpm.io/).
 
 On macOS, you can install these tools via Homebrew.
+
+<!-- TODO: investigate if we can install Maturin locally -->
 
 ```bash
 brew install protobuf hatch maturin zig pnpm
