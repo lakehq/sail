@@ -73,6 +73,7 @@ export default async () => {
       ]);
 
       if (pageData.params?.sphinx) {
+        pageData.title = pageData.params.title;
         pageData.frontmatter.prev = pageData.params.prev || {
           link: "/reference/",
           text: "Reference",
@@ -83,7 +84,11 @@ export default async () => {
     // Exclude directories starting with an underscore. Such directories are
     // internal (e.g. containing pages to be included in other pages).
     srcExclude: ["**/_*/**/*.md"],
-    ignoreDeadLinks: [/^https?:\/\/localhost(:\d+)?(\/.*)?$/],
+    ignoreDeadLinks: [
+      /^https?:\/\/localhost(:\d+)?(\/.*)?$/,
+      // The Python documentation is generated dynamically.
+      /^\/reference\/python\//,
+    ],
     themeConfig: {
       logo: "/favicon.png",
       nav: [

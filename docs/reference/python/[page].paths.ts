@@ -35,6 +35,7 @@ export default {
           params: {
             sphinx: true,
             page,
+            title: data.title,
             prev: data.prev
               ? { link: data.prev.link, text: data.prev.title }
               : false,

@@ -2,7 +2,10 @@
   "compilerOptions": {
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "baseUrl": "."
+    "baseUrl": ".",
+    "paths": {
+      "@theme/*": ["docs/.vitepress/theme/*"]
+    }
   },
   "include": ["docs/.vitepress/theme/**/*"]
 }
