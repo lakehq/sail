@@ -48,7 +48,9 @@
       "<TYPES>",
       "<THIRD_PARTY_MODULES>",
       "",
+      "<TYPES>^@theme/",
       "<TYPES>^[.]",
+      "^@theme/",
       "^[.]"
     ]
   }
