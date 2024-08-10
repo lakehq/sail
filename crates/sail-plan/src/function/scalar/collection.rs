@@ -11,9 +11,11 @@ pub(super) fn list_built_in_collection_functions() -> Vec<(&'static str, Functio
     use crate::function::common::FunctionBuilder as F;
 
     vec![
-        // TODO: Write tests for `array_size`, `cardinality` `size` to validate that the behavior
-        //  of expr_fn::cardinality fully matches behavior of Spark for all three.
         ("array_size", F::unary(expr_fn::cardinality)),
+        // FIXME: expr_fn::cardinality doesn't fully match expected behavior.
+        //  Spark's cardinality function seems to be the same as the size function.
+        //  `cardinality`: https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.cardinality.html
+        //  `size`: https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.size.html
         ("cardinality", F::unary(expr_fn::cardinality)),
         ("size", F::unary(expr_fn::cardinality)),
         ("concat", F::binary(concat)),
