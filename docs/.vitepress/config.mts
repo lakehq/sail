@@ -36,7 +36,6 @@ function analyticsHead(): HeadConfig[] {
 export default async () => {
   return defineConfig({
     base: siteBase(),
-    lastUpdated: true,
     lang: "en-US",
     title: headTitle,
     description: headDescription,
@@ -52,7 +51,10 @@ export default async () => {
       ["meta", { property: "og:image", content: headImage }],
       ["meta", { property: "og:type", content: "website" }],
       ["meta", { property: "og:site_name", content: "Sail documentation" }],
-      ['link', { rel: 'icon', type: 'image/png', href: `${siteBase()}favicon.png` }],
+      [
+        "link",
+        { rel: "icon", type: "image/png", href: `${siteBase()}favicon.png` },
+      ],
       ...analyticsHead(),
     ],
     transformPageData(pageData) {
@@ -69,13 +71,31 @@ export default async () => {
         "meta",
         { property: "og:url", content: canonicalUrl },
       ]);
+
+      if (pageData.params?.sphinx) {
+        pageData.title = pageData.params.title;
+        pageData.frontmatter.prev = pageData.params.prev || {
+          link: "/reference/",
+          text: "Reference",
+        };
+        pageData.frontmatter.next = pageData.params.next ?? false;
+      }
     },
     // Exclude directories starting with an underscore. Such directories are
     // internal (e.g. containing pages to be included in other pages).
     srcExclude: ["**/_*/**/*.md"],
-    ignoreDeadLinks: [/^https?:\/\/localhost(:\d+)?(\/.*)?$/],
+    ignoreDeadLinks: [
+      /^https?:\/\/localhost(:\d+)?(\/.*)?$/,
+      // The Python documentation is generated dynamically.
+      /^\/reference\/python\//,
+    ],
     themeConfig: {
-      nav: [{ text: "Home", link: "/" }],
+      logo: "/favicon.png",
+      nav: [
+        { text: "User Guide", link: "/guide/" },
+        { text: "Development", link: "/development/" },
+        { text: "Reference", link: "/reference/" },
+      ],
       notFound: {
         quote: "The page does not exist.",
       },
@@ -83,6 +103,7 @@ export default async () => {
         "/": [
           {
             text: "User Guide",
+            link: "/guide/",
             items: [
               {
                 text: "Installation",
@@ -93,6 +114,17 @@ export default async () => {
           {
             text: "Development",
             link: "/development/",
+            items: [],
+          },
+          {
+            text: "Reference",
+            link: "/reference/",
+            items: [
+              {
+                text: "Python API Reference",
+                link: "/reference/python/",
+              },
+            ],
           },
         ],
       },
