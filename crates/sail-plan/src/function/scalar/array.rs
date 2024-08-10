@@ -54,7 +54,7 @@ fn sort_array(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
         )
     } else {
         return Err(PlanError::invalid(format!(
-            "Invalid asc value for sort_array: {:?}",
+            "Invalid asc value for sort_array: {}",
             asc
         )));
     };

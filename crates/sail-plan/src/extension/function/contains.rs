@@ -41,7 +41,7 @@ impl ScalarUDFImpl for Contains {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         if args.len() != 2 {
             return Err(DataFusionError::Internal(format!(
-                "contains should only be called with two arguments, got {:?}",
+                "contains should only be called with two arguments, got {}",
                 args.len()
             )));
         }
