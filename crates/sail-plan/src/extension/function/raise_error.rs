@@ -52,6 +52,6 @@ impl ScalarUDFImpl for RaiseError {
             }
         };
 
-        Err(DataFusionError::Execution(format!("Error: {}", err_msg)))
+        Err(DataFusionError::Execution(err_msg))
     }
 }
