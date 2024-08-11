@@ -1606,14 +1606,14 @@ impl PlanResolver<'_> {
             comment,
             column_defaults,
             constraints,
-            location,
-            file_format,
-            table_partition_cols,
+            location: location.clone(),
+            file_format: file_format.clone(),
+            table_partition_cols: table_partition_cols.clone(),
             file_sort_order,
             if_not_exists,
             or_replace,
             unbounded,
-            options,
+            options: options.clone(),
             definition,
         };
         let plan = self.resolve_catalog_command(command);
@@ -1621,10 +1621,10 @@ impl PlanResolver<'_> {
         if let Some(query_logical_plan) = query_logical_plan {
             let copy_to_plan = LogicalPlanBuilder::copy_to(
                 query_logical_plan,
-                location.clone(),
-                file_format.clone(),
-                options.clone(),
-                table_partition_cols.clone(),
+                location,
+                file_format,
+                options,
+                table_partition_cols,
             )?
             .build()?;
         }
