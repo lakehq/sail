@@ -1530,6 +1530,11 @@ impl PlanResolver<'_> {
         definition: spec::TableDefinition,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        // TODO: handle query
+        //  1. Resolve query to get schema
+        //  2. (optional) if columns are specified in the definition, validate the schema
+        //  3. create external table
+        //  4. fill external table from query table (copy to)
         let spec::TableDefinition {
             schema,
             comment,
@@ -1543,14 +1548,17 @@ impl PlanResolver<'_> {
             or_replace,
             unbounded,
             options,
-            query: _, // TODO: handle query
+            query,
             definition,
         } = definition;
-        // TODO: handle query
-        //  1. Resolve query to get schema
-        //  2. (optional) if columns are specified in the definition, validate the schema
-        //  3. create external table
-        //  4. fill external table from query table (copy to)
+
+        let (schema, query_logical_plan) = if let Some(query) = query {
+            let logical_plan = self.resolve_query(query, state).await?;
+            (logical_plan.schema(), Some(logical_plan))
+        } else {
+            (schema, None)
+        };
+
         let fields = self.resolve_fields(schema.fields)?;
         let schema = Arc::new(DFSchema::from_unqualified_fields(fields, HashMap::new())?);
         let column_defaults: Vec<(String, Expr)> = async {
@@ -1591,6 +1599,7 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(|(k, v)| Ok((k, v)))
             .collect::<PlanResult<Vec<(String, String)>>>()?;
+
         let command = CatalogCommand::CreateTable {
             table: build_table_reference(table)?,
             schema,
@@ -1607,7 +1616,20 @@ impl PlanResolver<'_> {
             options,
             definition,
         };
-        self.resolve_catalog_command(command)
+        let plan = self.resolve_catalog_command(command);
+
+        if let Some(query_logical_plan) = query_logical_plan {
+            let copy_to_plan = LogicalPlanBuilder::copy_to(
+                query_logical_plan,
+                location.clone(),
+                file_format.clone(),
+                options.clone(),
+                table_partition_cols.clone(),
+            )?
+            .build()?;
+        }
+
+        plan
     }
 
     fn resolve_catalog_create_database(
