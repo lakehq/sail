@@ -1,52 +1,112 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
+import {
+  loadSphinxPages,
+  SphinxPageData,
+} from "../../.vitepress/theme/utils/sphinx";
+import { PathLike, TreeNode } from "../../.vitepress/theme/utils/tree";
 
-const SPHINX_BUILD_OUTPUT = path.join(
-  __dirname,
-  "../../../python/pysail/docs/_build",
-);
+/**
+ * The base URL for the Sphinx documentation.
+ */
+const BASE = "/reference/python";
+
+class SphinxPagePath implements PathLike {
+  readonly inner: SphinxPageData;
+
+  constructor(data: SphinxPageData) {
+    this.inner = data;
+  }
+
+  path(): string[] {
+    return this.inner.current.link.split("/").filter(Boolean);
+  }
+}
+
+type SphinxPageConfig = {
+  params: {
+    sphinx: true;
+    /**
+     * The parameter that defines the Markdown file path.
+     */
+    page: string;
+    current: { link: string; text: string };
+    prev: { link: string; text: string } | false | null;
+    next: { link: string; text: string } | false | null;
+    /**
+     * A list of direct child pages, or `undefined` if it is not a generated index page.
+     */
+    children?: { link: string; text: string }[];
+  };
+  content: string;
+};
+
+function transform(
+  tree: TreeNode<SphinxPagePath>,
+  prefix?: string,
+): TreeNode<SphinxPageConfig> {
+  prefix = `${prefix ?? ""}/${tree.name}`;
+
+  // Transform the child nodes first so that generated index pages are defined
+  // for all subdirectories.
+  const children = tree.children.map((child) => transform(child, prefix));
+
+  function data(): SphinxPageConfig {
+    if (tree.data !== null) {
+      const page = tree.data.inner;
+      return {
+        params: {
+          sphinx: true,
+          page: page.current.link
+            .replace(/\/$/, "/index")
+            .replace(/\.html$/, "")
+            .replace(/^\//, ""),
+          current: {
+            link: `${BASE}${page.current.link}`,
+            text: page.current.title,
+          },
+          prev: page.prev
+            ? { link: `${BASE}${page.prev.link}`, text: page.prev.title }
+            : null,
+          next: page.next
+            ? { link: `${BASE}${page.next.link}`, text: page.next.title }
+            : null,
+        },
+        content: page.content,
+      };
+    } else {
+      return {
+        params: {
+          sphinx: true,
+          page: `${prefix}/index`,
+          current: { link: `${BASE}${prefix}/`, text: "Index" },
+          prev: false,
+          next: false,
+          children: children.map((child) => ({
+            link: child.data.params.current.link,
+            text: child.data.params.current.text,
+          })),
+        },
+        content: "",
+      };
+    }
+  }
+
+  return new TreeNode(tree.name, data(), children);
+}
 
 export default {
   async paths() {
-    const entries = await fs.promises.readdir(SPHINX_BUILD_OUTPUT, {
-      withFileTypes: true,
-      recursive: true,
-    });
-    const files = entries.filter(
-      (entry) => entry.isFile() && entry.name.endsWith(".fjson"),
+    const links = (await loadSphinxPages()).map(
+      (page) => new SphinxPagePath(page.inner),
     );
-
-    const paths = await Promise.all(
-      files.map(async (entry) => {
-        if (entry.name === "search.fjson" || entry.name === "genindex.fjson") {
-          return null;
-        }
-        const file = path.join(entry.parentPath, entry.name);
-        const content = await fs.promises.readFile(file, "utf-8");
-        const data = JSON.parse(content);
-        const page = path
-          .relative(SPHINX_BUILD_OUTPUT, file)
-          .replace(/^index\.fjson$/, "/index")
-          .replace(/[/\\]index\.fjson$/, "/index")
-          // We must turn non-index pages into directories, since Sphinx handles URL in this way
-          // in `JSONHTMLBuilder`, which may generate relative URLs containing `../` may appear in the HTML.
-          .replace(/\.fjson$/, "/index");
-        return {
-          params: {
-            sphinx: true,
-            page,
-            title: data.title,
-            prev: data.prev
-              ? { link: data.prev.link, text: data.prev.title }
-              : false,
-            next: data.next
-              ? { link: data.next.link, text: data.next.title }
-              : false,
-          },
-          content: data.body,
-        };
-      }),
-    );
-    return paths.filter((path) => path !== null);
+    const root = links.find((link) => link.inner.current.link === "/");
+    if (root === undefined) {
+      throw new Error("root page not found");
+    }
+    // Generate the page tree from the paths so that we can generate any missing index pages
+    // for intermediate directories.
+    // Note that the page tree can be different from the page tree in the side bar.
+    // The former is defined by the paths, while the latter is defined by parent/previous/next links.
+    const tree = new TreeNode("", root, TreeNode.fromPaths(links));
+    return transform(tree).collect();
   },
 };
