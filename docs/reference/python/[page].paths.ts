@@ -43,7 +43,10 @@ function transform(
   tree: TreeNode<SphinxPagePath>,
   prefix?: string,
 ): TreeNode<SphinxPageConfig> {
-  prefix = `${prefix ?? ""}/${tree.name}`;
+  prefix = prefix ?? "";
+  if (tree.name !== "") {
+    prefix = `${prefix}/${tree.name}`;
+  }
 
   // Transform the child nodes first so that generated index pages are defined
   // for all subdirectories.
@@ -76,7 +79,7 @@ function transform(
       return {
         params: {
           sphinx: true,
-          page: `${prefix}/index`,
+          page: `${prefix}/index`.replace(/^\//, ""),
           current: { link: `${BASE}${prefix}/`, text: "Index" },
           prev: false,
           next: false,
