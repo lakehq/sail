@@ -42,21 +42,21 @@ fn slice(array: expr::Expr, start: expr::Expr, length: expr::Expr) -> expr::Expr
 
 fn sort_array(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     let (array, asc) = args.two()?;
-    let (sort, nulls) = if asc == lit(ScalarValue::Boolean(Some(true))) {
-        (
+    let (sort, nulls) = match asc {
+        lit(ScalarValue::Boolean(Some(true))) => (
             lit(ScalarValue::Utf8(Some("ASC".to_string()))),
             lit(ScalarValue::Utf8(Some("NULLS FIRST".to_string()))),
-        )
-    } else if asc == lit(ScalarValue::Boolean(Some(false))) {
-        (
+        ),
+        lit(ScalarValue::Boolean(Some(false))) => (
             lit(ScalarValue::Utf8(Some("DESC".to_string()))),
             lit(ScalarValue::Utf8(Some("NULLS LAST".to_string()))),
-        )
-    } else {
-        return Err(PlanError::invalid(format!(
-            "Invalid asc value for sort_array: {}",
-            asc
-        )));
+        ),
+        _ => {
+            return Err(PlanError::invalid(format!(
+                "Invalid asc value for sort_array: {}",
+                asc
+            )))
+        }
     };
     Ok(expr_fn::array_sort(array, sort, nulls))
 }

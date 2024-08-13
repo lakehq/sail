@@ -9,18 +9,16 @@ use crate::function::common::Function;
 use crate::utils::ItemTaker;
 
 fn assert_true(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    if args.len() > 2 {
+    let (col, err_msg) = if args.len() == 1 {
+        let col = args.one()?;
+        (col, lit(ScalarValue::Utf8(Some(format!("'{}' is not true!", col)))))
+    } else if args.len() == 2 {
+        args.two()?
+    } else {
         return Err(PlanError::invalid(format!(
             "assert_true expects at most two arguments, got {}",
             args.len()
         )));
-    }
-
-    let (col, list) = args.at_least_one()?;
-    let err_msg = if list.len() == 1 {
-        list[0].clone()
-    } else {
-        lit(ScalarValue::Utf8(Some(format!("'{}' is not true!", col))))
     };
 
     Ok(expr::Expr::Case(expr::Case {
@@ -29,7 +27,7 @@ fn assert_true(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
             Box::new(expr::Expr::Not(Box::new(col.clone()))),
             Box::new(expr::Expr::ScalarFunction(expr::ScalarFunction {
                 func: Arc::new(ScalarUDF::from(RaiseError::new())),
-                args: vec![err_msg.clone()],
+                args: vec![err_msg],
             })),
         )],
         else_expr: Some(Box::new(lit(ScalarValue::Null))),
