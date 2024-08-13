@@ -9,8 +9,9 @@ use sail_plan::resolver::PlanResolver;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::executor::{execute_plan, read_stream};
 use crate::proto::data_type::parse_spark_data_type;
-use crate::schema::to_spark_schema;
+use crate::schema::{to_spark_schema, to_tree_string};
 use crate::session::Session;
+use crate::spark::connect as sc;
 use crate::spark::connect::analyze_plan_request::explain::ExplainMode;
 use crate::spark::connect::analyze_plan_request::{
     DdlParse as DdlParseRequest, Explain as ExplainRequest,
@@ -31,12 +32,7 @@ use crate::spark::connect::analyze_plan_response::{
 use crate::spark::connect::StorageLevel;
 use crate::SPARK_VERSION;
 
-pub(crate) async fn handle_analyze_schema(
-    session: Arc<Session>,
-    request: SchemaRequest,
-) -> SparkResult<SchemaResponse> {
-    let SchemaRequest { plan } = request;
-    let plan = plan.required("plan")?;
+async fn analyze_schema(session: Arc<Session>, plan: sc::Plan) -> SparkResult<sc::DataType> {
     let ctx = session.context();
     let resolver = PlanResolver::new(ctx, session.plan_config()?);
     let NamedPlan { plan, fields } = resolver
@@ -47,8 +43,18 @@ pub(crate) async fn handle_analyze_schema(
     } else {
         plan.schema().inner().clone()
     };
+    to_spark_schema(schema)
+}
+
+pub(crate) async fn handle_analyze_schema(
+    session: Arc<Session>,
+    request: SchemaRequest,
+) -> SparkResult<SchemaResponse> {
+    let SchemaRequest { plan } = request;
+    let plan = plan.required("plan")?;
+    let schema = analyze_schema(session, plan).await?;
     Ok(SchemaResponse {
-        schema: Some(to_spark_schema(schema)?),
+        schema: Some(schema),
     })
 }
 
@@ -75,10 +81,15 @@ pub(crate) async fn handle_analyze_explain(
 }
 
 pub(crate) async fn handle_analyze_tree_string(
-    _session: Arc<Session>,
-    _request: TreeStringRequest,
+    session: Arc<Session>,
+    request: TreeStringRequest,
 ) -> SparkResult<TreeStringResponse> {
-    Err(SparkError::todo("handle analyze tree string"))
+    let TreeStringRequest { plan, level } = request;
+    let plan = plan.required("plan")?;
+    let schema = analyze_schema(session, plan).await?;
+    Ok(TreeStringResponse {
+        tree_string: to_tree_string(&schema, level),
+    })
 }
 
 pub(crate) async fn handle_analyze_is_local(

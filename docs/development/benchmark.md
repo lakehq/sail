@@ -1,3 +1,7 @@
+---
+title: Running Benchmarks
+---
+
 # Running Benchmarks
 
 You can use the following command to run individual queries from the TPC-H benchmark.
