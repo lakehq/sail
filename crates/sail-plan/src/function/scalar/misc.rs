@@ -9,11 +9,16 @@ use crate::function::common::Function;
 use crate::utils::ItemTaker;
 
 fn assert_true(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    let (col, err_msg) = if args.len() == 1 {
+    let (err_msg, col) = if args.len() == 1 {
         let col = args.one()?;
-        (col, lit(ScalarValue::Utf8(Some(format!("'{}' is not true!", col)))))
+        (
+            // Need to do this order to avoid the "value used after being moved" error.
+            lit(ScalarValue::Utf8(Some(format!("'{}' is not true!", &col)))),
+            col,
+        )
     } else if args.len() == 2 {
-        args.two()?
+        let (col, err_msg) = args.two()?;
+        (err_msg, col)
     } else {
         return Err(PlanError::invalid(format!(
             "assert_true expects at most two arguments, got {}",

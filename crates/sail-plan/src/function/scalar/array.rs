@@ -43,11 +43,11 @@ fn slice(array: expr::Expr, start: expr::Expr, length: expr::Expr) -> expr::Expr
 fn sort_array(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     let (array, asc) = args.two()?;
     let (sort, nulls) = match asc {
-        lit(ScalarValue::Boolean(Some(true))) => (
+        expr::Expr::Literal(ScalarValue::Boolean(Some(true))) => (
             lit(ScalarValue::Utf8(Some("ASC".to_string()))),
             lit(ScalarValue::Utf8(Some("NULLS FIRST".to_string()))),
         ),
-        lit(ScalarValue::Boolean(Some(false))) => (
+        expr::Expr::Literal(ScalarValue::Boolean(Some(false))) => (
             lit(ScalarValue::Utf8(Some("DESC".to_string()))),
             lit(ScalarValue::Utf8(Some("NULLS LAST".to_string()))),
         ),
