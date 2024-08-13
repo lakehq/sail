@@ -9,6 +9,7 @@ use datafusion::arrow::datatypes::{
 use datafusion::common::TableReference;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
+use datafusion::datasource::file_format::avro::AvroFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::json::JsonFormatFactory;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
@@ -246,6 +247,7 @@ pub(crate) async fn handle_execute_write_operation(
                     Arc::new(CsvFormatFactory::new_with_options(table_options.csv))
                 }
                 "arrow" => Arc::new(ArrowFormatFactory::new()),
+                "avro" => Arc::new(AvroFormatFactory::new()),
                 _ => {
                     return Err(SparkError::invalid(format!(
                         "unsupported source: {}",

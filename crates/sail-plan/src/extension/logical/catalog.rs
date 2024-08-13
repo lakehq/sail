@@ -94,6 +94,7 @@ pub(crate) enum CatalogCommand {
         unbounded: bool,
         options: Vec<(String, String)>,
         definition: Option<String>,
+        copy_to_plan: Option<Arc<LogicalPlan>>,
     },
     TableExists {
         table: TableReference,
@@ -318,6 +319,7 @@ impl CatalogCommand {
                 unbounded,
                 options,
                 definition,
+                copy_to_plan,
             } => {
                 let value = manager
                     .create_table(CatalogCommand::CreateTable {
@@ -335,6 +337,7 @@ impl CatalogCommand {
                         unbounded,
                         options,
                         definition,
+                        copy_to_plan,
                     })
                     .await
                     .is_ok();
