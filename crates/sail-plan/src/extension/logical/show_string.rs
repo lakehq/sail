@@ -9,18 +9,9 @@ use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use comfy_table::{Cell, CellAlignment, ColumnConstraint, Table, Width};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use sail_common::schema::escape_meta_characters;
 
 use crate::utils::ItemTaker;
-
-fn escape_meta_characters(s: &str) -> String {
-    s.replace('\n', "\\\\n")
-        .replace('\r', "\\\\r")
-        .replace('\t', "\\\\t")
-        .replace('\x07', "\\\\a")
-        .replace('\x08', "\\\\b")
-        .replace('\x0b', "\\\\v")
-        .replace('\x0c', "\\\\f")
-}
 
 fn truncate_string(s: &str, n: usize) -> String {
     if n == 0 || s.len() <= n {
