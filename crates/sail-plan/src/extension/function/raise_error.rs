@@ -38,7 +38,7 @@ impl ScalarUDFImpl for RaiseError {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         if args.len() != 1 {
             return Err(DataFusionError::Internal(format!(
-                "raise_error should only be called with two arguments, got {}",
+                "raise_error should only be called with one argument, got {}",
                 args.len()
             )));
         }
