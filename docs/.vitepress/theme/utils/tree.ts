@@ -1,5 +1,10 @@
 interface PathLike {
   path(): string[];
+  /**
+   * An optional rank of the page among its siblings.
+   * A page with a lower rank is listed before a page with a higher rank.
+   */
+  rank(): number | undefined;
 }
 
 interface NodeLike {
@@ -124,7 +129,7 @@ class TreeNode<T> {
     for (const item of items) {
       const parts = item.path();
 
-      // skip the item if it does not match the prefix
+      // Skip the item if it does not match the prefix.
       if (prefix.length > parts.length) {
         continue;
       }
@@ -153,6 +158,26 @@ class TreeNode<T> {
         siblings = node.children;
       }
     }
+
+    function sort(trees: TreeNode<T>[]): void {
+      trees.sort((a, b) => {
+        const rankA = a.data?.rank();
+        const rankB = b.data?.rank();
+        if (rankA === undefined && rankB !== undefined) {
+          return 1;
+        }
+        if (rankA !== undefined && rankB === undefined) {
+          return -1;
+        }
+        if (rankA !== rankB) {
+          return rankA - rankB;
+        }
+        return a.name.localeCompare(b.name);
+      });
+    }
+
+    // Sort the children of each node by rank and name.
+    sort(roots);
 
     return roots;
   }
