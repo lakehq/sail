@@ -1551,6 +1551,7 @@ impl PlanResolver<'_> {
         } = definition;
 
         let (schema, query_logical_plan) = if let Some(query) = query {
+            // FIXME: Query plan has cols renamed to #1, #2, etc. So I think there's more work here.
             let logical_plan = self.resolve_query_plan(*query, state).await?;
             (logical_plan.schema().clone(), Some(logical_plan))
         } else {
