@@ -151,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: assert_true"
+        "success": "ok"
       }
     },
     {

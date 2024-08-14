@@ -140,13 +140,14 @@ impl<'a> CatalogManager<'a> {
             unbounded,
             options,
             definition,
+            copy_to_plan,
         } = create_table
         {
             let ddl = LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
                 schema,
                 name: table,
-                location,
-                file_type: file_format,
+                location: location.clone(),
+                file_type: file_format.clone(),
                 table_partition_cols,
                 if_not_exists,
                 definition,
@@ -158,6 +159,14 @@ impl<'a> CatalogManager<'a> {
             }));
             // TODO: process the output
             _ = self.ctx.execute_logical_plan(ddl).await?;
+            if let Some(copy_to_plan) = copy_to_plan {
+                // FIXME: This does not actually execute the copy_to_plan.
+                //  execute_logical_plan only executes DDL, other statements remain unchanged.
+                _ = self
+                    .ctx
+                    .execute_logical_plan((*copy_to_plan).clone())
+                    .await?;
+            }
             Ok(())
         } else {
             exec_err!("Expected CatalogCommand::CreateTable")

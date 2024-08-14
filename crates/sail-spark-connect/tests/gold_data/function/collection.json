@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: array_size"
+        "success": "ok"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: cardinality"
+        "success": "ok"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: cardinality"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Map(Field { name: \"entries\", data_type: Struct([Field { name: \"key\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"value\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false)] to the signature ArraySignature(Array) failed. No function matches the given name and argument types 'cardinality(Map(Field { name: \"entries\", data_type: Struct([Field { name: \"key\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"value\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tcardinality(array)"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: concat"
+        "failure": "error in DataFusion: Error during planning: The array_concat function can only accept list as the args."
       }
     },
     {
@@ -111,7 +111,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: concat"
+        "failure": "error in DataFusion: Error during planning: two values expected: [Alias(Alias { expr: ScalarFunction(ScalarFunction { func: ScalarUDF { inner: MakeArray { signature: Signature { type_signature: OneOf([UserDefined, Any(0)]), volatility: Immutable }, aliases: [\"make_list\"] } }, args: [Literal(Int32(1)), Literal(Int32(2)), Literal(Int32(3))] }), relation: None, name: \"array(1, 2, 3)\" }), Alias(Alias { expr: ScalarFunction(ScalarFunction { func: ScalarUDF { inner: MakeArray { signature: Signature { type_signature: OneOf([UserDefined, Any(0)]), volatility: Immutable }, aliases: [\"make_list\"] } }, args: [Literal(Int32(4)), Literal(Int32(5))] }), relation: None, name: \"array(4, 5)\" }), Alias(Alias { expr: ScalarFunction(ScalarFunction { func: ScalarUDF { inner: MakeArray { signature: Signature { type_signature: OneOf([UserDefined, Any(0)]), volatility: Immutable }, aliases: [\"make_list\"] } }, args: [Literal(Int32(6))] }), relation: None, name: \"array(6)\" })]"
       }
     },
     {
@@ -133,7 +133,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: reverse"
+        "failure": "error in DataFusion: Execution error: array_reverse does not support type 'Utf8'."
       }
     },
     {
@@ -159,7 +159,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: reverse"
+        "success": "ok"
       }
     },
     {
@@ -181,7 +181,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: size"
+        "success": "ok"
       }
     },
     {
@@ -203,7 +203,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: size"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Map(Field { name: \"entries\", data_type: Struct([Field { name: \"key\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"value\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false)] to the signature ArraySignature(Array) failed. No function matches the given name and argument types 'cardinality(Map(Field { name: \"entries\", data_type: Struct([Field { name: \"key\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"value\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tcardinality(array)"
       }
     }
   ]

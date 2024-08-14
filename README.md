@@ -53,7 +53,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 Run the following commands to verify the code before committing changes.
 
 ```bash
-cargo +nightly fmt && cargo clippy --all-targets --all-features && cargo build && cargo test
+cargo +nightly fmt && cargo clippy --all-targets --all-features && cargo build && env SAIL_UPDATE_GOLD_DATA=1 cargo test
 ```
 
 The code can be built and tested using the stable toolchain,

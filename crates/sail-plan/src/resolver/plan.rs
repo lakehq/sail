@@ -3,15 +3,18 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes as adt;
-use datafusion::datasource::file_format::csv::CsvFormat;
-use datafusion::datasource::file_format::json::JsonFormat;
-use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
+use datafusion::datasource::file_format::avro::AvroFormatFactory;
+use datafusion::datasource::file_format::csv::{CsvFormat, CsvFormatFactory};
+use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
+use datafusion::datasource::file_format::parquet::{ParquetFormat, ParquetFormatFactory};
+use datafusion::datasource::file_format::{format_as_file_type, FileFormat, FileFormatFactory};
 use datafusion::datasource::function::TableFunction;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::execution::context::DataFilePaths;
 use datafusion::logical_expr::{logical_plan as plan, Expr, Extension, LogicalPlan, UNNAMED_TABLE};
+use datafusion_common::config::{ConfigFileType, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
@@ -1543,16 +1546,20 @@ impl PlanResolver<'_> {
             or_replace,
             unbounded,
             options,
-            query: _, // TODO: handle query
+            query,
             definition,
         } = definition;
-        // TODO: handle query
-        //  1. Resolve query to get schema
-        //  2. (optional) if columns are specified in the definition, validate the schema
-        //  3. create external table
-        //  4. fill external table from query table (copy to)
-        let fields = self.resolve_fields(schema.fields)?;
-        let schema = Arc::new(DFSchema::from_unqualified_fields(fields, HashMap::new())?);
+
+        let (schema, query_logical_plan) = if let Some(query) = query {
+            // FIXME: Query plan has cols renamed to #1, #2, etc. So I think there's more work here.
+            let logical_plan = self.resolve_query_plan(*query, state).await?;
+            (logical_plan.schema().clone(), Some(logical_plan))
+        } else {
+            let fields = self.resolve_fields(schema.fields)?;
+            let schema = Arc::new(DFSchema::from_unqualified_fields(fields, HashMap::new())?);
+            (schema, None)
+        };
+
         let column_defaults: Vec<(String, Expr)> = async {
             let mut results: Vec<(String, Expr)> = Vec::with_capacity(column_defaults.len());
             for column_default in column_defaults {
@@ -1591,6 +1598,53 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(|(k, v)| Ok((k, v)))
             .collect::<PlanResult<Vec<(String, String)>>>()?;
+
+        let copy_to_plan = if let Some(query_logical_plan) = query_logical_plan {
+            let mut table_options =
+                TableOptions::default_from_session_config(self.ctx.state().config_options());
+            let options_map = options.clone().into_iter().collect();
+            let format_factory: Arc<dyn FileFormatFactory> =
+                match file_format.to_lowercase().as_str() {
+                    "json" => {
+                        table_options.set_config_format(ConfigFileType::JSON);
+                        table_options.alter_with_string_hash_map(&options_map)?;
+                        Arc::new(JsonFormatFactory::new_with_options(table_options.json))
+                    }
+                    "parquet" => {
+                        table_options.set_config_format(ConfigFileType::PARQUET);
+                        table_options.alter_with_string_hash_map(&options_map)?;
+                        Arc::new(ParquetFormatFactory::new_with_options(
+                            table_options.parquet,
+                        ))
+                    }
+                    "csv" => {
+                        table_options.set_config_format(ConfigFileType::CSV);
+                        table_options.alter_with_string_hash_map(&options_map)?;
+                        Arc::new(CsvFormatFactory::new_with_options(table_options.csv))
+                    }
+                    "arrow" => Arc::new(ArrowFormatFactory::new()),
+                    "avro" => Arc::new(AvroFormatFactory::new()),
+                    _ => {
+                        return Err(PlanError::invalid(format!(
+                            "unsupported file_format: {}",
+                            file_format
+                        )))
+                    }
+                };
+            Some(Arc::new(
+                LogicalPlanBuilder::copy_to(
+                    query_logical_plan,
+                    location.clone(),
+                    format_as_file_type(format_factory),
+                    options_map,
+                    table_partition_cols.clone(),
+                )?
+                .build()?,
+            ))
+        } else {
+            None
+        };
+
         let command = CatalogCommand::CreateTable {
             table: build_table_reference(table)?,
             schema,
@@ -1606,6 +1660,7 @@ impl PlanResolver<'_> {
             unbounded,
             options,
             definition,
+            copy_to_plan,
         };
         self.resolve_catalog_command(command)
     }
