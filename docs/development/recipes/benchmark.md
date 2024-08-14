@@ -1,12 +1,13 @@
 ---
 title: Running Benchmarks
+rank: 90
 ---
+
+# Running Benchmarks
 
 ::: info
 This is an experimental process. The script used in this page may be removed in the future, when there is a better way to run benchmarks.
 :::
-
-# Running Benchmarks
 
 You can use the following command to run individual queries from the derived TPC-H benchmark.
 

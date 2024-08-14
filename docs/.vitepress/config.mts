@@ -116,17 +116,21 @@ class Sidebar {
     trees: TreeNode<PageLink>[],
     base?: string,
   ): DefaultTheme.SidebarItem[] {
-    function transform(tree: TreeNode<PageLink>): DefaultTheme.SidebarItem {
+    function transform(
+      tree: TreeNode<PageLink>,
+      level: number,
+    ): DefaultTheme.SidebarItem {
       if (tree.data === null) {
         throw new Error(`page with name '${tree.name}' does not exist`);
       }
       return {
         text: tree.data.title,
         link: base ? base + tree.data.url : tree.data.url,
-        items: tree.children.map(transform),
+        items: tree.children.map((child) => transform(child, level + 1)),
+        collapsed: level > 1 ? true : undefined,
       };
     }
-    return trees.map(transform);
+    return trees.map((tree) => transform(tree, 1));
   }
 
   static async userGuide(): Promise<DefaultTheme.SidebarItem[]> {
