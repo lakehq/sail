@@ -40,7 +40,7 @@ async function loadPages(
       if (!frontmatter.title) {
         throw new Error(`file ${file} does not have a title in frontmatter`);
       }
-      return new PageLink(url, frontmatter.title);
+      return new PageLink(url, frontmatter.title, frontmatter.rank);
     }),
   );
 }

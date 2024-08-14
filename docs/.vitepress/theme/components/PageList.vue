@@ -22,7 +22,11 @@ const trees = computed(() => {
         `page ${content.url} does not have a title in frontmatter`,
       );
     }
-    return new PageLink(content.url, content.frontmatter.title);
+    return new PageLink(
+      content.url,
+      content.frontmatter.title,
+      content.frontmatter.rank,
+    );
   });
   return TreeNode.fromPaths(links, props.prefix).map((tree) =>
     tree.transform((name: string, page: PageLink) => {

@@ -19,6 +19,12 @@ class SphinxPagePath implements PathLike {
   path(): string[] {
     return this.inner.current.link.split("/").filter(Boolean);
   }
+
+  rank(): number | undefined {
+    // This class is only used for generating the path tree, so we do not need to
+    // define the rank for each page.
+    return undefined;
+  }
 }
 
 type SphinxPageConfig = {
