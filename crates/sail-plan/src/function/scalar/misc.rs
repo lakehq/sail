@@ -26,6 +26,8 @@ fn assert_true(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
         )));
     };
 
+    // TODO: Add PySpark tests once we have the pytest setup for the library.
+    //  Ref link: https://github.com/lakehq/sail/pull/122#discussion_r1716235731
     Ok(expr::Expr::Case(expr::Case {
         expr: None,
         when_then_expr: vec![(
