@@ -91,3 +91,53 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
         ("sort_array", F::custom(sort_array)),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::{ListArray, RecordBatch};
+    use datafusion::arrow::datatypes::Int32Type;
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::DFSchema;
+    use datafusion_expr::{col, ColumnarValue};
+
+    use super::*;
+
+    #[test]
+    fn test_slice() -> PlanResult<()> {
+        let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(5),
+        ])]);
+        let batch = RecordBatch::try_from_iter([("l1", Arc::new(l1) as _)]).unwrap();
+
+        let start = lit(2);
+        let length = lit(3);
+        let expr = slice(col("l1"), start, length);
+
+        let df_schema = DFSchema::try_from(batch.schema())?;
+        let physical_expr = SessionContext::new().create_physical_expr(expr, &df_schema)?;
+
+        let result = physical_expr.evaluate(&batch)?;
+        let result_array = match result {
+            ColumnarValue::Array(array) => {
+                array.as_any().downcast_ref::<ListArray>().unwrap().clone()
+            }
+            _ => panic!("Expected an array result"),
+        };
+
+        let expected_array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(2),
+            Some(3),
+            Some(4),
+        ])]);
+
+        assert_eq!(result_array, expected_array);
+
+        Ok(())
+    }
+}
