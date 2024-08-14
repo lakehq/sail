@@ -6,6 +6,10 @@
   --vp-sidebar-width: 280px;
 }
 
+.dark img.logo {
+  filter: invert(1) hue-rotate(210deg);
+}
+
 a.footnote-backref {
   @apply no-underline;
   /* change font family to prevent special unicode characters shown as emoji in Chrome */

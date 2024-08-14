@@ -8,36 +8,61 @@ import { loadPages } from "./theme/utils/page";
 import { loadSphinxPages } from "./theme/utils/sphinx";
 import { TreeNode } from "./theme/utils/tree";
 
-class Head {
-  static readonly title = "Sail";
-  static readonly description =
-    "The computation framework with a mission to unify stream processing, batch processing, and compute-intensive (AI) workloads.";
-  // TODO: create a dedicated logo for Sail
-  static readonly image = "https://lakesail.com/logo.png";
-}
+// The documentation build process can be configured using the following environment variables:
+// - SAIL_SITE_URL: The URL of the documentation site.
+//     The URL must end with "/" and contain at least one last path segment corresponding to the documentation version.
+// - SAIL_VERSION: The version of the Sail library.
+// - SAIL_FATHOM_SITE_ID: (Optional) The Fathom site ID for analytics.
 
 class Site {
   static url(): string {
-    return (
-      process.env.SAIL_SITE_URL ?? "https://docs.lakesail.com/sail/latest/"
-    );
+    return process.env.SAIL_SITE_URL ?? "https://localhost/sail/main/";
   }
 
   static base(): string {
     const url = new URL(Site.url());
     return url.pathname;
   }
+
+  /**
+   * The documentation version extracted from the last path segment of the base URL.
+   * @returns The documentation version.
+   */
+  static version(): string {
+    const base = Site.base();
+    const match = base.match(/\/(?<version>[^/]+)\/$/);
+    if (match?.groups) {
+      return match.groups.version;
+    }
+    throw new Error(`missing documentation version in the base URL: ${base}`);
+  }
+
+  /**
+   * The version of the Sail library.
+   * @returns The library version.
+   */
+  static libVersion(): string {
+    return process.env.SAIL_VERSION ?? "0.0.0";
+  }
+}
+
+class Head {
+  static readonly title = "Sail";
+  static readonly description =
+    "The computation framework with a mission to unify stream processing, batch processing, and compute-intensive (AI) workloads.";
+  static readonly image = `${Site.url()}logo.png`;
 }
 
 class Analytics {
   static head(): HeadConfig[] {
-    if (process.env.SAIL_FATHOM_SITE_ID) {
+    const siteId = process.env.SAIL_FATHOM_SITE_ID;
+    if (siteId) {
       return [
         [
           "script",
           {
             src: "https://cdn.usefathom.com/script.js",
-            "data-site": process.env.SAIL_FATHOM_SITE_ID,
+            "data-site": siteId,
             "data-spa": "auto",
             defer: "",
           },
@@ -187,8 +212,12 @@ export default async () => {
       // The Python documentation is generated dynamically.
       /^\/reference\/python\//,
     ],
+    contentProps: {
+      version: Site.version(),
+      libVersion: Site.libVersion(),
+    },
     themeConfig: {
-      logo: "/favicon.png",
+      logo: "/logo.png",
       nav: [
         { text: "User Guide", link: "/guide/", activeMatch: "^/guide/" },
         {
@@ -209,6 +238,7 @@ export default async () => {
         ],
         "/reference/python/": await Sidebar.pythonReference(),
       },
+      externalLinkIcon: true,
       socialLinks: [
         {
           icon: "github",
