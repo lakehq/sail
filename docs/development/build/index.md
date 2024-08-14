@@ -1,11 +1,11 @@
 ---
-title: Recipes
-rank: 4
+title: Building the Project
+rank: 2
 ---
 
-# Recipes
+# Building the Project
 
-<PageList :data="data" :prefix="['development', 'recipes']" />
+<PageList :data="data" :prefix="['development', 'build']" />
 
 <script setup>
 import PageList from "@theme/components/PageList.vue";

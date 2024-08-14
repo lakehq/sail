@@ -14,6 +14,7 @@ target/
 
 # Common build directories
 build/
+!/docs/development/build/
 dist/
 tmp/
 out/

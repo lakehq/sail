@@ -1,11 +1,11 @@
 ---
-title: Recipes
-rank: 4
+title: Environment Setup
+rank: 1
 ---
 
-# Recipes
+# Environment Setup
 
-<PageList :data="data" :prefix="['development', 'recipes']" />
+<PageList :data="data" :prefix="['development', 'setup']" />
 
 <script setup>
 import PageList from "@theme/components/PageList.vue";

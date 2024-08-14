@@ -174,6 +174,7 @@ class TreeNode<T> {
         }
         return a.name.localeCompare(b.name);
       });
+      trees.forEach((tree) => sort(tree.children));
     }
 
     // Sort the children of each node by rank and name.
