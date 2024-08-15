@@ -1,5 +1,5 @@
-use datafusion::functions_aggregate::{average, count, sum};
-use datafusion_expr::{expr, AggregateFunction, BuiltInWindowFunction};
+use datafusion::functions_aggregate::{average, count, min_max, sum};
+use datafusion_expr::{expr, BuiltInWindowFunction};
 
 use crate::error::{PlanError, PlanResult};
 
@@ -11,11 +11,11 @@ pub(crate) fn get_built_in_window_function(
         "avg" => Ok(expr::WindowFunctionDefinition::AggregateUDF(
             average::avg_udaf(),
         )),
-        "min" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
-            AggregateFunction::Min,
+        "min" => Ok(expr::WindowFunctionDefinition::AggregateUDF(
+            min_max::min_udaf(),
         )),
-        "max" => Ok(expr::WindowFunctionDefinition::AggregateFunction(
-            AggregateFunction::Max,
+        "max" => Ok(expr::WindowFunctionDefinition::AggregateUDF(
+            min_max::max_udaf(),
         )),
         "sum" => Ok(expr::WindowFunctionDefinition::AggregateUDF(sum::sum_udaf())),
         "count" => Ok(expr::WindowFunctionDefinition::AggregateUDF(

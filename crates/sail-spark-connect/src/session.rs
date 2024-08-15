@@ -3,8 +3,8 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 
-use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use sail_common::config::{ConfigKeyValue, SparkUdfConfig};
 use sail_plan::config::{PlanConfig, TimestampType};
@@ -71,8 +71,12 @@ impl Session {
                     .unwrap_or(16),
             );
         let runtime = Arc::new(RuntimeEnv::default());
-        let state = SessionState::new_with_config_rt(config, runtime);
-        let state = state.with_query_planner(new_query_planner());
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime)
+            .with_default_features()
+            .with_query_planner(new_query_planner())
+            .build();
         let context = SessionContext::new_with_state(state);
 
         // TODO: This is a temp workaround to deregister all built-in functions that we define.
