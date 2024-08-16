@@ -11,3 +11,4 @@ runs:
           echo "Please commit all the automated changes."
           exit 1
         fi
+      shell: bash

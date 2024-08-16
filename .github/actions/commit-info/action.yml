@@ -22,3 +22,4 @@ runs:
         echo "sha_after=${{ github.sha }}" >> "$GITHUB_OUTPUT"
         echo "ref_before=${{ (github.event_name == 'pull_request' && github.base_ref) || github.ref }}" >> "$GITHUB_OUTPUT"
         echo "ref_after=${{ github.ref }}" >> "$GITHUB_OUTPUT"
+      shell: bash
