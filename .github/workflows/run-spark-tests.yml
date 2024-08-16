@@ -13,6 +13,8 @@ jobs:
       ref_before: ${{ steps.info.outputs.ref_before }}
       ref_after: ${{ steps.info.outputs.ref_after }}
     steps:
+      - uses: actions/checkout@v4
+
       - uses: ./.github/actions/commit-info
         id: info
 
