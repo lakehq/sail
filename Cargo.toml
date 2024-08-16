@@ -70,6 +70,8 @@ arrow-cast = { version = "52.2.0" }
 sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "f631629", features = ["serde", "visitor"] }
 serde_arrow = { version = "0.11.6", features = ["arrow-52"] }
 mimalloc = { version = "0.1.43", features = ["local_dynamic_tls"] }
+rand = "0.8.5"
+rand_chacha = "0.3.1"
 
 [patch.crates-io]
 # Override dependencies to use our forked versions.

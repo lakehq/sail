@@ -2905,6 +2905,8 @@ dependencies = [
  "lazy_static",
  "num-traits",
  "pyo3",
+ "rand",
+ "rand_chacha",
  "regex",
  "ryu",
  "sail-common",
