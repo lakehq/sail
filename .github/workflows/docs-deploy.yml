@@ -9,6 +9,10 @@ name: Docs deploy
 on:
   workflow_call:
     inputs:
+      environment:
+        description: The environment for documentation site deployment
+        type: string
+        required: true
       artifact_name:
         description: The name of the documentation site artifact
         type: string
@@ -22,6 +26,7 @@ jobs:
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
     permissions:
       id-token: write
     steps:

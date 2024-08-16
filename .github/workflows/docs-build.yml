@@ -6,6 +6,10 @@ name: Docs build
 on:
   workflow_call:
     inputs:
+      environment:
+        description: The environment for documentation site build
+        type: string
+        default: ""
       artifact_name:
         description: The name of the documentation site artifact, if upload is needed
         type: string
@@ -19,6 +23,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
     steps:
       - uses: actions/checkout@v4
         with:
