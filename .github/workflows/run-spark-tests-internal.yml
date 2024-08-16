@@ -1,10 +1,14 @@
-name: Run Spark tests (internal)
+name: Spark tests (internal)
 
 on:
   workflow_call:
     inputs:
+      sha:
+        description: The Git commit SHA to run the tests on
+        type: string
+        required: true
       ref:
-        description: The Git ref to run the tests on
+        description: The Git reference to run the tests on
         type: string
         required: true
       name:
@@ -15,14 +19,6 @@ on:
         description: The Spark version to test
         type: string
         default: "3.5.1"
-      java_version:
-        description: Java version
-        type: string
-        default: "17"
-      python_version:
-        description: Python version
-        type: string
-        default: "3.11"
 
 # All the scripts used in this workflow come from the commit specified by `inputs.ref`,
 # which can be different from the commit that defines the workflow.
@@ -35,18 +31,12 @@ on:
 
 jobs:
   test:
+    name: Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
-
-      - name: Get job information
-        id: info
-        run: |
-          commit_hash="$(git rev-parse HEAD)"
-          echo "env_key=spark-${{ inputs.spark_version }}-java-${{ inputs.java_version }}-python-${{ inputs.python_version }}" >> "$GITHUB_OUTPUT"
-          echo "commit_hash=${commit_hash}" >> "$GITHUB_OUTPUT"
+          ref: ${{ inputs.sha }}
 
       - uses: actions/cache@v4
         name: Cache test logs
@@ -54,18 +44,18 @@ jobs:
         with:
           path: |
             tmp/spark-tests
-          key: spark-tests-logs-${{ runner.os }}-${{ steps.info.outputs.env_key }}-${{ steps.info.outputs.commit_hash }}
+          key: spark-tests-logs-spark-${{ inputs.spark_version }}-${{ runner.os }}-${{ runner.arch }}-${{ inputs.sha }}
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         uses: actions/setup-java@v4
         with:
           distribution: "corretto"
-          java-version: ${{ inputs.java_version }}
+          java-version: "17"
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ inputs.python_version }}
+          python-version: "3.11"
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         name: Install Hatch
@@ -88,7 +78,7 @@ jobs:
           path: |
             opt/spark/python/dist/pyspark-*.tar.gz
           # We must use `format()` to define the key here since nested variable substitution is not supported.
-          key: ${{ format('spark-tests-package-{0}-pyspark-{1}-{2}', runner.os, inputs.spark_version, hashFiles(format('scripts/spark-tests/spark-{0}.patch', inputs.spark_version), 'scripts/spark-tests/build-pyspark.sh')) }}
+          key: ${{ format('spark-tests-pyspark-{0}-{1}-{2}-{3}', inputs.spark_version, runner.os, runner.arch, hashFiles(format('scripts/spark-tests/spark-{0}.patch', inputs.spark_version), 'scripts/spark-tests/build-pyspark.sh')) }}
 
       - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-pyspark.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
@@ -105,19 +95,19 @@ jobs:
           scripts/spark-tests/build-pyspark.sh
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@v4
-        name: Restore Python package
-        id: restore-python-package
+        uses: actions/cache@v4
+        name: Cache Python package
+        id: cache-python-package
         with:
           path: |
             target/wheels
-          key: python-package-${{ runner.os }}-${{ steps.info.outputs.commit_hash }}
+          key: python-package-${{ runner.os }}-${{ runner.arch }}-${{ inputs.sha }}
 
-      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.restore-python-package.outputs.cache-hit != 'true'
-        uses: ./.github/actions/setup-rust
+      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-python-package.outputs.cache-hit != 'true'
         name: Set up Rust
+        uses: ./.github/actions/setup-rust
 
-      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.restore-python-package.outputs.cache-hit != 'true'
+      - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-python-package.outputs.cache-hit != 'true'
         name: Build Python package
         uses: PyO3/maturin-action@v1
 
@@ -146,9 +136,10 @@ jobs:
         # which can happen occasionally for unknown reasons.
         # The timeout value should be adjusted as we add more tests.
         timeout-minutes: 5
+        env:
+          TEST_RUN_GIT_COMMIT: ${{ inputs.sha }}
+          TEST_RUN_GIT_REF: ${{ inputs.ref }}
         run: |
-          export TEST_RUN_GIT_COMMIT="${{ steps.info.outputs.commit_hash }}"
-          export TEST_RUN_GIT_REF="${{ inputs.ref }}"
           scripts/spark-tests/run-tests.sh
 
       - name: Upload test logs

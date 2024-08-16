@@ -44,7 +44,7 @@ runs:
           target/**/build/
           target/**/deps/
           target/**/.fingerprint/
-        key: setup-rust-${{ runner.os }}-${{ steps.versions.outputs.rust_release }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
+        key: setup-rust-${{ steps.versions.outputs.rust_release }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
 
     # Incremental compilation is not beneficial for CI builds.
     # So we turn it off to speed up the build and reduce the cache size.
