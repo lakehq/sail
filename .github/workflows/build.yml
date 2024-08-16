@@ -49,7 +49,7 @@ jobs:
       - build
 
   docs-build:
-    name: Docs
+    name: Docs build
     if: ${{ github.event_name == 'pull_request' }}
     uses: ./.github/workflows/docs-build.yml
     needs:
