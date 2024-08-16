@@ -8,6 +8,7 @@ on:
 
 jobs:
   build:
+    name: Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,7 +40,10 @@ jobs:
         name: Build Python package
         uses: PyO3/maturin-action@v1
 
-  run-spark-tests:
+  spark-tests:
+    name: Spark tests
     uses: ./.github/workflows/run-spark-tests.yml
     permissions:
       pull-requests: write
+    needs:
+      - build

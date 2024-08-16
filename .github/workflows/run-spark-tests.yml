@@ -7,7 +7,7 @@ jobs:
   setup:
     runs-on: ubuntu-latest
     outputs:
-      run_tests: ${{ ((github.event_name == 'pull_request' && github.event.action == 'opened') || (github.event_name == 'pull_request' && steps.match.outputs.result == 'true') || github.event_name == 'push') && 'true' || 'false' }}
+      run_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.match.outputs.result == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
       sha_before: ${{ steps.info.outputs.sha_before }}
       sha_after: ${{ steps.info.outputs.sha_after }}
       ref_before: ${{ steps.info.outputs.ref_before }}

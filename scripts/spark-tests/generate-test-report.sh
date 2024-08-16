@@ -26,7 +26,7 @@ function show_commit_info() {
   local name="$1"
   local dir="$2"
   # shellcheck disable=SC2016
-  printf '* **%s**: `%s` (`%s`)\n' \
+  printf '| **%s** | `%s` | `%s` |\n' \
     "${name}" \
     "$(head -c 7 "${dir}/commit")" \
     "$(tr -d '\n' < "${dir}/ref")"
@@ -98,6 +98,8 @@ printf '### Spark Test Report\n\n'
 
 printf '#### Commit Information\n\n'
 
+printf "| Commit | Revision | Branch |\n"
+printf "| :--- | :--- | :--- |\n"
 show_commit_info 'After' "${after_dir}"
 show_commit_info 'Before' "${before_dir}"
 

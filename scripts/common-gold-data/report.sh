@@ -19,7 +19,7 @@ function show_commit_info() {
   local dir="$2"
   local ref="$3"
   # shellcheck disable=SC2016
-  printf '* **%s**: `%s` (`%s`)\n' \
+  printf '| **%s** | `%s` | `%s` |\n' \
     "${name}" \
     "$(git -C "${dir}" rev-parse --short=7 HEAD)" \
     "${ref}"
@@ -101,6 +101,8 @@ printf '</details>\n\n'
 
 printf '#### Commit Information\n\n'
 
+printf "| Commit | Revision | Branch |\n"
+printf "| :--- | :--- | :--- |\n"
 show_commit_info 'After' "${after_dir}" "${REPORT_GIT_REF_AFTER-HEAD}"
 show_commit_info 'Before' "${before_dir}" "${REPORT_GIT_REF_BEFORE-HEAD}"
 

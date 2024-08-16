@@ -1,4 +1,4 @@
-name: Commit message match
+name: Match commit message
 description: Match the commit message against a pattern
 inputs:
   pattern:

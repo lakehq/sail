@@ -43,7 +43,7 @@ jobs:
         with:
           path: |
             tmp/spark-tests
-          key: spark-tests-logs-${{ runner.os }}-${{ runner.arch }}-spark-${{ inputs.spark_version }}-${{ inputs.sha }}
+          key: spark-tests-logs-spark-${{ inputs.spark_version }}-${{ runner.os }}-${{ runner.arch }}-${{ inputs.sha }}
 
       - if: steps.cache-logs.outputs.cache-hit != 'true'
         uses: actions/setup-java@v4
