@@ -35,13 +35,13 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
         return Err(SqlError::unsupported("FOR clause"));
     }
 
-    let _ctes = if let Some(with) = with {
+    let mut ctes = if let Some(with) = with {
         from_ast_with(with)?
     } else {
         HashMap::new()
     };
 
-    let plan = from_ast_set_expr(*body)?;
+    let plan = from_ast_set_expr(*body, &mut ctes)?;
 
     let plan = if !order_by.is_empty() {
         let order_by = order_by
@@ -83,7 +83,10 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
     Ok(plan)
 }
 
-fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
+fn from_ast_select(
+    select: ast::Select,
+    ctes: &mut HashMap<String, Arc<spec::QueryPlan>>,
+) -> SqlResult<spec::QueryPlan> {
     use ast::{Distinct, GroupByExpr, SelectItem};
 
     let ast::Select {
@@ -138,7 +141,7 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
         .try_fold(
             None,
             |r: Option<spec::QueryPlan>, table| -> SqlResult<Option<spec::QueryPlan>> {
-                let right = from_ast_table_with_joins(table)?;
+                let right = from_ast_table_with_joins(table, ctes)?;
                 match r {
                     Some(left) => Ok(Some(spec::QueryPlan::new(spec::QueryNode::Join(
                         spec::Join {
@@ -256,11 +259,14 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
     Ok(plan)
 }
 
-fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::QueryPlan> {
+fn from_ast_set_expr(
+    set_expr: ast::SetExpr,
+    ctes: &mut HashMap<String, Arc<spec::QueryPlan>>,
+) -> SqlResult<spec::QueryPlan> {
     use ast::{SetExpr, SetOperator, SetQuantifier};
 
     match set_expr {
-        SetExpr::Select(select) => from_ast_select(*select),
+        SetExpr::Select(select) => from_ast_select(*select, ctes),
         SetExpr::Query(query) => from_ast_query(*query),
         SetExpr::SetOperation {
             op,
@@ -268,8 +274,8 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::QueryPlan> {
             left,
             right,
         } => {
-            let left = from_ast_set_expr(*left)?;
-            let right = from_ast_set_expr(*right)?;
+            let left = from_ast_set_expr(*left, ctes)?;
+            let right = from_ast_set_expr(*right, ctes)?;
             let (is_all, by_name) = match set_quantifier {
                 SetQuantifier::All => (true, false),
                 SetQuantifier::Distinct | SetQuantifier::None => (false, false),
@@ -330,11 +336,14 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::QueryPlan> {
     }
 }
 
-fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::QueryPlan> {
+fn from_ast_table_with_joins(
+    table: ast::TableWithJoins,
+    ctes: &mut HashMap<String, Arc<spec::QueryPlan>>,
+) -> SqlResult<spec::QueryPlan> {
     use sqlparser::ast::{JoinConstraint, JoinOperator};
 
     let ast::TableWithJoins { relation, joins } = table;
-    let plan = from_ast_table_factor(relation)?;
+    let plan = from_ast_table_factor(relation, ctes)?;
     let plan = joins
         .into_iter()
         .try_fold(plan, |left, join| -> SqlResult<_> {
@@ -342,7 +351,7 @@ fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::Quer
                 relation: right,
                 join_operator,
             } = join;
-            let right = from_ast_table_factor(right)?;
+            let right = from_ast_table_factor(right, ctes)?;
             let (join_type, constraint) = match join_operator {
                 JoinOperator::Inner(constraint) => (spec::JoinType::Inner, Some(constraint)),
                 JoinOperator::LeftOuter(constraint) => {
@@ -390,7 +399,10 @@ fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::Quer
     Ok(plan)
 }
 
-fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> {
+fn from_ast_table_factor(
+    table: ast::TableFactor,
+    ctes: &mut HashMap<String, Arc<spec::QueryPlan>>,
+) -> SqlResult<spec::QueryPlan> {
     use ast::TableFactor;
 
     match table {
@@ -432,13 +444,20 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
                     }),
                 })
             } else {
-                spec::QueryPlan::new(spec::QueryNode::Read {
-                    is_streaming: false,
-                    read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
-                        name: from_ast_object_name(name)?,
-                        options: Default::default(),
-                    }),
-                })
+                let object_name = from_ast_object_name(name)?;
+                let table_name = object_name.to_string();
+                let cte = ctes.get(&table_name).map(|cte| cte.as_ref());
+                if let Some(cte) = cte {
+                    cte.clone()
+                } else {
+                    spec::QueryPlan::new(spec::QueryNode::Read {
+                        is_streaming: false,
+                        read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
+                            name: object_name,
+                            options: Default::default(),
+                        }),
+                    })
+                }
             };
             with_ast_table_alias(plan, alias)
         }
@@ -466,7 +485,7 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
             default_on_null,
             alias,
         } => {
-            let plan = from_ast_table_factor(*table)?;
+            let plan = from_ast_table_factor(*table, ctes)?;
             if default_on_null.is_some() {
                 return Err(SqlError::unsupported("PIVOT default on null"));
             }
@@ -533,7 +552,7 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
             columns,
             alias,
         } => {
-            let plan = from_ast_table_factor(*table)?;
+            let plan = from_ast_table_factor(*table, ctes)?;
             let values = columns
                 .into_iter()
                 .map(|c| spec::UnpivotValue {

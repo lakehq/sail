@@ -167,6 +167,18 @@ impl ObjectName {
     }
 }
 
+impl std::fmt::Display for ObjectName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<String> = self.clone().into();
+        match names.as_slice() {
+            [table] => write!(f, "{table}"),
+            [schema, table] => write!(f, "{schema}.{table}"),
+            [catalog, schema, table] => write!(f, "{catalog}.{schema}.{table}"),
+            _ => write!(f, "{}", names.join(".")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SortOrder {
