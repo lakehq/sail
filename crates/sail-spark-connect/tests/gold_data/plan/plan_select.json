@@ -451,7 +451,7 @@
                     "read": {
                       "namedTable": {
                         "name": [
-                          "testdata"
+                          "testData"
                         ],
                         "options": []
                       },

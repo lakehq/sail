@@ -614,10 +614,21 @@ pub(crate) fn from_ast_with(with: ast::With) -> SqlResult<HashMap<String, Arc<sp
 }
 
 pub(crate) fn from_recursive_cte(
-    cte_name: String,
-    cte_query: ast::Query,
+    _cte_name: String,
+    mut cte_query: ast::Query,
 ) -> SqlResult<spec::QueryPlan> {
-    let _ = cte_name;
-    let _ = cte_query;
+    let (_left_expr, _right_expr, _set_quantifier) = match *cte_query.body {
+        ast::SetExpr::SetOperation {
+            op: ast::SetOperator::Union,
+            left,
+            right,
+            set_quantifier,
+        } => (left, right, set_quantifier),
+        other => {
+            // Only UNION queries can be recursive CTEs
+            cte_query.body = Box::new(other);
+            return from_ast_query(cte_query);
+        }
+    };
     Err(SqlError::todo("from_recursive_cte"))
 }
