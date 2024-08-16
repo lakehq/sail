@@ -47,7 +47,7 @@ function write_test_summary() {
 
 function show_test_summary() {
   local file="$1"
-  sort -t$'\t' -k2,2 -k1,1r < "${file}" | awk -F$'\t' '
+  sort -t$'\t' -k2,2 -k1,1 < "${file}" | awk -F$'\t' '
     BEGIN {
       printf "| Suite | Commit | Failed | Passed | Skipped | Warnings | Time (s) |\n"
       printf "| :--- | :--- | ---: | ---: | ---: | ---: | ---: |\n"

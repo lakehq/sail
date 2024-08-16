@@ -5,6 +5,7 @@ on:
 
 jobs:
   setup:
+    name: Setup
     runs-on: ubuntu-latest
     outputs:
       run_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.match.outputs.result == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
@@ -25,6 +26,7 @@ jobs:
           ignore_case: true
 
   test-after:
+    name: After
     if: needs.setup.outputs.run_tests == 'true'
     uses: ./.github/workflows/run-spark-tests-internal.yml
     with:
@@ -35,6 +37,7 @@ jobs:
       - setup
 
   test-before:
+    name: Before
     if: needs.setup.outputs.run_tests == 'true'
     uses: ./.github/workflows/run-spark-tests-internal.yml
     with:
@@ -46,6 +49,7 @@ jobs:
       - test-after # test sequentially to improve cache hit rate
 
   analyze:
+    name: Analyze
     runs-on: ubuntu-latest
     needs:
       - test-after
@@ -86,6 +90,7 @@ jobs:
           retention-days: 1
 
   report:
+    name: Report
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:

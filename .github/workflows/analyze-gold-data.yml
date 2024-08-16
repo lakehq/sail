@@ -8,6 +8,7 @@ on:
 
 jobs:
   run:
+    name: Run
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,6 +42,7 @@ jobs:
           retention-days: 1
 
   report:
+    name: Report
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
