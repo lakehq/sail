@@ -1,0 +1,25 @@
+name: Commit information
+description: Collect commit information for the workflow run
+outputs:
+  sha_before:
+    description: The Git SHA before the code change
+    value: ${{ steps.info.outputs.sha_before }}
+  sha_after:
+    description: The Git SHA after the code change
+    value: ${{ steps.info.outputs.sha_after }}
+  ref_before:
+    description: The Git reference before the code change
+    value: ${{ steps.info.outputs.ref_before }}
+  ref_after:
+    description: The Git reference after the code change
+    value: ${{ steps.info.outputs.ref_after }}
+runs:
+  using: composite
+  steps:
+    - id: info
+      run: |
+        echo "sha_before=${{ (github.event_name == 'pull_request' && github.event.pull_request.base.sha) || (github.event_name == 'push' && github.event.before) || github.sha }}" >> "$GITHUB_OUTPUT"
+        echo "sha_after=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+        echo "ref_before=${{ (github.event_name == 'pull_request' && github.base_ref) || github.ref }}" >> "$GITHUB_OUTPUT"
+        echo "ref_after=${{ github.ref }}" >> "$GITHUB_OUTPUT"
+      shell: bash

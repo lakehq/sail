@@ -3,12 +3,12 @@
 set -euo 'pipefail'
 
 if [ "$#" -ne 2 ]; then
-    echo "Usage: $0 <head-repository> <base-repository>"
+    echo "Usage: $0 <repository-after> <repository-before>"
     exit 1
 fi
 
-head_dir="$1"
-base_dir="$2"
+after_dir="$1"
+before_dir="$2"
 
 project_path="$(git rev-parse --show-toplevel)"
 
@@ -17,11 +17,12 @@ cd "${project_path}"
 function show_commit_info() {
   local name="$1"
   local dir="$2"
+  local ref="$3"
   # shellcheck disable=SC2016
-  printf '* **%s**: `%s` (`%s`)\n' \
+  printf '| **%s** | `%s` | `%s` |\n' \
     "${name}" \
-    "$(git -C "${dir}" rev-parse --abbrev-ref HEAD)" \
-    "$(git -C "${dir}" rev-parse HEAD)"
+    "$(git -C "${dir}" rev-parse --short=7 HEAD)" \
+    "${ref}"
 }
 
 function collect_metrics() {
@@ -66,7 +67,7 @@ function show_summary() {
 }
 
 function show_details() {
-  sort -t$'\t' -k2,3 -k1,1r | awk -F$'\t' '
+  sort -t$'\t' -k2,3 -k1,1 | awk -F$'\t' '
     BEGIN {
       printf "| Group | File | Commit | TP | TN | FP | FN | Total |\n"
       printf "| :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: |\n"
@@ -100,15 +101,17 @@ printf '</details>\n\n'
 
 printf '#### Commit Information\n\n'
 
-show_commit_info 'Head' "${head_dir}"
-show_commit_info 'Base' "${base_dir}"
+printf "| Commit | Revision | Branch |\n"
+printf "| :--- | :--- | :--- |\n"
+show_commit_info 'After' "${after_dir}" "${REPORT_GIT_REF_AFTER-HEAD}"
+show_commit_info 'Before' "${before_dir}" "${REPORT_GIT_REF_BEFORE-HEAD}"
 
 printf '\n'
 printf '#### Summary\n\n'
 
 show_summary_header
-collect_metrics 'Head' "${head_dir}" | show_summary 'Head'
-collect_metrics 'Base' "${base_dir}" | show_summary 'Base'
+collect_metrics 'After' "${after_dir}" | show_summary 'After'
+collect_metrics 'Before' "${before_dir}" | show_summary 'Before'
 
 printf '\n'
 printf '#### Details\n\n'
@@ -117,8 +120,8 @@ printf '<details>\n'
 printf '<summary>Gold Data Metrics</summary>\n\n'
 
 cat \
-  <(collect_metrics 'Head' "${head_dir}") \
-  <(collect_metrics 'Base' "${base_dir}") \
+  <(collect_metrics 'After' "${after_dir}") \
+  <(collect_metrics 'Before' "${before_dir}") \
   | show_details
 
 printf '</details>\n'
