@@ -24,14 +24,14 @@ runs:
       with:
         result-encoding: string
         script: |
-          const { data: commit } = await github.rest.repos.getCommit({
+          const { data: commit } = await github.rest.git.getCommit({
             owner: context.repo.owner,
             repo: context.repo.repo,
             // When the event is `pull_request`, we must extract the commit message from the head branch,
             // rather than the merge branch created by GitHub.
-            ref: context.payload.pull_request.head.sha || context.sha,
+            commit_sha: context.payload.pull_request.head.sha || context.sha,
           });
           const pattern = process.env.MESSAGE_PATTERN;
           const flags = process.env.MESSAGE_FLAGS;
           const regex = new RegExp(pattern, flags);
-          return commit.data.message.match(regex) !== null ? 'true' : 'false';
+          return commit.message.match(regex) !== null ? 'true' : 'false';
