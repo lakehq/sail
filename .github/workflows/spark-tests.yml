@@ -26,9 +26,9 @@ jobs:
           ignore_case: true
 
   test-after:
-    name: After
+    name: Test after
     if: needs.setup.outputs.run_tests == 'true'
-    uses: ./.github/workflows/run-spark-tests-internal.yml
+    uses: ./.github/workflows/spark-tests-internal.yml
     with:
       sha: ${{ needs.setup.outputs.sha_after }}
       ref: ${{ needs.setup.outputs.ref_after }}
@@ -37,9 +37,9 @@ jobs:
       - setup
 
   test-before:
-    name: Before
+    name: Test before
     if: needs.setup.outputs.run_tests == 'true'
-    uses: ./.github/workflows/run-spark-tests-internal.yml
+    uses: ./.github/workflows/spark-tests-internal.yml
     with:
       sha: ${{ needs.setup.outputs.sha_before }}
       ref: ${{ needs.setup.outputs.ref_before }}

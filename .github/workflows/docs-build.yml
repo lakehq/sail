@@ -1,0 +1,94 @@
+name: Docs build
+
+# This workflow uses the following variables from the environment:
+# - FATHOM_SITE_ID (optional)
+
+on:
+  workflow_call:
+    inputs:
+      artifact_name:
+        description: The name of the documentation site artifact, if upload is needed
+        type: string
+        default: ""
+      site_url:
+        description: The documentation site URL to override the default value in VitePress configuration
+        type: string
+        default: ""
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install Hatch
+        uses: pypa/hatch@install
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Run code formatter
+        env:
+          FORMAT_OPTIONS: --check
+        run: pnpm run format
+
+      - name: Run code linter
+        run: pnpm run lint
+
+      - uses: actions/cache@v4
+        name: Cache Python package
+        id: cache-python-package
+        with:
+          path: |
+            target/wheels
+          key: python-package-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+
+      - if: steps.cache-python-package.outputs.cache-hit != 'true'
+        name: Set up Rust
+        uses: ./.github/actions/setup-rust
+
+      - if: steps.cache-python-package.outputs.cache-hit != 'true'
+        name: Build Python package
+        uses: PyO3/maturin-action@v1
+
+      - name: Build Python documentation
+        run: |
+          hatch env create docs
+          hatch run docs:install-pysail
+          hatch run docs:build
+
+      - name: Build VitePress site
+        env:
+          SAIL_SITE_URL: ${{ inputs.site_url }}
+          # The Fathom Analytics script will not be added if the site ID is not set.
+          SAIL_FATHOM_SITE_ID: ${{ vars.FATHOM_SITE_ID }}
+        run: |
+          if [[ "${SAIL_SITE_URL}" == */main/ ]]; then
+            version="$(hatch version)+$(git rev-parse --short=7 HEAD)"
+          else
+            version="$(hatch version)"
+          fi
+          export SAIL_VERSION="$version"
+          pnpm run docs:build
+        shell: bash
+
+      - name: Upload artifact
+        if: ${{ inputs.artifact_name != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: docs/.vitepress/dist
+          retention-days: 7

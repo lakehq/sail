@@ -42,8 +42,42 @@ jobs:
 
   spark-tests:
     name: Spark tests
-    uses: ./.github/workflows/run-spark-tests.yml
+    uses: ./.github/workflows/spark-tests.yml
     permissions:
       pull-requests: write
     needs:
       - build
+
+  docs-build:
+    name: Docs
+    if: ${{ github.event_name == 'pull_request' }}
+    uses: ./.github/workflows/docs-build.yml
+    needs:
+      - build
+
+  docs-release-dev:
+    name: Docs release (dev)
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/docs-release.yml
+    permissions:
+      id-token: write
+    needs:
+      - build
+    environment: docs/dev
+    with:
+      artifact_name: docs-dist-dev
+      site_url: "https://docs.dev.lakesail.com/sail/main/"
+
+  docs-release-prod:
+    name: Docs release (prod)
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/docs-release.yml
+    permissions:
+      id-token: write
+    needs:
+      - build
+      - docs-release-dev
+    environment: docs/prod
+    with:
+      artifact_name: docs-dist-prod
+      site_url: "https://docs.lakesail.com/sail/main/"

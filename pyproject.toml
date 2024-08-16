@@ -32,13 +32,25 @@ installer = "pip"
 dependencies = [
     "pyspark[connect,sql]==3.5.1",
     "pytest~=8.2",
+]
+
+[tool.hatch.envs.default.overrides]
+env.CI.installer = "uv"
+
+[tool.hatch.envs.docs]
+detached = true
+path = ".venvs/docs"
+python = "3.11"
+installer = "pip"
+dependencies = [
     "sphinx~=8.0",
 ]
 
-[tool.hatch.envs.default.scripts]
-docs-build = "sphinx-build python/pysail/docs python/pysail/docs/_build -b json"
+[tool.hatch.envs.docs.scripts]
+install-pysail = "{env:HATCH_UV} pip install pysail --no-index -f target/wheels --force-reinstall"
+build = "sphinx-build python/pysail/docs python/pysail/docs/_build -b json"
 
-[tool.hatch.envs.default.overrides]
+[tool.hatch.envs.docs.overrides]
 env.CI.installer = "uv"
 
 [tool.hatch.envs.test]
@@ -68,6 +80,7 @@ dependencies = [
 
 [tool.hatch.envs.test.scripts]
 install-pyspark = "{env:HATCH_UV} pip install opt/spark/python/dist/pyspark-3.5.1.tar.gz"
+install-pysail = "{env:HATCH_UV} pip install pysail --no-index -f target/wheels --force-reinstall"
 
 [tool.hatch.envs.test.overrides]
 env.CI.installer = "uv"

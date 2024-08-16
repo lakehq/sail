@@ -1,0 +1,31 @@
+name: Docs release
+
+on:
+  workflow_call:
+    artifact_name:
+      description: The name of the documentation site artifact
+      type: string
+      required: true
+    site_url:
+      description: The documentation site URL
+      type: string
+      required: true
+
+jobs:
+  build:
+    name: Build
+    uses: ./.github/workflows/docs-build.yml
+    with:
+      artifact_name: ${{ inputs.artifact_name }}
+      site_url: ${{ inputs.site_url }}
+
+  deploy:
+    name: Deploy
+    uses: ./.github/workflows/docs-deploy.yml
+    permissions:
+      id-token: write
+    needs:
+      - build
+    with:
+      artifact_name: ${{ inputs.artifact_name }}
+      site_url: ${{ inputs.site_url }}

@@ -1,0 +1,60 @@
+name: Docs release (tag push)
+
+on:
+  push:
+    tags:
+      - "docs/dev/v*"
+      - "docs/dev/latest"
+      - "docs/prod/v*"
+      - "docs/prod/latest"
+
+jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+    outputs:
+      stage: ${{ steps.info.outputs.stage }}
+      version: ${{ steps.info.outputs.version }}
+    steps:
+      - name: Collect release information
+        id: info
+        env:
+          GIT_TAG_REF: ${{ github.ref }}
+        run: |
+          case "${GIT_TAG_REF#refs/tags/}" in
+            docs/dev/v*)
+              stage=dev
+              version=${tag#docs/dev/v}
+              ;;
+            docs/dev/latest)
+              stage=dev
+              version=latest
+              ;;
+            docs/prod/v*)
+              stage=prod
+              version=${tag#docs/prod/v}
+              ;;
+            docs/prod/latest)
+              stage=prod
+              version=latest
+              ;;
+            *)
+              echo "Invalid tag reference: ${GIT_TAG_REF}"
+              exit 1
+              ;;
+          esac
+          echo "stage=$stage" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+        shell: bash
+
+  release:
+    name: Release
+    uses: ./.github/workflows/docs-release.yml
+    permissions:
+      id-token: write
+    needs:
+      - setup
+    environment: ${{ startsWith(github.ref, 'refs/tags/docs/prod/') && 'docs/prod' || 'docs/dev' }}
+    with:
+      artifact_name: docs-dist
+      site_url: "${{ needs.setup.outputs.stage == 'prod' && 'https://docs.lakesail.com/sail/' || 'https://docs.dev.lakesail.com/sail/' }}${{ needs.setup.outputs.version }}/"
