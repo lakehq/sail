@@ -1,42 +1,53 @@
-name: Run Spark tests
+name: Spark tests
 
 on:
   workflow_call:
-    inputs:
-      head_ref:
-        description: The Git head ref to run the tests on
-        type: string
-        required: true
-      base_ref:
-        description: The Git base ref to run the tests on
-        type: string
-        required: true
-permissions:
-  contents: read
-  pull-requests: write
 
 jobs:
-  test-head:
-    uses: ./.github/workflows/run-spark-tests-internal.yml
-    with:
-      ref: ${{ inputs.head_ref }}
-      name: head
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      run_tests: ${{ ((github.event_name == 'pull_request' && github.event.action == 'opened') || (github.event_name == 'pull_request' && steps.match.outputs.result == 'true') || github.event_name == 'push') && 'true' || 'false' }}
+      sha_before: ${{ steps.info.outputs.sha_before }}
+      sha_after: ${{ steps.info.outputs.sha_after }}
+      ref_before: ${{ steps.info.outputs.ref_before }}
+      ref_after: ${{ steps.info.outputs.ref_after }}
+    steps:
+      - uses: ./.github/actions/commit-info
+        id: info
 
-  test-base:
+      - uses: ./.github/actions/commit-message-match
+        id: match
+        with:
+          pattern: "\\[(spark )?tests?\\]"
+          ignore_case: true
+
+  test-after:
+    if: needs.setup.outputs.run_tests == 'true'
     uses: ./.github/workflows/run-spark-tests-internal.yml
     with:
-      ref: ${{ inputs.base_ref }}
-      name: base
-    # Test the base branch only after the head branch has been tested successfully.
-    # The base test also runs faster since the Spark environment is likely cached by the head test.
+      sha: ${{ needs.setup.outputs.sha_after }}
+      ref: ${{ needs.setup.outputs.ref_after }}
+      name: after
     needs:
-      - test-head
+      - setup
 
-  report:
+  test-before:
+    if: needs.setup.outputs.run_tests == 'true'
+    uses: ./.github/workflows/run-spark-tests-internal.yml
+    with:
+      sha: ${{ needs.setup.outputs.sha_before }}
+      ref: ${{ needs.setup.outputs.ref_before }}
+      name: before
+    needs:
+      - setup
+      - test-after # test sequentially to improve cache hit rate
+
+  analyze:
     runs-on: ubuntu-latest
     needs:
-      - test-head
-      - test-base
+      - test-after
+      - test-before
     steps:
       - uses: actions/checkout@v4
 
@@ -46,24 +57,45 @@ jobs:
           chmod +x /usr/local/bin/jq
           jq --version
 
-      - name: Download head test logs
+      - name: Download test logs after the code change
         uses: actions/download-artifact@v4
         with:
-          name: test-logs-head
-          path: /tmp/test-head
+          name: test-logs-after
+          path: /tmp/test-after
 
-      - name: Download base test logs
+      - name: Download test logs before the code change
         uses: actions/download-artifact@v4
         with:
-          name: test-logs-base
-          path: /tmp/test-base
+          name: test-logs-before
+          path: /tmp/test-before
 
       - name: Generate test report
         run: |
           scripts/spark-tests/generate-test-report.sh \
-          /tmp/test-head /tmp/test-base \
+          /tmp/test-after /tmp/test-before \
           > /tmp/test-report.md
           cat /tmp/test-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: /tmp/test-report.md
+          retention-days: 1
+
+  report:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    needs:
+      - analyze
+    steps:
+      - name: Download test report
+        uses: actions/download-artifact@v4
+        with:
+          name: test-report
+          path: /tmp
 
       - name: Publish test report
         uses: marocchino/sticky-pull-request-comment@v2

@@ -3,12 +3,12 @@
 set -euo 'pipefail'
 
 if [ "$#" -ne 2 ]; then
-    echo "Usage: $0 <head-repository> <base-repository>"
+    echo "Usage: $0 <repository-after> <repository-before>"
     exit 1
 fi
 
-head_dir="$1"
-base_dir="$2"
+after_dir="$1"
+before_dir="$2"
 
 project_path="$(git rev-parse --show-toplevel)"
 
@@ -100,15 +100,15 @@ printf '</details>\n\n'
 
 printf '#### Commit Information\n\n'
 
-show_commit_info 'Head' "${head_dir}"
-show_commit_info 'Base' "${base_dir}"
+show_commit_info 'After' "${after_dir}"
+show_commit_info 'Before' "${before_dir}"
 
 printf '\n'
 printf '#### Summary\n\n'
 
 show_summary_header
-collect_metrics 'Head' "${head_dir}" | show_summary 'Head'
-collect_metrics 'Base' "${base_dir}" | show_summary 'Base'
+collect_metrics 'After' "${after_dir}" | show_summary 'After'
+collect_metrics 'Before' "${before_dir}" | show_summary 'Before'
 
 printf '\n'
 printf '#### Details\n\n'
@@ -117,8 +117,8 @@ printf '<details>\n'
 printf '<summary>Gold Data Metrics</summary>\n\n'
 
 cat \
-  <(collect_metrics 'Head' "${head_dir}") \
-  <(collect_metrics 'Base' "${base_dir}") \
+  <(collect_metrics 'After' "${after_dir}") \
+  <(collect_metrics 'Before' "${before_dir}") \
   | show_details
 
 printf '</details>\n'

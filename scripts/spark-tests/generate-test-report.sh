@@ -3,12 +3,12 @@
 set -euo 'pipefail'
 
 if [ "$#" -ne 2 ]; then
-    echo "Usage: $0 <head-test-logs> <base-test-logs>"
+    echo "Usage: $0 <test-logs-after> <test-logs-before>"
     exit 1
 fi
 
-head_dir="$1"
-base_dir="$2"
+after_dir="$1"
+before_dir="$2"
 
 project_path="$(git rev-parse --show-toplevel)"
 tmp_dir="$(mktemp -d)"
@@ -98,26 +98,26 @@ printf '### Spark Test Report\n\n'
 
 printf '#### Commit Information\n\n'
 
-show_commit_info 'Head' "${head_dir}"
-show_commit_info 'Base' "${base_dir}"
+show_commit_info 'After' "${after_dir}"
+show_commit_info 'Before' "${before_dir}"
 
 printf '\n'
 printf '#### Test Summary\n\n'
 
-write_test_summary 'Head' "${head_dir}" "${tmp_dir}/summary.tsv"
-write_test_summary 'Base' "${base_dir}" "${tmp_dir}/summary.tsv"
+write_test_summary 'After' "${after_dir}" "${tmp_dir}/summary.tsv"
+write_test_summary 'Before' "${before_dir}" "${tmp_dir}/summary.tsv"
 
 show_test_summary "${tmp_dir}/summary.tsv"
 
 printf '\n'
 printf '#### Test Details\n\n'
 
-cat "${head_dir}"/*.jsonl > "${tmp_dir}/head.jsonl"
-cat "${base_dir}"/*.jsonl > "${tmp_dir}/base.jsonl"
+cat "${after_dir}"/*.jsonl > "${tmp_dir}/after.jsonl"
+cat "${before_dir}"/*.jsonl > "${tmp_dir}/before.jsonl"
 
 jq -r -f "${project_path}/scripts/spark-tests/count-errors.jq" \
-  --slurpfile baseline "${tmp_dir}/base.jsonl" \
-  "${tmp_dir}/head.jsonl" > "${tmp_dir}/errors.txt"
+  --slurpfile baseline "${tmp_dir}/before.jsonl" \
+  "${tmp_dir}/after.jsonl" > "${tmp_dir}/errors.txt"
 
 printf '<details>\n'
 printf '<summary>Error Counts</summary>\n\n'
@@ -126,12 +126,12 @@ printf '</details>\n\n'
 
 mkdir "${tmp_dir}/passed-tests"
 jq -r -f "${project_path}/scripts/spark-tests/show-passed-tests.jq" \
-  "${tmp_dir}/base.jsonl" > "${tmp_dir}/passed-tests/base"
+  "${tmp_dir}/before.jsonl" > "${tmp_dir}/passed-tests/before"
 jq -r -f "${project_path}/scripts/spark-tests/show-passed-tests.jq" \
-  "${tmp_dir}/head.jsonl" > "${tmp_dir}/passed-tests/head"
+  "${tmp_dir}/after.jsonl" > "${tmp_dir}/passed-tests/after"
 
 pushd "${tmp_dir}/passed-tests" > /dev/null
-diff -U 0 base head > ../passed-tests.diff || true
+diff -U 0 before after > ../passed-tests.diff || true
 popd > /dev/null
 
 printf '<details>\n'

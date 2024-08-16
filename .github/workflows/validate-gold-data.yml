@@ -2,13 +2,11 @@ name: Validate gold data
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - "scripts/spark-gold-data/**"
   pull_request:
-    branches:
-      - main
+    branches: [main]
     paths:
       - "scripts/spark-gold-data/**"
 
@@ -42,12 +40,4 @@ jobs:
         run: |
           env SAIL_UPDATE_GOLD_DATA=1 cargo test
 
-      - name: Detect uncommitted changes
-        run: |
-          status="$(git status --porcelain)"
-          if [ -n "$status" ]; then
-            echo "Uncommitted changes detected:"
-            echo "$status"
-            echo "Please commit all the gold data changes."
-            exit 1
-          fi
+      - uses: ./.github/actions/detect-changes

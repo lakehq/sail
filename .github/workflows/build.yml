@@ -2,40 +2,15 @@ name: Build
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
-permissions:
-  contents: read
-  pull-requests: write
+    branches: [main]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    outputs:
-      test_marker: ${{ steps.info.outputs.test_marker }}
-      test_head_ref: ${{ steps.info.outputs.test_head_ref }}
-      test_base_ref: ${{ steps.info.outputs.test_base_ref }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          # When the workflow is triggered by a pull request event, the commit being pushed
-          # is a parent of the merge commit. So we need a fetch depth of 2 to get the commit message.
-          fetch-depth: 2
-
-      - name: Get job information
-        id: info
-        run: |
-          commit="${{ github.event.pull_request.head.sha || github.sha }}"
-          commit_message="$(git show --pretty='format:%s' -s "${commit}")"
-          test_marker="$(printf '%s' "${commit_message}" | grep -q -i '\[\(spark tests\?\|tests\?\)\]' && printf 'true' || printf 'false')"
-          test_head_ref="${{ github.event_name == 'pull_request' && github.ref || github.event.after || github.sha }}"
-          test_base_ref="${{ github.event_name == 'pull_request' && github.base_ref || github.event.before || github.sha }}"
-          echo "test_marker=${test_marker}" >> "$GITHUB_OUTPUT"
-          echo "test_head_ref=${test_head_ref}" >> "$GITHUB_OUTPUT"
-          echo "test_base_ref=${test_base_ref}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-python@v5
         with:
@@ -52,36 +27,17 @@ jobs:
       - name: Test
         run: cargo test
 
-      - name: Build Python package
-        uses: PyO3/maturin-action@v1
-
-      - name: Save Python package
-        uses: actions/cache/save@v4
+      - name: Cache Python package
+        id: cache-python-package
+        uses: actions/cache@v4
         with:
           path: |
             target/wheels
-          key: python-package-${{ runner.os }}-${{ github.sha }}
+          key: python-package-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+
+      - if: steps.cache-python-package.outputs.cache-hit != 'true'
+        name: Build Python package
+        uses: PyO3/maturin-action@v1
 
   run-spark-tests:
     uses: ./.github/workflows/run-spark-tests.yml
-    if: |
-      (github.event_name == 'pull_request' && github.event.action == 'opened') ||
-      (github.event_name == 'pull_request' && needs.build.outputs.test_marker == 'true') ||
-      github.event_name == 'push'
-    needs:
-      - build
-    with:
-      head_ref: ${{ needs.build.outputs.test_head_ref }}
-      base_ref: ${{ needs.build.outputs.test_base_ref }}
-
-  analyze-gold-data:
-    uses: ./.github/workflows/analyze-gold-data.yml
-    if: |
-      (github.event_name == 'pull_request' && github.event.action == 'opened') ||
-      (github.event_name == 'pull_request' && needs.build.outputs.test_marker == 'true') ||
-      github.event_name == 'push'
-    needs:
-      - build
-    with:
-      head_ref: ${{ needs.build.outputs.test_head_ref }}
-      base_ref: ${{ needs.build.outputs.test_base_ref }}

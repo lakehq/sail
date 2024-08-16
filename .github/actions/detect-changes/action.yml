@@ -1,0 +1,13 @@
+name: Detect changes
+description: Detect uncommitted changes in the Git working directory
+runs:
+  using: composite
+  steps:
+    - run: |
+        status="$(git status --porcelain)"
+        if [ -n "$status" ]; then
+          echo "Uncommitted changes detected:"
+          echo "$status"
+          echo "Please commit all the automated changes."
+          exit 1
+        fi
