@@ -41,3 +41,5 @@ jobs:
 
   run-spark-tests:
     uses: ./.github/workflows/run-spark-tests.yml
+    permissions:
+      pull-requests: write

@@ -18,12 +18,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: tmp/before
-          ref: ${{ info.outputs.sha_before }}
+          ref: ${{ steps.info.outputs.sha_before }}
 
       - uses: actions/checkout@v4
         with:
           path: tmp/after
-          ref: ${{ info.outputs.sha_after }}
+          ref: ${{ steps.info.outputs.sha_after }}
 
       - name: Generate gold data report
         run: |
