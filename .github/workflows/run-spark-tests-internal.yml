@@ -135,9 +135,10 @@ jobs:
         # which can happen occasionally for unknown reasons.
         # The timeout value should be adjusted as we add more tests.
         timeout-minutes: 5
+        env:
+          TEST_RUN_GIT_COMMIT: ${{ inputs.sha }}
+          TEST_RUN_GIT_REF: ${{ inputs.ref }}
         run: |
-          export TEST_RUN_GIT_COMMIT="${{ inputs.sha }}"
-          export TEST_RUN_GIT_REF="${{ inputs.ref }}"
           scripts/spark-tests/run-tests.sh
 
       - name: Upload test logs

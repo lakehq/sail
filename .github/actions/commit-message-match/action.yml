@@ -29,7 +29,7 @@ runs:
             repo: context.repo.repo,
             // When the event is `pull_request`, we must extract the commit message from the head branch,
             // rather than the merge branch created by GitHub.
-            commit_sha: context.payload.pull_request.head.sha || context.sha,
+            ref: context.payload.pull_request.head.sha || context.sha,
           });
           const pattern = process.env.MESSAGE_PATTERN;
           const flags = process.env.MESSAGE_FLAGS;

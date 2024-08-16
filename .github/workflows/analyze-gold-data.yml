@@ -26,6 +26,9 @@ jobs:
           ref: ${{ steps.info.outputs.sha_after }}
 
       - name: Generate gold data report
+        env:
+          REPORT_GIT_REF_BEFORE: ${{ steps.info.outputs.ref_before }}
+          REPORT_GIT_REF_AFTER: ${{ steps.info.outputs.ref_after }}
         run: |
           scripts/common-gold-data/report.sh tmp/after tmp/before > tmp/report.md
           cat tmp/report.md >> "$GITHUB_STEP_SUMMARY"

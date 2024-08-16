@@ -17,11 +17,12 @@ cd "${project_path}"
 function show_commit_info() {
   local name="$1"
   local dir="$2"
+  local ref="$3"
   # shellcheck disable=SC2016
   printf '* **%s**: `%s` (`%s`)\n' \
     "${name}" \
-    "$(git -C "${dir}" rev-parse --abbrev-ref HEAD)" \
-    "$(git -C "${dir}" rev-parse HEAD)"
+    "$(git -C "${dir}" rev-parse --short=7 HEAD)" \
+    "${ref}"
 }
 
 function collect_metrics() {
@@ -66,7 +67,7 @@ function show_summary() {
 }
 
 function show_details() {
-  sort -t$'\t' -k2,3 -k1,1r | awk -F$'\t' '
+  sort -t$'\t' -k2,3 -k1,1 | awk -F$'\t' '
     BEGIN {
       printf "| Group | File | Commit | TP | TN | FP | FN | Total |\n"
       printf "| :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: |\n"
@@ -100,8 +101,8 @@ printf '</details>\n\n'
 
 printf '#### Commit Information\n\n'
 
-show_commit_info 'After' "${after_dir}"
-show_commit_info 'Before' "${before_dir}"
+show_commit_info 'After' "${after_dir}" "${REPORT_GIT_REF_AFTER-HEAD}"
+show_commit_info 'Before' "${before_dir}" "${REPORT_GIT_REF_BEFORE-HEAD}"
 
 printf '\n'
 printf '#### Summary\n\n'
