@@ -75,9 +75,9 @@ fn parse_explain_statement(parser: &mut Parser) -> SqlResult<Statement> {
                 parser.next_token();
                 ExplainMode::Cost
             }
-            _ => return Err(SqlError::invalid(format!("token after EXPLAIN: {:?}", w))),
+            _ => return Err(SqlError::invalid(format!("token after EXPLAIN: {}", w))),
         },
-        x => return Err(SqlError::invalid(format!("token after EXPLAIN: {:?}", x))),
+        x => return Err(SqlError::invalid(format!("token after EXPLAIN: {}", x))),
     };
     // TODO: Properly implement each explain mode:
     //  1. Format the explain output the way Spark does
@@ -679,7 +679,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
         | Statement::LockTables { .. }
         | Statement::UnlockTables
         | Statement::Unload { .. } => Err(SqlError::unsupported(format!(
-            "Unsupported statement: {:?}",
+            "Unsupported statement: {}",
             statement
         ))),
     }
@@ -728,7 +728,7 @@ fn from_ast_table_constraint(constraint: ast::TableConstraint) -> SqlResult<spec
         | ast::TableConstraint::Check { .. }
         | ast::TableConstraint::Index { .. }
         | ast::TableConstraint::FulltextOrSpatial { .. } => {
-            Err(SqlError::unsupported(format!("{:?}", constraint)))
+            Err(SqlError::unsupported(format!("{}", constraint)))
         }
     }
 }

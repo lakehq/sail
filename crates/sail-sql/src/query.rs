@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use sail_common::spec;
 use sqlparser::ast;
 use sqlparser::ast::PivotValueSource;
@@ -5,6 +8,7 @@ use sqlparser::ast::PivotValueSource;
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{from_ast_expression, from_ast_object_name, from_ast_order_by};
 use crate::literal::LiteralValue;
+use crate::utils::normalize_ident;
 
 pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
     let ast::Query {
@@ -18,9 +22,6 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
         locks,
         for_clause,
     } = query;
-    if with.is_some() {
-        return Err(SqlError::todo("WITH clause"));
-    }
     if !limit_by.is_empty() {
         return Err(SqlError::unsupported("LIMIT BY clause"));
     }
@@ -33,6 +34,13 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
     if for_clause.is_some() {
         return Err(SqlError::unsupported("FOR clause"));
     }
+
+    let _ctes = if let Some(with) = with {
+        from_ast_with(with)?
+    } else {
+        HashMap::new()
+    };
+
     let plan = from_ast_set_expr(*body)?;
 
     let plan = if !order_by.is_empty() {
@@ -559,9 +567,38 @@ fn with_ast_table_alias(
         Some(ast::TableAlias { name, columns }) => {
             Ok(spec::QueryPlan::new(spec::QueryNode::TableAlias {
                 input: Box::new(plan),
-                name: name.value.into(),
+                name: spec::Identifier::from(normalize_ident(name)),
                 columns: columns.into_iter().map(|c| c.value.into()).collect(),
             }))
         }
     }
+}
+
+pub(crate) fn from_ast_with(with: ast::With) -> SqlResult<HashMap<String, Arc<spec::QueryPlan>>> {
+    let mut ctes: HashMap<String, Arc<spec::QueryPlan>> = HashMap::new();
+    for cte in with.cte_tables {
+        let cte_name = normalize_ident(cte.alias.name.clone());
+        if ctes.contains_key(&cte_name) {
+            return Err(SqlError::InvalidArgument(format!(
+                "WITH query name {cte_name} specified more than once."
+            )));
+        }
+        let plan = if with.recursive {
+            from_recursive_cte(cte_name.clone(), *cte.query)?
+        } else {
+            from_ast_query(*cte.query)?
+        };
+        let plan = with_ast_table_alias(plan, Some(cte.alias))?;
+        ctes.insert(cte_name, Arc::new(plan));
+    }
+    Ok(ctes)
+}
+
+pub(crate) fn from_recursive_cte(
+    cte_name: String,
+    cte_query: ast::Query,
+) -> SqlResult<spec::QueryPlan> {
+    let _ = cte_name;
+    let _ = cte_query;
+    Err(SqlError::todo("from_recursive_cte"))
 }
