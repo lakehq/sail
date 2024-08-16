@@ -1625,7 +1625,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: randn"
+        "success": "ok"
       }
     },
     {
@@ -1647,7 +1647,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: randn"
+        "success": "ok"
       }
     },
     {
@@ -1669,7 +1669,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: randn"
+        "success": "ok"
       }
     },
     {

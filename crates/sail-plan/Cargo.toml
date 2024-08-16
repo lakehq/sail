@@ -34,3 +34,4 @@ num-traits = { workspace = true }
 tokio = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
+rand_distr = { workspace = true }
