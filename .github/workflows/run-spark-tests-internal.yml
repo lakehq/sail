@@ -77,7 +77,7 @@ jobs:
           path: |
             opt/spark/python/dist/pyspark-*.tar.gz
           # We must use `format()` to define the key here since nested variable substitution is not supported.
-          key: ${{ format('spark-tests-pyspark-{0}-{1}-{2}-{3}', runner.os, runner.arch, inputs.spark_version, hashFiles(format('scripts/spark-tests/spark-{0}.patch', inputs.spark_version), 'scripts/spark-tests/build-pyspark.sh')) }}
+          key: ${{ format('spark-tests-pyspark-{0}-{1}-{2}-{3}', inputs.spark_version, runner.os, runner.arch, hashFiles(format('scripts/spark-tests/spark-{0}.patch', inputs.spark_version), 'scripts/spark-tests/build-pyspark.sh')) }}
 
       - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-pyspark.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
