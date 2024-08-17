@@ -39,7 +39,7 @@ impl<'a> CatalogManager<'a> {
         };
         let database = self.get_database(database)?;
         if database.is_none() {
-            return exec_err!("database does not exist: {}", database_name);
+            return exec_err!("Database not found: {database_name}");
         }
         let state = self.ctx.state_ref();
         let mut state = state.write();

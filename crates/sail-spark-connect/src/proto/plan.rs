@@ -1146,7 +1146,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 } = x;
                 let table = match db_name {
                     Some(x) => parse_object_name(x.as_str())?.child(table_name.into()),
-                    None => spec::ObjectName::new_unqualified(table_name.into()),
+                    None => parse_object_name(table_name.as_str())?,
                 };
                 Ok(spec::CommandNode::ListColumns { table })
             }
@@ -1163,7 +1163,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 } = x;
                 let table = match db_name {
                     Some(x) => parse_object_name(x.as_str())?.child(table_name.into()),
-                    None => spec::ObjectName::new_unqualified(table_name.into()),
+                    None => parse_object_name(table_name.as_str())?,
                 };
                 Ok(spec::CommandNode::GetTable { table })
             }
@@ -1191,7 +1191,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 } = x;
                 let table = match db_name {
                     Some(x) => parse_object_name(x.as_str())?.child(table_name.into()),
-                    None => spec::ObjectName::new_unqualified(table_name.into()),
+                    None => parse_object_name(table_name.as_str())?,
                 };
                 Ok(spec::CommandNode::TableExists { table })
             }

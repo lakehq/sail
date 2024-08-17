@@ -314,10 +314,13 @@ pub(crate) async fn handle_execute_create_dataframe_view(
     };
     let df = DataFrame::new(ctx.state(), plan);
     let table_ref = TableReference::from(view.name.as_str());
-    let _ = view.is_global;
+    let _ = view.is_global; // TODO: global view
     if view.replace {
         ctx.deregister_table(table_ref.clone())?;
     }
+    // FIXME: This is creating a table with TableType::View, but it should be TableType::Temporary.
+    //  Once this is fixed update the match statement in `impl From<TableType> for TableTypeName`
+    //  in `crates/sail-plan/src/catalog/table.rs`
     ctx.register_table(table_ref, df.into_view())?;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     if metadata.reattachable {

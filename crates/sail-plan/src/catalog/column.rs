@@ -1,4 +1,4 @@
-use datafusion_common::{exec_datafusion_err, Result, TableReference};
+use datafusion_common::{exec_datafusion_err, exec_err, Result, TableReference};
 use sail_common::unwrap_or;
 use serde::{Deserialize, Serialize};
 
@@ -45,7 +45,7 @@ impl<'a> CatalogManager<'a> {
         );
         let table = unwrap_or!(
             schema_provider.table(table_name.as_ref()).await?,
-            return Ok(Vec::new())
+            return exec_err!("Table not found: {table_name}")
         );
         table
             .schema()
