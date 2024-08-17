@@ -21,10 +21,11 @@ jobs:
         env:
           GIT_TAG_REF: ${{ github.ref }}
         run: |
-          case "${GIT_TAG_REF#refs/tags/}" in
+          tag="${GIT_TAG_REF#refs/tags/}"
+          case "$tag" in
             docs/dev/v*)
               stage=dev
-              version=${tag#docs/dev/v}
+              version="${tag#docs/dev/v}"
               ;;
             docs/dev/latest)
               stage=dev
@@ -32,7 +33,7 @@ jobs:
               ;;
             docs/prod/v*)
               stage=prod
-              version=${tag#docs/prod/v}
+              version="${tag#docs/prod/v}"
               ;;
             docs/prod/latest)
               stage=prod
@@ -43,6 +44,10 @@ jobs:
               exit 1
               ;;
           esac
+          if [[ "$version" == *"/"* ]]; then
+            echo "Invalid version: $version"
+            exit 1
+          fi
           echo "stage=$stage" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
         shell: bash
