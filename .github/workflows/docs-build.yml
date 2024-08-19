@@ -62,6 +62,11 @@ jobs:
           key: python-package-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
 
       - if: steps.cache-python-package.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - if: steps.cache-python-package.outputs.cache-hit != 'true'
         name: Set up Rust
         uses: ./.github/actions/setup-rust
 
