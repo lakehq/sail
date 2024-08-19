@@ -12,19 +12,14 @@ on:
         type: string
         required: true
 
-env:
-  RELEASE_ENVIRONMENT: docs/${{ inputs.stage }}
-  RELEASE_ARTIFACT_NAME: docs-dist-${{ inputs.stage }}
-  RELEASE_SITE_URL: "https://${{ inputs.stage == 'prod' && 'docs' || 'docs.dev' }}.lakesail.com/sail/${{ inputs.version }}/"
-
 jobs:
   build:
     name: Build
     uses: ./.github/workflows/docs-build.yml
     with:
-      environment: ${{ env.RELEASE_ENVIRONMENT }}
-      artifact_name: ${{ env.RELEASE_ARTIFACT_NAME }}
-      site_url: ${{ env.RELEASE_SITE_URL }}
+      environment: docs/${{ inputs.stage }}
+      artifact_name: docs-dist-${{ inputs.stage }}
+      site_url: "https://${{ inputs.stage == 'prod' && 'docs' || 'docs.dev' }}.lakesail.com/sail/${{ inputs.version }}/"
 
   deploy:
     name: Deploy
@@ -34,6 +29,6 @@ jobs:
     needs:
       - build
     with:
-      environment: ${{ env.RELEASE_ENVIRONMENT }}
-      artifact_name: ${{ env.RELEASE_ARTIFACT_NAME }}
-      site_url: ${{ env.RELEASE_SITE_URL }}
+      environment: docs/${{ inputs.stage }}
+      artifact_name: docs-dist-${{ inputs.stage }}
+      site_url: "https://${{ inputs.stage == 'prod' && 'docs' || 'docs.dev' }}.lakesail.com/sail/${{ inputs.version }}/"
