@@ -39,6 +39,9 @@ jobs:
           result-encoding: string
           script: |
             const url = new URL(process.env.SITE_URL);
+            if (!url.pathname.endsWith("/")) {
+              throw new Error("The site URL must end with '/'");
+            }
             return url.pathname;
 
       - name: Configure AWS credentials
@@ -46,7 +49,6 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-          mask-aws-account-id: true
 
       - name: Download artifact
         uses: actions/download-artifact@v4
@@ -64,4 +66,4 @@ jobs:
 
       - name: Invalidate CloudFront cache
         run: |
-          aws cloudfront create-invalidation --distribution-id ${{ vars.AWS_CLOUDFRONT_DISTRIBUTION_ID }} --paths '/*'
+          aws cloudfront create-invalidation --distribution-id ${{ vars.AWS_CLOUDFRONT_DISTRIBUTION_ID }} --paths '${{ steps.site-base-url.outputs.result }}*'
