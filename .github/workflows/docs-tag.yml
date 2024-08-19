@@ -60,6 +60,7 @@ jobs:
     permissions:
       id-token: write
     needs:
+      - setup
       - build
     with:
       stage: ${{ matrix.stage }}
