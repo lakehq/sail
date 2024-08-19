@@ -1,5 +1,5 @@
 use arrow::datatypes::DataType;
-use datafusion::functions_array::expr_fn;
+use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, BinaryExpr, Operator};
 

@@ -217,7 +217,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: btrim"
+        "success": "ok"
       }
     },
     {
@@ -239,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: btrim"
+        "success": "ok"
       }
     },
     {
@@ -1469,7 +1469,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: ltrim"
+        "success": "ok"
       }
     },
     {
@@ -2441,7 +2441,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rtrim"
+        "success": "ok"
       }
     },
     {
@@ -3429,7 +3429,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: trim"
+        "success": "ok"
       }
     },
     {
@@ -3451,7 +3451,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: trim"
+        "success": "ok"
       }
     },
     {
@@ -3473,7 +3473,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: trim"
+        "success": "ok"
       }
     },
     {
@@ -3517,7 +3517,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: ltrim"
+        "success": "ok"
       }
     },
     {
@@ -3561,7 +3561,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rtrim"
+        "success": "ok"
       }
     },
     {
