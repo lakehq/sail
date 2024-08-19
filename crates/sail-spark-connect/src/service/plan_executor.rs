@@ -19,6 +19,7 @@ use datafusion_common::config::{ConfigFileType, TableOptions};
 use datafusion_expr::ScalarUDF;
 use sail_common::spec;
 use sail_common::utils::rename_logical_plan;
+use sail_plan::extension::source::dataframe_temporary_table::DataFrameTemporaryTableProvider;
 use sail_plan::resolver::plan::NamedPlan;
 use sail_plan::resolver::PlanResolver;
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
@@ -318,10 +319,12 @@ pub(crate) async fn handle_execute_create_dataframe_view(
     if view.replace {
         ctx.deregister_table(table_ref.clone())?;
     }
-    // FIXME: This is creating a table with TableType::View, but it should be TableType::Temporary.
-    //  Once this is fixed update the match statement in `impl From<TableType> for TableTypeName`
-    //  in `crates/sail-plan/src/catalog/table.rs`
-    ctx.register_table(table_ref, df.into_view())?;
+    ctx.register_table(
+        table_ref,
+        Arc::new(DataFrameTemporaryTableProvider::new(
+            df.logical_plan().clone(),
+        )),
+    )?;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     if metadata.reattachable {
         tx.send(ExecutorOutput::complete()).await?;

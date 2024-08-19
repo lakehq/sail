@@ -36,14 +36,14 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
         return Err(SqlError::unsupported("FOR clause"));
     }
 
-    let mut ctes = if let Some(with) = with {
+    let ctes = if let Some(with) = with {
         from_ast_with(with)?
     } else {
         HashMap::new()
     };
 
     let plan = from_ast_set_expr(*body)?;
-    let plan = add_ctes_to_plan(&mut ctes, plan);
+    let plan = add_ctes_to_plan(&ctes, plan);
 
     let plan = if !order_by.is_empty() {
         let order_by = order_by

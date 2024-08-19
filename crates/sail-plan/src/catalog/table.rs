@@ -41,9 +41,7 @@ impl From<TableType> for TableTypeName {
         match table_type {
             TableType::Base => TableTypeName::Managed, // TODO: Could also be EXTERNAL
             TableType::Temporary => TableTypeName::Temporary,
-            // FIXME: Once `handle_execute_create_dataframe_view` registers as TableType::Temporary,
-            //  change this back to TableTypeName::View
-            TableType::View => TableTypeName::Temporary,
+            TableType::View => TableTypeName::View,
         }
     }
 }

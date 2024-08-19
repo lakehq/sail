@@ -9,7 +9,7 @@ use datafusion_expr::{Extension, LogicalPlan};
 mod catalog;
 pub mod config;
 pub mod error;
-mod extension;
+pub mod extension;
 pub mod formatter;
 pub mod function;
 pub mod resolver;
