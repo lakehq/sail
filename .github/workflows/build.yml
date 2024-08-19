@@ -50,19 +50,20 @@ jobs:
 
   docs-build:
     name: Docs build
-    if: ${{ github.event_name == 'pull_request' }}
     uses: ./.github/workflows/docs-build.yml
+    strategy:
+      matrix:
+        stage: ${{ fromJSON(github.event_name == 'push' && '["dev", "prod"]' || '["dev"]') }}
     needs:
       - build
     with:
-      stage: dev
+      stage: ${{ matrix.stage }}
       version: main
-      deploy: false
 
-  docs-build-and-deploy:
-    name: Docs build and deploy
+  docs-deploy:
+    name: Docs deploy
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    uses: ./.github/workflows/docs-build.yml
+    uses: ./.github/workflows/docs-deploy.yml
     strategy:
       max-parallel: 1
       matrix:
@@ -70,8 +71,7 @@ jobs:
     permissions:
       id-token: write
     needs:
-      - build
+      - docs-build
     with:
       stage: ${{ matrix.stage }}
       version: main
-      deploy: true

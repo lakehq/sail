@@ -1,11 +1,7 @@
 name: Docs build
 
-# This workflow uses the following variables from the environment:
+# This workflow uses the following variable(s) from the environment:
 # - FATHOM_SITE_ID (optional)
-# - AWS_REGION (required for deployment)
-# - AWS_ROLE_ARN (required for deployment)
-# - AWS_S3_BUCKET (required for deployment)
-# - AWS_CLOUDFRONT_DISTRIBUTION_ID (required for deployment)
 
 on:
   workflow_call:
@@ -18,14 +14,6 @@ on:
         description: The documentation version ("main", "latest", or a version number)
         type: string
         required: true
-      deploy:
-        description: Whether to deploy the documentation site
-        type: boolean
-        default: false
-
-env:
-  ARTIFACT_NAME: docs-dist-${{ inputs.stage }}-${{ inputs.version }}
-  SITE_URL: "https://${{ inputs.stage == 'prod' && 'docs' || 'docs.dev' }}.lakesail.com/sail/${{ inputs.version }}/"
 
 jobs:
   build:
@@ -90,7 +78,7 @@ jobs:
 
       - name: Build VitePress site
         env:
-          SAIL_SITE_URL: ${{ env.SITE_URL }}
+          SAIL_SITE_URL: "https://${{ inputs.stage == 'prod' && 'docs' || 'docs.dev' }}.lakesail.com/sail/${{ inputs.version }}/"
           # The Fathom Analytics script will not be added if the site ID is not set.
           SAIL_FATHOM_SITE_ID: ${{ vars.FATHOM_SITE_ID }}
         run: |
@@ -106,52 +94,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ARTIFACT_NAME }}
+          name: docs-dist-${{ inputs.stage }}-${{ inputs.version }}
           path: docs/.vitepress/dist
           retention-days: 7
-
-  deploy:
-    name: Deploy
-    if: ${{ inputs.deploy }}
-    runs-on: ubuntu-latest
-    environment: docs/${{ inputs.stage }}
-    permissions:
-      id-token: write
-    steps:
-      - name: Get site base URL
-        id: site-base-url
-        uses: actions/github-script@v7
-        env:
-          SITE_URL: ${{ env.SITE_URL }}
-        with:
-          result-encoding: string
-          script: |
-            const url = new URL(process.env.SITE_URL);
-            if (!url.pathname.endsWith("/")) {
-              throw new Error("The site URL must end with '/'");
-            }
-            return url.pathname;
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.ARTIFACT_NAME }}
-          path: docs/.vitepress/dist
-
-      - name: Display artifact directory structure
-        run: find . -type f
-        working-directory: docs/.vitepress/dist
-
-      - name: Sync to S3
-        run: |
-          aws s3 sync docs/.vitepress/dist s3://${{ vars.AWS_S3_BUCKET }}${{ steps.site-base-url.outputs.result }} --delete
-
-      - name: Invalidate CloudFront cache
-        run: |
-          aws cloudfront create-invalidation --distribution-id ${{ vars.AWS_CLOUDFRONT_DISTRIBUTION_ID }} --paths '${{ steps.site-base-url.outputs.result }}*'

@@ -39,9 +39,21 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
         shell: bash
 
-  release:
-    name: Release
+  build:
+    name: Build
     uses: ./.github/workflows/docs-build.yml
+    strategy:
+      matrix:
+        stage: [dev, prod]
+    needs:
+      - setup
+    with:
+      stage: ${{ matrix.stage }}
+      version: ${{ needs.setup.outputs.version }}
+
+  deploy:
+    name: Deploy
+    uses: ./.github/workflows/docs-deploy.yml
     strategy:
       max-parallel: 1
       matrix:
@@ -49,8 +61,7 @@ jobs:
     permissions:
       id-token: write
     needs:
-      - setup
+      - build
     with:
       stage: ${{ matrix.stage }}
       version: ${{ needs.setup.outputs.version }}
-      deploy: true
