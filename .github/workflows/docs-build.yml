@@ -1,29 +1,25 @@
 name: Docs build
 
-# This workflow uses the following variables from the environment:
+# This workflow uses the following variable(s) from the environment:
 # - FATHOM_SITE_ID (optional)
 
 on:
   workflow_call:
     inputs:
-      environment:
-        description: The optional environment for documentation site build
+      stage:
+        description: The stage ("test", "dev", or "prod") for documentation build
         type: string
-        default: ""
-      artifact_name:
-        description: The name of the documentation site artifact, if upload is needed
+        required: true
+      version:
+        description: The documentation version ("main", "latest", or a version number)
         type: string
-        default: ""
-      site_url:
-        description: The documentation site URL to override the default value in VitePress configuration
-        type: string
-        default: ""
+        required: true
 
 jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    environment: docs/${{ inputs.stage }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -82,7 +78,7 @@ jobs:
 
       - name: Build VitePress site
         env:
-          SAIL_SITE_URL: ${{ inputs.site_url }}
+          SAIL_SITE_URL: "https://${{ inputs.stage == 'prod' && 'docs' || 'docs.dev' }}.lakesail.com/sail/${{ inputs.version }}/"
           # The Fathom Analytics script will not be added if the site ID is not set.
           SAIL_FATHOM_SITE_ID: ${{ vars.FATHOM_SITE_ID }}
         run: |
@@ -96,9 +92,8 @@ jobs:
         shell: bash
 
       - name: Upload artifact
-        if: ${{ inputs.artifact_name != '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.artifact_name }}
+          name: docs-dist-${{ inputs.stage }}-${{ inputs.version }}
           path: docs/.vitepress/dist
           retention-days: 7

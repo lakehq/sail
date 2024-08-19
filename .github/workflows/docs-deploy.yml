@@ -1,6 +1,6 @@
 name: Docs deploy
 
-# This workflow uses the following variables from the environment:
+# This workflow uses the following variable(s) from the environment:
 # - AWS_REGION
 # - AWS_ROLE_ARN
 # - AWS_S3_BUCKET
@@ -9,16 +9,12 @@ name: Docs deploy
 on:
   workflow_call:
     inputs:
-      environment:
-        description: The environment for documentation site deployment
+      stage:
+        description: The stage ("dev" or "prod") for documentation deployment
         type: string
         required: true
-      artifact_name:
-        description: The name of the documentation site artifact
-        type: string
-        required: true
-      site_url:
-        description: The documentation site URL
+      version:
+        description: The documentation version ("main", "latest", or a version number)
         type: string
         required: true
 
@@ -26,24 +22,10 @@ jobs:
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    environment: docs/${{ inputs.stage }}
     permissions:
       id-token: write
     steps:
-      - name: Get site base URL
-        id: site-base-url
-        uses: actions/github-script@v7
-        env:
-          SITE_URL: ${{ inputs.site_url }}
-        with:
-          result-encoding: string
-          script: |
-            const url = new URL(process.env.SITE_URL);
-            if (!url.pathname.endsWith("/")) {
-              throw new Error("The site URL must end with '/'");
-            }
-            return url.pathname;
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -53,7 +35,7 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: ${{ inputs.artifact_name }}
+          name: docs-dist-${{ inputs.stage }}-${{ inputs.version }}
           path: docs/.vitepress/dist
 
       - name: Display artifact directory structure
@@ -62,8 +44,8 @@ jobs:
 
       - name: Sync to S3
         run: |
-          aws s3 sync docs/.vitepress/dist s3://${{ vars.AWS_S3_BUCKET }}${{ steps.site-base-url.outputs.result }} --delete
+          aws s3 sync docs/.vitepress/dist s3://${{ vars.AWS_S3_BUCKET }}/sail/${{ inputs.version }}/ --delete
 
       - name: Invalidate CloudFront cache
         run: |
-          aws cloudfront create-invalidation --distribution-id ${{ vars.AWS_CLOUDFRONT_DISTRIBUTION_ID }} --paths '${{ steps.site-base-url.outputs.result }}*'
+          aws cloudfront create-invalidation --distribution-id ${{ vars.AWS_CLOUDFRONT_DISTRIBUTION_ID }} --paths '/sail/${{ inputs.version }}/*'

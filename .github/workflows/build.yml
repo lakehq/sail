@@ -50,24 +50,28 @@ jobs:
 
   docs-build:
     name: Docs build
-    if: ${{ github.event_name == 'pull_request' }}
     uses: ./.github/workflows/docs-build.yml
+    strategy:
+      matrix:
+        stage: ${{ fromJSON(github.event_name == 'push' && '["dev", "prod"]' || '["test"]') }}
     needs:
       - build
+    with:
+      stage: ${{ matrix.stage }}
+      version: main
 
-  docs-release:
-    name: Docs release
+  docs-deploy:
+    name: Docs deploy
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/docs-deploy.yml
     strategy:
       max-parallel: 1
       matrix:
         stage: [dev, prod]
-    uses: ./.github/workflows/docs-release.yml
     permissions:
       id-token: write
     needs:
-      - build
+      - docs-build
     with:
-      environment: docs/${{ matrix.stage }}
-      artifact_name: docs-dist-${{ matrix.stage }}
-      site_url: "https://${{ matrix.stage == 'prod' && 'docs' || 'docs.dev' }}.lakesail.com/sail/main/"
+      stage: ${{ matrix.stage }}
+      version: main
