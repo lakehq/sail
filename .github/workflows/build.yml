@@ -42,8 +42,36 @@ jobs:
 
   spark-tests:
     name: Spark tests
-    uses: ./.github/workflows/run-spark-tests.yml
+    uses: ./.github/workflows/spark-tests.yml
     permissions:
       pull-requests: write
     needs:
       - build
+
+  docs-build:
+    name: Docs build
+    uses: ./.github/workflows/docs-build.yml
+    strategy:
+      matrix:
+        stage: ${{ fromJSON(github.event_name == 'push' && '["dev", "prod"]' || '["test"]') }}
+    needs:
+      - build
+    with:
+      stage: ${{ matrix.stage }}
+      version: main
+
+  docs-deploy:
+    name: Docs deploy
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/docs-deploy.yml
+    strategy:
+      max-parallel: 1
+      matrix:
+        stage: [dev, prod]
+    permissions:
+      id-token: write
+    needs:
+      - docs-build
+    with:
+      stage: ${{ matrix.stage }}
+      version: main

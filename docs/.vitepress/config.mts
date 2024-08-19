@@ -16,7 +16,7 @@ import { TreeNode } from "./theme/utils/tree";
 
 class Site {
   static url(): string {
-    return process.env.SAIL_SITE_URL ?? "https://localhost/sail/main/";
+    return process.env.SAIL_SITE_URL || "https://localhost/sail/main/";
   }
 
   static base(): string {
@@ -42,7 +42,7 @@ class Site {
    * @returns The library version.
    */
   static libVersion(): string {
-    return process.env.SAIL_VERSION ?? "0.0.0";
+    return process.env.SAIL_VERSION || "0.0.0";
   }
 }
 

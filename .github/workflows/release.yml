@@ -6,9 +6,6 @@ on:
       - "v*"
       - "test/v*"
 
-permissions:
-  contents: read
-
 jobs:
   verify:
     name: Verify

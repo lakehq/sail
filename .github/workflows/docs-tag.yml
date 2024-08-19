@@ -1,0 +1,67 @@
+name: Docs tag push
+
+on:
+  push:
+    tags:
+      - "docs/v*"
+      - "docs/latest"
+
+jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.info.outputs.version }}
+    steps:
+      - name: Collect release information
+        id: info
+        env:
+          GIT_TAG_REF: ${{ github.ref }}
+        run: |
+          tag="${GIT_TAG_REF#refs/tags/}"
+          case "$tag" in
+            docs/v*)
+              version="${tag#docs/v}"
+              ;;
+            docs/latest)
+              version=latest
+              ;;
+            *)
+              echo "Invalid tag reference: ${GIT_TAG_REF}"
+              exit 1
+              ;;
+          esac
+          if [[ "$version" == *"/"* ]]; then
+            echo "Invalid version: $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+        shell: bash
+
+  build:
+    name: Build
+    uses: ./.github/workflows/docs-build.yml
+    strategy:
+      matrix:
+        stage: [dev, prod]
+    needs:
+      - setup
+    with:
+      stage: ${{ matrix.stage }}
+      version: ${{ needs.setup.outputs.version }}
+
+  deploy:
+    name: Deploy
+    uses: ./.github/workflows/docs-deploy.yml
+    strategy:
+      max-parallel: 1
+      matrix:
+        stage: [dev, prod]
+    permissions:
+      id-token: write
+    needs:
+      - setup
+      - build
+    with:
+      stage: ${{ matrix.stage }}
+      version: ${{ needs.setup.outputs.version }}
