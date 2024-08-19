@@ -42,8 +42,32 @@ jobs:
 
   spark-tests:
     name: Spark tests
-    uses: ./.github/workflows/run-spark-tests.yml
+    uses: ./.github/workflows/spark-tests.yml
     permissions:
       pull-requests: write
     needs:
       - build
+
+  docs-build:
+    name: Docs build
+    if: ${{ github.event_name == 'pull_request' }}
+    uses: ./.github/workflows/docs-build.yml
+    needs:
+      - build
+
+  docs-release:
+    name: Docs release
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    strategy:
+      max-parallel: 1
+      matrix:
+        stage: [dev, prod]
+    uses: ./.github/workflows/docs-release.yml
+    permissions:
+      id-token: write
+    needs:
+      - build
+    with:
+      environment: docs/${{ matrix.stage }}
+      artifact_name: docs-dist-${{ matrix.stage }}
+      site_url: "https://${{ matrix.stage == 'prod' && 'docs' || 'docs.dev' }}.lakesail.com/sail/main/"

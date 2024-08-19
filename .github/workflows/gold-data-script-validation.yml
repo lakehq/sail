@@ -1,4 +1,4 @@
-name: Validate gold data
+name: Gold data script validation
 
 on:
   push:

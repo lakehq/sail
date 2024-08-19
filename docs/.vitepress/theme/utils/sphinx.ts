@@ -97,8 +97,8 @@ async function loadSphinxPages(): Promise<SphinxPage[]> {
         normalizePath(path.relative(SPHINX_BUILD_OUTPUT, file))
           .replace(/(^|\/)index\.fjson$/, "$1")
           .replace(/\.fjson$/, ".html");
-      const parent =
-        data.parents?.length > 0 ? data.parents[data.parents.length - 1] : null;
+      const parents = data.parents ?? [];
+      const parent = parents.length > 0 ? parents[parents.length - 1] : null;
       return new SphinxPage({
         current: { link: link, title: data.title },
         parent: resolveLink(parent, link),

@@ -77,16 +77,17 @@ class TreeNode<T> {
       if (traversal.length > items.length) {
         error("previous or next links form a cycle");
       }
-      if (current.next() === undefined) {
+      const next = current.next();
+      if (next === undefined) {
         current = undefined;
       } else {
-        const next = lookup(current.next()).data;
-        if (next.prev() !== current.name()) {
+        const item = lookup(next).data;
+        if (item.prev() !== current.name()) {
           error(
-            `next node '${next.name()}' does not point to current node '${current.name()}'`,
+            `next node '${item.name()}' does not point to current node '${current.name()}'`,
           );
         }
-        current = next;
+        current = item;
       }
     }
     if (traversal.length !== items.length) {
@@ -120,11 +121,11 @@ class TreeNode<T> {
   static fromPaths<T extends PathLike>(
     items: T[],
     prefix?: string[],
-  ): TreeNode<T>[] {
+  ): TreeNode<T | null>[] {
     if (prefix === undefined) {
       prefix = [];
     }
-    const roots: TreeNode<T>[] = [];
+    const roots: TreeNode<T | null>[] = [];
 
     for (const item of items) {
       const parts = item.path();
@@ -159,18 +160,19 @@ class TreeNode<T> {
       }
     }
 
-    function sort(trees: TreeNode<T>[]): void {
+    function sort(trees: TreeNode<T | null>[]): void {
       trees.sort((a, b) => {
         const rankA = a.data?.rank();
         const rankB = b.data?.rank();
-        if (rankA === undefined && rankB !== undefined) {
-          return 1;
+        if (rankA !== undefined && rankB !== undefined) {
+          const diff = rankA - rankB;
+          return diff !== 0 ? diff : a.name.localeCompare(b.name);
         }
         if (rankA !== undefined && rankB === undefined) {
           return -1;
         }
-        if (rankA !== rankB) {
-          return rankA - rankB;
+        if (rankA === undefined && rankB !== undefined) {
+          return 1;
         }
         return a.name.localeCompare(b.name);
       });
