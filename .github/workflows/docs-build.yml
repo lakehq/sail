@@ -24,7 +24,6 @@ on:
         default: false
 
 env:
-  ENVIRONMENT: docs/${{ inputs.stage }}
   ARTIFACT_NAME: docs-dist-${{ inputs.stage }}-${{ inputs.version }}
   SITE_URL: "https://${{ inputs.stage == 'prod' && 'docs' || 'docs.dev' }}.lakesail.com/sail/${{ inputs.version }}/"
 
@@ -32,7 +31,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    environment: ${{ env.ENVIRONMENT }}
+    environment: docs/${{ inputs.stage }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -115,7 +114,7 @@ jobs:
     name: Deploy
     if: ${{ inputs.deploy }}
     runs-on: ubuntu-latest
-    environment: ${{ env.ENVIRONMENT }}
+    environment: docs/${{ inputs.stage }}
     permissions:
       id-token: write
     steps:
