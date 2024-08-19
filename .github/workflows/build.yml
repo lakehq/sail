@@ -54,11 +54,15 @@ jobs:
     uses: ./.github/workflows/docs-build.yml
     needs:
       - build
+    with:
+      stage: dev
+      version: main
+      deploy: false
 
-  docs-release:
-    name: Docs release
+  docs-build-and-deploy:
+    name: Docs build and deploy
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    uses: ./.github/workflows/docs-release.yml
+    uses: ./.github/workflows/docs-build.yml
     strategy:
       max-parallel: 1
       matrix:
@@ -70,3 +74,4 @@ jobs:
     with:
       stage: ${{ matrix.stage }}
       version: main
+      deploy: true

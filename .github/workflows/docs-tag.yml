@@ -1,4 +1,4 @@
-name: Docs release (tag push)
+name: Docs tag push
 
 on:
   push:
@@ -41,7 +41,7 @@ jobs:
 
   release:
     name: Release
-    uses: ./.github/workflows/docs-release.yml
+    uses: ./.github/workflows/docs-build.yml
     strategy:
       max-parallel: 1
       matrix:
@@ -53,3 +53,4 @@ jobs:
     with:
       stage: ${{ matrix.stage }}
       version: ${{ needs.setup.outputs.version }}
+      deploy: true
