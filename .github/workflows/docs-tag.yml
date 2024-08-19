@@ -11,7 +11,6 @@ jobs:
     name: Setup
     runs-on: ubuntu-latest
     outputs:
-      stage: ${{ steps.info.outputs.stage }}
       version: ${{ steps.info.outputs.version }}
     steps:
       - name: Collect release information

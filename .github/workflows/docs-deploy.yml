@@ -10,7 +10,7 @@ on:
   workflow_call:
     inputs:
       stage:
-        description: The stage ("dev" or "prod") for documentation release
+        description: The stage ("dev" or "prod") for documentation deployment
         type: string
         required: true
       version:

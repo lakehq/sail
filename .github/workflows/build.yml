@@ -53,7 +53,7 @@ jobs:
     uses: ./.github/workflows/docs-build.yml
     strategy:
       matrix:
-        stage: ${{ fromJSON(github.event_name == 'push' && '["dev", "prod"]' || '["dev"]') }}
+        stage: ${{ fromJSON(github.event_name == 'push' && '["dev", "prod"]' || '["test"]') }}
     needs:
       - build
     with:
