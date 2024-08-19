@@ -59,7 +59,6 @@ jobs:
       id-token: write
     needs:
       - setup
-    environment: ${{ startsWith(github.ref, 'refs/tags/docs/prod/') && 'docs/prod' || 'docs/dev' }}
     with:
-      artifact_name: docs-dist
-      site_url: "${{ needs.setup.outputs.stage == 'prod' && 'https://docs.lakesail.com/sail/' || 'https://docs.dev.lakesail.com/sail/' }}${{ needs.setup.outputs.version }}/"
+      stage: ${{ needs.setup.outputs.stage }}
+      version: ${{ needs.setup.outputs.version }}

@@ -3,27 +3,28 @@ name: Docs release
 on:
   workflow_call:
     inputs:
-      environment:
-        description: The environment for documentation site deployment
+      stage:
+        description: The stage ("dev" or "prod") for documentation release
         type: string
         required: true
-      artifact_name:
-        description: The name of the documentation site artifact
+      version:
+        description: The documentation version ("main", "latest", or a version number)
         type: string
         required: true
-      site_url:
-        description: The documentation site URL
-        type: string
-        required: true
+
+env:
+  RELEASE_ENVIRONMENT: docs/${{ inputs.stage }}
+  RELEASE_ARTIFACT_NAME: docs-dist-${{ inputs.stage }}
+  RELEASE_SITE_URL: "https://${{ inputs.stage == 'prod' && 'docs' || 'docs.dev' }}.lakesail.com/sail/${{ inputs.version }}/"
 
 jobs:
   build:
     name: Build
     uses: ./.github/workflows/docs-build.yml
     with:
-      environment: ${{ inputs.environment }}
-      artifact_name: ${{ inputs.artifact_name }}
-      site_url: ${{ inputs.site_url }}
+      environment: ${{ env.RELEASE_ENVIRONMENT }}
+      artifact_name: ${{ env.RELEASE_ARTIFACT_NAME }}
+      site_url: ${{ env.RELEASE_SITE_URL }}
 
   deploy:
     name: Deploy
@@ -33,6 +34,6 @@ jobs:
     needs:
       - build
     with:
-      environment: ${{ inputs.environment }}
-      artifact_name: ${{ inputs.artifact_name }}
-      site_url: ${{ inputs.site_url }}
+      environment: ${{ env.RELEASE_ENVIRONMENT }}
+      artifact_name: ${{ env.RELEASE_ARTIFACT_NAME }}
+      site_url: ${{ env.RELEASE_SITE_URL }}

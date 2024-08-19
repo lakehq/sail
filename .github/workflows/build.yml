@@ -68,6 +68,5 @@ jobs:
     needs:
       - build
     with:
-      environment: docs/${{ matrix.stage }}
-      artifact_name: docs-dist-${{ matrix.stage }}
-      site_url: "https://${{ matrix.stage == 'prod' && 'docs' || 'docs.dev' }}.lakesail.com/sail/main/"
+      stage: ${{ matrix.stage }}
+      version: main
