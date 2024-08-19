@@ -44,7 +44,7 @@ jobs:
 
       - name: Sync to S3
         run: |
-          aws s3 sync docs/.vitepress/dist s3://${{ vars.AWS_S3_BUCKET }}/sail/${{ inputs.version }}/ steps.site-base-url.outputs.result }} --delete
+          aws s3 sync docs/.vitepress/dist s3://${{ vars.AWS_S3_BUCKET }}/sail/${{ inputs.version }}/ --delete
 
       - name: Invalidate CloudFront cache
         run: |
