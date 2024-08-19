@@ -58,11 +58,11 @@ jobs:
   docs-release:
     name: Docs release
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/docs-release.yml
     strategy:
       max-parallel: 1
       matrix:
         stage: [dev, prod]
-    uses: ./.github/workflows/docs-release.yml
     permissions:
       id-token: write
     needs:

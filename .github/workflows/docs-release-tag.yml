@@ -3,10 +3,8 @@ name: Docs release (tag push)
 on:
   push:
     tags:
-      - "docs/dev/v*"
-      - "docs/dev/latest"
-      - "docs/prod/v*"
-      - "docs/prod/latest"
+      - "docs/v*"
+      - "docs/latest"
 
 jobs:
   setup:
@@ -23,20 +21,10 @@ jobs:
         run: |
           tag="${GIT_TAG_REF#refs/tags/}"
           case "$tag" in
-            docs/dev/v*)
-              stage=dev
-              version="${tag#docs/dev/v}"
+            docs/v*)
+              version="${tag#docs/v}"
               ;;
-            docs/dev/latest)
-              stage=dev
-              version=latest
-              ;;
-            docs/prod/v*)
-              stage=prod
-              version="${tag#docs/prod/v}"
-              ;;
-            docs/prod/latest)
-              stage=prod
+            docs/latest)
               version=latest
               ;;
             *)
@@ -48,17 +36,20 @@ jobs:
             echo "Invalid version: $version"
             exit 1
           fi
-          echo "stage=$stage" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
         shell: bash
 
   release:
     name: Release
     uses: ./.github/workflows/docs-release.yml
+    strategy:
+      max-parallel: 1
+      matrix:
+        stage: [dev, prod]
     permissions:
       id-token: write
     needs:
       - setup
     with:
-      stage: ${{ needs.setup.outputs.stage }}
+      stage: ${{ matrix.stage }}
       version: ${{ needs.setup.outputs.version }}
