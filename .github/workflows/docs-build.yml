@@ -7,7 +7,7 @@ on:
   workflow_call:
     inputs:
       environment:
-        description: The environment for documentation site build
+        description: The optional environment for documentation site build
         type: string
         default: ""
       artifact_name:

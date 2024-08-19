@@ -3,7 +3,7 @@ name: Docs deploy
 # This workflow uses the following variables from the environment:
 # - AWS_REGION
 # - AWS_ROLE_ARN
-# - AWS_S3_BUCKET_NAME
+# - AWS_S3_BUCKET
 # - AWS_CLOUDFRONT_DISTRIBUTION_ID
 
 on:
@@ -60,7 +60,7 @@ jobs:
 
       - name: Sync to S3
         run: |
-          aws s3 sync docs/.vitepress/dist s3://${{ vars.AWS_S3_BUCKET_NAME }}${{ steps.site-base-url.outputs.result }} --delete
+          aws s3 sync docs/.vitepress/dist s3://${{ vars.AWS_S3_BUCKET }}${{ steps.site-base-url.outputs.result }} --delete
 
       - name: Invalidate CloudFront cache
         run: |
