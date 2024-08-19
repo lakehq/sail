@@ -19,14 +19,14 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
 
-#      - name: Format check
-#        run: cargo +nightly fmt -- --check
-#
-#      - name: Run Clippy
-#        run: cargo clippy --all-targets --all-features -- -D warnings
-#
-#      - name: Test
-#        run: cargo test
+      #      - name: Format check
+      #        run: cargo +nightly fmt -- --check
+      #
+      #      - name: Run Clippy
+      #        run: cargo clippy --all-targets --all-features -- -D warnings
+      #
+      #      - name: Test
+      #        run: cargo test
 
       - name: Cache Python package
         id: cache-python-package
@@ -48,16 +48,16 @@ jobs:
     needs:
       - build
 
-#  docs-build:
-#    name: Docs build
-#    if: ${{ github.event_name == 'pull_request' }}
-#    uses: ./.github/workflows/docs-build.yml
-#    needs:
-#      - build
+  #  docs-build:
+  #    name: Docs build
+  #    if: ${{ github.event_name == 'pull_request' }}
+  #    uses: ./.github/workflows/docs-build.yml
+  #    needs:
+  #      - build
 
   docs-release-dev:
     name: Docs release (dev)
-#    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    #    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     uses: ./.github/workflows/docs-release.yml
     permissions:
       id-token: write
