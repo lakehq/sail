@@ -55,28 +55,19 @@ jobs:
     needs:
       - build
 
-  docs-release-dev:
-    name: Docs release (dev)
+  docs-release:
+    name: Docs release
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    strategy:
+      max-parallel: 1
+      matrix:
+        stage: [dev, prod]
     uses: ./.github/workflows/docs-release.yml
     permissions:
       id-token: write
     needs:
       - build
     with:
-      environment: docs/dev
-      artifact_name: docs-dist-dev
-      site_url: "https://docs.dev.lakesail.com/sail/main/"
-
-  docs-release-prod:
-    name: Docs release (prod)
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    uses: ./.github/workflows/docs-release.yml
-    permissions:
-      id-token: write
-    needs:
-      - docs-release-dev
-    with:
-      environment: docs/prod
-      artifact_name: docs-dist-prod
-      site_url: "https://docs.lakesail.com/sail/main/"
+      environment: docs/${{ matrix.stage }}
+      artifact_name: docs-dist-${{ matrix.stage }}
+      site_url: "https://${{ matrix.stage == 'prod' && 'docs' || 'docs.dev' }}.lakesail.com/sail/main/"
