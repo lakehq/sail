@@ -388,7 +388,7 @@ impl CatalogCommand {
                 if_exists,
             } => {
                 // TODO: use the correct catalog and database for global temporary views
-                let value = manager.drop_view(view, if_exists).await.is_ok();
+                let value = manager.drop_temporary_view(view, if_exists).await.is_ok();
                 let rows = vec![SingleValueMetadata { value }];
                 build_record_batch(command_schema, &rows)?
             }

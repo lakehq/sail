@@ -11,18 +11,18 @@ use datafusion_expr::{
     Expr, LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown, TableType,
 };
 
-pub struct DataFrameTemporaryTableProvider {
+pub struct TemporaryTableProvider {
     plan: LogicalPlan,
 }
 
-impl DataFrameTemporaryTableProvider {
+impl TemporaryTableProvider {
     pub fn new(plan: LogicalPlan) -> Self {
         Self { plan }
     }
 }
 
 #[async_trait]
-impl TableProvider for DataFrameTemporaryTableProvider {
+impl TableProvider for TemporaryTableProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }

@@ -6,6 +6,15 @@ use datafusion_expr::{CreateView, DdlStatement, DropView, LogicalPlan};
 use crate::catalog::CatalogManager;
 
 impl<'a> CatalogManager<'a> {
+    pub(crate) async fn drop_temporary_view(
+        &self,
+        view: TableReference,
+        _if_exists: bool,
+    ) -> Result<()> {
+        self.ctx.deregister_table(view)?;
+        Ok(())
+    }
+
     pub(crate) async fn drop_view(&self, view: TableReference, if_exists: bool) -> Result<()> {
         let ddl = LogicalPlan::Ddl(DdlStatement::DropView(DropView {
             name: view,
