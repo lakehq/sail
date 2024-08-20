@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use datafusion::functions;
 use datafusion::functions::expr_fn;
+use datafusion::functions::string::contains::ContainsFunc;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::contains::Contains;
 use crate::extension::function::levenshtein::Levenshtein;
 use crate::function::common::Function;
 use crate::utils::ItemTaker;
@@ -60,7 +60,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("character_length", F::unary(expr_fn::char_length)),
         ("chr", F::unary(expr_fn::chr)),
         ("concat_ws", F::custom(concat_ws)),
-        ("contains", F::udf(Contains::new())),
+        ("contains", F::udf(ContainsFunc::new())),
         ("decode", F::unknown("decode")),
         ("elt", F::unknown("elt")),
         ("encode", F::unknown("encode")),
