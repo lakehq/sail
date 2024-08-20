@@ -11,5 +11,5 @@
       "@theme/*": ["docs/.vitepress/theme/*"]
     }
   },
-  "include": ["docs/.vitepress/theme/**/*"]
+  "include": ["docs/.vitepress/config.mts", "docs/.vitepress/theme/**/*"]
 }

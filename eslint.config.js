@@ -16,7 +16,7 @@ export default ts.config(
     ],
   },
   {
-    files: ["**/*.{ts,js,vue}"],
+    files: ["**/*.{ts,mts,js,mjs,vue}"],
     languageOptions: {
       parserOptions: {
         parser: "@typescript-eslint/parser",
