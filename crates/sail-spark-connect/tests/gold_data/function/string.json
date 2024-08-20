@@ -1403,7 +1403,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: lpad"
+        "success": "ok"
       }
     },
     {
@@ -1425,7 +1425,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: lpad"
+        "success": "ok"
       }
     },
     {
@@ -1447,7 +1447,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: lpad"
+        "success": "ok"
       }
     },
     {
@@ -2375,7 +2375,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rpad"
+        "success": "ok"
       }
     },
     {
@@ -2397,7 +2397,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rpad"
+        "success": "ok"
       }
     },
     {
@@ -2419,7 +2419,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rpad"
+        "success": "ok"
       }
     },
     {
