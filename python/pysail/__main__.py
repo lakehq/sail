@@ -91,6 +91,8 @@ if __name__ == "__main__":
     print(df.withColumn("x", F.col("a")).withColumn("y", F.col("a")).select(
         add_x_y(F.struct(F.col("x"), F.col("y")))).toPandas())
     print(df.select(add(F.col("a"), F.col("a"))).toPandas())
+    print("With Clause")
+    print(spark.sql("WITH test AS (SELECT * FROM df) SELECT * FROM test").toPandas())
 
     # FIXME: not working
     # print(spark.sql("SELECT 1 AS text WHERE $1 > 'a'", ["b"]).toPandas())

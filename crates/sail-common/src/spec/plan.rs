@@ -255,6 +255,11 @@ pub enum QueryNode {
         name: Identifier,
         columns: Vec<Identifier>,
     },
+    WithCtes {
+        input: Box<QueryPlan>,
+        recursive: bool,
+        ctes: Vec<(Identifier, QueryPlan)>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

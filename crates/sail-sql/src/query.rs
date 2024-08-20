@@ -1,11 +1,7 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use sail_common::spec;
 use sqlparser::ast;
 use sqlparser::ast::PivotValueSource;
 
-use crate::cte::{add_ctes_to_plan, from_recursive_cte};
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{from_ast_expression, from_ast_object_name, from_ast_order_by};
 use crate::literal::LiteralValue;
@@ -36,14 +32,7 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
         return Err(SqlError::unsupported("FOR clause"));
     }
 
-    let ctes = if let Some(with) = with {
-        from_ast_with(with)?
-    } else {
-        HashMap::new()
-    };
-
     let plan = from_ast_set_expr(*body)?;
-    let plan = add_ctes_to_plan(&ctes, plan);
 
     let plan = if !order_by.is_empty() {
         let order_by = order_by
@@ -82,7 +71,17 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
         plan
     };
 
-    Ok(plan)
+    if let Some(with) = with {
+        let recursive = with.recursive;
+        let ctes = from_ast_with(with)?;
+        Ok(spec::QueryPlan::new(spec::QueryNode::WithCtes {
+            input: Box::new(plan),
+            recursive,
+            ctes,
+        }))
+    } else {
+        Ok(plan)
+    }
 }
 
 fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
@@ -576,22 +575,15 @@ fn with_ast_table_alias(
     }
 }
 
-pub(crate) fn from_ast_with(with: ast::With) -> SqlResult<HashMap<String, Arc<spec::QueryPlan>>> {
-    let mut ctes: HashMap<String, Arc<spec::QueryPlan>> = HashMap::new();
+pub(crate) fn from_ast_with(
+    with: ast::With,
+) -> SqlResult<Vec<(spec::Identifier, spec::QueryPlan)>> {
+    let mut ctes: Vec<(spec::Identifier, spec::QueryPlan)> = Vec::new();
     for cte in with.cte_tables {
-        let cte_name = normalize_ident(cte.alias.name.clone());
-        if ctes.contains_key(&cte_name) {
-            return Err(SqlError::InvalidArgument(format!(
-                "WITH query name {cte_name} specified more than once."
-            )));
-        }
-        let plan = if with.recursive {
-            from_recursive_cte(cte_name.clone(), *cte.query)?
-        } else {
-            from_ast_query(*cte.query)?
-        };
+        let cte_name = spec::Identifier::from(normalize_ident(cte.alias.name.clone()));
+        let plan = from_ast_query(*cte.query)?;
         let plan = with_ast_table_alias(plan, Some(cte.alias))?;
-        ctes.insert(cte_name, Arc::new(plan));
+        ctes.push((cte_name, plan));
     }
     Ok(ctes)
 }

@@ -5,49 +5,74 @@
       "output": {
         "success": {
           "query": {
-            "project": {
+            "withCtes": {
               "input": {
-                "tableAlias": {
+                "project": {
                   "input": {
-                    "project": {
-                      "input": {
-                        "read": {
-                          "namedTable": {
-                            "name": [
-                              "testcat",
-                              "db",
-                              "tab"
-                            ],
-                            "options": []
-                          },
-                          "isStreaming": false
-                        },
-                        "planId": null,
-                        "sourceInfo": null
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "cte1"
+                        ],
+                        "options": []
                       },
-                      "expressions": [
-                        {
-                          "unresolvedStar": {
-                            "target": null
-                          }
-                        }
-                      ]
+                      "isStreaming": false
                     },
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "name": "cte1",
-                  "columns": []
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
                 },
                 "planId": null,
                 "sourceInfo": null
               },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null
+              "recursive": false,
+              "ctes": [
+                [
+                  "cte1",
+                  {
+                    "tableAlias": {
+                      "input": {
+                        "project": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "name": [
+                                  "testcat",
+                                  "db",
+                                  "tab"
+                                ],
+                                "options": []
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null,
+                            "sourceInfo": null
+                          },
+                          "expressions": [
+                            {
+                              "unresolvedStar": {
+                                "target": null
+                              }
+                            }
+                          ]
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "cte1",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
                   }
-                }
+                ]
               ]
             },
             "planId": null,
@@ -61,52 +86,77 @@
       "output": {
         "success": {
           "query": {
-            "project": {
+            "withCtes": {
               "input": {
-                "tableAlias": {
+                "project": {
                   "input": {
-                    "project": {
-                      "input": {
-                        "read": {
-                          "namedTable": {
-                            "name": [
-                              "a"
-                            ],
-                            "options": []
-                          },
-                          "isStreaming": false
-                        },
-                        "planId": null,
-                        "sourceInfo": null
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
                       },
-                      "expressions": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "c"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ]
+                      "isStreaming": false
                     },
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "name": "t",
-                  "columns": [
-                    "x"
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
                   ]
                 },
                 "planId": null,
                 "sourceInfo": null
               },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null
+              "recursive": false,
+              "ctes": [
+                [
+                  "t",
+                  {
+                    "tableAlias": {
+                      "input": {
+                        "project": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "name": [
+                                  "a"
+                                ],
+                                "options": []
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null,
+                            "sourceInfo": null
+                          },
+                          "expressions": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "c"
+                                ],
+                                "planId": null
+                              }
+                            }
+                          ]
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "t",
+                      "columns": [
+                        "x"
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
                   }
-                }
+                ]
               ]
             },
             "planId": null,
@@ -139,47 +189,72 @@
       "output": {
         "success": {
           "query": {
-            "project": {
+            "withCtes": {
               "input": {
-                "tableAlias": {
+                "project": {
                   "input": {
-                    "project": {
-                      "input": {
-                        "read": {
-                          "namedTable": {
-                            "name": [
-                              "a"
-                            ],
-                            "options": []
-                          },
-                          "isStreaming": false
-                        },
-                        "planId": null,
-                        "sourceInfo": null
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "cte1"
+                        ],
+                        "options": []
                       },
-                      "expressions": [
-                        {
-                          "unresolvedStar": {
-                            "target": null
-                          }
-                        }
-                      ]
+                      "isStreaming": false
                     },
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "name": "cte1",
-                  "columns": []
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
                 },
                 "planId": null,
                 "sourceInfo": null
               },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null
+              "recursive": false,
+              "ctes": [
+                [
+                  "cte1",
+                  {
+                    "tableAlias": {
+                      "input": {
+                        "project": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "name": [
+                                  "a"
+                                ],
+                                "options": []
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null,
+                            "sourceInfo": null
+                          },
+                          "expressions": [
+                            {
+                              "unresolvedStar": {
+                                "target": null
+                              }
+                            }
+                          ]
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "cte1",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
                   }
-                }
+                ]
               ]
             },
             "planId": null,
