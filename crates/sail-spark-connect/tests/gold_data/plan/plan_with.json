@@ -37,37 +37,29 @@
                 [
                   "cte1",
                   {
-                    "tableAlias": {
+                    "project": {
                       "input": {
-                        "project": {
-                          "input": {
-                            "read": {
-                              "namedTable": {
-                                "name": [
-                                  "testcat",
-                                  "db",
-                                  "tab"
-                                ],
-                                "options": []
-                              },
-                              "isStreaming": false
-                            },
-                            "planId": null,
-                            "sourceInfo": null
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "testcat",
+                              "db",
+                              "tab"
+                            ],
+                            "options": []
                           },
-                          "expressions": [
-                            {
-                              "unresolvedStar": {
-                                "target": null
-                              }
-                            }
-                          ]
+                          "isStreaming": false
                         },
                         "planId": null,
                         "sourceInfo": null
                       },
-                      "name": "cte1",
-                      "columns": []
+                      "expressions": [
+                        {
+                          "unresolvedStar": {
+                            "target": null
+                          }
+                        }
+                      ]
                     },
                     "planId": null,
                     "sourceInfo": null
@@ -118,39 +110,29 @@
                 [
                   "t",
                   {
-                    "tableAlias": {
+                    "project": {
                       "input": {
-                        "project": {
-                          "input": {
-                            "read": {
-                              "namedTable": {
-                                "name": [
-                                  "a"
-                                ],
-                                "options": []
-                              },
-                              "isStreaming": false
-                            },
-                            "planId": null,
-                            "sourceInfo": null
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "a"
+                            ],
+                            "options": []
                           },
-                          "expressions": [
-                            {
-                              "unresolvedAttribute": {
-                                "name": [
-                                  "c"
-                                ],
-                                "planId": null
-                              }
-                            }
-                          ]
+                          "isStreaming": false
                         },
                         "planId": null,
                         "sourceInfo": null
                       },
-                      "name": "t",
-                      "columns": [
-                        "x"
+                      "expressions": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "c"
+                            ],
+                            "planId": null
+                          }
+                        }
                       ]
                     },
                     "planId": null,
@@ -221,35 +203,27 @@
                 [
                   "cte1",
                   {
-                    "tableAlias": {
+                    "project": {
                       "input": {
-                        "project": {
-                          "input": {
-                            "read": {
-                              "namedTable": {
-                                "name": [
-                                  "a"
-                                ],
-                                "options": []
-                              },
-                              "isStreaming": false
-                            },
-                            "planId": null,
-                            "sourceInfo": null
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "a"
+                            ],
+                            "options": []
                           },
-                          "expressions": [
-                            {
-                              "unresolvedStar": {
-                                "target": null
-                              }
-                            }
-                          ]
+                          "isStreaming": false
                         },
                         "planId": null,
                         "sourceInfo": null
                       },
-                      "name": "cte1",
-                      "columns": []
+                      "expressions": [
+                        {
+                          "unresolvedStar": {
+                            "target": null
+                          }
+                        }
+                      ]
                     },
                     "planId": null,
                     "sourceInfo": null

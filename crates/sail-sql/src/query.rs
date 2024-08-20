@@ -582,7 +582,6 @@ pub(crate) fn from_ast_with(
     for cte in with.cte_tables {
         let cte_name = spec::Identifier::from(normalize_ident(cte.alias.name.clone()));
         let plan = from_ast_query(*cte.query)?;
-        let plan = with_ast_table_alias(plan, Some(cte.alias))?;
         ctes.push((cte_name, plan));
     }
     Ok(ctes)

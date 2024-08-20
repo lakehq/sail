@@ -313,16 +313,12 @@ pub(crate) async fn handle_execute_create_dataframe_view(
     } else {
         plan
     };
-    let df = DataFrame::new(ctx.state(), plan);
     let table_ref = TableReference::from(view.name.as_str());
     let _ = view.is_global; // TODO: global view
     if view.replace {
         ctx.deregister_table(table_ref.clone())?;
     }
-    ctx.register_table(
-        table_ref,
-        Arc::new(TemporaryTableProvider::new(df.logical_plan().clone())),
-    )?;
+    ctx.register_table(table_ref, Arc::new(TemporaryTableProvider::new(plan)))?;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     if metadata.reattachable {
         tx.send(ExecutorOutput::complete()).await?;
