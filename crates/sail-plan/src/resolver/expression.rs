@@ -556,7 +556,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let candidates =
-            self.resolve_expression_attribute_candicates(&name, plan_id, schema, state)?;
+            self.resolve_expression_attribute_candidates(&name, plan_id, schema, state)?;
         if candidates.len() > 1 {
             return plan_err!("ambiguous attribute: {:?}", name)?;
         }
@@ -565,7 +565,7 @@ impl PlanResolver<'_> {
             return Ok(NamedExpr::new(vec![name], expr::Expr::Column(column)));
         }
         let candidates = if let Some(schema) = state.get_outer_query_schema().cloned() {
-            self.resolve_expression_attribute_candicates(&name, None, &schema, state)?
+            self.resolve_expression_attribute_candidates(&name, None, &schema, state)?
         } else {
             vec![]
         };
@@ -582,7 +582,7 @@ impl PlanResolver<'_> {
         plan_err!("cannot resolve attribute: {:?}", name)?
     }
 
-    fn resolve_expression_attribute_candicates(
+    fn resolve_expression_attribute_candidates(
         &self,
         name: &spec::ObjectName,
         plan_id: Option<i64>,
