@@ -19,7 +19,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    environment: docs/${{ inputs.stage }}
+    environment: ${{ inputs.stage != 'test' && format('docs/{0}', inputs.stage) || '' }}
     steps:
       - uses: actions/checkout@v4
         with:

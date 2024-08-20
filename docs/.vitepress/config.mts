@@ -74,6 +74,16 @@ class Analytics {
   }
 }
 
+class Robots {
+  static head(): HeadConfig[] {
+    if (Site.version() === "main") {
+      return [["meta", { name: "robots", content: "noindex" }]];
+    } else {
+      return [];
+    }
+  }
+}
+
 class TransformPageData {
   static canonicalUrl(pageData: PageData): void {
     const canonicalUrl = `${Site.url()}${pageData.relativePath}`
@@ -113,11 +123,11 @@ class Sidebar {
   private static readonly srcDir = path.join(__dirname, "..");
 
   private static items(
-    trees: TreeNode<PageLink>[],
+    trees: TreeNode<PageLink | null>[],
     base?: string,
   ): DefaultTheme.SidebarItem[] {
     function transform(
-      tree: TreeNode<PageLink>,
+      tree: TreeNode<PageLink | null>,
       level: number,
     ): DefaultTheme.SidebarItem {
       if (tree.data === null) {
@@ -203,6 +213,7 @@ export default async () => {
         { rel: "icon", type: "image/png", href: `${Site.base()}favicon.png` },
       ],
       ...Analytics.head(),
+      ...Robots.head(),
     ],
     transformPageData(pageData) {
       TransformPageData.canonicalUrl(pageData);
