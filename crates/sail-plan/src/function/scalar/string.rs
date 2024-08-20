@@ -7,6 +7,7 @@ use datafusion_expr::{expr, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::contains::Contains;
+use crate::extension::function::levenshtein::Levenshtein;
 use crate::function::common::Function;
 use crate::utils::ItemTaker;
 
@@ -73,7 +74,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("left", F::binary(expr_fn::left)),
         ("len", F::unary(expr_fn::length)),
         ("length", F::unary(expr_fn::length)),
-        ("levenshtein", F::unknown("levenshtein")),
+        ("levenshtein", F::udf(Levenshtein::new())),
         ("locate", F::unknown("locate")),
         ("lower", F::unary(expr_fn::lower)),
         ("lpad", F::var_arg(expr_fn::lpad)),

@@ -1293,7 +1293,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: levenshtein"
+        "success": "ok"
       }
     },
     {
@@ -1315,7 +1315,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: levenshtein"
+        "success": "ok"
       }
     },
     {
