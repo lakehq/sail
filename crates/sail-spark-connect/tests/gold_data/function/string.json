@@ -305,7 +305,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: char"
+        "success": "ok"
       }
     },
     {
@@ -415,7 +415,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: chr"
+        "success": "ok"
       }
     },
     {
