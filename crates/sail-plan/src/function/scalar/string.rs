@@ -39,9 +39,10 @@ fn substr(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
 }
 
 fn concat_ws(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    // FIXME: Case where there is only 1 arg:
-    //  https://docs.databricks.com/en/sql/language-manual/functions/concat_ws.html
     let (delimiter, args) = args.at_least_one()?;
+    if args.is_empty() {
+        return Ok(expr::Expr::Literal(ScalarValue::Utf8(Some("".to_string()))));
+    }
     Ok(expr_fn::concat_ws(delimiter, args))
 }
 

@@ -501,7 +501,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: concat_ws was called with 1 arguments. It requires at least 2."
+        "success": "ok"
       }
     },
     {
