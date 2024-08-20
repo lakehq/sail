@@ -2,6 +2,8 @@ use datafusion::functions::expr_fn;
 use datafusion_expr::{expr, BinaryExpr, Operator};
 
 use crate::error::PlanResult;
+use crate::extension::function::randn::Randn;
+use crate::extension::function::random::Random;
 use crate::function::common::Function;
 use crate::utils::ItemTaker;
 
@@ -82,9 +84,9 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("pow", F::binary(expr_fn::power)),
         ("power", F::binary(expr_fn::power)),
         ("radians", F::unary(expr_fn::radians)),
-        ("rand", F::nullary(expr_fn::random)), // TODO: Support random(seed)
-        ("randn", F::unknown("randn")),
-        ("random", F::nullary(expr_fn::random)), // TODO: Support random(seed)
+        ("rand", F::udf(Random::new())),
+        ("randn", F::udf(Randn::new())),
+        ("random", F::udf(Random::new())),
         ("rint", F::unknown("rint")),
         ("round", F::var_arg(expr_fn::round)),
         ("sec", F::unknown("sec")),

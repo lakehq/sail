@@ -5,6 +5,7 @@ use sqlparser::ast::PivotValueSource;
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{from_ast_expression, from_ast_object_name, from_ast_order_by};
 use crate::literal::LiteralValue;
+use crate::utils::normalize_ident;
 
 pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
     let ast::Query {
@@ -18,9 +19,6 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
         locks,
         for_clause,
     } = query;
-    if with.is_some() {
-        return Err(SqlError::todo("WITH clause"));
-    }
     if !limit_by.is_empty() {
         return Err(SqlError::unsupported("LIMIT BY clause"));
     }
@@ -33,6 +31,7 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
     if for_clause.is_some() {
         return Err(SqlError::unsupported("FOR clause"));
     }
+
     let plan = from_ast_set_expr(*body)?;
 
     let plan = if !order_by.is_empty() {
@@ -72,7 +71,17 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
         plan
     };
 
-    Ok(plan)
+    if let Some(with) = with {
+        let recursive = with.recursive;
+        let ctes = from_ast_with(with)?;
+        Ok(spec::QueryPlan::new(spec::QueryNode::WithCtes {
+            input: Box::new(plan),
+            recursive,
+            ctes,
+        }))
+    } else {
+        Ok(plan)
+    }
 }
 
 fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
@@ -559,9 +568,21 @@ fn with_ast_table_alias(
         Some(ast::TableAlias { name, columns }) => {
             Ok(spec::QueryPlan::new(spec::QueryNode::TableAlias {
                 input: Box::new(plan),
-                name: name.value.into(),
+                name: spec::Identifier::from(normalize_ident(name)),
                 columns: columns.into_iter().map(|c| c.value.into()).collect(),
             }))
         }
     }
+}
+
+pub(crate) fn from_ast_with(
+    with: ast::With,
+) -> SqlResult<Vec<(spec::Identifier, spec::QueryPlan)>> {
+    let mut ctes: Vec<(spec::Identifier, spec::QueryPlan)> = Vec::new();
+    for cte in with.cte_tables {
+        let cte_name = spec::Identifier::from(normalize_ident(cte.alias.name.clone()));
+        let plan = from_ast_query(*cte.query)?;
+        ctes.push((cte_name, plan));
+    }
+    Ok(ctes)
 }

@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion::catalog::Session;
 use datafusion::datasource::TableProvider;
-use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_datafusion_err, Column, Constraints, Result, Statistics};
@@ -96,7 +96,7 @@ impl TableProvider for RenameTableProvider {
 
     async fn scan(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
@@ -141,7 +141,7 @@ impl TableProvider for RenameTableProvider {
 
     async fn insert_into(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
         overwrite: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {

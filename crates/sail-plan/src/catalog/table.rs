@@ -44,10 +44,6 @@ impl From<TableType> for TableTypeName {
             TableType::View => TableTypeName::View,
         }
     }
-    // TODO: handle_execute_create_dataframe_view
-    //  is currently creating a View table from DataFrame.
-    //  Unsure if this would be considered a Temporary View Table or not.
-    //  Spark's expectation is that a Temporary View Table is created.
 }
 
 impl From<TableTypeName> for TableType {
@@ -239,7 +235,7 @@ impl<'a> CatalogManager<'a> {
         );
         let schema_provider = unwrap_or!(
             catalog_provider.schema(database_name.as_ref()),
-            return Ok(Vec::new())
+            return exec_err!("Database not found: {database_name}")
         );
         let mut tables = Vec::new();
         for table_name in schema_provider.table_names() {
@@ -254,12 +250,44 @@ impl<'a> CatalogManager<'a> {
                 table_provider,
             ));
         }
+        let default_catalog = self.default_catalog()?;
+        let default_database = self.default_database()?;
+        if catalog_name.as_ref() != default_catalog.as_str()
+            || database_name.as_ref() != default_database.as_str()
+        {
+            let catalog_provider = unwrap_or!(
+                self.ctx.catalog(default_catalog.as_str()),
+                return Ok(tables)
+            );
+            let schema_provider = unwrap_or!(
+                catalog_provider.schema(default_database.as_str()),
+                return Ok(tables)
+            );
+            for table_name in schema_provider.table_names() {
+                if !match_pattern(table_name.as_str(), table_pattern) {
+                    continue;
+                }
+                let table_provider =
+                    unwrap_or!(schema_provider.table(&table_name).await?, continue);
+                if table_provider.table_type() != TableType::Temporary
+                    && table_provider.table_type() != TableType::View
+                {
+                    continue;
+                }
+                tables.push(TableMetadata::new(
+                    default_catalog.as_ref(),
+                    default_database.as_ref(),
+                    table_name.as_str(),
+                    table_provider,
+                ));
+            }
+            // TODO: Spark temporary views are session-scoped and are not associated with a catalog or database.
+            //   We should create a "hidden" catalog provider and include the temporary views in the result.
+            //   Spark *global* temporary views should be put in the `global_temp` database, and they will be
+            //   included in the result if the database pattern matches `global_temp`.
+            //   The `global_temp` database name can be configured via `spark.sql.globalTempDatabase`.
+        }
         Ok(tables)
-        // TODO: Spark temporary views are session-scoped and are not associated with a catalog or database.
-        //   We should create a "hidden" catalog provider and include the temporary views in the result.
-        //   Spark *global* temporary views should be put in the `global_temp` database, and they will be
-        //   included in the result if the database pattern matches `global_temp`.
-        //   The `global_temp` database name can be configured via `spark.sql.globalTempDatabase`.
     }
 
     pub(crate) async fn drop_table(

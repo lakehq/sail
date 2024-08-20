@@ -14,7 +14,7 @@ Sail is available as a Python package on PyPI. You can install it using `pip`.
 pip install pysail
 ```
 
-**Note**: Currenctly only a source-only pre-release is available, so you need the Rust toolchain to install Sail.
+**Note**: Currently only a source-only pre-release is available, so you need the Rust toolchain to install Sail.
 A proper release with pre-built wheels will be available soon.
 
 ## Documentation

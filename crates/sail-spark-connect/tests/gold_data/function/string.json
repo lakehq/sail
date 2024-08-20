@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: character_length"
+        "success": "ok"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: char_length"
+        "success": "ok"
       }
     },
     {
@@ -173,7 +173,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: bit_length"
+        "success": "ok"
       }
     },
     {
@@ -195,7 +195,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: bit_length"
+        "success": "ok"
       }
     },
     {
@@ -217,7 +217,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: btrim"
+        "success": "ok"
       }
     },
     {
@@ -239,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: btrim"
+        "success": "ok"
       }
     },
     {
@@ -327,7 +327,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: char_length"
+        "success": "ok"
       }
     },
     {
@@ -349,7 +349,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: char_length"
+        "success": "ok"
       }
     },
     {
@@ -371,7 +371,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: character_length"
+        "success": "ok"
       }
     },
     {
@@ -393,7 +393,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: character_length"
+        "success": "ok"
       }
     },
     {
@@ -459,7 +459,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: concat_ws"
+        "success": "ok"
       }
     },
     {
@@ -481,7 +481,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: concat_ws"
+        "success": "ok"
       }
     },
     {
@@ -501,7 +501,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: concat_ws"
+        "failure": "error in DataFusion: Execution error: concat_ws was called with 1 arguments. It requires at least 2."
       }
     },
     {
@@ -523,7 +523,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: concat_ws"
+        "success": "ok"
       }
     },
     {
@@ -919,7 +919,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: find_in_set"
+        "success": "ok"
       }
     },
     {
@@ -1095,7 +1095,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: initcap"
+        "success": "ok"
       }
     },
     {
@@ -1117,7 +1117,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: instr"
+        "success": "ok"
       }
     },
     {
@@ -1161,7 +1161,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: left"
+        "success": "ok"
       }
     },
     {
@@ -1205,7 +1205,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: len"
+        "success": "ok"
       }
     },
     {
@@ -1227,7 +1227,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: len"
+        "success": "ok"
       }
     },
     {
@@ -1249,7 +1249,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: length"
+        "success": "ok"
       }
     },
     {
@@ -1271,7 +1271,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: length"
+        "success": "ok"
       }
     },
     {
@@ -1469,7 +1469,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: ltrim"
+        "success": "ok"
       }
     },
     {
@@ -1843,7 +1843,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: octet_length"
+        "success": "ok"
       }
     },
     {
@@ -1865,7 +1865,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: octet_length"
+        "success": "ok"
       }
     },
     {
@@ -2309,7 +2309,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: repeat"
+        "success": "ok"
       }
     },
     {
@@ -2353,7 +2353,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: right"
+        "success": "ok"
       }
     },
     {
@@ -2441,7 +2441,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rtrim"
+        "success": "ok"
       }
     },
     {
@@ -3407,7 +3407,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: translate"
+        "success": "ok"
       }
     },
     {
@@ -3429,7 +3429,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: trim"
+        "success": "ok"
       }
     },
     {
@@ -3451,7 +3451,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: trim"
+        "success": "ok"
       }
     },
     {
@@ -3473,7 +3473,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: trim"
+        "success": "ok"
       }
     },
     {
@@ -3517,7 +3517,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: ltrim"
+        "success": "ok"
       }
     },
     {
@@ -3561,7 +3561,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rtrim"
+        "success": "ok"
       }
     },
     {

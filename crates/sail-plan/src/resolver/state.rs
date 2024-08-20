@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use datafusion_common::DFSchemaRef;
+use datafusion_common::{DFSchemaRef, TableReference};
+use datafusion_expr::LogicalPlan;
 use serde_arrow::_impl::arrow::_raw::schema::SchemaRef;
 
 use crate::error::{PlanError, PlanResult};
@@ -16,6 +18,8 @@ pub(super) struct PlanResolverState {
     attributes: HashMap<(PlanId, FieldName), ResolvedFieldName>,
     /// The outer query schema for the current subquery.
     outer_query_schema: Option<DFSchemaRef>,
+    /// The CTEs for the current query.
+    ctes: HashMap<TableReference, Arc<LogicalPlan>>,
 }
 
 impl Default for PlanResolverState {
@@ -31,6 +35,7 @@ impl PlanResolverState {
             fields: HashMap::new(),
             attributes: HashMap::new(),
             outer_query_schema: None,
+            ctes: HashMap::new(),
         }
     }
 
@@ -103,6 +108,18 @@ impl PlanResolverState {
     pub fn enter_query_scope(&mut self, schema: DFSchemaRef) -> QueryScope {
         QueryScope::new(self, schema)
     }
+
+    pub fn enter_cte_scope(&mut self) -> CteScope {
+        CteScope::new(self)
+    }
+
+    pub fn get_cte(&self, table_ref: &TableReference) -> Option<&LogicalPlan> {
+        self.ctes.get(table_ref).map(|cte| cte.as_ref())
+    }
+
+    pub fn insert_cte(&mut self, table_ref: TableReference, plan: LogicalPlan) {
+        self.ctes.insert(table_ref, Arc::new(plan));
+    }
 }
 
 pub(crate) struct QueryScope<'a> {
@@ -128,5 +145,30 @@ impl<'a> QueryScope<'a> {
 impl<'a> Drop for QueryScope<'a> {
     fn drop(&mut self) {
         self.state.outer_query_schema = self.previous_outer_query_schema.take();
+    }
+}
+
+pub(crate) struct CteScope<'a> {
+    state: &'a mut PlanResolverState,
+    previous_ctes: HashMap<TableReference, Arc<LogicalPlan>>,
+}
+
+impl<'a> CteScope<'a> {
+    fn new(state: &'a mut PlanResolverState) -> Self {
+        let previous_ctes = state.ctes.clone();
+        Self {
+            state,
+            previous_ctes,
+        }
+    }
+
+    pub(crate) fn state(&mut self) -> &mut PlanResolverState {
+        self.state
+    }
+}
+
+impl<'a> Drop for CteScope<'a> {
+    fn drop(&mut self) {
+        self.state.ctes = std::mem::take(&mut self.previous_ctes);
     }
 }

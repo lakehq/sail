@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
@@ -328,10 +328,40 @@ impl PlanResolver<'_> {
                 self.resolve_query_table_alias(*input, name, columns, state)
                     .await?
             }
+            QueryNode::WithCtes {
+                input,
+                recursive,
+                ctes,
+            } => {
+                self.resolve_query_with_ctes(*input, recursive, ctes, state)
+                    .await?
+            }
         };
         self.verify_query_plan(&plan, state)?;
         self.register_schema_with_plan_id(&plan, plan_id, state)?;
         Ok(plan)
+    }
+
+    pub(super) async fn resolve_recursive_query_plan(
+        &self,
+        plan: spec::QueryPlan,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        match plan {
+            spec::QueryPlan {
+                node:
+                    spec::QueryNode::SetOperation(spec::SetOperation {
+                        left: _,
+                        right: _,
+                        set_op_type: _,
+                        is_all: _,
+                        by_name: _,
+                        allow_missing_columns: _,
+                    }),
+                ..
+            } => Err(PlanError::todo("Recursive CTEs")),
+            other => self.resolve_query_plan(other, state).await,
+        }
     }
 
     pub(super) async fn resolve_command_plan(
@@ -517,10 +547,15 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let spec::ReadNamedTable { name, options } = table;
+
+        let table_reference = build_table_reference(name)?;
+        if let Some(cte) = state.get_cte(&table_reference) {
+            return Ok(cte.clone());
+        }
+
         if !options.is_empty() {
             return Err(PlanError::todo("table options"));
         }
-        let table_reference = build_table_reference(name)?;
         let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
         let names = state.register_fields(&table_provider.schema());
         let table_provider = RenameTableProvider::try_new(table_provider, names)?;
@@ -1386,6 +1421,36 @@ impl PlanResolver<'_> {
                 table: Arc::from(String::from(name)),
             },
         )?))
+    }
+
+    async fn resolve_query_with_ctes(
+        &self,
+        input: spec::QueryPlan,
+        recursive: bool,
+        ctes: Vec<(spec::Identifier, spec::QueryPlan)>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let cte_names = ctes
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<HashSet<_>>();
+        if cte_names.len() < ctes.len() {
+            return Err(PlanError::invalid(
+                "CTE query name specified more than once",
+            ));
+        }
+        let mut scope = state.enter_cte_scope();
+        let state = scope.state();
+        for (name, query) in ctes.into_iter() {
+            let reference = build_table_reference(spec::ObjectName::new_unqualified(name.clone()))?;
+            let plan = if recursive {
+                self.resolve_recursive_query_plan(query, state).await?
+            } else {
+                self.resolve_query_plan(query, state).await?
+            };
+            state.insert_cte(reference, plan);
+        }
+        self.resolve_query_plan(input, state).await
     }
 
     async fn resolve_query_common_inline_udtf(

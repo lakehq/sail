@@ -19,6 +19,7 @@ use datafusion_common::config::{ConfigFileType, TableOptions};
 use datafusion_expr::ScalarUDF;
 use sail_common::spec;
 use sail_common::utils::rename_logical_plan;
+use sail_plan::extension::source::temporary_table::TemporaryTableProvider;
 use sail_plan::resolver::plan::NamedPlan;
 use sail_plan::resolver::PlanResolver;
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
@@ -312,13 +313,12 @@ pub(crate) async fn handle_execute_create_dataframe_view(
     } else {
         plan
     };
-    let df = DataFrame::new(ctx.state(), plan);
     let table_ref = TableReference::from(view.name.as_str());
-    let _ = view.is_global;
+    let _ = view.is_global; // TODO: global view
     if view.replace {
         ctx.deregister_table(table_ref.clone())?;
     }
-    ctx.register_table(table_ref, df.into_view())?;
+    ctx.register_table(table_ref, Arc::new(TemporaryTableProvider::new(plan)))?;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     if metadata.reattachable {
         tx.send(ExecutorOutput::complete()).await?;
