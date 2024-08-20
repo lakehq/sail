@@ -38,33 +38,40 @@ fn substr(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     Err(PlanError::invalid("substr requires 2 or 3 arguments"))
 }
 
+fn concat_ws(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    // FIXME: Case where there is only 1 arg:
+    //  https://docs.databricks.com/en/sql/language-manual/functions/concat_ws.html
+    let (delimiter, args) = args.at_least_one()?;
+    Ok(expr_fn::concat_ws(delimiter, args))
+}
+
 pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
     vec![
         ("ascii", F::unary(expr_fn::ascii)),
         ("base64", F::unknown("base64")),
-        ("bit_length", F::unknown("bit_length")),
+        ("bit_length", F::unary(expr_fn::bit_length)),
         ("btrim", F::var_arg(expr_fn::btrim)),
         ("char", F::unknown("char")),
-        ("char_length", F::unknown("char_length")),
-        ("character_length", F::unknown("character_length")),
+        ("char_length", F::unary(expr_fn::char_length)),
+        ("character_length", F::unary(expr_fn::char_length)),
         ("chr", F::unknown("chr")),
-        ("concat_ws", F::unknown("concat_ws")),
+        ("concat_ws", F::custom(concat_ws)),
         ("contains", F::udf(Contains::new())),
         ("decode", F::unknown("decode")),
         ("elt", F::unknown("elt")),
         ("encode", F::unknown("encode")),
         ("endswith", F::binary(expr_fn::ends_with)),
-        ("find_in_set", F::unknown("find_in_set")),
+        ("find_in_set", F::binary(expr_fn::find_in_set)),
         ("format_number", F::unknown("format_number")),
         ("format_string", F::unknown("format_string")),
-        ("initcap", F::unknown("initcap")),
-        ("instr", F::unknown("instr")),
+        ("initcap", F::unary(expr_fn::initcap)),
+        ("instr", F::binary(expr_fn::instr)),
         ("lcase", F::unary(expr_fn::lower)),
-        ("left", F::unknown("left")),
-        ("len", F::unknown("len")),
-        ("length", F::unknown("length")),
+        ("left", F::binary(expr_fn::left)),
+        ("len", F::unary(expr_fn::length)),
+        ("length", F::unary(expr_fn::length)),
         ("levenshtein", F::unknown("levenshtein")),
         ("locate", F::unknown("locate")),
         ("lower", F::unary(expr_fn::lower)),
@@ -72,7 +79,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("ltrim", F::var_arg(expr_fn::ltrim)),
         ("luhn_check", F::unknown("luhn_check")),
         ("mask", F::unknown("mask")),
-        ("octet_length", F::unknown("octet_length")),
+        ("octet_length", F::unary(expr_fn::octet_length)),
         ("overlay", F::unknown("overlay")),
         ("position", F::unknown("position")),
         ("printf", F::unknown("printf")),
@@ -82,9 +89,9 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("regexp_instr", F::unknown("regexp_instr")),
         ("regexp_replace", F::custom(regexp_replace)),
         ("regexp_substr", F::unknown("regexp_substr")),
-        ("repeat", F::unknown("repeat")),
+        ("repeat", F::binary(expr_fn::repeat)),
         ("replace", F::unknown("replace")),
-        ("right", F::unknown("right")),
+        ("right", F::binary(expr_fn::right)),
         ("rpad", F::unknown("rpad")),
         ("rtrim", F::var_arg(expr_fn::rtrim)),
         ("sentences", F::unknown("sentences")),
@@ -100,7 +107,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("to_char", F::unknown("to_char")),
         ("to_number", F::unknown("to_number")),
         ("to_varchar", F::unknown("to_varchar")),
-        ("translate", F::unknown("translate")),
+        ("translate", F::ternary(expr_fn::translate)),
         ("trim", F::var_arg(expr_fn::trim)),
         ("try_to_binary", F::unknown("try_to_binary")),
         ("try_to_number", F::unknown("try_to_number")),
