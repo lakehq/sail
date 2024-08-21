@@ -99,8 +99,7 @@ jobs:
         name: Cache Python package
         id: cache-python-package
         with:
-          path: |
-            target/wheels
+          path: target/wheels
           key: python-package-${{ runner.os }}-${{ runner.arch }}-${{ inputs.sha }}
 
       - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-python-package.outputs.cache-hit != 'true'
@@ -114,7 +113,7 @@ jobs:
       # We do not cache the environments since package installation via `uv` is fast, while downloading
       # the environments from the cache still takes time.
       - if: steps.cache-logs.outputs.cache-hit != 'true'
-        name: Set up Hatch environments
+        name: Set up Hatch environment
         run: |
           hatch env create test
           hatch run test:install-pyspark

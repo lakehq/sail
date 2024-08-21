@@ -10,6 +10,11 @@ license = "Apache-2.0"
 requires-python = ">=3.8"
 dependencies = []
 
+[project.optional-dependencies]
+spark = [
+    "pyspark[connect]>=3.5,<4.0",
+]
+
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
@@ -30,12 +35,15 @@ path = ".venvs/default"
 python = "3.11"
 installer = "pip"
 dependencies = [
-    "pyspark[connect,sql]==3.5.1",
+    "pyspark[connect]==3.5.1",
     "pytest~=8.2",
 ]
 
 [tool.hatch.envs.default.overrides]
 env.CI.installer = "uv"
+
+[tool.hatch.envs.default.scripts]
+install-pysail = "{env:HATCH_UV} pip install pysail --no-index -f target/wheels --force-reinstall"
 
 [tool.hatch.envs.docs]
 detached = true
@@ -90,6 +98,12 @@ packages = ["python/pysail"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["python/pysail"]
+
+[tool.ruff.lint.per-file-ignores]
+"python/pysail/docs/conf.py" = ["INP001"]
+"python/pysail/examples/**/*.py" = ["T201"]
+"python/pysail/tests/**/*.py" = ["S101"]
+"scripts/**/*.py" = ["SLF001"]
 
 [tool.pytest.ini_options]
 testpaths = ["python"]

@@ -53,8 +53,7 @@ jobs:
         name: Cache Python package
         id: cache-python-package
         with:
-          path: |
-            target/wheels
+          path: target/wheels
           key: python-package-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
 
       - if: steps.cache-python-package.outputs.cache-hit != 'true'
