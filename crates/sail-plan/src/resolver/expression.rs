@@ -907,7 +907,24 @@ impl PlanResolver<'_> {
         let extraction = self.resolve_literal(extraction)?;
         let NamedExpr { name, expr, .. } =
             self.resolve_named_expression(child, schema, state).await?;
-        let name = format!("{}[{}]", name.one()?, extraction_name);
+        let name = if let expr::Expr::Column(column) = &expr {
+            // Get the data type of the column
+            let data_type = schema
+                .field_with_unqualified_name(&column.name)?
+                .data_type();
+            match data_type {
+                DataType::Struct(_) => {
+                    // For struct types, use dot notation
+                    format!("{}.{}", name.one()?, extraction_name)
+                }
+                _ => {
+                    // For other types, default to bracket notation
+                    format!("{}[{}]", name.one()?, extraction_name)
+                }
+            }
+        } else {
+            format!("{}[{}]", name.one()?, extraction_name)
+        };
         Ok(NamedExpr::new(vec![name], expr.field(extraction)))
     }
 
