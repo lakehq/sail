@@ -305,7 +305,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: char"
+        "success": "ok"
       }
     },
     {
@@ -415,7 +415,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: chr"
+        "success": "ok"
       }
     },
     {
@@ -501,7 +501,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: concat_ws was called with 1 arguments. It requires at least 2."
+        "success": "ok"
       }
     },
     {
@@ -1293,7 +1293,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: levenshtein"
+        "success": "ok"
       }
     },
     {
@@ -1315,7 +1315,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: levenshtein"
+        "success": "ok"
       }
     },
     {
@@ -1403,7 +1403,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: lpad"
+        "success": "ok"
       }
     },
     {
@@ -1425,7 +1425,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: lpad"
+        "success": "ok"
       }
     },
     {
@@ -1447,7 +1447,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: lpad"
+        "success": "ok"
       }
     },
     {
@@ -2375,7 +2375,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rpad"
+        "success": "ok"
       }
     },
     {
@@ -2397,7 +2397,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rpad"
+        "success": "ok"
       }
     },
     {
@@ -2419,7 +2419,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: rpad"
+        "success": "ok"
       }
     },
     {

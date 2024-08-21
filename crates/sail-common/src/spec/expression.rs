@@ -108,6 +108,13 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
+    SimilarTo {
+        expr: Box<Expr>,
+        pattern: Box<Expr>,
+        negated: bool,
+        escape_char: Option<char>,
+        case_insensitive: bool,
+    },
 }
 
 /// An identifier with only one part.

@@ -1,3 +1,4 @@
 # It is safe to make breaking changes to public members in the crates
 # since we are developing an application rather than a library.
 avoid-breaking-exported-api = false
+too-many-arguments-threshold = 8

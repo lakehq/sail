@@ -700,9 +700,32 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
             subquery: Box::new(from_ast_query(*subquery)?),
             negated,
         }),
+        Expr::SimilarTo {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        } => {
+            let escape_char = if let Some(char) = escape_char {
+                if char.len() != 1 {
+                    return Err(SqlError::invalid(
+                        "Invalid escape character in SIMILAR TO expression",
+                    ));
+                }
+                Some(char.chars().next().unwrap())
+            } else {
+                None
+            };
+            Ok(spec::Expr::SimilarTo {
+                expr: Box::new(from_ast_expression(*expr)?),
+                pattern: Box::new(from_ast_expression(*pattern)?),
+                negated,
+                escape_char,
+                case_insensitive: false,
+            })
+        }
         Expr::JsonAccess { .. }
         | Expr::InUnnest { .. }
-        | Expr::SimilarTo { .. }
         | Expr::AnyOp { .. }
         | Expr::AllOp { .. }
         | Expr::Convert { .. }

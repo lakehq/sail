@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use datafusion::functions;
 use datafusion::functions::expr_fn;
+use datafusion::functions::string::contains::ContainsFunc;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::contains::Contains;
+use crate::extension::function::levenshtein::Levenshtein;
 use crate::function::common::Function;
 use crate::utils::ItemTaker;
 
@@ -39,9 +40,10 @@ fn substr(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
 }
 
 fn concat_ws(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    // FIXME: Case where there is only 1 arg:
-    //  https://docs.databricks.com/en/sql/language-manual/functions/concat_ws.html
     let (delimiter, args) = args.at_least_one()?;
+    if args.is_empty() {
+        return Ok(expr::Expr::Literal(ScalarValue::Utf8(Some("".to_string()))));
+    }
     Ok(expr_fn::concat_ws(delimiter, args))
 }
 
@@ -53,12 +55,12 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("base64", F::unknown("base64")),
         ("bit_length", F::unary(expr_fn::bit_length)),
         ("btrim", F::var_arg(expr_fn::btrim)),
-        ("char", F::unknown("char")),
+        ("char", F::unary(expr_fn::chr)),
         ("char_length", F::unary(expr_fn::char_length)),
         ("character_length", F::unary(expr_fn::char_length)),
-        ("chr", F::unknown("chr")),
+        ("chr", F::unary(expr_fn::chr)),
         ("concat_ws", F::custom(concat_ws)),
-        ("contains", F::udf(Contains::new())),
+        ("contains", F::udf(ContainsFunc::new())),
         ("decode", F::unknown("decode")),
         ("elt", F::unknown("elt")),
         ("encode", F::unknown("encode")),
@@ -72,10 +74,10 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("left", F::binary(expr_fn::left)),
         ("len", F::unary(expr_fn::length)),
         ("length", F::unary(expr_fn::length)),
-        ("levenshtein", F::unknown("levenshtein")),
+        ("levenshtein", F::udf(Levenshtein::new())),
         ("locate", F::unknown("locate")),
         ("lower", F::unary(expr_fn::lower)),
-        ("lpad", F::unknown("lpad")),
+        ("lpad", F::var_arg(expr_fn::lpad)),
         ("ltrim", F::var_arg(expr_fn::ltrim)),
         ("luhn_check", F::unknown("luhn_check")),
         ("mask", F::unknown("mask")),
@@ -92,7 +94,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("repeat", F::binary(expr_fn::repeat)),
         ("replace", F::unknown("replace")),
         ("right", F::binary(expr_fn::right)),
-        ("rpad", F::unknown("rpad")),
+        ("rpad", F::var_arg(expr_fn::rpad)),
         ("rtrim", F::var_arg(expr_fn::rtrim)),
         ("sentences", F::unknown("sentences")),
         ("soundex", F::unknown("soundex")),
