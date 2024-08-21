@@ -311,8 +311,11 @@ impl PlanFormatter for DefaultPlanFormatter {
                     Ok(format!("({} {} {})", left, name, right))
                 }
             }
-            "&" | "^" | "|" | "*" | "/" | "%" | "!=" | "<" | "<=" | "<=>" | "=" | "==" | ">"
-            | ">=" => {
+            "==" => {
+                let (left, right) = arguments.two()?;
+                Ok(format!("({left} = {right})"))
+            }
+            "&" | "^" | "|" | "*" | "/" | "%" | "!=" | "<" | "<=" | "<=>" | "=" | ">" | ">=" => {
                 let (left, right) = arguments.two()?;
                 Ok(format!("({} {} {})", left, name, right))
             }
@@ -326,6 +329,25 @@ impl PlanFormatter for DefaultPlanFormatter {
             "in" => {
                 let (value, list) = arguments.at_least_one()?;
                 Ok(format!("({} IN ({}))", value, list.join(", ")))
+            }
+            "case" | "when" => {
+                let mut result = String::from("CASE");
+                let mut i = 0;
+                while i < arguments.len() {
+                    if i + 1 < arguments.len() {
+                        result.push_str(&format!(
+                            " WHEN {} THEN {}",
+                            arguments[i],
+                            arguments[i + 1]
+                        ));
+                        i += 2;
+                    } else {
+                        result.push_str(&format!(" ELSE {}", arguments[i]));
+                        break;
+                    }
+                }
+                result.push_str(" END");
+                Ok(result)
             }
             _ => {
                 let arguments = arguments.join(", ");

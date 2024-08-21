@@ -90,10 +90,7 @@ impl ShowStringFormat {
             .schema()
             .fields
             .iter()
-            .map(|f| {
-                let escaped_name = escape_meta_characters(f.name());
-                Cell::new(escaped_name.replace("==", "="))
-            })
+            .map(|f| Cell::new(escape_meta_characters(f.name())))
             .collect::<Vec<_>>();
         table.set_header(header);
 
