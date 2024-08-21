@@ -477,6 +477,24 @@ impl PlanResolver<'_> {
                 self.resolve_expression_is_not_distinct_from(*left, *right, schema, state)
                     .await
             }
+            Expr::SimilarTo {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive,
+            } => {
+                self.resolve_expression_similar_to(
+                    *expr,
+                    *pattern,
+                    negated,
+                    escape_char,
+                    case_insensitive,
+                    schema,
+                    state,
+                )
+                .await
+            }
         }
     }
 
@@ -1279,6 +1297,30 @@ impl PlanResolver<'_> {
                 op: Operator::IsNotDistinctFrom,
                 right: Box::new(right),
             }),
+        ))
+    }
+
+    async fn resolve_expression_similar_to(
+        &self,
+        expr: spec::Expr,
+        pattern: spec::Expr,
+        negated: bool,
+        escape_char: Option<char>,
+        case_insensitive: bool,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let expr = self.resolve_expression(expr, schema, state).await?;
+        let pattern = self.resolve_expression(pattern, schema, state).await?;
+        Ok(NamedExpr::new(
+            vec!["similar_to".to_string()],
+            expr::Expr::SimilarTo(expr::Like::new(
+                negated,
+                Box::new(expr),
+                Box::new(pattern),
+                escape_char,
+                case_insensitive,
+            )),
         ))
     }
 }
