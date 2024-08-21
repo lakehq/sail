@@ -661,10 +661,6 @@ impl PlanResolver<'_> {
         let (argument_names, arguments) = self
             .resolve_alias_expressions_and_names(arguments, schema, state)
             .await?;
-        let input_types: Vec<DataType> = arguments
-            .iter()
-            .map(|arg| arg.get_type(schema))
-            .collect::<Result<Vec<DataType>, DataFusionError>>()?;
 
         // FIXME: is_user_defined_function is always false
         //  So, we need to check udf's before built-in functions.
@@ -697,6 +693,12 @@ impl PlanResolver<'_> {
                 .map_err(|e| {
                     PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
                 })?;
+
+                let input_types: Vec<DataType> = arguments
+                    .iter()
+                    .map(|arg| arg.get_type(schema))
+                    .collect::<Result<Vec<DataType>, DataFusionError>>(
+                )?;
 
                 let python_udf: PySparkUDF = PySparkUDF::new(
                     function_name.to_owned(),
