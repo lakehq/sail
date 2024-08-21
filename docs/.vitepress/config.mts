@@ -47,7 +47,7 @@ class Site {
 }
 
 class Head {
-  static readonly title = "Sail";
+  static readonly title = "Sail Documentation";
   static readonly description =
     "The computation framework with a mission to unify stream processing, batch processing, and compute-intensive (AI) workloads.";
   static readonly image = `${Site.url()}logo.png`;
@@ -76,8 +76,8 @@ class Analytics {
 
 class Robots {
   static head(): HeadConfig[] {
-    if (Site.version() === "main") {
-      return [["meta", { name: "robots", content: "noindex" }]];
+    if (Site.version() !== "latest") {
+      return [["meta", { name: "robots", content: "noindex, nofollow" }]];
     } else {
       return [];
     }
@@ -195,6 +195,7 @@ export default async () => {
     base: Site.base(),
     lang: "en-US",
     title: Head.title,
+    titleTemplate: `:title - ${Head.title}`,
     description: Head.description,
     head: [
       ["meta", { property: "title", content: Head.title }],
@@ -232,6 +233,7 @@ export default async () => {
       libVersion: Site.libVersion(),
     },
     themeConfig: {
+      siteTitle: "Sail",
       logo: "/logo.png",
       nav: [
         { text: "User Guide", link: "/guide/", activeMatch: "^/guide/" },
