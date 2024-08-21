@@ -26,13 +26,19 @@ fn ilike(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
 }
 
 fn rlike(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
-    expr::Expr::SimilarTo(expr::Like {
-        negated: false,
-        expr: Box::new(expr),
-        pattern: Box::new(pattern),
-        case_insensitive: false,
-        escape_char: None,
-    })
+    // FIXME: There is no `PhysicalExpr` for `Expr::SimilarTo` in DataFusion.
+    //  create_physical_expr in datafusion/planner/src/planner doesn't have a `SimilarTo` match arm.
+    //  which leads to the error:
+    //      not_impl_err!("Physical plan does not support logical expression {other:?}")
+    //  Once the physical expr for `SimilarTo` is implemented, use the code below for performance:
+    //     expr::Expr::SimilarTo(expr::Like {
+    //         negated: false,
+    //         expr: Box::new(expr),
+    //         pattern: Box::new(pattern),
+    //         case_insensitive: false,
+    //         escape_char: None,
+    //     })
+    expr_fn::regexp_like(expr, pattern, None)
 }
 
 fn is_in_list(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
