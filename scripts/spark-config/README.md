@@ -10,5 +10,7 @@ Run the following command **in the project root directory** to update the data f
 Please commit the changes if any.
 
 ```bash
-poetry -C python run scripts/spark-config/generate.py -o crates/sail-spark-connect/data/spark_config.json
+env SPARK_LOCAL_IP=127.0.0.1 \
+  hatch run scripts/spark-config/generate.py \
+  -o crates/sail-spark-connect/data/spark_config.json
 ```

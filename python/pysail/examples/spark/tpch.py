@@ -8,7 +8,7 @@ from pyspark.sql import SparkSession
 
 
 class TpchBenchmark:
-    TABLE_NAMES = ["customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier"]
+    TABLE_NAMES = ("customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier")
 
     def __init__(self, url: str, data_path: str, query_path: str):
         self.url = url
@@ -20,10 +20,7 @@ class TpchBenchmark:
 
     @contextlib.contextmanager
     def spark_session(self):
-        if self._is_remote():
-            builder = SparkSession.builder.remote(self.url)
-        else:
-            builder = SparkSession.builder.master(self.url)
+        builder = SparkSession.builder.remote(self.url) if self._is_remote() else SparkSession.builder.master(self.url)
         spark = builder.appName("TPC-H").getOrCreate()
         for table in self.TABLE_NAMES:
             path = f"{self.data_path}/{table}.parquet"
@@ -34,13 +31,13 @@ class TpchBenchmark:
         finally:
             spark.stop()
 
-    def _run_query(self, spark: SparkSession, query: int, explain: bool):
+    def _run_query(self, spark: SparkSession, query: int, explain: bool):  # noqa: FBT001
         with open(f"{self.query_path}/q{query}.sql") as f:
             for sql in f.read().split(";"):
-                sql = sql.strip()
+                sql = sql.strip()  # noqa: PLW2901
                 if not sql:
                     continue
-                sql = sql.replace("create view", "create temp view")
+                sql = sql.replace("create view", "create temp view")  # noqa: PLW2901
                 print(sql)
                 if explain:
                     if self._is_remote():
@@ -61,7 +58,7 @@ class TpchBenchmark:
                     end_time = time.time()
                     print(f"The query returned {len(rows)} rows and took {end_time - start_time} seconds.")
 
-    def run(self, query: int | None = None, explain: bool = False):
+    def run(self, query: int | None = None, explain: bool = False):  # noqa: FBT001, FBT002
         with self.spark_session() as spark:
             if query is not None:
                 self._run_query(spark, query, explain)

@@ -32,8 +32,7 @@ jobs:
         id: cache-python-package
         uses: actions/cache@v4
         with:
-          path: |
-            target/wheels
+          path: target/wheels
           key: python-package-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
 
       - if: steps.cache-python-package.outputs.cache-hit != 'true'
@@ -45,6 +44,12 @@ jobs:
     uses: ./.github/workflows/spark-tests.yml
     permissions:
       pull-requests: write
+    needs:
+      - build
+
+  python-build:
+    name: Python build
+    uses: ./.github/workflows/python-build.yml
     needs:
       - build
 

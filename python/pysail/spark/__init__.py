@@ -1,4 +1,4 @@
-from typing import Tuple
+from __future__ import annotations
 
 from pysail import _native
 
@@ -9,6 +9,7 @@ __all__ = [
 
 class SparkConnectServer:
     """The Spark Connect server that uses Sail as the computation engine."""
+
     def __init__(self, ip: str, port: int) -> None:
         """Create a new Spark Connect server.
 
@@ -33,7 +34,7 @@ class SparkConnectServer:
         self._inner.stop()
 
     @property
-    def listening_address(self) -> Tuple[str, int] | None:
+    def listening_address(self) -> tuple[str, int] | None:
         """The address that the server is listening on,
         or ``None`` if the server is not running.
         """

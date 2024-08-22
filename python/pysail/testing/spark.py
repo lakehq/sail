@@ -1,11 +1,12 @@
-"""A pytest plugin for PySpark tests.
-"""
+"""A pytest plugin for PySpark tests."""
+
+from __future__ import annotations
+
 import os
 import shlex
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
 
 import pytest
 
@@ -29,7 +30,6 @@ def spark_working_dir(tmp_path_factory):
     )
 
     os.chdir(working_dir)
-    yield
 
 
 @pytest.fixture(scope="class", autouse=_is_spark_testing())
@@ -58,7 +58,6 @@ def spark_env_var(tmp_path_factory):
     ]
     os.environ["TMPDIR"] = tmp_dir.as_posix()
     os.environ["PYSPARK_SUBMIT_ARGS"] = " ".join(spark_args)
-    yield
 
 
 @pytest.fixture(scope="module", autouse=_is_spark_testing())
@@ -76,7 +75,7 @@ def spark_doctest_session(doctest_namespace, request):
 
 @dataclass
 class TestMarker:
-    keywords: List[str]
+    keywords: list[str]
     reason: str
 
 
@@ -120,9 +119,7 @@ SKIPPED_SPARK_TESTS = [
 ]
 
 
-def pytest_collection_modifyitems(
-    session: pytest.Session, config: pytest.Config, items: List[pytest.Item]
-) -> None:
+def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config, items: list[pytest.Item]) -> None:  # noqa: ARG001
     if not _is_spark_testing():
         return
 

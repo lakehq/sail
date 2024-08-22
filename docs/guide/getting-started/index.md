@@ -10,8 +10,7 @@ In this guide, you will see how to use Sail as the compute engine for PySpark.
 Install the required packages in your Python environment.
 
 ```bash
-pip install pysail
-pip install 'pyspark[connect]'
+pip install 'pysail[spark]'
 ```
 
 ## Using the Sail PySpark Shell
