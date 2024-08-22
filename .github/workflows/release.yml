@@ -142,9 +142,13 @@ jobs:
             platform_target="${{ matrix.platform.target }}"
             case "${platform_target}" in
               "aarch64")
+                apt-get update
+                apt-get install -y wget unzip
                 protoc_target="linux-aarch_64"
                 ;;
               "x86_64")
+                yum update -y
+                yum install -y wget unzip
                 protoc_target="linux-x86_64"
                 ;;
               *)
@@ -152,8 +156,8 @@ jobs:
                 exit 1
                 ;;
             esac
-            curl -sLf -o /tmp/protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${protoc_version#v}/protoc-${protoc_version#v}-${protoc_target}.zip"
-            sudo unzip /tmp/protoc.zip -d /usr/local 'bin/*' 'include/*'
+            wget -q -O /tmp/protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${protoc_version#v}/protoc-${protoc_version#v}-${protoc_target}.zip"
+            unzip /tmp/protoc.zip -d /usr/local 'bin/*' 'include/*'
             rm /tmp/protoc.zip
 
       - name: Upload wheels
