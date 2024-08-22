@@ -7,9 +7,6 @@ on:
       - "test/v*"
   # We can run the workflow manually to test package release without publishing to PyPI.
   workflow_dispatch:
-  # FIXME: remove this
-  pull_request:
-    branches: [main]
 
 jobs:
   setup:
