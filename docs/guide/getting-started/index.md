@@ -26,9 +26,7 @@ The `SparkSession` is available as the `spark` local variable.
 You can run Spark SQL queries or use the DataFrame API in the shell.
 
 ::: info
-
 Spark uses the [Spark Connect](https://spark.apache.org/docs/latest/spark-connect-overview.html) protocol to communicate with Sail, which runs as a Spark Connect server in the background, in the same process.
-
 :::
 
 ## Using the Sail Library
@@ -48,3 +46,20 @@ spark = SparkSession.builder.remote(f"sc://{host}:{port}").getOrCreate()
 
 spark.sql("SELECT 1").show()
 ```
+
+## Running the Sail Spark Connect Server
+
+You can use the following command to start a Spark Connect server powered by Sail.
+
+```bash
+env RUST_LOG=info python -m pysail.spark server
+```
+
+By default, the server listens on port `50051` on `127.0.0.1`. You can change the listening address and port using the
+`--ip` and `--port` options.
+The `--help` option shows the available options for the server.
+
+::: info
+Currently, we use the `RUST_LOG` environment variable to control the logging level of the server.
+This may change in the future.
+:::

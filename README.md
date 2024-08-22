@@ -30,5 +30,4 @@ Contributions are welcome!
 Please submit GitHub issues for bug reports and feature requests.
 
 Feel free to create a pull request if you would like to make a code change.
-You can refer to the `main` branch [development guide](https://docs.lakesail.com/sail/main/development/) to get started.
-Note that the development guide in the latest released version may not be up-to-date.
+You can refer to the [development guide](https://docs.lakesail.com/sail/main/development/) to get started.
