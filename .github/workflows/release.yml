@@ -120,7 +120,7 @@ jobs:
       # so we install the build tools directly on the host.
 
       - name: Install protoc
-        if: ${{ matrix.platform.os != 'linux' }}
+        id: protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -135,19 +135,26 @@ jobs:
           # https://github.com/PyO3/maturin-action/issues/222
           manylinux: ${{ matrix.platform.target == 'aarch64' && matrix.platform.os == 'linux' && '2_24' || 'auto' }}
           # For Linux, we need to install build tools inside the container.
-          # The actual installation commands depend on the platform.
+          # The actual installation commands may depend on the platform.
           # https://github.com/PyO3/maturin-action/discussions/273
           before-script-linux: |
-            case "${{ matrix.platform.target }}" in
+            protoc_version="${{ steps.protoc.outputs.version }}"
+            platform_target="${{ matrix.platform.target }}"
+            case "${platform_target}" in
               "aarch64")
-                sudo apt-get update
-                sudo apt-get install -y protobuf-compiler
+                protoc_target="linux-aarch_64"
                 ;;
               "x86_64")
-                yum update -y
-                yum install -y protobuf-compiler
+                protoc_target="linux-x86_64"
+                ;;
+              *)
+                echo "Unsupported platform target: ${platform_target}"
+                exit 1
                 ;;
             esac
+            curl -sLf -o /tmp/protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${protoc_version#v}/protoc-${protoc_version#v}-${protoc_target}.zip"
+            sudo unzip /tmp/protoc.zip -d /usr/local 'bin/*' 'include/*'
+            rm /tmp/protoc.zip
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
