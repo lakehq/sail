@@ -97,6 +97,8 @@ jobs:
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -138,10 +140,13 @@ jobs:
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install package
         run: |
-          pip install -vvv 'pysail[spark]==${{ needs.setup.outputs.version }}' -f dist --no-binary pysail
+          pip install pysail -v --no-index -f dist --no-binary :all:
+          pip install pyspark==3.5.2
           pip install pytest
 
       - name: Verify package
@@ -176,7 +181,8 @@ jobs:
 
       - name: Install package
         run: |
-          pip install 'pysail[spark]==${{ needs.setup.outputs.version }}' -f dist --only-binary pysail
+          pip install pysail -v --no-index -f dist --only-binary :all:
+          pip install pyspark==3.5.2
           pip install pytest
 
       - name: Verify package

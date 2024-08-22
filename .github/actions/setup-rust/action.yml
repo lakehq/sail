@@ -5,6 +5,8 @@ runs:
   steps:
     - name: Install protoc
       uses: arduino/setup-protoc@v3
+      with:
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
 
     # The Rust stable toolchain is likely installed already, but we need to check for updates.
     # The Rust nightly toolchain is needed for features used in e.g. code formatting.
