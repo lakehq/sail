@@ -20,27 +20,47 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+
       - name: Install Hatch
         uses: pypa/hatch@install
 
       - name: Get version
         id: version
+        shell: bash
         run: |
           version="$(hatch version)"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
-      - name: Verify tag
-        if: ${{ github.event_name == 'push' }}
+      - name: Verify version
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
         shell: bash
         run: |
-          tag="${{ github.ref }}"
-          version="$(hatch version)"
-          if [[ "${tag}" == "refs/tags/v${version}" ]]; then
-            echo "The package version ${version} will be published to PyPI."
-          elif [[ "${tag}" == "refs/tags/test/v${version}" ]]; then
-            echo "The package version ${version} will be published to Test PyPI."
+          if pip download pysail=="${RELEASE_VERSION}" -d /tmp --no-deps --no-binary pysail; then
+            echo "The package version ${RELEASE_VERSION} already exists on PyPI."
+            exit 1
           else
-            echo "The package version ${version} and the Git tag ${tag} do not match."
+            echo "The package version ${RELEASE_VERSION} is not published on PyPI yet."
+            echo "The release workflow is allowed to continue."
+            echo "Please ignore the error messages from `pip download` above."
+          fi
+
+      - name: Verify tag
+        if: ${{ github.event_name == 'push' }}
+        env:
+          RELEASE_TAG: ${{ github.ref }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          if [[ "${RELEASE_TAG}" == "refs/tags/v${RELEASE_VERSION}" ]]; then
+            echo "The package version ${RELEASE_VERSION} will be published to PyPI."
+          elif [[ "${RELEASE_TAG}" == "refs/tags/test/v${RELEASE_VERSION}" ]]; then
+            echo "The package version ${RELEASE_VERSION} will be published to Test PyPI."
+          else
+            echo "The package version ${RELEASE_VERSION} and the Git tag ${RELEASE_TAG} do not match."
             exit 1
           fi
 
@@ -114,9 +134,18 @@ jobs:
           path: dist/*.whl
           retention-days: 7
 
+  # Here we test package installation (sdist and wheel) from the `dist` directory.
+  # Note that pip favors packages from the index over local packages specified via `-f` or `--find-links`.
+  # But we cannot use `--no-index` since the dependencies are not available locally.
+  # Therefore, we install `pysail` by specifying the exact release version.
+  # In a previous step, we verified that this version is not published on PyPI yet,
+  # so we can be sure that the package is installed from the local `dist` directory.
+
   test-sdist:
     name: Test sdist
     runs-on: ${{ matrix.platform.runner }}
+    env:
+      RELEASE_VERSION: ${{ needs.setup.outputs.version }}
     strategy:
       matrix:
         platform:
@@ -138,26 +167,34 @@ jobs:
         with:
           python-version: 3.x
 
+      # We need the build tools when installing the package from source.
+
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install package
+        shell: bash
         run: |
-          pip install pysail -v --no-index -f dist --no-binary :all:
-          pip install pyspark==3.5.2
+          pip install 'pysail[spark]=='"${RELEASE_VERSION}" -v -f dist --no-binary :all:
           pip install pytest
 
       - name: Verify package
-        run: python -c 'import pysail; assert pysail.__version__ == "${{ needs.setup.outputs.version }}"'
+        shell: python
+        run: |
+          import os, pysail
+          assert pysail.__version__ == os.environ["RELEASE_VERSION"]
 
       - name: Run tests
+        shell: bash
         run: pytest --pyargs pysail
 
   test-wheel:
     name: Test wheel
     runs-on: ${{ matrix.platform.runner }}
+    env:
+      RELEASE_VERSION: ${{ needs.setup.outputs.version }}
     strategy:
       matrix:
         platform:
@@ -180,15 +217,19 @@ jobs:
           python-version: 3.x
 
       - name: Install package
+        shell: bash
         run: |
-          pip install pysail -v --no-index -f dist --only-binary :all:
-          pip install pyspark==3.5.2
+          pip install 'pysail[spark]=='"${RELEASE_VERSION}" -v -f dist --only-binary :all:
           pip install pytest
 
       - name: Verify package
-        run: python -c 'import pysail; assert pysail.__version__ == "${{ needs.setup.outputs.version }}"'
+        shell: python
+        run: |
+          import os, pysail
+          assert pysail.__version__ == os.environ["RELEASE_VERSION"]
 
       - name: Run tests
+        shell: bash
         run: pytest --pyargs pysail
 
   review:
@@ -204,6 +245,7 @@ jobs:
           merge-multiple: true
 
       - name: Show release artifacts
+        shell: bash
         run: |
           ls -lah dist
           md5sum dist/*
