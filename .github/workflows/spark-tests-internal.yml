@@ -105,6 +105,8 @@ jobs:
       - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-python-package.outputs.cache-hit != 'true'
         name: Set up Rust
         uses: ./.github/actions/setup-rust
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - if: steps.cache-logs.outputs.cache-hit != 'true' && steps.cache-python-package.outputs.cache-hit != 'true'
         name: Build Python package
