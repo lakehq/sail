@@ -1,18 +1,10 @@
 name: Rust setup
 description: Prepare Rust build environment and build cache
-inputs:
-  protoc_version:
-    description: Protobuf compiler version
-    default: "26.1"
 runs:
   using: composite
   steps:
     - name: Install protoc
-      run: |
-        wget -q -O /tmp/protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${{ inputs.protoc_version }}/protoc-${{ inputs.protoc_version }}-linux-x86_64.zip"
-        sudo unzip /tmp/protoc.zip -d /usr/local 'bin/*' 'include/*'
-        rm /tmp/protoc.zip
-      shell: bash
+      uses: arduino/setup-protoc@v3
 
     # The Rust stable toolchain is likely installed already, but we need to check for updates.
     # The Rust nightly toolchain is needed for features used in e.g. code formatting.
