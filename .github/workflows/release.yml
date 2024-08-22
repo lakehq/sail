@@ -137,8 +137,10 @@ jobs:
           # For Linux, we need to install build tools inside the container.
           # The actual installation commands depend on the platform.
           # https://github.com/PyO3/maturin-action/discussions/273
+          # Note: `protoc_target` is the same for all containers.
           before-script-linux: |
             protoc_version="${{ steps.protoc.outputs.version }}"
+            protoc_target="linux-x86_64"
             platform_target="${{ matrix.platform.target }}"
             case "${platform_target}" in
               "aarch64")
@@ -154,7 +156,7 @@ jobs:
                 exit 1
                 ;;
             esac
-            wget -q -O /tmp/protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${protoc_version#v}/protoc-${protoc_version#v}-linux-x86_64.zip"
+            wget -q -O /tmp/protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${protoc_version#v}/protoc-${protoc_version#v}-${protoc_target}.zip"
             unzip /tmp/protoc.zip -d /usr/local 'bin/*' 'include/*'
             rm /tmp/protoc.zip
             protoc --version
