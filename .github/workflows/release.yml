@@ -6,6 +6,7 @@ on:
       - "v*"
       - "test/v*"
   # We can run the workflow manually to test package release without publishing to PyPI.
+  # Only the repository maintainers have the permission to do this.
   workflow_dispatch:
 
 jobs:
