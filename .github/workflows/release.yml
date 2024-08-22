@@ -169,7 +169,7 @@ jobs:
   # Note that pip favors packages from the index over local packages specified via `-f` or `--find-links`.
   # But we cannot use `--no-index` since the dependencies are not available locally.
   # Therefore, we install `pysail` by specifying the exact release version.
-  # In a previous step, we verified that this version is not published on PyPI yet,
+  # In a previous job, we have verified that this version is not published on PyPI yet,
   # so we can be sure that the package is installed from the local `dist` directory.
 
   # The ARM runner is created in the GitHub organization.
