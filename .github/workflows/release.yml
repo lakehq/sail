@@ -117,7 +117,7 @@ jobs:
           python-version: "3.11"
 
       # For macOS and Windows, Maturin does not build the package in a container,
-      # so we install the build tools directly on the host.
+      # so the build tools installed on the host are used.
 
       - name: Install protoc
         id: protoc
@@ -135,7 +135,7 @@ jobs:
           # https://github.com/PyO3/maturin-action/issues/222
           manylinux: ${{ matrix.platform.target == 'aarch64' && matrix.platform.os == 'linux' && '2_24' || 'auto' }}
           # For Linux, we need to install build tools inside the container.
-          # The actual installation commands may depend on the platform.
+          # The actual installation commands depend on the platform.
           # https://github.com/PyO3/maturin-action/discussions/273
           before-script-linux: |
             protoc_version="${{ steps.protoc.outputs.version }}"
@@ -167,12 +167,17 @@ jobs:
           path: dist/*.whl
           retention-days: 7
 
-  # Here we test package installation (sdist and wheel) from the `dist` directory.
+  # Here we test installation of packages from the `dist` directory.
   # Note that pip favors packages from the index over local packages specified via `-f` or `--find-links`.
   # But we cannot use `--no-index` since the dependencies are not available locally.
   # Therefore, we install `pysail` by specifying the exact release version.
   # In a previous step, we verified that this version is not published on PyPI yet,
   # so we can be sure that the package is installed from the local `dist` directory.
+
+  # The ARM runner is created in the GitHub organization.
+  # For better security, it can only be used by `release.yml` in the `main` branch.
+  # To test ARM jobs in pull requests, the organization administrators can temporarily
+  # modify the runner group ("workflow access") in the organization settings.
 
   test-sdist:
     name: Test sdist
