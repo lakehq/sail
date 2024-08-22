@@ -126,7 +126,9 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist
-          manylinux: auto
+          # https://github.com/briansmith/ring/issues/1728
+          # https://github.com/PyO3/maturin-action/issues/222
+          manylinux: ${{ matrix.platform.target == 'aarch64' && matrix.platform.os == 'linux' && '2_24' || 'auto' }}
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -178,7 +180,7 @@ jobs:
       - name: Install package
         shell: bash
         run: |
-          pip install 'pysail[spark]=='"${RELEASE_VERSION}" -v -f dist --no-binary :all:
+          pip install 'pysail[spark]=='"${RELEASE_VERSION}" -v -f dist --no-binary pysail
           pip install pytest
 
       - name: Verify package
@@ -220,7 +222,7 @@ jobs:
       - name: Install package
         shell: bash
         run: |
-          pip install 'pysail[spark]=='"${RELEASE_VERSION}" -v -f dist --only-binary :all:
+          pip install 'pysail[spark]=='"${RELEASE_VERSION}" -v -f dist --only-binary pysail
           pip install pytest
 
       - name: Verify package
