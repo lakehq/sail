@@ -46,7 +46,7 @@ jobs:
           else
             echo "The package version ${RELEASE_VERSION} is not published on PyPI yet."
             echo "The release workflow is allowed to continue."
-            echo "Please ignore the error messages from `pip download` above."
+            echo "Please ignore the pip error messages above."
           fi
 
       - name: Verify tag
