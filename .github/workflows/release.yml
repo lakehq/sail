@@ -121,14 +121,21 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install cross-compiler (Linux aarch64)
+        if: matrix.platform.target == 'aarch64' && matrix.platform.os == 'linux'
+        shell: bash
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
+          command: build
           target: ${{ matrix.platform.target }}
           args: --release --out dist
           # https://github.com/briansmith/ring/issues/1728
           # https://github.com/PyO3/maturin-action/issues/222
           manylinux: ${{ matrix.platform.target == 'aarch64' && matrix.platform.os == 'linux' && '2_24' || 'auto' }}
+          # We do not build in containers since we rely on build tools (e.g. `protoc`) installed on the host.
           container: off
 
       - name: Upload wheels
@@ -154,7 +161,7 @@ jobs:
       matrix:
         platform:
           - runner: ubuntu-latest
-          - runner: ubuntu-24.04-arm
+          # - runner: ubuntu-24.04-arm # FIXME
           - runner: macos-12
           - runner: macos-14
           - runner: windows-latest
