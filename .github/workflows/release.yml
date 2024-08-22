@@ -41,6 +41,7 @@ jobs:
         run: |
           if pip download pysail=="${RELEASE_VERSION}" -d /tmp --no-deps --no-binary pysail; then
             echo "The package version ${RELEASE_VERSION} already exists on PyPI."
+            echo "Please update the package version."
             exit 1
           else
             echo "The package version ${RELEASE_VERSION} is not published on PyPI yet."
