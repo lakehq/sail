@@ -144,21 +144,20 @@ jobs:
               "aarch64")
                 apt-get update
                 apt-get install -y wget unzip
-                protoc_target="linux-aarch_64"
                 ;;
               "x86_64")
                 yum update -y
                 yum install -y wget unzip
-                protoc_target="linux-x86_64"
                 ;;
               *)
                 echo "Unsupported platform target: ${platform_target}"
                 exit 1
                 ;;
             esac
-            wget -q -O /tmp/protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${protoc_version#v}/protoc-${protoc_version#v}-${protoc_target}.zip"
+            wget -q -O /tmp/protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${protoc_version#v}/protoc-${protoc_version#v}-linux-x86_64.zip"
             unzip /tmp/protoc.zip -d /usr/local 'bin/*' 'include/*'
             rm /tmp/protoc.zip
+            protoc --version
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
