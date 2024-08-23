@@ -18,10 +18,8 @@ hatch run test:maturin develop
 ```
 
 ::: info
-
 The Spark test environment depends on the [patched PySpark package](./spark-setup).
 The patched PySpark package will be installed automatically during the environment creation.
-
 :::
 
 ## Running the Spark Connect Server

@@ -1,6 +1,8 @@
 import path from "path";
 
-import type { DefaultTheme, PageData } from "vitepress";
+import type { DefaultTheme, MarkdownOptions, PageData } from "vitepress";
+import markdownItDeflist from "markdown-it-deflist";
+import markdownItFootnote from "markdown-it-footnote";
 import { defineConfig, HeadConfig } from "vitepress";
 
 import { PageLink } from "./theme/utils/link";
@@ -81,6 +83,18 @@ class Robots {
     } else {
       return [];
     }
+  }
+}
+
+class Markdown {
+  static options(): MarkdownOptions {
+    return {
+      theme: { light: "min-light", dark: "min-dark" },
+      config: (md) => {
+        md.use(markdownItFootnote);
+        md.use(markdownItDeflist);
+      },
+    };
   }
 }
 
@@ -220,6 +234,7 @@ export default async () => {
       TransformPageData.canonicalUrl(pageData);
       TransformPageData.sphinx(pageData);
     },
+    markdown: Markdown.options(),
     // Exclude directories starting with an underscore. Such directories are
     // internal (e.g. containing pages to be included in other pages).
     srcExclude: ["**/_*/**/*.md"],
