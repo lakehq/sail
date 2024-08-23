@@ -24,7 +24,7 @@ and builds Sail from source. You need the following build tools for this process
 1. A recent version of the stable Rust toolchain. You can manage the Rust toolchain using [rustup](https://rustup.rs/).
 2. The [Protocol Buffers](https://protobuf.dev/) compiler (`protoc`).
 
-Installation from source may take 10 - 20 minutes, and the actual build time depends on your system configuration.
+Installation from source may take 10 - 30 minutes, and the actual build time depends on your system configuration.
 You can pass the `-v` option to the `pip install` command to get more insights into the build process.
 
 Sometimes, you may want to build Sail from source even when the pre-built wheels are available.

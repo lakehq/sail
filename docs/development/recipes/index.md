@@ -1,6 +1,6 @@
 ---
 title: Recipes
-rank: 4
+rank: 6
 ---
 
 # Recipes
