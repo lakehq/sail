@@ -5,22 +5,61 @@ on:
     tags:
       - "v*"
       - "test/v*"
+  # We can run the workflow manually to test package release without publishing to PyPI.
+  # Only the repository maintainers have the permission to do this.
+  workflow_dispatch:
 
 jobs:
-  verify:
-    name: Verify
+  setup:
+    name: Setup
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install Hatch
         uses: pypa/hatch@install
-      - name: Verify tag
+
+      - name: Get version
+        id: version
         shell: bash
         run: |
-          tag="${{ github.ref }}"
           version="$(hatch version)"
-          if [[ "${tag}" != "refs/tags/v${version}" && "${tag}" != "refs/tags/test/v${version}" ]]; then
-            echo "The Git tag '${tag}' does not match the project version '${version}'."
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify version
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          if pip download pysail=="${RELEASE_VERSION}" -d /tmp --no-deps --no-binary pysail; then
+            echo "The package version ${RELEASE_VERSION} already exists on PyPI."
+            echo "Please update the package version."
+            exit 1
+          else
+            echo "The package version ${RELEASE_VERSION} is not published on PyPI yet."
+            echo "The release workflow is allowed to continue."
+            echo "Please ignore the pip error messages above."
+          fi
+
+      - name: Verify tag
+        if: ${{ github.event_name == 'push' }}
+        env:
+          RELEASE_TAG: ${{ github.ref }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          if [[ "${RELEASE_TAG}" == "refs/tags/v${RELEASE_VERSION}" ]]; then
+            echo "The package version ${RELEASE_VERSION} will be published to PyPI."
+          elif [[ "${RELEASE_TAG}" == "refs/tags/test/v${RELEASE_VERSION}" ]]; then
+            echo "The package version ${RELEASE_VERSION} will be published to Test PyPI."
+          else
+            echo "The package version ${RELEASE_VERSION} and the Git tag ${RELEASE_TAG} do not match."
             exit 1
           fi
 
@@ -28,35 +67,229 @@ jobs:
     name: Build sdist
     runs-on: ubuntu-latest
     needs:
-      - verify
+      - setup
     steps:
       - uses: actions/checkout@v4
+
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
           args: --out dist
+
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
           name: package-sdist
+          path: dist/*.tar.gz
+          retention-days: 7
+
+  build-wheel:
+    name: Build wheel
+    runs-on: ${{ matrix.platform.runner }}
+    needs:
+      - setup
+    strategy:
+      matrix:
+        platform:
+          - runner: ubuntu-latest
+            target: x86_64
+            os: linux
+          - runner: ubuntu-latest
+            target: aarch64
+            os: linux
+          - runner: windows-latest
+            target: x64
+            os: windows
+          - runner: macos-12
+            target: x86_64
+            os: macos
+          - runner: macos-14
+            target: aarch64
+            os: macos
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # For macOS and Windows, Maturin does not build the package in a container,
+      # so the build tools installed on the host are used.
+
+      - name: Install protoc
+        id: protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist
+          # https://github.com/briansmith/ring/issues/1728
+          # https://github.com/PyO3/maturin-action/issues/222
+          manylinux: ${{ matrix.platform.target == 'aarch64' && matrix.platform.os == 'linux' && '2_24' || 'auto' }}
+          # For Linux, we need to install build tools inside the container.
+          # The actual installation commands depend on the platform.
+          # https://github.com/PyO3/maturin-action/discussions/273
+          # Note: `protoc_target` is the same for all containers.
+          before-script-linux: |
+            protoc_version="${{ steps.protoc.outputs.version }}"
+            protoc_target="linux-x86_64"
+            platform_target="${{ matrix.platform.target }}"
+            case "${platform_target}" in
+              "aarch64")
+                apt-get update
+                apt-get install -y wget unzip
+                ;;
+              "x86_64")
+                yum update -y
+                yum install -y wget unzip
+                ;;
+              *)
+                echo "Unsupported platform target: ${platform_target}"
+                exit 1
+                ;;
+            esac
+            wget -q -O /tmp/protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${protoc_version#v}/protoc-${protoc_version#v}-${protoc_target}.zip"
+            unzip /tmp/protoc.zip -d /usr/local 'bin/*' 'include/*'
+            rm /tmp/protoc.zip
+            protoc --version
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-wheel-${{ matrix.platform.os }}-${{ matrix.platform.target }}
+          path: dist/*.whl
+          retention-days: 7
+
+  # Here we test installation of packages from the `dist` directory.
+  # Note that pip favors packages from the index over local packages specified via `-f` or `--find-links`.
+  # But we cannot use `--no-index` since the dependencies are not available locally.
+  # Therefore, we install `pysail` by specifying the exact release version.
+  # In a previous job, we have verified that this version is not published on PyPI yet,
+  # so we can be sure that the package is installed from the local `dist` directory.
+
+  # The ARM runner is created in the GitHub organization.
+  # For better security, it can only be used by `release.yml` in the `main` branch.
+  # To test ARM jobs in pull requests, the organization administrators can temporarily
+  # modify the runner group ("workflow access") in the organization settings.
+
+  test-sdist:
+    name: Test sdist
+    runs-on: ${{ matrix.platform.runner }}
+    env:
+      RELEASE_VERSION: ${{ needs.setup.outputs.version }}
+    strategy:
+      matrix:
+        platform:
+          - runner: ubuntu-latest
+          - runner: ubuntu-24.04-arm
+          - runner: macos-12
+          - runner: macos-14
+          - runner: windows-latest
+    needs:
+      - setup
+      - build-sdist
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: package-sdist
           path: dist
 
-  review:
-    name: Review
-    runs-on: ubuntu-latest
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # We need the build tools when installing the package from source.
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install package
+        shell: bash
+        run: |
+          pip install 'pysail[spark]=='"${RELEASE_VERSION}" -v -f dist --no-binary pysail
+          pip install pytest
+
+      - name: Verify package
+        shell: python
+        run: |
+          import os, pysail
+          assert pysail.__version__ == os.environ["RELEASE_VERSION"]
+
+      - name: Run tests
+        shell: bash
+        run: pytest --pyargs pysail
+
+  test-wheel:
+    name: Test wheel
+    runs-on: ${{ matrix.platform.runner }}
+    env:
+      RELEASE_VERSION: ${{ needs.setup.outputs.version }}
+    strategy:
+      matrix:
+        platform:
+          - runner: ubuntu-latest
+          - runner: ubuntu-24.04-arm
+          - runner: macos-12
+          - runner: macos-14
+          - runner: windows-latest
     needs:
-      - build-sdist
+      - setup
+      - build-wheel
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        shell: bash
+        run: |
+          pip install 'pysail[spark]=='"${RELEASE_VERSION}" -v -f dist --only-binary pysail
+          pip install pytest
+
+      - name: Verify package
+        shell: python
+        run: |
+          import os, pysail
+          assert pysail.__version__ == os.environ["RELEASE_VERSION"]
+
+      - name: Run tests
+        shell: bash
+        run: pytest --pyargs pysail
+
+  review:
+    name: Review
+    runs-on: ubuntu-latest
+    needs:
+      - test-sdist
+      - test-wheel
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Show release artifacts
-        run: find dist -type f
+        shell: bash
+        run: |
+          ls -lah dist
+          md5sum dist/*
 
   release:
     name: Release
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -68,6 +301,7 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
       - name: Publish to PyPI
         uses: PyO3/maturin-action@v1
         env:

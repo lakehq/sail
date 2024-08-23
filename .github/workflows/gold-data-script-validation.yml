@@ -32,6 +32,8 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
         name: Set up Rust
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Bootstrap gold data
         run: |
