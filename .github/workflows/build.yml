@@ -18,6 +18,8 @@ jobs:
           python-version: "3.11"
 
       - uses: ./.github/actions/setup-rust
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Format check
         run: cargo +nightly fmt -- --check

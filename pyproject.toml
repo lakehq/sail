@@ -1,13 +1,14 @@
 [project]
 name = "pysail"
-version = "0.1.0.dev0"
+version = "0.1.0.dev1"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
 ]
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.8"
+# Spark 3.5 does not support Python 3.12 yet.
+requires-python = ">=3.8,<3.12"
 dependencies = []
 
 [project.optional-dependencies]

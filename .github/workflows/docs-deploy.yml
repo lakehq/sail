@@ -43,9 +43,14 @@ jobs:
         working-directory: docs/.vitepress/dist
 
       - name: Sync to S3
+        env:
+          S3_URI: s3://${{ vars.AWS_S3_BUCKET }}/sail/${{ inputs.version }}/
         run: |
-          aws s3 sync docs/.vitepress/dist s3://${{ vars.AWS_S3_BUCKET }}/sail/${{ inputs.version }}/ --delete
+          aws s3 sync docs/.vitepress/dist "${S3_URI}" --delete
 
       - name: Invalidate CloudFront cache
+        env:
+          CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.AWS_CLOUDFRONT_DISTRIBUTION_ID }}
+          CLOUDFRONT_PATH: /sail/${{ inputs.version }}/*
         run: |
-          aws cloudfront create-invalidation --distribution-id ${{ vars.AWS_CLOUDFRONT_DISTRIBUTION_ID }} --paths '/sail/${{ inputs.version }}/*'
+          aws cloudfront create-invalidation --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" --paths "${CLOUDFRONT_PATH}"
