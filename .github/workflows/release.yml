@@ -117,6 +117,13 @@ jobs:
       # For macOS and Windows, Maturin does not build the package in a container,
       # so the build tools installed on the host are used.
 
+      # For Linux, Maturin builds the package in a container.
+      # We should not build the package on the host with the cross-compilation toolchain installed via system package managers,
+      # nor should we build the package on the ARM host directly.
+      # The package built on the host may incorrectly depend on a too recent glibc version,
+      # and the resulting wheel would not be manylinux compliant.
+      # The auditwheel tool would report an error in such cases.
+
       - name: Install protoc
         id: protoc
         uses: arduino/setup-protoc@v3
