@@ -8,7 +8,7 @@ use datafusion::common::{Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion_common::{plan_err, Column, DFSchemaRef, DataFusionError};
-use datafusion_expr::{expr, expr_fn, window_frame, ExprSchemable, Operator, ScalarUDF};
+use datafusion_expr::{expr, expr_fn, lit, window_frame, ExprSchemable, Operator, ScalarUDF};
 use num_traits::Float;
 use sail_common::spec;
 use sail_python_udf::cereal::partial_pyspark_udf::{
@@ -18,6 +18,7 @@ use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 use sail_python_udf::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::drop_struct_field::DropStructField;
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, get_built_in_window_function,
 };
@@ -998,13 +999,43 @@ impl PlanResolver<'_> {
 
     async fn resolve_expression_update_fields(
         &self,
-        _struct_expression: spec::Expr,
-        _field_name: spec::ObjectName,
-        _value_expression: Option<spec::Expr>,
-        _schema: &DFSchemaRef,
-        _state: &mut PlanResolverState,
+        struct_expression: spec::Expr,
+        field_name: spec::ObjectName,
+        value_expression: Option<spec::Expr>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        Err(PlanError::todo("update fields"))
+        let field_name: Vec<String> = field_name.into();
+        let NamedExpr { name, expr, .. } = self
+            .resolve_named_expression(struct_expression, schema, state)
+            .await?;
+        let name = name
+            .one()
+            .map_err(|_| PlanError::invalid("one name expected for expression"))?;
+        let column = match &expr {
+            expr::Expr::Column(column) => Ok(column),
+            _ => Err(PlanError::invalid("column expected in update fields")),
+        }?;
+        let _column_name = state.get_field_name(column.name())?.to_string();
+
+        if let Some(_value_expression) = value_expression {
+            Err(PlanError::todo(
+                "resolve_expression_update_fields with value_expression",
+            ))
+        } else {
+            let (_struct_qualifier, struct_field) =
+                schema.qualified_field_with_unqualified_name(column.name())?;
+            let _struct_type = match struct_field.data_type() {
+                DataType::Struct(fields) => fields,
+                _ => return Err(PlanError::invalid("Expected a struct type")),
+            };
+            let new_expr = expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func: Arc::new(ScalarUDF::from(DropStructField::new())),
+                args: vec![expr, lit(ScalarValue::from(field_name[0].as_str()))],
+            });
+            // println!("CHECK HERE:\nname: {name:?}\nstruct_expression: {struct_expression:?}\nfield_name: {field_name:?}\nvalue_expression: {value_expression:?}\nresolved_struct_expression:\n{name:?}\n{expr:?}\ncolumn: {column:?}\ncolumn_name: {column_name:?} struct_field: {struct_field:?}\nstruct_type: {struct_type:?}\nstruct_qualifier: {struct_qualifier:?}");
+            Ok(NamedExpr::new(vec![name], new_expr))
+        }
     }
 
     async fn resolve_expression_named_lambda_variable(

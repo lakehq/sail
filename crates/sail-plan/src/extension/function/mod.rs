@@ -1,4 +1,5 @@
 pub(crate) mod array;
+pub(crate) mod drop_struct_field;
 pub(crate) mod explode;
 pub(crate) mod levenshtein;
 pub(crate) mod map_function;
