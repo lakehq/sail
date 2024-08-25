@@ -10,18 +10,14 @@ use datafusion_expr::{ColumnarValue, Expr, ExprSchemable, ScalarUDFImpl, Signatu
 #[derive(Debug)]
 pub struct DropStructField {
     signature: Signature,
-}
-
-impl Default for DropStructField {
-    fn default() -> Self {
-        Self::new()
-    }
+    field_names: Vec<String>,
 }
 
 impl DropStructField {
-    pub fn new() -> Self {
+    pub fn new(field_names: Vec<String>) -> Self {
         Self {
-            signature: Signature::any(2, Volatility::Immutable),
+            signature: Signature::any(1, Volatility::Immutable),
+            field_names,
         }
     }
 }
@@ -36,23 +32,18 @@ impl ScalarUDFImpl for DropStructField {
     }
 
     fn display_name(&self, args: &[Expr]) -> Result<String> {
-        if args.len() != 2 {
+        if args.len() != 1 {
             return exec_err!(
-                "drop_struct_field function requires 2 arguments, got {}",
+                "drop_struct_field function requires 1 argument, got {}",
                 args.len()
             );
         }
 
-        let name = match &args[1] {
-            Expr::Literal(name) => name,
-            _ => {
-                return exec_err!(
-                    "drop_struct_field function requires the argument field_name to be a string"
-                );
-            }
-        };
-
-        Ok(format!("{}[{}]", args[0].display_name()?, name))
+        Ok(format!(
+            "{}[{}]",
+            args[0].display_name()?,
+            &self.field_names.join(".")
+        ))
     }
 
     fn signature(&self) -> &Signature {
@@ -69,24 +60,19 @@ impl ScalarUDFImpl for DropStructField {
         schema: &dyn ExprSchema,
         _arg_types: &[DataType],
     ) -> Result<DataType> {
-        if args.len() != 2 {
+        if args.len() != 1 {
             return exec_err!(
-                "drop_struct_field function requires 2 arguments, got {}",
+                "drop_struct_field function requires 1 argument, got {}",
                 args.len()
             );
         }
 
-        let name = match &args[1] {
-            Expr::Literal(name) => name,
-            _ => {
-                return exec_err!(
-                    "drop_struct_field function requires the argument field_name to be a string"
-                );
-            }
-        };
+        // Just testing, this is not the right way to deal with field names
+        let name = &self.field_names.join(".");
         let data_type = args[0].get_type(schema)?;
+
         match (data_type, name) {
-            (DataType::Struct(fields), ScalarValue::Utf8(Some(s))) => {
+            (DataType::Struct(fields), s) => {
                 if s.is_empty() {
                     plan_err!(
                         "Struct based indexed access requires a non empty string"
@@ -105,18 +91,15 @@ impl ScalarUDFImpl for DropStructField {
                     Ok(DataType::Struct(remaining_fields.into()))
                 }
             }
-            (DataType::Struct(_), _) => plan_err!(
-                "Only UTF8 strings are valid as an indexed field in a struct"
-            ),
             (DataType::Null, _) => Ok(DataType::Null),
             (other, _) => plan_err!("The expression to get an indexed field is only valid for `List`, `Struct`, or `Null` types, got {other}"),
         }
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if args.len() != 2 {
+        if args.len() != 1 {
             return exec_err!(
-                "drop_struct_field function requires 2 arguments, got {}",
+                "drop_struct_field function requires 1 argument, got {}",
                 args.len()
             );
         }
@@ -127,18 +110,11 @@ impl ScalarUDFImpl for DropStructField {
 
         let arrays = ColumnarValue::values_to_arrays(args)?;
         let array = Arc::clone(&arrays[0]);
-
-        let name = match &args[1] {
-            ColumnarValue::Scalar(name) => name,
-            _ => {
-                return exec_err!(
-                    "drop_struct_field function requires the argument field_name to be a string"
-                );
-            }
-        };
+        // Just testing, this is not the right way to deal with field names
+        let name = &self.field_names.join(".");
 
         match (array.data_type(), name) {
-            (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
+            (DataType::Struct(_), k) => {
                 let struct_array = as_struct_array(&array)?;
                 let drop_pos = struct_array.column_names().iter().position(|c| c == k);
                 match drop_pos {
@@ -164,10 +140,6 @@ impl ScalarUDFImpl for DropStructField {
                     }
                 }
             }
-            (DataType::Struct(_), name) => exec_err!(
-                "drop indexed field is only possible on struct with utf8 indexes. \
-                             Tried with {name:?} index"
-            ),
             (DataType::Null, _) => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
             (dt, name) => exec_err!(
                 "drop indexed field is only possible on lists with int64 indexes or struct \
