@@ -575,9 +575,7 @@ fn with_ast_table_alias(
     }
 }
 
-pub(crate) fn from_ast_with(
-    with: ast::With,
-) -> SqlResult<Vec<(spec::Identifier, spec::QueryPlan)>> {
+pub fn from_ast_with(with: ast::With) -> SqlResult<Vec<(spec::Identifier, spec::QueryPlan)>> {
     let mut ctes: Vec<(spec::Identifier, spec::QueryPlan)> = Vec::new();
     for cte in with.cte_tables {
         let cte_name = spec::Identifier::from(normalize_ident(cte.alias.name.clone()));

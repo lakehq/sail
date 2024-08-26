@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 
-use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use sail_common::config::{ConfigKeyValue, SparkUdfConfig};
@@ -11,6 +11,7 @@ use sail_plan::config::{PlanConfig, TimestampType};
 use sail_plan::formatter::DefaultPlanFormatter;
 use sail_plan::function::BUILT_IN_SCALAR_FUNCTIONS;
 use sail_plan::new_query_planner;
+use sail_plan::object_store::ExtendedObjectStoreRegistry;
 
 use crate::config::{ConfigKeyValueList, SparkRuntimeConfig};
 use crate::error::SparkResult;
@@ -70,7 +71,11 @@ impl Session {
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(16),
             );
-        let runtime = Arc::new(RuntimeEnv::default());
+        let runtime = {
+            let config = RuntimeConfig::default()
+                .with_object_store_registry(Arc::new(ExtendedObjectStoreRegistry::new()));
+            Arc::new(RuntimeEnv::new(config)?)
+        };
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
