@@ -1,6 +1,16 @@
 use datafusion::functions::expr_fn;
+use datafusion_common::ScalarValue;
+use datafusion_expr::{expr, lit};
 
+use crate::error::PlanResult;
 use crate::function::common::Function;
+use crate::utils::ItemTaker;
+
+fn year(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    let date = args.one()?;
+    let part = lit(ScalarValue::Utf8(Some("YEAR".to_string())));
+    Ok(expr_fn::date_part(part, date))
+}
 
 pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
@@ -67,6 +77,6 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("weekofyear", F::unknown("weekofyear")),
         ("window", F::unknown("window")),
         ("window_time", F::unknown("window_time")),
-        ("year", F::unknown("year")),
+        ("year", F::custom(year)),
     ]
 }

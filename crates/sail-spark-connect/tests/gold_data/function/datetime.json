@@ -2834,7 +2834,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: year"
+        "success": "ok"
       }
     }
   ]
