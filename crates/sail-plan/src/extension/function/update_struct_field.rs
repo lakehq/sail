@@ -93,13 +93,10 @@ impl UpdateStructField {
         }
 
         let struct_array = as_struct_array(&array)?;
-        let new_field = Field::new(
-            field_names
-                .last()
-                .ok_or_else(|| exec_datafusion_err!("empty attribute: {:?}", &field_names))?,
-            new_field_array.data_type().clone(),
-            true,
-        );
+        let last_field_name = field_names
+            .last()
+            .ok_or_else(|| exec_datafusion_err!("empty attribute: {:?}", &field_names))?;
+        let new_field = Field::new(last_field_name, new_field_array.data_type().clone(), true);
         let new_data_type =
             Self::update_nested_field(struct_array.data_type(), field_names, &new_field)?;
         let new_fields = match new_data_type {
@@ -109,7 +106,7 @@ impl UpdateStructField {
         let mut new_arrays = Vec::new();
 
         for field in new_fields.iter() {
-            if field.name() == field_names.last().unwrap() {
+            if field.name() == last_field_name {
                 if field_names.len() == 1 {
                     new_arrays.push(new_field_array.clone());
                 } else {
