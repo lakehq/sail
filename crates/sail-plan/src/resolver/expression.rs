@@ -19,6 +19,7 @@ use sail_python_udf::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::drop_struct_field::DropStructField;
+use crate::extension::function::update_struct_field::UpdateStructField;
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, get_built_in_window_function,
 };
@@ -1013,17 +1014,21 @@ impl PlanResolver<'_> {
             .one()
             .map_err(|_| PlanError::invalid("one name expected for expression"))?;
 
-        if let Some(_value_expression) = value_expression {
-            Err(PlanError::todo(
-                "resolve_expression_update_fields with value_expression",
-            ))
+        let new_expr = if let Some(value_expression) = value_expression {
+            let value_expr = self
+                .resolve_expression(value_expression, schema, state)
+                .await?;
+            expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func: Arc::new(ScalarUDF::from(UpdateStructField::new(field_name))),
+                args: vec![expr, value_expr],
+            })
         } else {
-            let new_expr = expr::Expr::ScalarFunction(expr::ScalarFunction {
+            expr::Expr::ScalarFunction(expr::ScalarFunction {
                 func: Arc::new(ScalarUDF::from(DropStructField::new(field_name))),
                 args: vec![expr],
-            });
-            Ok(NamedExpr::new(vec![name], new_expr))
-        }
+            })
+        };
+        Ok(NamedExpr::new(vec![name], new_expr))
     }
 
     async fn resolve_expression_named_lambda_variable(

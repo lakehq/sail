@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{Array, ArrayRef, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_struct_array;
-use datafusion_common::{exec_err, plan_err, ExprSchema, Result, ScalarValue};
+use datafusion_common::{exec_err, plan_err, ExprSchema, Result};
 use datafusion_expr::{ColumnarValue, Expr, ExprSchemable, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
@@ -27,6 +27,7 @@ impl DropStructField {
                 if field_names.is_empty() {
                     return plan_err!("Field name cannot be empty");
                 }
+
                 let current_field = &field_names[0];
                 let mut new_fields = Vec::new();
                 let mut field_found = false;
@@ -60,26 +61,24 @@ impl DropStructField {
         }
     }
 
-    fn drop_nested_field_from_array(array: ArrayRef, field_names: &[String]) -> Result<ArrayRef> {
-        let struct_array = as_struct_array(&array)?;
-
+    fn drop_nested_field_from_array(array: &ArrayRef, field_names: &[String]) -> Result<ArrayRef> {
         if field_names.is_empty() {
             return exec_err!("Field name cannot be empty");
         }
 
+        let struct_array = as_struct_array(&array)?;
         let new_data_type = Self::drop_nested_field(struct_array.data_type(), field_names)?;
         let new_fields = match new_data_type {
             DataType::Struct(fields) => fields,
             _ => unreachable!("drop_nested_field should always return a Struct"),
         };
-
         let mut new_arrays = Vec::new();
 
         for field in new_fields.iter() {
             if let Some(column) = struct_array.column_by_name(field.name()) {
                 if field.data_type() != column.data_type() {
                     let new_array =
-                        Self::drop_nested_field_from_array(column.clone(), &field_names[1..])?;
+                        Self::drop_nested_field_from_array(&Arc::clone(column), &field_names[1..])?;
                     new_arrays.push(new_array);
                 } else {
                     new_arrays.push(column.clone());
@@ -126,7 +125,6 @@ impl ScalarUDFImpl for DropStructField {
                 args.len()
             );
         }
-
         let data_type = args[0].get_type(schema)?;
         Self::drop_nested_field(&data_type, &self.field_names)
     }
@@ -138,14 +136,9 @@ impl ScalarUDFImpl for DropStructField {
                 args.len()
             );
         }
-
-        if args[0].data_type().is_null() {
-            return Ok(ColumnarValue::Scalar(ScalarValue::Null));
-        }
-
         let arrays = ColumnarValue::values_to_arrays(args)?;
         let array = Arc::clone(&arrays[0]);
-        let new_array = Self::drop_nested_field_from_array(array, &self.field_names)?;
+        let new_array = Self::drop_nested_field_from_array(&array, &self.field_names)?;
         Ok(ColumnarValue::Array(new_array))
     }
 }

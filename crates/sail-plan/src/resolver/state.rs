@@ -54,16 +54,6 @@ impl PlanResolverState {
         resolved
     }
 
-    #[allow(dead_code)]
-    pub fn deregister_field(&mut self, resolved: &str) -> PlanResult<()> {
-        if self.fields.remove(resolved).is_none() {
-            return Err(PlanError::internal(format!(
-                "unknown resolved field: {resolved}"
-            )));
-        }
-        Ok(())
-    }
-
     pub fn register_anonymous_field(&mut self) -> ResolvedFieldName {
         self.register_field("")
     }
