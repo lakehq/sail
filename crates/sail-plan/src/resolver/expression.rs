@@ -1012,11 +1012,6 @@ impl PlanResolver<'_> {
         let name = name
             .one()
             .map_err(|_| PlanError::invalid("one name expected for expression"))?;
-        let column = match &expr {
-            expr::Expr::Column(column) => Ok(column),
-            _ => Err(PlanError::invalid("column expected in update fields")),
-        }?;
-        let _column_name = state.get_field_name(column.name())?.to_string();
 
         if let Some(_value_expression) = value_expression {
             Err(PlanError::todo(

@@ -2,7 +2,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, StructArray};
-use datafusion::arrow::datatypes::{DataType, Fields};
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_struct_array;
 use datafusion_common::{exec_err, plan_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Expr, ExprSchemable, ScalarUDFImpl, Signature, Volatility};
@@ -20,6 +20,81 @@ impl DropStructField {
             field_names,
         }
     }
+
+    fn drop_nested_field(data_type: &DataType, field_names: &[String]) -> Result<DataType> {
+        match data_type {
+            DataType::Struct(fields) => {
+                if field_names.is_empty() {
+                    return plan_err!("Field name cannot be empty");
+                }
+                let current_field = &field_names[0];
+                let mut new_fields = Vec::new();
+                let mut field_found = false;
+
+                for field in fields.iter() {
+                    if field.name() == current_field {
+                        field_found = true;
+                        if field_names.len() == 1 {
+                            continue;
+                        } else {
+                            let new_data_type =
+                                Self::drop_nested_field(field.data_type(), &field_names[1..])?;
+                            new_fields.push(Arc::new(Field::new(
+                                field.name(),
+                                new_data_type,
+                                field.is_nullable(),
+                            )));
+                        }
+                    } else {
+                        new_fields.push(Arc::clone(field));
+                    }
+                }
+
+                if !field_found {
+                    plan_err!("Field `{current_field}` not found")
+                } else {
+                    Ok(DataType::Struct(new_fields.into()))
+                }
+            }
+            _ => plan_err!("Expected Struct, found {data_type}"),
+        }
+    }
+
+    fn drop_nested_field_from_array(array: ArrayRef, field_names: &[String]) -> Result<ArrayRef> {
+        let struct_array = as_struct_array(&array)?;
+
+        if field_names.is_empty() {
+            return exec_err!("Field name cannot be empty");
+        }
+
+        let new_data_type = Self::drop_nested_field(struct_array.data_type(), field_names)?;
+        let new_fields = match new_data_type {
+            DataType::Struct(fields) => fields,
+            _ => unreachable!("drop_nested_field should always return a Struct"),
+        };
+
+        let mut new_arrays = Vec::new();
+
+        for field in new_fields.iter() {
+            if let Some(column) = struct_array.column_by_name(field.name()) {
+                if field.data_type() != column.data_type() {
+                    let new_array =
+                        Self::drop_nested_field_from_array(column.clone(), &field_names[1..])?;
+                    new_arrays.push(new_array);
+                } else {
+                    new_arrays.push(column.clone());
+                }
+            } else {
+                return exec_err!("Field `{}` not found", field.name());
+            }
+        }
+
+        Ok(Arc::new(StructArray::try_new(
+            new_fields,
+            new_arrays,
+            struct_array.nulls().cloned(),
+        )?))
+    }
 }
 
 impl ScalarUDFImpl for DropStructField {
@@ -29,21 +104,6 @@ impl ScalarUDFImpl for DropStructField {
 
     fn name(&self) -> &str {
         "drop_struct_field"
-    }
-
-    fn display_name(&self, args: &[Expr]) -> Result<String> {
-        if args.len() != 1 {
-            return exec_err!(
-                "drop_struct_field function requires 1 argument, got {}",
-                args.len()
-            );
-        }
-
-        Ok(format!(
-            "{}[{}]",
-            args[0].display_name()?,
-            &self.field_names.join(".")
-        ))
     }
 
     fn signature(&self) -> &Signature {
@@ -67,33 +127,8 @@ impl ScalarUDFImpl for DropStructField {
             );
         }
 
-        // Just testing, this is not the right way to deal with field names
-        let name = &self.field_names.join(".");
         let data_type = args[0].get_type(schema)?;
-
-        match (data_type, name) {
-            (DataType::Struct(fields), s) => {
-                if s.is_empty() {
-                    plan_err!(
-                        "Struct based indexed access requires a non empty string"
-                    )
-                } else {
-                    let remaining_fields: Vec<_> = fields
-                        .iter()
-                        .filter_map(|f| {
-                            if f.name() != s {
-                                Some(f.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    Ok(DataType::Struct(remaining_fields.into()))
-                }
-            }
-            (DataType::Null, _) => Ok(DataType::Null),
-            (other, _) => plan_err!("The expression to get an indexed field is only valid for `List`, `Struct`, or `Null` types, got {other}"),
-        }
+        Self::drop_nested_field(&data_type, &self.field_names)
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -110,41 +145,7 @@ impl ScalarUDFImpl for DropStructField {
 
         let arrays = ColumnarValue::values_to_arrays(args)?;
         let array = Arc::clone(&arrays[0]);
-        // Just testing, this is not the right way to deal with field names
-        let name = &self.field_names.join(".");
-
-        match (array.data_type(), name) {
-            (DataType::Struct(_), k) => {
-                let struct_array = as_struct_array(&array)?;
-                let drop_pos = struct_array.column_names().iter().position(|c| c == k);
-                match drop_pos {
-                    None => exec_err!("drop indexed field {k} not found in struct"),
-                    Some(pos) => {
-                        let filtered_columns: Vec<ArrayRef> = struct_array
-                            .columns()
-                            .iter()
-                            .enumerate()
-                            .filter(|(i, _)| *i != pos)
-                            .map(|(_, field)| Arc::clone(field))
-                            .collect();
-                        let filtered_fields: Fields = struct_array
-                            .fields()
-                            .iter()
-                            .enumerate()
-                            .filter(|(i, _)| *i != pos)
-                            .map(|(_, field)| Arc::clone(field))
-                            .collect();
-                        let new_struct_array =
-                            Arc::new(StructArray::new(filtered_fields, filtered_columns, None));
-                        Ok(ColumnarValue::Array(new_struct_array))
-                    }
-                }
-            }
-            (DataType::Null, _) => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
-            (dt, name) => exec_err!(
-                "drop indexed field is only possible on lists with int64 indexes or struct \
-                                         with utf8 indexes. Tried {dt:?} with {name:?} index"
-            ),
-        }
+        let new_array = Self::drop_nested_field_from_array(array, &self.field_names)?;
+        Ok(ColumnarValue::Array(new_array))
     }
 }
