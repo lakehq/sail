@@ -12,6 +12,11 @@ fn year(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     Ok(expr_fn::date_part(part, date))
 }
 
+fn trunc(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    let (date, part) = args.two()?;
+    Ok(expr_fn::date_trunc(part, date))
+}
+
 pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -66,7 +71,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("to_timestamp_ntz", F::unknown("to_timestamp_ntz")),
         ("to_unix_timestamp", F::unknown("to_unix_timestamp")),
         ("to_utc_timestamp", F::unknown("to_utc_timestamp")),
-        ("trunc", F::unknown("trunc")),
+        ("trunc", F::custom(trunc)),
         ("try_to_timestamp", F::unknown("try_to_timestamp")),
         ("unix_date", F::unknown("unix_date")),
         ("unix_micros", F::unknown("unix_micros")),
