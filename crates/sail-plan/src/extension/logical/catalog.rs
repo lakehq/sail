@@ -286,11 +286,10 @@ impl CatalogCommand {
                 location,
                 properties,
             } => {
-                let value = manager
+                manager
                     .create_database(database, if_not_exists, comment, location, properties)
-                    .await
-                    .is_ok();
-                let rows = vec![SingleValueMetadata { value }];
+                    .await?;
+                let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
             }
             CatalogCommand::DatabaseExists { database } => {
@@ -317,11 +316,8 @@ impl CatalogCommand {
                 if_exists,
                 cascade,
             } => {
-                let value = manager
-                    .drop_database(database, if_exists, cascade)
-                    .await
-                    .is_ok();
-                let rows = vec![SingleValueMetadata { value }];
+                manager.drop_database(database, if_exists, cascade).await?;
+                let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
             }
             CatalogCommand::CreateTable {
@@ -341,7 +337,7 @@ impl CatalogCommand {
                 definition,
                 copy_to_plan,
             } => {
-                let value = manager
+                manager
                     .create_table(CatalogCommand::CreateTable {
                         table,
                         schema,
@@ -359,9 +355,8 @@ impl CatalogCommand {
                         definition,
                         copy_to_plan,
                     })
-                    .await
-                    .is_ok();
-                let rows = vec![SingleValueMetadata { value }];
+                    .await?;
+                let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
             }
             CatalogCommand::TableExists { table } => {
@@ -390,8 +385,8 @@ impl CatalogCommand {
                 if_exists,
                 purge,
             } => {
-                let value = manager.drop_table(table, if_exists, purge).await.is_ok();
-                let rows = vec![SingleValueMetadata { value }];
+                manager.drop_table(table, if_exists, purge).await?;
+                let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
             }
             CatalogCommand::ListColumns { table } => {
@@ -418,13 +413,13 @@ impl CatalogCommand {
                 if_exists,
             } => {
                 // TODO: use the correct catalog and database for global temporary views
-                let value = manager.drop_temporary_view(view, if_exists).await.is_ok();
-                let rows = vec![SingleValueMetadata { value }];
+                manager.drop_temporary_view(view, if_exists).await?;
+                let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
             }
             CatalogCommand::DropView { view, if_exists } => {
-                let value = manager.drop_view(view, if_exists).await.is_ok();
-                let rows = vec![SingleValueMetadata { value }];
+                manager.drop_view(view, if_exists).await?;
+                let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
             }
             CatalogCommand::CreateTemporaryView {
@@ -435,11 +430,10 @@ impl CatalogCommand {
                 temporary,
                 definition,
             } => {
-                let value = manager
+                manager
                     .create_view(input, view, is_global, replace, temporary, definition)
-                    .await
-                    .is_ok();
-                let rows = vec![SingleValueMetadata { value }];
+                    .await?;
+                let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
             }
         };
