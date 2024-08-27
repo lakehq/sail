@@ -4,8 +4,8 @@ use std::sync::Arc;
 use datafusion::arrow::array::{Array, ArrayRef, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_struct_array;
-use datafusion_common::{exec_datafusion_err, exec_err, plan_err, ExprSchema, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, Expr, ExprSchemable, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result, ScalarValue};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub struct UpdateStructField {
@@ -149,32 +149,23 @@ impl ScalarUDFImpl for UpdateStructField {
         &self.signature
     }
 
-    fn return_type(&self, _: &[DataType]) -> Result<DataType> {
-        todo!()
-    }
-
-    fn return_type_from_exprs(
-        &self,
-        args: &[Expr],
-        schema: &dyn ExprSchema,
-        _arg_types: &[DataType],
-    ) -> Result<DataType> {
-        if args.len() != 2 {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types.len() != 2 {
             return exec_err!(
                 "update_struct_field function requires 2 arguments, got {}",
-                args.len()
+                arg_types.len()
             );
         }
-        let data_type = args[0].get_type(schema)?;
-        let new_field_type = args[1].get_type(schema)?;
+        let data_type = &arg_types[0];
+        let new_field_type = &arg_types[1];
         let new_field = Field::new(
             self.field_names
                 .last()
                 .ok_or_else(|| exec_datafusion_err!("empty attribute: {:?}", &self.field_names))?,
-            new_field_type,
+            new_field_type.clone(),
             true,
         );
-        Self::update_nested_field(&data_type, &self.field_names, &new_field)
+        Self::update_nested_field(data_type, &self.field_names, &new_field)
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {

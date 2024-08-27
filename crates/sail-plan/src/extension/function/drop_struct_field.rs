@@ -4,8 +4,8 @@ use std::sync::Arc;
 use datafusion::arrow::array::{Array, ArrayRef, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_struct_array;
-use datafusion_common::{exec_err, plan_err, ExprSchema, Result};
-use datafusion_expr::{ColumnarValue, Expr, ExprSchemable, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{exec_err, plan_err, Result};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub struct DropStructField {
@@ -108,24 +108,14 @@ impl ScalarUDFImpl for DropStructField {
         &self.signature
     }
 
-    fn return_type(&self, _: &[DataType]) -> Result<DataType> {
-        todo!()
-    }
-
-    fn return_type_from_exprs(
-        &self,
-        args: &[Expr],
-        schema: &dyn ExprSchema,
-        _arg_types: &[DataType],
-    ) -> Result<DataType> {
-        if args.len() != 1 {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types.len() != 1 {
             return exec_err!(
                 "drop_struct_field function requires 1 argument, got {}",
-                args.len()
+                arg_types.len()
             );
         }
-        let data_type = args[0].get_type(schema)?;
-        Self::drop_nested_field(&data_type, &self.field_names)
+        Self::drop_nested_field(&arg_types[0], &self.field_names)
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
