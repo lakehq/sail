@@ -77,11 +77,10 @@ impl DropStructField {
         for field in new_fields.iter() {
             if let Some(column) = struct_array.column_by_name(field.name()) {
                 if field.data_type() != column.data_type() {
-                    let new_array =
-                        Self::drop_nested_field_from_array(&Arc::clone(column), &field_names[1..])?;
+                    let new_array = Self::drop_nested_field_from_array(column, &field_names[1..])?;
                     new_arrays.push(new_array);
                 } else {
-                    new_arrays.push(column.clone());
+                    new_arrays.push(Arc::clone(column));
                 }
             } else {
                 return exec_err!("Field `{}` not found", field.name());

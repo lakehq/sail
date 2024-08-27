@@ -84,9 +84,9 @@ impl UpdateStructField {
     }
 
     fn update_nested_field_from_array(
-        array: ArrayRef,
+        array: &ArrayRef,
         field_names: &[String],
-        new_field_array: ArrayRef,
+        new_field_array: &ArrayRef,
     ) -> Result<ArrayRef> {
         if field_names.is_empty() {
             return exec_err!("Field name cannot be empty");
@@ -108,21 +108,21 @@ impl UpdateStructField {
         for field in new_fields.iter() {
             if field.name() == last_field_name {
                 if field_names.len() == 1 {
-                    new_arrays.push(new_field_array.clone());
+                    new_arrays.push(Arc::clone(new_field_array));
                 } else {
                     let existing_column =
                         struct_array.column_by_name(field.name()).ok_or_else(|| {
                             exec_datafusion_err!("Field `{}` not found", field.name())
                         })?;
                     let new_array = Self::update_nested_field_from_array(
-                        existing_column.clone(),
+                        existing_column,
                         &field_names[1..],
-                        new_field_array.clone(),
+                        new_field_array,
                     )?;
                     new_arrays.push(new_array);
                 }
             } else if let Some(column) = struct_array.column_by_name(field.name()) {
-                new_arrays.push(column.clone());
+                new_arrays.push(Arc::clone(column));
             } else {
                 return exec_err!("Unexpected field `{}` in updated struct", field.name());
             }
@@ -190,9 +190,12 @@ impl ScalarUDFImpl for UpdateStructField {
 
         let arrays = ColumnarValue::values_to_arrays(args)?;
         let struct_array = Arc::clone(&arrays[0]);
-        let new_field_array = Arc::clone(&arrays[1]);
-        let new_array =
-            Self::update_nested_field_from_array(struct_array, &self.field_names, new_field_array)?;
+        let new_field_array = &arrays[1];
+        let new_array = Self::update_nested_field_from_array(
+            &struct_array,
+            &self.field_names,
+            new_field_array,
+        )?;
         Ok(ColumnarValue::Array(new_array))
     }
 }
