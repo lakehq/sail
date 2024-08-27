@@ -73,6 +73,7 @@ pyo3 = { version = "0.21.2", features = ["auto-initialize", "serde"] }
 # Should be the equivalent of enabling the pyarrow feature in datafusion since we already have pyo3 in the workspace
 arrow = { version = "52.2.0", features = ["ffi", "pyarrow"] }
 arrow-cast = { version = "52.2.0" }
+# The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.10.2", features = ["aws", "gcp", "http"] }
 # We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.
 sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "f631629", features = ["serde", "visitor"] }
