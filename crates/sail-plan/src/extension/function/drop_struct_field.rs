@@ -136,8 +136,8 @@ impl ScalarUDFImpl for DropStructField {
             );
         }
         let arrays = ColumnarValue::values_to_arrays(args)?;
-        let array = Arc::clone(&arrays[0]);
-        let new_array = Self::drop_nested_field_from_array(&array, &self.field_names)?;
+        let array = &arrays[0];
+        let new_array = Self::drop_nested_field_from_array(array, &self.field_names)?;
         Ok(ColumnarValue::Array(new_array))
     }
 }

@@ -189,13 +189,10 @@ impl ScalarUDFImpl for UpdateStructField {
         }
 
         let arrays = ColumnarValue::values_to_arrays(args)?;
-        let struct_array = Arc::clone(&arrays[0]);
+        let struct_array = &arrays[0];
         let new_field_array = &arrays[1];
-        let new_array = Self::update_nested_field_from_array(
-            &struct_array,
-            &self.field_names,
-            new_field_array,
-        )?;
+        let new_array =
+            Self::update_nested_field_from_array(struct_array, &self.field_names, new_field_array)?;
         Ok(ColumnarValue::Array(new_array))
     }
 }
