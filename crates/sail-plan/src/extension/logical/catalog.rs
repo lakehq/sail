@@ -158,6 +158,7 @@ pub(crate) enum CatalogCommand {
         view: TableReference,
         is_global: bool,
         replace: bool,
+        temporary: bool,
         definition: Option<String>,
     },
 }
@@ -431,10 +432,11 @@ impl CatalogCommand {
                 view,
                 is_global,
                 replace,
+                temporary,
                 definition,
             } => {
                 let value = manager
-                    .create_view(input, view, is_global, replace, definition)
+                    .create_view(input, view, is_global, replace, temporary, definition)
                     .await
                     .is_ok();
                 let rows = vec![SingleValueMetadata { value }];

@@ -639,9 +639,13 @@ pub struct CatalogDefinition {
 #[serde(rename_all = "camelCase")]
 pub struct TemporaryViewDefinition {
     pub input: Box<QueryPlan>,
-    pub columns: Vec<Identifier>,
+    pub columns: Option<Vec<Identifier>>,
     pub is_global: bool,
     pub replace: bool,
+    /// Whether to create a temporary view.
+    /// The Spark Connect operation creates a temporary view,
+    /// while the SQL command creates a view.
+    pub temporary: bool,
     pub definition: Option<String>,
 }
 

@@ -3,18 +3,13 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::compute::concat_batches;
-use datafusion::common::TableReference;
 use sail_common::spec;
-use sail_common::utils::rename_logical_plan;
-use sail_plan::extension::source::temporary_table::TemporaryTableProvider;
-use sail_plan::resolver::plan::NamedPlan;
-use sail_plan::resolver::PlanResolver;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
 use tracing::debug;
 
-use crate::error::{ProtoFieldExt, SparkError, SparkResult};
+use crate::error::{SparkError, SparkResult};
 use crate::executor::{
     read_stream, to_arrow_batch, Executor, ExecutorBatch, ExecutorMetadata, ExecutorOutput,
 };
@@ -24,8 +19,7 @@ use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
 };
 use crate::spark::connect::{
-    relation, CommonInlineUserDefinedFunction as SCCommonInlineUserDefinedFunction,
-    CommonInlineUserDefinedTableFunction as SCCommonInlineUserDefinedTableFunction,
+    relation, CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
     CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, LocalRelation, Relation,
     SqlCommand, StreamingQueryCommand, StreamingQueryManagerCommand, WriteOperation,
     WriteOperationV2, WriteStreamOperationStart,
@@ -146,7 +140,7 @@ pub(crate) async fn handle_execute_relation(
 
 pub(crate) async fn handle_execute_register_function(
     session: Arc<Session>,
-    udf: SCCommonInlineUserDefinedFunction,
+    udf: CommonInlineUserDefinedFunction,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let plan = spec::Plan::Command(spec::CommandPlan::new(spec::CommandNode::RegisterFunction(
@@ -171,30 +165,8 @@ pub(crate) async fn handle_execute_create_dataframe_view(
     view: CreateDataFrameViewCommand,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    let ctx = session.context();
-    let relation = view.input.required("input relation")?;
-    let resolver = PlanResolver::new(ctx, session.plan_config()?);
-    let NamedPlan { plan, fields } = resolver.resolve_named_plan(relation.try_into()?).await?;
-    let plan = if let Some(fields) = fields {
-        rename_logical_plan(plan, &fields)?
-    } else {
-        plan
-    };
-    let table_ref = TableReference::from(view.name.as_str());
-    let _ = view.is_global; // TODO: global view
-    if view.replace {
-        ctx.deregister_table(table_ref.clone())?;
-    }
-    ctx.register_table(table_ref, Arc::new(TemporaryTableProvider::new(plan)))?;
-    let (tx, rx) = tokio::sync::mpsc::channel(1);
-    if metadata.reattachable {
-        tx.send(ExecutorOutput::complete()).await?;
-    }
-    Ok(ExecutePlanResponseStream::new(
-        session.session_id().to_string(),
-        metadata.operation_id,
-        ReceiverStream::new(rx),
-    ))
+    let plan = spec::Plan::Command(spec::CommandPlan::new(view.try_into()?));
+    handle_execute_plan(session, plan, metadata, ExecutePlanMode::EagerSilent).await
 }
 
 pub(crate) async fn handle_execute_write_operation_v2(
@@ -287,7 +259,7 @@ pub(crate) async fn handle_execute_streaming_query_manager_command(
 
 pub(crate) async fn handle_execute_register_table_function(
     session: Arc<Session>,
-    udtf: SCCommonInlineUserDefinedTableFunction,
+    udtf: CommonInlineUserDefinedTableFunction,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let plan = spec::Plan::Command(spec::CommandPlan::new(

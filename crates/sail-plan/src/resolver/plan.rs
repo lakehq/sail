@@ -28,7 +28,7 @@ use datafusion_expr::utils::{
     columnize_expr, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
     find_aggregate_exprs,
 };
-use datafusion_expr::{build_join_schema, col, LogicalPlanBuilder, ScalarUDF};
+use datafusion_expr::{build_join_schema, LogicalPlanBuilder, ScalarUDF};
 use sail_common::spec;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
@@ -1876,36 +1876,21 @@ impl PlanResolver<'_> {
             columns,
             is_global,
             replace,
+            temporary,
             definition,
         } = view_definition;
-        let columns: Vec<String> = columns.into_iter().map(String::from).collect();
         let input = self.resolve_query_plan(*input, state).await?;
-        let input = if !columns.is_empty() {
-            // Not sure if we need to do this but this is what datafusion does
-            let fields = input.schema().fields().clone();
-            if columns.len() != fields.len() {
-                return Err(PlanError::invalid(format!(
-                    "Source table contains {} columns but only {} names given as column alias",
-                    fields.len(),
-                    columns.len()
-                )));
-            }
-            LogicalPlanBuilder::from(input)
-                .project(
-                    fields
-                        .iter()
-                        .zip(columns.into_iter())
-                        .map(|(field, column)| col(field.name()).alias(column)),
-                )?
-                .build()?
-        } else {
-            input
+        let fields = match columns {
+            Some(columns) => columns.into_iter().map(String::from).collect(),
+            None => state.get_field_names(input.schema().inner())?,
         };
+        let input = rename_logical_plan(input, &fields)?;
         let command = CatalogCommand::CreateTemporaryView {
             input: Arc::new(input),
             view: build_table_reference(view)?,
             is_global,
             replace,
+            temporary,
             definition,
         };
         self.resolve_catalog_command(command)

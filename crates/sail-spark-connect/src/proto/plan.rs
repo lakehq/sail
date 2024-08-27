@@ -8,7 +8,8 @@ use crate::spark::connect as sc;
 use crate::spark::connect::catalog::CatType;
 use crate::spark::connect::relation::RelType;
 use crate::spark::connect::{
-    plan, Catalog, Plan, Relation, RelationCommon, WriteOperation, WriteOperationV2,
+    plan, Catalog, CreateDataFrameViewCommand, Plan, Relation, RelationCommon, WriteOperation,
+    WriteOperationV2,
 };
 
 struct RelationMetadata {
@@ -1490,6 +1491,32 @@ impl TryFrom<WriteOperationV2> for spec::Write {
             options,
             table_properties,
             overwrite_condition,
+        })
+    }
+}
+
+impl TryFrom<CreateDataFrameViewCommand> for spec::CommandNode {
+    type Error = SparkError;
+
+    fn try_from(command: CreateDataFrameViewCommand) -> SparkResult<spec::CommandNode> {
+        let CreateDataFrameViewCommand {
+            input,
+            name,
+            is_global,
+            replace,
+        } = command;
+        let input = input.required("input relation")?.try_into()?;
+        let view = parse_object_name(name.as_str())?;
+        Ok(spec::CommandNode::CreateTemporaryView {
+            view,
+            definition: spec::TemporaryViewDefinition {
+                input: Box::new(input),
+                columns: None,
+                is_global,
+                replace,
+                temporary: true,
+                definition: None,
+            },
         })
     }
 }
