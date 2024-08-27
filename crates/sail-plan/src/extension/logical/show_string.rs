@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use comfy_table::{Cell, CellAlignment, ColumnConstraint, Table, Width};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use sail_common::display::{ArrayFormatter, FormatOptions};
 use sail_common::schema::escape_meta_characters;
 
 use crate::utils::ItemTaker;
