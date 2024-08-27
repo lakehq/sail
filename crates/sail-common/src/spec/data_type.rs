@@ -1,10 +1,8 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CommonError, CommonResult};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum DataType {
     Null,
@@ -67,23 +65,23 @@ impl DataType {
                 name: default_field_name.to_string(),
                 data_type: x,
                 nullable,
-                metadata: HashMap::new(),
+                metadata: vec![],
             }]),
         };
         Schema { fields }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct Field {
     pub name: String,
     pub data_type: DataType,
     pub nullable: bool,
-    pub metadata: HashMap<String, String>,
+    pub metadata: Vec<(String, String)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct Fields(pub Vec<Field>);
 
 impl Fields {
@@ -108,7 +106,7 @@ impl From<Vec<Field>> for Fields {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "camelCase")]
 pub enum DayTimeIntervalField {
     Day = 0,
@@ -134,7 +132,7 @@ impl TryFrom<i32> for DayTimeIntervalField {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "camelCase")]
 pub enum YearMonthIntervalField {
     Year = 0,

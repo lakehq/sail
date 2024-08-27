@@ -12,11 +12,11 @@ use datafusion_expr::{
 };
 
 pub struct TemporaryTableProvider {
-    plan: LogicalPlan,
+    plan: Arc<LogicalPlan>,
 }
 
 impl TemporaryTableProvider {
-    pub fn new(plan: LogicalPlan) -> Self {
+    pub fn new(plan: Arc<LogicalPlan>) -> Self {
         Self { plan }
     }
 }
@@ -47,7 +47,7 @@ impl TableProvider for TemporaryTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut expr = LogicalPlanBuilder::from(self.plan.clone());
+        let mut expr = LogicalPlanBuilder::from(self.plan.as_ref().clone());
         let filter = filters.iter().cloned().reduce(|acc, new| acc.and(new));
         if let Some(filter) = filter {
             expr = expr.filter(filter)?

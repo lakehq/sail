@@ -7,7 +7,7 @@ use sail_plan::resolver::plan::NamedPlan;
 use sail_plan::resolver::PlanResolver;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::executor::{execute_plan, read_stream};
+use crate::executor::read_stream;
 use crate::proto::data_type::parse_spark_data_type;
 use crate::schema::{to_spark_schema, to_tree_string};
 use crate::session::Session;
@@ -69,10 +69,7 @@ pub(crate) async fn handle_analyze_explain(
         mode: explain_mode.try_into()?,
         input: Box::new(plan.try_into()?),
     }));
-    let ctx = session.context();
-    let resolver = PlanResolver::new(ctx, session.plan_config()?);
-    let explain = resolver.resolve_named_plan(explain).await?;
-    let stream = execute_plan(ctx, explain).await?;
+    let stream = session.execute_plan(explain).await?;
     let batches = read_stream(stream).await?;
     Ok(ExplainResponse {
         // FIXME: The explain output should not be formatted as a table.

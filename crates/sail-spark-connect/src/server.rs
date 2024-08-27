@@ -92,23 +92,30 @@ impl SparkConnectService for SparkConnectServer {
                             .await?
                     }
                     CommandType::WriteOperationV2(write) => {
-                        service::handle_execute_write_operation_v2(session, write).await?
+                        service::handle_execute_write_operation_v2(session, write, metadata).await?
                     }
                     CommandType::SqlCommand(sql) => {
                         service::handle_execute_sql_command(session, sql, metadata).await?
                     }
                     CommandType::WriteStreamOperationStart(start) => {
-                        service::handle_execute_write_stream_operation_start(session, start).await?
+                        service::handle_execute_write_stream_operation_start(
+                            session, start, metadata,
+                        )
+                        .await?
                     }
                     CommandType::StreamingQueryCommand(stream) => {
-                        service::handle_execute_streaming_query_command(session, stream).await?
+                        service::handle_execute_streaming_query_command(session, stream, metadata)
+                            .await?
                     }
                     CommandType::GetResourcesCommand(resource) => {
-                        service::handle_execute_get_resources_command(session, resource).await?
+                        service::handle_execute_get_resources_command(session, resource, metadata)
+                            .await?
                     }
                     CommandType::StreamingQueryManagerCommand(manager) => {
-                        service::handle_execute_streaming_query_manager_command(session, manager)
-                            .await?
+                        service::handle_execute_streaming_query_manager_command(
+                            session, manager, metadata,
+                        )
+                        .await?
                     }
                     CommandType::RegisterTableFunction(udtf) => {
                         service::handle_execute_register_table_function(session, udtf, metadata)

@@ -78,7 +78,7 @@ impl TableProvider for PySparkUserDefinedTable {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct PySparkUDTF {
     return_type: DataType,
     return_schema: SchemaRef,

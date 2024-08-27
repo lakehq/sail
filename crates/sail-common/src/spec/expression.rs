@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
 use crate::spec::data_type::DataType;
@@ -27,7 +25,7 @@ pub enum Expr {
         expr: Box<Expr>,
         /// A single identifier, or multiple identifiers for multi-alias.
         name: Vec<Identifier>,
-        metadata: Option<HashMap<String, String>>,
+        metadata: Option<Vec<(String, String)>>,
     },
     Cast {
         expr: Box<Expr>,
@@ -265,7 +263,7 @@ pub struct CommonInlineUserDefinedTableFunction {
     pub function: TableFunctionDefinition,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum TableFunctionDefinition {
     PythonUdtf {

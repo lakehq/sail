@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use sail_common::spec;
 use sail_sql::data_type::parse_data_type;
 use sail_sql::expression::{
@@ -67,14 +69,14 @@ impl TryFrom<Expression> for spec::Expr {
                     metadata,
                 } = *alias;
                 let expr = expr.required("alias expression")?;
-                let metadata = metadata
+                let metadata: Option<HashMap<String, String>> = metadata
                     .map(|x| serde_json::from_str(&x).map_err(SparkError::from))
                     .transpose()?;
                 let name: Vec<spec::Identifier> = name.into_iter().map(|x| x.into()).collect();
                 Ok(spec::Expr::Alias {
                     expr: Box::new((*expr).try_into()?),
                     name,
-                    metadata,
+                    metadata: metadata.map(|x| x.into_iter().collect()),
                 })
             }
             ExprType::Cast(cast) => {

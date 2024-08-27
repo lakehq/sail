@@ -3,17 +3,27 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 
+#[cfg(test)]
+use arrow::array::RecordBatch;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::execution::SendableRecordBatchStream;
+use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use sail_common::config::{ConfigKeyValue, SparkUdfConfig};
+use sail_common::spec;
+use sail_common::utils::rename_physical_plan;
 use sail_plan::config::{PlanConfig, TimestampType};
 use sail_plan::formatter::DefaultPlanFormatter;
 use sail_plan::function::BUILT_IN_SCALAR_FUNCTIONS;
-use sail_plan::new_query_planner;
+use sail_plan::resolver::plan::NamedPlan;
+use sail_plan::resolver::PlanResolver;
+use sail_plan::{execute_logical_plan, new_query_planner};
 
 use crate::config::{ConfigKeyValueList, SparkRuntimeConfig};
 use crate::error::SparkResult;
+#[cfg(test)]
+use crate::executor::read_stream;
 use crate::executor::Executor;
 use crate::spark::config::{
     SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH,
@@ -270,6 +280,40 @@ impl Session {
             }
         }
         Ok(removed)
+    }
+
+    pub(crate) async fn execute_plan(
+        &self,
+        plan: spec::Plan,
+    ) -> SparkResult<SendableRecordBatchStream> {
+        let ctx = self.context();
+        let resolver = PlanResolver::new(ctx, self.plan_config()?);
+        let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
+        let df = execute_logical_plan(ctx, plan).await?;
+        let plan = df.create_physical_plan().await?;
+        let plan = if let Some(fields) = fields {
+            rename_physical_plan(plan, fields.as_slice())?
+        } else {
+            plan
+        };
+        Ok(execute_stream(plan, ctx.task_ctx())?)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn execute_query(&self, query: &str) -> SparkResult<Vec<RecordBatch>> {
+        use crate::spark::connect::relation::RelType;
+        use crate::spark::connect::{Relation, Sql};
+
+        let relation = Relation {
+            common: None,
+            rel_type: Some(RelType::Sql(Sql {
+                query: query.to_string(),
+                args: HashMap::new(),
+                pos_args: vec![],
+            })),
+        };
+        let stream = self.execute_plan(relation.try_into()?).await?;
+        read_stream(stream).await
     }
 }
 

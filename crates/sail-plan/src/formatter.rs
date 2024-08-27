@@ -398,8 +398,6 @@ impl Display for DecimalDisplay<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use sail_common::spec::Literal;
 
     use super::*;
@@ -540,7 +538,7 @@ mod tests {
                                 contains_null: true,
                             },
                             nullable: false,
-                            metadata: HashMap::new(),
+                            metadata: vec![],
                         },
                         spec::Field {
                             name: "bar".to_string(),
@@ -549,11 +547,11 @@ mod tests {
                                     name: "baz".to_string(),
                                     data_type: spec::DataType::String,
                                     nullable: false,
-                                    metadata: HashMap::new(),
+                                    metadata: vec![],
                                 }]),
                             },
                             nullable: true,
-                            metadata: HashMap::new(),
+                            metadata: vec![],
                         },
                     ]
                     .into()
@@ -569,7 +567,7 @@ mod tests {
                                 name: "baz".to_string(),
                                 data_type: spec::DataType::String,
                                 nullable: false,
-                                metadata: HashMap::new(),
+                                metadata: vec![],
                             }]),
                         },
                         elements: vec![Literal::String("hello".to_string())],
