@@ -55,7 +55,8 @@ impl TryFrom<sdt::StructField> for spec::Field {
             name,
             data_type,
             nullable,
-            metadata,
+            // TODO: preserve metadata order in serde
+            metadata: metadata.into_iter().collect(),
         })
     }
 }
@@ -223,6 +224,7 @@ impl TryFrom<spec::Field> for sdt::StructField {
             metadata,
         } = field;
         let data_type = data_type.try_into()?;
+        let metadata: HashMap<_, _> = metadata.into_iter().collect();
         let metadata = serde_json::to_string(&metadata)?;
         Ok(sdt::StructField {
             name,

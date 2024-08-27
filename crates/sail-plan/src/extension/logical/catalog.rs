@@ -10,7 +10,8 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::{
     exec_datafusion_err, not_impl_err, Constraints, DFSchema, SchemaReference, TableReference,
 };
-use datafusion_expr::{TableScan, UNNAMED_TABLE};
+use datafusion_expr::{ScalarUDF, TableScan, UNNAMED_TABLE};
+use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
 use serde::Serialize;
 use serde_arrow::schema::{SchemaLike, TracingOptions};
 use serde_arrow::to_arrow;
@@ -42,6 +43,11 @@ impl CatalogCommandNode {
             config,
         })
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub(crate) enum CatalogTableFunction {
+    PySparkUDTF(PySparkUDTF),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -129,6 +135,15 @@ pub(crate) enum CatalogCommand {
         if_exists: bool,
         is_temporary: bool,
     },
+    RegisterFunction {
+        udf: ScalarUDF,
+    },
+    RegisterTableFunction {
+        name: String,
+        // We have to be explicit about the UDTF types we support.
+        // We cannot use `Arc<dyn TableFunctionImpl>` because it does not implement `Eq` and `Hash`.
+        udtf: CatalogTableFunction,
+    },
     DropTemporaryView {
         view: TableReference,
         is_global: bool,
@@ -182,6 +197,8 @@ impl CatalogCommand {
             CatalogCommand::FunctionExists { .. } => "FunctionExists",
             CatalogCommand::GetFunction { .. } => "GetFunction",
             CatalogCommand::ListFunctions { .. } => "ListFunctions",
+            CatalogCommand::RegisterFunction { .. } => "RegisterFunction",
+            CatalogCommand::RegisterTableFunction { .. } => "RegisterTableFunction",
             CatalogCommand::DropFunction { .. } => "DropFunction",
             CatalogCommand::DropTemporaryView { .. } => "DropTemporaryView",
             CatalogCommand::DropView { .. } => "DropView",
@@ -208,7 +225,9 @@ impl CatalogCommand {
                 Vec::<FieldRef>::from_type::<FunctionMetadata>(TracingOptions::default())
             }
             CatalogCommand::SetCurrentCatalog { .. }
-            | CatalogCommand::SetCurrentDatabase { .. } => {
+            | CatalogCommand::SetCurrentDatabase { .. }
+            | CatalogCommand::RegisterFunction { .. }
+            | CatalogCommand::RegisterTableFunction { .. } => {
                 Vec::<FieldRef>::from_type::<EmptyMetadata>(TracingOptions::default())
             }
             CatalogCommand::CurrentCatalog | CatalogCommand::CurrentDatabase => {
@@ -382,6 +401,16 @@ impl CatalogCommand {
             CatalogCommand::GetFunction { .. } => return not_impl_err!("get function"),
             CatalogCommand::ListFunctions { .. } => return not_impl_err!("list functions"),
             CatalogCommand::DropFunction { .. } => return not_impl_err!("drop function"),
+            CatalogCommand::RegisterFunction { udf } => {
+                manager.register_function(udf)?;
+                let rows: Vec<EmptyMetadata> = vec![];
+                build_record_batch(command_schema, &rows)?
+            }
+            CatalogCommand::RegisterTableFunction { name, udtf } => {
+                manager.register_table_function(name, udtf)?;
+                let rows: Vec<EmptyMetadata> = vec![];
+                build_record_batch(command_schema, &rows)?
+            }
             CatalogCommand::DropTemporaryView {
                 view,
                 is_global: _,

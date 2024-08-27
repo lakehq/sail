@@ -7,11 +7,6 @@ use std::sync::{Arc, Mutex};
 use arrow::ipc::writer::StreamWriter;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::execute_stream;
-use datafusion::prelude::SessionContext;
-use sail_common::utils::rename_physical_plan;
-use sail_plan::execute_logical_plan;
-use sail_plan::resolver::plan::NamedPlan;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -278,21 +273,6 @@ impl Executor {
     }
 }
 
-pub(crate) async fn execute_plan(
-    ctx: &SessionContext,
-    plan: NamedPlan,
-) -> SparkResult<SendableRecordBatchStream> {
-    let NamedPlan { plan, fields } = plan;
-    let df = execute_logical_plan(ctx, plan).await?;
-    let plan = df.create_physical_plan().await?;
-    let plan = if let Some(fields) = fields {
-        rename_physical_plan(plan, fields.as_slice())?
-    } else {
-        plan
-    };
-    Ok(execute_stream(plan, ctx.task_ctx())?)
-}
-
 pub(crate) async fn read_stream(
     mut stream: SendableRecordBatchStream,
 ) -> SparkResult<Vec<RecordBatch>> {
@@ -314,34 +294,4 @@ pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
         writer.finish()?;
     }
     Ok(output)
-}
-
-#[cfg(test)]
-pub(crate) async fn execute_query(
-    ctx: &SessionContext,
-    query: &str,
-) -> SparkResult<Vec<RecordBatch>> {
-    use std::collections::HashMap;
-    use std::sync::Arc;
-
-    use sail_plan::config::PlanConfig;
-    use sail_plan::resolver::PlanResolver;
-
-    use crate::spark::connect::relation::RelType;
-    use crate::spark::connect::{Relation, Sql};
-
-    let config = PlanConfig::default();
-    let relation = Relation {
-        common: None,
-        rel_type: Some(RelType::Sql(Sql {
-            query: query.to_string(),
-            args: HashMap::new(),
-            pos_args: vec![],
-        })),
-    };
-    let plan = PlanResolver::new(ctx, Arc::new(config))
-        .resolve_named_plan(relation.try_into()?)
-        .await?;
-    let stream = execute_plan(ctx, plan).await?;
-    read_stream(stream).await
 }

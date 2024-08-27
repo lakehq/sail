@@ -11,7 +11,7 @@ sail-sql = { path = "../sail-sql" }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-functions-array = { workspace = true }
+datafusion-functions-nested = { workspace = true }
 thiserror = { workspace = true }
 tokio-stream = { workspace = true }
 async-trait = { workspace = true }

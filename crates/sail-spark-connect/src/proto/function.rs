@@ -7,7 +7,6 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use crate::error::{SparkError, SparkResult};
-    use crate::executor::execute_query;
     use crate::proto::data_type_json::JsonDataType;
     use crate::session::Session;
 
@@ -50,9 +49,8 @@ mod tests {
         Ok(test_gold_set(
             "tests/gold_data/function/*.json",
             |example: FunctionExample| -> SparkResult<String> {
-                let ctx = session.context();
                 let result =
-                    rt.block_on(async { execute_query(ctx, example.query.as_str()).await });
+                    rt.block_on(async { session.execute_query(example.query.as_str()).await });
                 // TODO: validate the result against the expected output
                 // TODO: handle non-deterministic results and error messages
                 match result {

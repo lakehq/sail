@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
@@ -36,7 +35,7 @@ pub(super) struct NamedExpr {
     /// to be expanded into multiple ones in the projection).
     pub name: Vec<String>,
     pub expr: expr::Expr,
-    pub metadata: HashMap<String, String>,
+    pub metadata: Vec<(String, String)>,
 }
 
 impl NamedExpr {
@@ -44,7 +43,7 @@ impl NamedExpr {
         Self {
             name,
             expr,
-            metadata: HashMap::new(),
+            metadata: vec![],
         }
     }
 
@@ -72,7 +71,7 @@ impl NamedExpr {
         }
     }
 
-    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+    pub fn with_metadata(mut self, metadata: Vec<(String, String)>) -> Self {
         self.metadata = metadata;
         self
     }
@@ -743,7 +742,7 @@ impl PlanResolver<'_> {
         &self,
         expr: spec::Expr,
         name: Vec<spec::Identifier>,
-        metadata: Option<HashMap<String, String>>,
+        metadata: Option<Vec<(String, String)>>,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {

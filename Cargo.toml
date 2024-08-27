@@ -59,7 +59,7 @@ num-traits = "0.2.19"
 datafusion = { version = "41.0.0", features = ["serde", "pyarrow"] }
 datafusion-common = { version = "41.0.0", features = ["object_store", "pyarrow"] }
 datafusion-expr = "41.0.0"
-datafusion-functions-array = "40.0.0"
+datafusion-functions-nested = "41.0.0"
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 # 0.21 breaks when datafusion has pyarrow enabled
 pyo3 = { version = "0.21.2", features = ["auto-initialize", "serde"] }

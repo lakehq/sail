@@ -57,12 +57,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install jq
-        run: |
-          wget -q -O /usr/local/bin/jq "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64"
-          chmod +x /usr/local/bin/jq
-          jq --version
-
       - name: Download test logs after the code change
         uses: actions/download-artifact@v4
         with:

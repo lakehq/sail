@@ -18,7 +18,7 @@
               "name": "A",
               "dataType": "integer",
               "nullable": true,
-              "metadata": {}
+              "metadata": []
             }
           ]
         }
@@ -33,7 +33,7 @@
               "name": "!@#$%.^&*()",
               "dataType": "string",
               "nullable": true,
-              "metadata": {}
+              "metadata": []
             }
           ]
         }
@@ -55,7 +55,7 @@
               "name": "a",
               "dataType": "integer",
               "nullable": true,
-              "metadata": {}
+              "metadata": []
             }
           ]
         }
@@ -103,19 +103,19 @@
                       "name": "intType",
                       "dataType": "integer",
                       "nullable": true,
-                      "metadata": {}
+                      "metadata": []
                     },
                     {
                       "name": "ts",
                       "dataType": "timestamp",
                       "nullable": true,
-                      "metadata": {}
+                      "metadata": []
                     }
                   ]
                 }
               },
               "nullable": true,
-              "metadata": {}
+              "metadata": []
             }
           ]
         }
@@ -130,9 +130,12 @@
               "name": "a",
               "dataType": "integer",
               "nullable": true,
-              "metadata": {
-                "comment": "test"
-              }
+              "metadata": [
+                [
+                  "comment",
+                  "test"
+                ]
+              ]
             }
           ]
         }
@@ -147,13 +150,13 @@
               "name": "a",
               "dataType": "integer",
               "nullable": true,
-              "metadata": {}
+              "metadata": []
             },
             {
               "name": "b",
               "dataType": "long",
               "nullable": true,
-              "metadata": {}
+              "metadata": []
             }
           ]
         }
@@ -183,7 +186,7 @@
                                 }
                               },
                               "nullable": true,
-                              "metadata": {}
+                              "metadata": []
                             },
                             {
                               "name": "anotherDecimal",
@@ -194,13 +197,13 @@
                                 }
                               },
                               "nullable": true,
-                              "metadata": {}
+                              "metadata": []
                             }
                           ]
                         }
                       },
                       "nullable": true,
-                      "metadata": {}
+                      "metadata": []
                     },
                     {
                       "name": "MAP",
@@ -216,7 +219,7 @@
                         }
                       },
                       "nullable": true,
-                      "metadata": {}
+                      "metadata": []
                     },
                     {
                       "name": "arrAy",
@@ -227,7 +230,7 @@
                         }
                       },
                       "nullable": true,
-                      "metadata": {}
+                      "metadata": []
                     },
                     {
                       "name": "anotherArray",
@@ -242,13 +245,13 @@
                         }
                       },
                       "nullable": true,
-                      "metadata": {}
+                      "metadata": []
                     }
                   ]
                 }
               },
               "nullable": true,
-              "metadata": {}
+              "metadata": []
             }
           ]
         }

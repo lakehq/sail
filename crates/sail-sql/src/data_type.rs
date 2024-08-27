@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use sail_common::spec;
 use sqlparser::ast;
 use sqlparser::ast::DateTimeField;
@@ -200,9 +198,9 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
                         None => return Err(SqlError::invalid("missing field name")),
                     };
                     let data_type = from_ast_data_type(&f.field_type)?;
-                    let mut metadata = HashMap::new();
+                    let mut metadata = vec![];
                     if let Some(comment) = &f.comment {
-                        metadata.insert("comment".to_string(), comment.clone());
+                        metadata.push(("comment".to_string(), comment.clone()));
                     };
                     Ok(spec::Field {
                         name,

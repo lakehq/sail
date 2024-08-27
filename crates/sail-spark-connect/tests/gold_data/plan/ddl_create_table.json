@@ -212,13 +212,13 @@
                     "name": "a",
                     "dataType": "integer",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   },
                   {
                     "name": "b",
                     "dataType": "string",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   }
                 ]
               },
@@ -283,7 +283,7 @@
                     "name": "id",
                     "dataType": "long",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   }
                 ]
               },
@@ -348,7 +348,7 @@
                     "name": "id",
                     "dataType": "long",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   }
                 ]
               },
@@ -396,7 +396,7 @@
                     "name": "id",
                     "dataType": "long",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   }
                 ]
               },
@@ -527,13 +527,13 @@
                     "name": "a",
                     "dataType": "integer",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   },
                   {
                     "name": "b",
                     "dataType": "integer",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   }
                 ]
               },
@@ -579,13 +579,13 @@
                     "name": "a",
                     "dataType": "integer",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   },
                   {
                     "name": "b",
                     "dataType": "integer",
                     "nullable": false,
-                    "metadata": {}
+                    "metadata": []
                   }
                 ]
               },
@@ -632,13 +632,13 @@
                     "name": "a",
                     "dataType": "integer",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   },
                   {
                     "name": "b",
                     "dataType": "string",
                     "nullable": false,
-                    "metadata": {}
+                    "metadata": []
                   }
                 ]
               },
@@ -686,13 +686,13 @@
                     "name": "a",
                     "dataType": "integer",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   },
                   {
                     "name": "b",
                     "dataType": "string",
                     "nullable": false,
-                    "metadata": {}
+                    "metadata": []
                   }
                 ]
               },
@@ -741,13 +741,13 @@
                     "name": "a",
                     "dataType": "integer",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   },
                   {
                     "name": "b",
                     "dataType": "string",
                     "nullable": false,
-                    "metadata": {}
+                    "metadata": []
                   }
                 ]
               },
@@ -795,13 +795,13 @@
                     "name": "a",
                     "dataType": "integer",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   },
                   {
                     "name": "b",
                     "dataType": "string",
                     "nullable": false,
-                    "metadata": {}
+                    "metadata": []
                   }
                 ]
               },
@@ -918,13 +918,13 @@
                     "name": "a",
                     "dataType": "integer",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   },
                   {
                     "name": "b",
                     "dataType": "string",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   }
                 ]
               },
@@ -963,13 +963,13 @@
                     "name": "a",
                     "dataType": "integer",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   },
                   {
                     "name": "b",
                     "dataType": "string",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   }
                 ]
               },
@@ -1008,13 +1008,13 @@
                     "name": "a",
                     "dataType": "integer",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   },
                   {
                     "name": "b",
                     "dataType": "string",
                     "nullable": true,
-                    "metadata": {}
+                    "metadata": []
                   }
                 ]
               },

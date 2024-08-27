@@ -33,7 +33,7 @@ impl PlanResolver<'_> {
                     name: "element".to_string(),
                     data_type: *element_type,
                     nullable: contains_null,
-                    metadata: HashMap::new(),
+                    metadata: vec![],
                 };
                 Ok(adt::DataType::List(Arc::new(self.resolve_field(field)?)))
             }
@@ -74,13 +74,13 @@ impl PlanResolver<'_> {
                         name: "key".to_string(),
                         data_type: *key_type,
                         nullable: false,
-                        metadata: HashMap::new(),
+                        metadata: vec![],
                     },
                     spec::Field {
                         name: "value".to_string(),
                         data_type: *value_type,
                         nullable: value_contains_null,
-                        metadata: HashMap::new(),
+                        metadata: vec![],
                     },
                 ];
                 Ok(adt::DataType::Map(
@@ -258,7 +258,7 @@ impl PlanResolver<'_> {
             name: name.clone(),
             data_type,
             nullable: field.is_nullable(),
-            metadata,
+            metadata: metadata.into_iter().collect(),
         })
     }
 

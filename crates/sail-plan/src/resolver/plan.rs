@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes as adt;
+use datafusion::dataframe::DataFrame;
 use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::avro::AvroFormatFactory;
 use datafusion::datasource::file_format::csv::{CsvFormat, CsvFormatFactory};
@@ -27,16 +28,18 @@ use datafusion_expr::utils::{
     columnize_expr, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
     find_aggregate_exprs,
 };
-use datafusion_expr::{build_join_schema, col, LogicalPlanBuilder};
+use datafusion_expr::{build_join_schema, col, LogicalPlanBuilder, ScalarUDF};
 use sail_common::spec;
-use sail_common::utils::{cast_record_batch, read_record_batches};
+use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
+use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
+use sail_python_udf::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
 use crate::catalog::CatalogManager;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
-    CatalogCommand, CatalogCommandNode, RangeNode, ShowStringFormat, ShowStringNode,
-    ShowStringStyle, SortWithinPartitionsNode,
+    CatalogCommand, CatalogCommandNode, CatalogTableFunction, RangeNode, ShowStringFormat,
+    ShowStringNode, ShowStringStyle, SortWithinPartitionsNode,
 };
 use crate::extension::source::rename::RenameTableProvider;
 use crate::resolver::expression::NamedExpr;
@@ -509,15 +512,17 @@ impl PlanResolver<'_> {
                 database,
                 definition,
             } => self.resolve_catalog_create_database(database, definition),
-            CommandNode::RegisterFunction(_) => Err(PlanError::todo("register function")),
-            CommandNode::RegisterTableFunction(_) => {
-                Err(PlanError::todo("register table function"))
+            CommandNode::RegisterFunction(function) => {
+                self.resolve_catalog_register_function(function)
+            }
+            CommandNode::RegisterTableFunction(function) => {
+                self.resolve_catalog_register_table_function(function)
             }
             CommandNode::CreateTemporaryView { view, definition } => {
                 self.resolve_catalog_create_temp_view(view, definition, state)
                     .await
             }
-            CommandNode::Write { .. } => Err(PlanError::todo("write")),
+            CommandNode::Write(write) => self.resolve_command_write(write, state).await,
             CommandNode::Explain { mode, input } => {
                 self.resolve_command_explain(*input, mode, state).await
             }
@@ -1586,6 +1591,114 @@ impl PlanResolver<'_> {
         }))
     }
 
+    async fn resolve_command_write(
+        &self,
+        write: spec::Write,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        use spec::{SaveMode, SaveType, TableSaveMethod};
+
+        let spec::Write {
+            input,
+            source,
+            save_type,
+            mode,
+            sort_columns,
+            partitioning_columns,
+            bucket_by,
+            options,
+            table_properties: _,
+            overwrite_condition: _,
+        } = write;
+        if !sort_columns.is_empty() {
+            return Err(PlanError::unsupported("sort column names"));
+        }
+        if !partitioning_columns.is_empty() {
+            return Err(PlanError::unsupported("partitioning columns"));
+        }
+        if bucket_by.is_some() {
+            return Err(PlanError::unsupported("bucketing"));
+        }
+        let options: HashMap<_, _> = options.into_iter().collect();
+        let partitioning_columns: Vec<String> =
+            partitioning_columns.into_iter().map(String::from).collect();
+
+        let mut table_options =
+            TableOptions::default_from_session_config(self.ctx.state().config_options());
+        let plan = self.resolve_query_plan(*input, state).await?;
+        let fields = state.get_field_names(plan.schema().inner())?;
+        let plan = rename_logical_plan(plan, &fields)?;
+        let plan = match save_type {
+            SaveType::Path(path) => {
+                // always write multi-file output
+                let path = if path.ends_with('/') {
+                    path
+                } else {
+                    format!("{}/", path)
+                };
+                let source = source.ok_or_else(|| PlanError::invalid("missing source"))?;
+                // FIXME: option compatibility
+                let format_factory: Arc<dyn FileFormatFactory> = match source.as_str() {
+                    "json" => {
+                        table_options.set_config_format(ConfigFileType::JSON);
+                        table_options.alter_with_string_hash_map(&options)?;
+                        Arc::new(JsonFormatFactory::new_with_options(table_options.json))
+                    }
+                    "parquet" => {
+                        table_options.set_config_format(ConfigFileType::PARQUET);
+                        table_options.alter_with_string_hash_map(&options)?;
+                        Arc::new(ParquetFormatFactory::new_with_options(
+                            table_options.parquet,
+                        ))
+                    }
+                    "csv" => {
+                        table_options.set_config_format(ConfigFileType::CSV);
+                        table_options.alter_with_string_hash_map(&options)?;
+                        Arc::new(CsvFormatFactory::new_with_options(table_options.csv))
+                    }
+                    "arrow" => Arc::new(ArrowFormatFactory::new()),
+                    "avro" => Arc::new(AvroFormatFactory::new()),
+                    _ => {
+                        return Err(PlanError::invalid(format!(
+                            "unsupported source: {}",
+                            source
+                        )))
+                    }
+                };
+                LogicalPlanBuilder::copy_to(
+                    plan,
+                    path,
+                    format_as_file_type(format_factory),
+                    options,
+                    partitioning_columns,
+                )?
+                .build()?
+            }
+            SaveType::Table { table, save_method } => {
+                let table_ref = build_table_reference(table)?;
+                match save_method {
+                    TableSaveMethod::SaveAsTable => {
+                        // FIXME: It is incorrect to have side-effect in the resolver.
+                        // FIXME: Should we materialize the table or create a view?
+                        let df = DataFrame::new(self.ctx.state(), plan);
+                        self.ctx.register_table(table_ref, df.into_view())?;
+                        LogicalPlan::EmptyRelation(plan::EmptyRelation {
+                            produce_one_row: false,
+                            schema: Arc::new(DFSchema::empty()),
+                        })
+                    }
+                    TableSaveMethod::InsertInto => {
+                        let arrow_schema = adt::Schema::from(plan.schema().as_ref());
+                        let overwrite = mode == SaveMode::Overwrite;
+                        LogicalPlanBuilder::insert_into(plan, table_ref, &arrow_schema, overwrite)?
+                            .build()?
+                    }
+                }
+            }
+        };
+        Ok(plan)
+    }
+
     fn resolve_catalog_command(&self, command: CatalogCommand) -> PlanResult<LogicalPlan> {
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(CatalogCommandNode::try_new(command, self.config.clone())?),
@@ -1794,6 +1907,94 @@ impl PlanResolver<'_> {
             is_global,
             replace,
             definition,
+        };
+        self.resolve_catalog_command(command)
+    }
+
+    // TODO: consolidate duplicated UDF/UDTF code
+
+    fn resolve_catalog_register_function(
+        &self,
+        function: spec::CommonInlineUserDefinedFunction,
+    ) -> PlanResult<LogicalPlan> {
+        let spec::CommonInlineUserDefinedFunction {
+            function_name,
+            deterministic,
+            arguments: _,
+            function,
+        } = function;
+        let function_name: &str = function_name.as_str();
+
+        let (output_type, _eval_type, _command, _python_version) = match &function {
+            spec::FunctionDefinition::PythonUdf {
+                output_type,
+                eval_type,
+                command,
+                python_version,
+            } => (output_type, eval_type, command, python_version),
+            _ => {
+                return Err(PlanError::invalid("UDF function type must be Python UDF"));
+            }
+        };
+        let output_type: adt::DataType = self.resolve_data_type(output_type.clone())?;
+
+        let python_udf = UnresolvedPySparkUDF::new(
+            function_name.to_owned(),
+            function,
+            output_type,
+            deterministic,
+        );
+
+        let command = CatalogCommand::RegisterFunction {
+            udf: ScalarUDF::from(python_udf),
+        };
+        self.resolve_catalog_command(command)
+    }
+
+    fn resolve_catalog_register_table_function(
+        &self,
+        function: spec::CommonInlineUserDefinedTableFunction,
+    ) -> PlanResult<LogicalPlan> {
+        let spec::CommonInlineUserDefinedTableFunction {
+            function_name,
+            deterministic,
+            arguments: _,
+            function,
+        } = function;
+
+        let (return_type, _eval_type, _command, _python_version) = match &function {
+            spec::TableFunctionDefinition::PythonUdtf {
+                return_type,
+                eval_type,
+                command,
+                python_version,
+            } => (return_type, eval_type, command, python_version),
+        };
+
+        let return_type: adt::DataType = self.resolve_data_type(return_type.clone())?;
+        let return_schema: adt::SchemaRef = match return_type {
+            adt::DataType::Struct(ref fields) => {
+                Arc::new(adt::Schema::new(fields.clone()))
+            },
+            _ => {
+                return Err(PlanError::invalid(format!(
+                    "Invalid Python user-defined table function return type. Expect a struct type, but got {}",
+                    return_type
+                )))
+            }
+        };
+
+        let python_udtf: PySparkUDTF = PySparkUDTF::new(
+            return_type,
+            return_schema,
+            function,
+            self.config.spark_udf_config.clone(),
+            deterministic,
+        );
+
+        let command = CatalogCommand::RegisterTableFunction {
+            name: function_name,
+            udtf: CatalogTableFunction::PySparkUDTF(python_udtf),
         };
         self.resolve_catalog_command(command)
     }
