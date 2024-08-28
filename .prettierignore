@@ -4,4 +4,8 @@
 !docs/
 !/*.js
 !/*.json
+!/*.yml
+!/*.yaml
 !/*.md
+
+pnpm-lock.yaml

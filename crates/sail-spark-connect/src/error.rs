@@ -96,6 +96,7 @@ impl From<PlanError> for SparkError {
     fn from(error: PlanError) -> Self {
         match error {
             PlanError::DataFusionError(e) => SparkError::DataFusionError(e),
+            PlanError::ArrowError(e) => SparkError::ArrowError(e),
             PlanError::MissingArgument(message) => SparkError::MissingArgument(message),
             PlanError::InvalidArgument(message) => SparkError::InvalidArgument(message),
             PlanError::NotSupported(message) => SparkError::NotSupported(message),

@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 #[cfg(test)]
 use arrow::array::RecordBatch;
-use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::execute_stream;
@@ -16,6 +16,7 @@ use sail_common::utils::rename_physical_plan;
 use sail_plan::config::{PlanConfig, TimestampType};
 use sail_plan::formatter::DefaultPlanFormatter;
 use sail_plan::function::BUILT_IN_SCALAR_FUNCTIONS;
+use sail_plan::object_store::{DynamicObjectStoreRegistry, ObjectStoreConfig};
 use sail_plan::resolver::plan::NamedPlan;
 use sail_plan::resolver::PlanResolver;
 use sail_plan::{execute_logical_plan, new_query_planner};
@@ -52,7 +53,11 @@ impl Debug for Session {
 }
 
 impl Session {
-    pub(crate) fn try_new(user_id: Option<String>, session_id: String) -> SparkResult<Self> {
+    pub(crate) fn try_new(
+        user_id: Option<String>,
+        session_id: String,
+        object_store_config: Arc<ObjectStoreConfig>,
+    ) -> SparkResult<Self> {
         // TODO: support more systematic configuration
         // TODO: return error on invalid environment variables
         let config = SessionConfig::new()
@@ -80,7 +85,11 @@ impl Session {
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(16),
             );
-        let runtime = Arc::new(RuntimeEnv::default());
+        let runtime = {
+            let registry = DynamicObjectStoreRegistry::new().with_config(object_store_config);
+            let config = RuntimeConfig::default().with_object_store_registry(Arc::new(registry));
+            Arc::new(RuntimeEnv::new(config)?)
+        };
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
@@ -340,15 +349,28 @@ pub(crate) struct SessionKey {
 type SessionStore = HashMap<SessionKey, Arc<Session>>;
 
 #[derive(Debug)]
-pub(crate) struct SessionManager {
+pub struct SessionManager {
     sessions: Mutex<SessionStore>,
+    object_store_config: Arc<ObjectStoreConfig>,
+}
+
+impl Default for SessionManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SessionManager {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             sessions: Mutex::new(SessionStore::new()),
+            object_store_config: Arc::new(ObjectStoreConfig::default()),
         }
+    }
+
+    pub fn with_object_store_config(mut self, object_store_config: ObjectStoreConfig) -> Self {
+        self.object_store_config = Arc::new(object_store_config);
+        self
     }
 
     pub(crate) fn get_session(&self, key: SessionKey) -> SparkResult<Arc<Session>> {
@@ -359,11 +381,12 @@ impl SessionManager {
         match entry {
             Entry::Occupied(o) => Ok(o.get().clone()),
             Entry::Vacant(v) => {
-                let session = Arc::new(Session::try_new(
+                let session = Session::try_new(
                     v.key().user_id.clone(),
                     v.key().session_id.clone(),
-                )?);
-                Ok(v.insert(session).clone())
+                    Arc::clone(&self.object_store_config),
+                )?;
+                Ok(v.insert(Arc::new(session)).clone())
             }
         }
     }

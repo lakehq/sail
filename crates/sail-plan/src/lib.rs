@@ -12,6 +12,7 @@ pub mod error;
 pub mod extension;
 pub mod formatter;
 pub mod function;
+pub mod object_store;
 pub mod resolver;
 mod utils;
 

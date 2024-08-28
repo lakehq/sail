@@ -13,7 +13,6 @@ use datafusion::datasource::file_format::{format_as_file_type, FileFormat, FileF
 use datafusion::datasource::function::TableFunction;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
-use datafusion::execution::context::DataFilePaths;
 use datafusion::logical_expr::{logical_plan as plan, Expr, Extension, LogicalPlan, UNNAMED_TABLE};
 use datafusion_common::config::{ConfigFileType, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -613,15 +612,15 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let spec::ReadDataSource {
             format,
-            schema: _,
+            schema,
             options: _,
             paths,
             predicates: _,
         } = source;
-        let urls = paths.to_urls()?;
-        if urls.is_empty() {
+        if paths.is_empty() {
             return Err(PlanError::invalid("empty data source paths"));
         }
+        let urls = self.resolve_listing_urls(paths).await?;
         let (format, extension): (Arc<dyn FileFormat>, _) = match format.as_deref() {
             Some("json") => (Arc::new(JsonFormat::default()), ".json"),
             Some("csv") => (Arc::new(CsvFormat::default()), ".csv"),
@@ -634,11 +633,10 @@ impl PlanResolver<'_> {
             }
         };
         let options = ListingOptions::new(format).with_file_extension(extension);
-        // TODO: use provided schema if available
-        let schema = options.infer_schema(&self.ctx.state(), &urls[0]).await?;
+        let schema = self.resolve_listing_schema(&urls, &options, schema).await?;
         let config = ListingTableConfig::new_with_multi_paths(urls)
             .with_listing_options(options)
-            .with_schema(schema);
+            .with_schema(Arc::new(schema));
         let table_provider = Arc::new(ListingTable::try_new(config)?);
         let names = state.register_fields(&table_provider.schema());
         let table_provider = RenameTableProvider::try_new(table_provider, names)?;
@@ -1631,10 +1629,10 @@ impl PlanResolver<'_> {
         let plan = match save_type {
             SaveType::Path(path) => {
                 // always write multi-file output
-                let path = if path.ends_with('/') {
+                let path = if path.ends_with(object_store::path::DELIMITER) {
                     path
                 } else {
-                    format!("{}/", path)
+                    format!("{}{}", path, object_store::path::DELIMITER)
                 };
                 let source = source.ok_or_else(|| PlanError::invalid("missing source"))?;
                 // FIXME: option compatibility
