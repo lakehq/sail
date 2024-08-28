@@ -1,9 +1,12 @@
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use arrow::array::RecordBatch;
     use arrow::error::ArrowError;
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use sail_common::tests::test_gold_set;
+    use sail_plan::object_store::ObjectStoreConfig;
     use serde::{Deserialize, Serialize};
 
     use crate::error::{SparkError, SparkResult};
@@ -45,7 +48,11 @@ mod tests {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        let session = Session::try_new(None, "test".to_string())?;
+        let session = Session::try_new(
+            None,
+            "test".to_string(),
+            Arc::new(ObjectStoreConfig::default()),
+        )?;
         Ok(test_gold_set(
             "tests/gold_data/function/*.json",
             |example: FunctionExample| -> SparkResult<String> {

@@ -8,6 +8,9 @@ use object_store::local::LocalFileSystem;
 use object_store::ObjectStore;
 use url::Url;
 
+use crate::object_store::s3::S3CredentialProvider;
+use crate::object_store::ObjectStoreConfig;
+
 #[derive(Debug, Eq, PartialEq, Hash)]
 struct ObjectStoreKey {
     scheme: String,
@@ -24,17 +27,18 @@ impl ObjectStoreKey {
 }
 
 #[derive(Debug)]
-pub struct ExtendedObjectStoreRegistry {
+pub struct DynamicObjectStoreRegistry {
     stores: RwLock<HashMap<ObjectStoreKey, Arc<dyn ObjectStore>>>,
+    config: Arc<ObjectStoreConfig>,
 }
 
-impl Default for ExtendedObjectStoreRegistry {
+impl Default for DynamicObjectStoreRegistry {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ExtendedObjectStoreRegistry {
+impl DynamicObjectStoreRegistry {
     pub fn new() -> Self {
         let mut stores: HashMap<_, Arc<dyn ObjectStore>> = HashMap::new();
         stores.insert(
@@ -46,14 +50,31 @@ impl ExtendedObjectStoreRegistry {
         );
         Self {
             stores: RwLock::new(stores),
+            config: Arc::new(ObjectStoreConfig::default()),
         }
+    }
+
+    pub fn with_config(mut self, config: Arc<ObjectStoreConfig>) -> Self {
+        self.config = config;
+        self
     }
 
     fn get_dynamic_object_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
         let key = ObjectStoreKey::new(url);
         match key.scheme.as_str() {
             "s3" => {
-                let builder = AmazonS3Builder::from_env().with_bucket_name(key.authority);
+                let config = self.config.aws().ok_or_else(|| {
+                    plan_datafusion_err!("AWS configuration is required for S3 object store")
+                })?;
+                let mut builder = AmazonS3Builder::from_env().with_bucket_name(key.authority);
+                if let Some(region) = config.region() {
+                    builder = builder.with_region(region.to_string());
+                }
+                let credentials = config.credentials_provider().ok_or_else(|| {
+                    plan_datafusion_err!("AWS credentials are required for S3 object store")
+                })?;
+                let credentials = S3CredentialProvider::new(credentials);
+                builder = builder.with_credentials(Arc::new(credentials));
                 Ok(Arc::new(builder.build()?))
             }
             _ => {
@@ -63,7 +84,7 @@ impl ExtendedObjectStoreRegistry {
     }
 }
 
-impl ObjectStoreRegistry for ExtendedObjectStoreRegistry {
+impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
     fn register_store(
         &self,
         url: &Url,

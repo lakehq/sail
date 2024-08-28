@@ -29,11 +29,9 @@ pub struct SparkConnectServer {
     session_manager: SessionManager,
 }
 
-impl Default for SparkConnectServer {
-    fn default() -> Self {
-        Self {
-            session_manager: SessionManager::new(),
-        }
+impl SparkConnectServer {
+    pub fn new(session_manager: SessionManager) -> Self {
+        Self { session_manager }
     }
 }
 

@@ -1,5 +1,6 @@
 use std::future::Future;
 
+use sail_plan::object_store::{load_aws_config, ObjectStoreConfig};
 use tokio::net::TcpListener;
 use tonic::codegen::http;
 use tonic::transport::server::TcpIncoming;
@@ -8,6 +9,7 @@ use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::{debug, Span};
 
 use crate::server::SparkConnectServer;
+use crate::session::SessionManager;
 use crate::spark::connect::spark_connect_service_server::SparkConnectServiceServer;
 
 pub async fn serve<F>(
@@ -30,7 +32,9 @@ where
         .register_encoded_file_descriptor_set(crate::spark::connect::FILE_DESCRIPTOR_SET)
         .build()?;
 
-    let server = SparkConnectServer::default();
+    let object_store_config = ObjectStoreConfig::default().with_aws(load_aws_config().await);
+    let session_manager = SessionManager::new().with_object_store_config(object_store_config);
+    let server = SparkConnectServer::new(session_manager);
 
     let layer = ServiceBuilder::new()
         .layer(

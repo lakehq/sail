@@ -11,9 +11,7 @@ use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
 use datafusion::datasource::file_format::parquet::{ParquetFormat, ParquetFormatFactory};
 use datafusion::datasource::file_format::{format_as_file_type, FileFormat, FileFormatFactory};
 use datafusion::datasource::function::TableFunction;
-use datafusion::datasource::listing::{
-    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
-};
+use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::logical_expr::{logical_plan as plan, Expr, Extension, LogicalPlan, UNNAMED_TABLE};
 use datafusion_common::config::{ConfigFileType, TableOptions};
@@ -30,7 +28,6 @@ use datafusion_expr::utils::{
     find_aggregate_exprs,
 };
 use datafusion_expr::{build_join_schema, LogicalPlanBuilder, ScalarUDF};
-use object_store::ObjectStore;
 use sail_common::spec;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
@@ -620,25 +617,10 @@ impl PlanResolver<'_> {
             paths,
             predicates: _,
         } = source;
-        let session_state = self.ctx.state();
         if paths.is_empty() {
             return Err(PlanError::invalid("empty data source paths"));
         }
-        let urls = {
-            let mut urls = vec![];
-            for path in paths {
-                let url = ListingTableUrl::parse(&path)?;
-                let store = session_state.runtime_env().object_store(&url)?;
-                if store.head(url.prefix()).await.is_ok() {
-                    urls.push(url);
-                } else {
-                    // The object at the path does not exist, so we treat it as a directory.
-                    let path = format!("{}{}", path, object_store::path::DELIMITER);
-                    urls.push(ListingTableUrl::parse(path)?);
-                }
-            }
-            urls
-        };
+        let urls = self.resolve_listing_urls(paths).await?;
         let (format, extension): (Arc<dyn FileFormat>, _) = match format.as_deref() {
             Some("json") => (Arc::new(JsonFormat::default()), ".json"),
             Some("csv") => (Arc::new(CsvFormat::default()), ".csv"),
@@ -651,18 +633,10 @@ impl PlanResolver<'_> {
             }
         };
         let options = ListingOptions::new(format).with_file_extension(extension);
-        let schema = match schema {
-            // ignore empty schema
-            Some(spec::Schema { fields }) if fields.0.is_empty() => None,
-            x => x,
-        };
-        let schema = match schema {
-            Some(schema) => Arc::new(self.resolve_schema(schema)?),
-            None => options.infer_schema(&session_state, &urls[0]).await?,
-        };
+        let schema = self.resolve_listing_schema(&urls, &options, schema).await?;
         let config = ListingTableConfig::new_with_multi_paths(urls)
             .with_listing_options(options)
-            .with_schema(schema);
+            .with_schema(Arc::new(schema));
         let table_provider = Arc::new(ListingTable::try_new(config)?);
         let names = state.register_fields(&table_provider.schema());
         let table_provider = RenameTableProvider::try_new(table_provider, names)?;

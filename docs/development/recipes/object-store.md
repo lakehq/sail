@@ -58,4 +58,5 @@ spark.read.json(path).show()
 
 ::: warning
 You need to create the bucket manually by visiting the MinIO console at <http://localhost:19001/>.
+Log in with the credentials configured in `compose.yml`.
 :::
