@@ -46,9 +46,9 @@ chrono-tz = "0.9"
 futures = "0.3"
 comfy-table = "7.1"
 html-escape = "0.2"
-syn = "2.0.75"
-quote = "1.0.36"
-prettyplease = "0.2.20"
+syn = "2.0.76"
+quote = "1.0.37"
+prettyplease = "0.2.22"
 phf = { version = "0.11.2", features = ["macros"] }
 ryu = "1.0.18"
 either = "1.12.0"
@@ -59,6 +59,7 @@ rand = "0.8.5"
 rand_chacha = "0.3.1"
 rand_distr = "0.4.3"
 url = "2.5.2"
+lexical-core = { version = "0.8.5", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 
 ######
 # The versions of the following dependencies are managed manually.
@@ -66,13 +67,14 @@ url = "2.5.2"
 datafusion = { version = "41.0.0", features = ["serde", "pyarrow"] }
 datafusion-common = { version = "41.0.0", features = ["object_store", "pyarrow"] }
 datafusion-expr = "41.0.0"
-datafusion-functions-array = "40.0.0"
+datafusion-functions-nested = "41.0.0"
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 # 0.21 breaks when datafusion has pyarrow enabled
 pyo3 = { version = "0.21.2", features = ["auto-initialize", "serde"] }
 # Should be the equivalent of enabling the pyarrow feature in datafusion since we already have pyo3 in the workspace
 arrow = { version = "52.2.0", features = ["ffi", "pyarrow"] }
 arrow-cast = { version = "52.2.0" }
+arrow-schema = { version = "52.2.0" }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.10.2", features = ["aws", "gcp", "http"] }
 # We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.

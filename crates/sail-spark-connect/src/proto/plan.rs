@@ -7,7 +7,10 @@ use crate::proto::data_type::{parse_spark_data_type, DEFAULT_FIELD_NAME};
 use crate::spark::connect as sc;
 use crate::spark::connect::catalog::CatType;
 use crate::spark::connect::relation::RelType;
-use crate::spark::connect::{plan, Catalog, Plan, Relation, RelationCommon};
+use crate::spark::connect::{
+    plan, Catalog, CreateDataFrameViewCommand, Plan, Relation, RelationCommon, WriteOperation,
+    WriteOperationV2,
+};
 
 struct RelationMetadata {
     plan_id: Option<i64>,
@@ -1346,6 +1349,175 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 })
             }
         }
+    }
+}
+
+impl TryFrom<WriteOperation> for spec::Write {
+    type Error = SparkError;
+
+    fn try_from(write: WriteOperation) -> SparkResult<spec::Write> {
+        use crate::spark::connect::write_operation::save_table::TableSaveMethod;
+        use crate::spark::connect::write_operation::{BucketBy, SaveMode, SaveTable, SaveType};
+
+        let WriteOperation {
+            input,
+            source,
+            mode,
+            sort_column_names,
+            partitioning_columns,
+            bucket_by,
+            options,
+            save_type,
+        } = write;
+        let input = input.required("input")?.try_into()?;
+        let mode = match SaveMode::try_from(mode).required("save mode")? {
+            SaveMode::Unspecified => spec::SaveMode::ErrorIfExists,
+            SaveMode::Append => spec::SaveMode::Append,
+            SaveMode::Overwrite => spec::SaveMode::Overwrite,
+            SaveMode::ErrorIfExists => spec::SaveMode::ErrorIfExists,
+            SaveMode::Ignore => spec::SaveMode::Ignore,
+        };
+        let sort_columns = sort_column_names.into_iter().map(|x| x.into()).collect();
+        let partitioning_columns = partitioning_columns.into_iter().map(|x| x.into()).collect();
+        let bucket_by = match bucket_by {
+            Some(x) => {
+                let BucketBy {
+                    bucket_column_names,
+                    num_buckets,
+                } = x;
+                let bucket_column_names =
+                    bucket_column_names.into_iter().map(|x| x.into()).collect();
+                let num_buckets = usize::try_from(num_buckets).required("bucket num buckets")?;
+                Some(spec::SaveBucketBy {
+                    bucket_column_names,
+                    num_buckets,
+                })
+            }
+            None => None,
+        };
+        let options = options.into_iter().collect();
+        let save_type = match save_type.required("save type")? {
+            SaveType::Path(x) => spec::SaveType::Path(x),
+            SaveType::Table(table) => {
+                let SaveTable {
+                    table_name,
+                    save_method,
+                } = table;
+                let table = parse_object_name(table_name.as_str())?;
+                let save_method = TableSaveMethod::try_from(save_method).required("save method")?;
+                let save_method = match save_method {
+                    TableSaveMethod::Unspecified => {
+                        return Err(SparkError::invalid("unspecified save method"))
+                    }
+                    TableSaveMethod::SaveAsTable => spec::TableSaveMethod::SaveAsTable,
+                    TableSaveMethod::InsertInto => spec::TableSaveMethod::InsertInto,
+                };
+                spec::SaveType::Table { table, save_method }
+            }
+        };
+        Ok(spec::Write {
+            input: Box::new(input),
+            source,
+            save_type,
+            mode,
+            sort_columns,
+            partitioning_columns,
+            bucket_by,
+            options,
+            table_properties: vec![],
+            overwrite_condition: None,
+        })
+    }
+}
+
+impl TryFrom<WriteOperationV2> for spec::Write {
+    type Error = SparkError;
+
+    fn try_from(write: WriteOperationV2) -> SparkResult<spec::Write> {
+        use crate::spark::connect::write_operation_v2::Mode;
+
+        let WriteOperationV2 {
+            input,
+            table_name,
+            provider,
+            partitioning_columns,
+            options,
+            table_properties,
+            mode,
+            overwrite_condition,
+        } = write;
+        let input = input.required("input")?.try_into()?;
+        let table = parse_object_name(table_name.as_str())?;
+        let partitioning_columns = partitioning_columns
+            .into_iter()
+            .map(|x| {
+                let expr: spec::Expr = x.try_into()?;
+                match expr {
+                    spec::Expr::UnresolvedAttribute { name, plan_id: _ } => {
+                        let mut name: Vec<String> = name.into();
+                        if name.len() > 1 {
+                            return Err(SparkError::invalid("multiple partitioning column"));
+                        }
+                        let name = name.pop().required("partitioning column")?;
+                        Ok(name.into())
+                    }
+                    _ => Err(SparkError::invalid("partitioning column")),
+                }
+            })
+            .collect::<SparkResult<_>>()?;
+        let options = options.into_iter().collect();
+        let table_properties = table_properties.into_iter().collect();
+        let mode = match Mode::try_from(mode).required("write operation v2 mode")? {
+            Mode::Unspecified => spec::SaveMode::ErrorIfExists,
+            Mode::Create => spec::SaveMode::Create,
+            Mode::Overwrite => spec::SaveMode::Overwrite,
+            Mode::OverwritePartitions => spec::SaveMode::OverwritePartitions,
+            Mode::Append => spec::SaveMode::Append,
+            Mode::Replace => spec::SaveMode::Replace,
+            Mode::CreateOrReplace => spec::SaveMode::CreateOrReplace,
+        };
+        let overwrite_condition = overwrite_condition.map(|x| x.try_into()).transpose()?;
+        Ok(spec::Write {
+            input: Box::new(input),
+            source: provider,
+            save_type: spec::SaveType::Table {
+                table,
+                save_method: spec::TableSaveMethod::SaveAsTable,
+            },
+            mode,
+            sort_columns: vec![],
+            partitioning_columns,
+            bucket_by: None,
+            options,
+            table_properties,
+            overwrite_condition,
+        })
+    }
+}
+
+impl TryFrom<CreateDataFrameViewCommand> for spec::CommandNode {
+    type Error = SparkError;
+
+    fn try_from(command: CreateDataFrameViewCommand) -> SparkResult<spec::CommandNode> {
+        let CreateDataFrameViewCommand {
+            input,
+            name,
+            is_global,
+            replace,
+        } = command;
+        let input = input.required("input relation")?.try_into()?;
+        let view = parse_object_name(name.as_str())?;
+        Ok(spec::CommandNode::CreateTemporaryView {
+            view,
+            definition: spec::TemporaryViewDefinition {
+                input: Box::new(input),
+                columns: None,
+                is_global,
+                replace,
+                temporary: true,
+                definition: None,
+            },
+        })
     }
 }
 

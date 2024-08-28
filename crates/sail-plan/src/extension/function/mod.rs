@@ -1,4 +1,5 @@
 pub(crate) mod array;
+pub(crate) mod drop_struct_field;
 pub(crate) mod explode;
 pub(crate) mod levenshtein;
 pub(crate) mod map_function;
@@ -7,4 +8,5 @@ pub(crate) mod raise_error;
 pub(crate) mod randn;
 pub(crate) mod random;
 pub(crate) mod struct_function;
+pub(crate) mod update_struct_field;
 mod utils;

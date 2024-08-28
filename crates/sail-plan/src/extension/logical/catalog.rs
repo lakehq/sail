@@ -10,7 +10,8 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::{
     exec_datafusion_err, not_impl_err, Constraints, DFSchema, SchemaReference, TableReference,
 };
-use datafusion_expr::{TableScan, UNNAMED_TABLE};
+use datafusion_expr::{ScalarUDF, TableScan, UNNAMED_TABLE};
+use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
 use serde::Serialize;
 use serde_arrow::schema::{SchemaLike, TracingOptions};
 use serde_arrow::to_arrow;
@@ -42,6 +43,11 @@ impl CatalogCommandNode {
             config,
         })
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub(crate) enum CatalogTableFunction {
+    PySparkUDTF(PySparkUDTF),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -129,6 +135,15 @@ pub(crate) enum CatalogCommand {
         if_exists: bool,
         is_temporary: bool,
     },
+    RegisterFunction {
+        udf: ScalarUDF,
+    },
+    RegisterTableFunction {
+        name: String,
+        // We have to be explicit about the UDTF types we support.
+        // We cannot use `Arc<dyn TableFunctionImpl>` because it does not implement `Eq` and `Hash`.
+        udtf: CatalogTableFunction,
+    },
     DropTemporaryView {
         view: TableReference,
         is_global: bool,
@@ -143,6 +158,7 @@ pub(crate) enum CatalogCommand {
         view: TableReference,
         is_global: bool,
         replace: bool,
+        temporary: bool,
         definition: Option<String>,
     },
 }
@@ -182,6 +198,8 @@ impl CatalogCommand {
             CatalogCommand::FunctionExists { .. } => "FunctionExists",
             CatalogCommand::GetFunction { .. } => "GetFunction",
             CatalogCommand::ListFunctions { .. } => "ListFunctions",
+            CatalogCommand::RegisterFunction { .. } => "RegisterFunction",
+            CatalogCommand::RegisterTableFunction { .. } => "RegisterTableFunction",
             CatalogCommand::DropFunction { .. } => "DropFunction",
             CatalogCommand::DropTemporaryView { .. } => "DropTemporaryView",
             CatalogCommand::DropView { .. } => "DropView",
@@ -208,7 +226,9 @@ impl CatalogCommand {
                 Vec::<FieldRef>::from_type::<FunctionMetadata>(TracingOptions::default())
             }
             CatalogCommand::SetCurrentCatalog { .. }
-            | CatalogCommand::SetCurrentDatabase { .. } => {
+            | CatalogCommand::SetCurrentDatabase { .. }
+            | CatalogCommand::RegisterFunction { .. }
+            | CatalogCommand::RegisterTableFunction { .. } => {
                 Vec::<FieldRef>::from_type::<EmptyMetadata>(TracingOptions::default())
             }
             CatalogCommand::CurrentCatalog | CatalogCommand::CurrentDatabase => {
@@ -266,11 +286,10 @@ impl CatalogCommand {
                 location,
                 properties,
             } => {
-                let value = manager
+                manager
                     .create_database(database, if_not_exists, comment, location, properties)
-                    .await
-                    .is_ok();
-                let rows = vec![SingleValueMetadata { value }];
+                    .await?;
+                let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
             }
             CatalogCommand::DatabaseExists { database } => {
@@ -297,11 +316,8 @@ impl CatalogCommand {
                 if_exists,
                 cascade,
             } => {
-                let value = manager
-                    .drop_database(database, if_exists, cascade)
-                    .await
-                    .is_ok();
-                let rows = vec![SingleValueMetadata { value }];
+                manager.drop_database(database, if_exists, cascade).await?;
+                let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
             }
             CatalogCommand::CreateTable {
@@ -321,7 +337,7 @@ impl CatalogCommand {
                 definition,
                 copy_to_plan,
             } => {
-                let value = manager
+                manager
                     .create_table(CatalogCommand::CreateTable {
                         table,
                         schema,
@@ -339,9 +355,8 @@ impl CatalogCommand {
                         definition,
                         copy_to_plan,
                     })
-                    .await
-                    .is_ok();
-                let rows = vec![SingleValueMetadata { value }];
+                    .await?;
+                let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
             }
             CatalogCommand::TableExists { table } => {
@@ -370,8 +385,8 @@ impl CatalogCommand {
                 if_exists,
                 purge,
             } => {
-                let value = manager.drop_table(table, if_exists, purge).await.is_ok();
-                let rows = vec![SingleValueMetadata { value }];
+                manager.drop_table(table, if_exists, purge).await?;
+                let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
             }
             CatalogCommand::ListColumns { table } => {
@@ -382,19 +397,29 @@ impl CatalogCommand {
             CatalogCommand::GetFunction { .. } => return not_impl_err!("get function"),
             CatalogCommand::ListFunctions { .. } => return not_impl_err!("list functions"),
             CatalogCommand::DropFunction { .. } => return not_impl_err!("drop function"),
+            CatalogCommand::RegisterFunction { udf } => {
+                manager.register_function(udf)?;
+                let rows: Vec<EmptyMetadata> = vec![];
+                build_record_batch(command_schema, &rows)?
+            }
+            CatalogCommand::RegisterTableFunction { name, udtf } => {
+                manager.register_table_function(name, udtf)?;
+                let rows: Vec<EmptyMetadata> = vec![];
+                build_record_batch(command_schema, &rows)?
+            }
             CatalogCommand::DropTemporaryView {
                 view,
                 is_global: _,
                 if_exists,
             } => {
                 // TODO: use the correct catalog and database for global temporary views
-                let value = manager.drop_temporary_view(view, if_exists).await.is_ok();
-                let rows = vec![SingleValueMetadata { value }];
+                manager.drop_temporary_view(view, if_exists).await?;
+                let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
             }
             CatalogCommand::DropView { view, if_exists } => {
-                let value = manager.drop_view(view, if_exists).await.is_ok();
-                let rows = vec![SingleValueMetadata { value }];
+                manager.drop_view(view, if_exists).await?;
+                let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
             }
             CatalogCommand::CreateTemporaryView {
@@ -402,13 +427,13 @@ impl CatalogCommand {
                 view,
                 is_global,
                 replace,
+                temporary,
                 definition,
             } => {
-                let value = manager
-                    .create_view(input, view, is_global, replace, definition)
-                    .await
-                    .is_ok();
-                let rows = vec![SingleValueMetadata { value }];
+                manager
+                    .create_view(input, view, is_global, replace, temporary, definition)
+                    .await?;
+                let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
             }
         };

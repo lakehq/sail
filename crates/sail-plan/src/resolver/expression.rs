@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
@@ -18,6 +17,8 @@ use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 use sail_python_udf::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::drop_struct_field::DropStructField;
+use crate::extension::function::update_struct_field::UpdateStructField;
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, get_built_in_window_function,
 };
@@ -34,7 +35,7 @@ pub(super) struct NamedExpr {
     /// to be expanded into multiple ones in the projection).
     pub name: Vec<String>,
     pub expr: expr::Expr,
-    pub metadata: HashMap<String, String>,
+    pub metadata: Vec<(String, String)>,
 }
 
 impl NamedExpr {
@@ -42,7 +43,7 @@ impl NamedExpr {
         Self {
             name,
             expr,
-            metadata: HashMap::new(),
+            metadata: vec![],
         }
     }
 
@@ -70,7 +71,7 @@ impl NamedExpr {
         }
     }
 
-    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+    pub fn with_metadata(mut self, metadata: Vec<(String, String)>) -> Self {
         self.metadata = metadata;
         self
     }
@@ -661,10 +662,6 @@ impl PlanResolver<'_> {
         let (argument_names, arguments) = self
             .resolve_alias_expressions_and_names(arguments, schema, state)
             .await?;
-        let input_types: Vec<DataType> = arguments
-            .iter()
-            .map(|arg| arg.get_type(schema))
-            .collect::<Result<Vec<DataType>, DataFusionError>>()?;
 
         // FIXME: is_user_defined_function is always false
         //  So, we need to check udf's before built-in functions.
@@ -697,6 +694,12 @@ impl PlanResolver<'_> {
                 .map_err(|e| {
                     PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
                 })?;
+
+                let input_types: Vec<DataType> = arguments
+                    .iter()
+                    .map(|arg| arg.get_type(schema))
+                    .collect::<Result<Vec<DataType>, DataFusionError>>(
+                )?;
 
                 let python_udf: PySparkUDF = PySparkUDF::new(
                     function_name.to_owned(),
@@ -739,7 +742,7 @@ impl PlanResolver<'_> {
         &self,
         expr: spec::Expr,
         name: Vec<spec::Identifier>,
-        metadata: Option<HashMap<String, String>>,
+        metadata: Option<Vec<(String, String)>>,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
@@ -996,13 +999,35 @@ impl PlanResolver<'_> {
 
     async fn resolve_expression_update_fields(
         &self,
-        _struct_expression: spec::Expr,
-        _field_name: spec::ObjectName,
-        _value_expression: Option<spec::Expr>,
-        _schema: &DFSchemaRef,
-        _state: &mut PlanResolverState,
+        struct_expression: spec::Expr,
+        field_name: spec::ObjectName,
+        value_expression: Option<spec::Expr>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        Err(PlanError::todo("update fields"))
+        let field_name: Vec<String> = field_name.into();
+        let NamedExpr { name, expr, .. } = self
+            .resolve_named_expression(struct_expression, schema, state)
+            .await?;
+        let name = name
+            .one()
+            .map_err(|_| PlanError::invalid("one name expected for expression"))?;
+
+        let new_expr = if let Some(value_expression) = value_expression {
+            let value_expr = self
+                .resolve_expression(value_expression, schema, state)
+                .await?;
+            expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func: Arc::new(ScalarUDF::from(UpdateStructField::new(field_name))),
+                args: vec![expr, value_expr],
+            })
+        } else {
+            expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func: Arc::new(ScalarUDF::from(DropStructField::new(field_name))),
+                args: vec![expr],
+            })
+        };
+        Ok(NamedExpr::new(vec![name], new_expr))
     }
 
     async fn resolve_expression_named_lambda_variable(

@@ -549,9 +549,10 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
                 view: name,
                 definition: spec::TemporaryViewDefinition {
                     input: Box::new(query),
-                    columns,
+                    columns: Some(columns),
                     is_global: true,
                     replace: or_replace,
+                    temporary: false,
                     definition: statement_sql,
                 },
             };

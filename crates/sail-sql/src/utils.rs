@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use sail_common::spec;
 use sqlparser::ast;
 
@@ -51,7 +49,7 @@ pub fn build_schema_from_columns(columns: Vec<ast::ColumnDef>) -> SqlResult<spec
             name: normalize_ident(column.name),
             data_type: from_ast_data_type(&column.data_type)?,
             nullable: !not_nullable,
-            metadata: HashMap::new(),
+            metadata: vec![],
         };
         fields.push(field);
     }
