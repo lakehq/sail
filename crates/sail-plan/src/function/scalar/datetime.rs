@@ -17,6 +17,9 @@ fn trunc(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     Ok(expr_fn::date_trunc(part, date))
 }
 
+// FIXME: Spark displays dates and timestamps according to the session time zone.
+//  We should be setting the DataFusion config `datafusion.execution.time_zone`
+//  and casting any datetime functions that don't use the DataFusion config.
 pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -25,7 +28,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("convert_timezone", F::unknown("convert_timezone")),
         ("curdate", F::nullary(expr_fn::current_date)),
         ("current_date", F::nullary(expr_fn::current_date)),
-        ("current_timestamp", F::unknown("current_timestamp")),
+        ("current_timestamp", F::nullary(expr_fn::now)),
         ("current_timezone", F::unknown("current_timezone")),
         ("date_add", F::unknown("date_add")),
         ("date_diff", F::unknown("date_diff")),

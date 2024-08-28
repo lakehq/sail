@@ -370,7 +370,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: current_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -392,7 +392,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: current_timestamp"
+        "success": "ok"
       }
     },
     {
