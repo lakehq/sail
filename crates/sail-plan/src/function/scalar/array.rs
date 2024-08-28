@@ -2,6 +2,7 @@ use arrow::datatypes::DataType;
 use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, BinaryExpr, Operator};
+use datafusion_functions_nested::position::array_position_udf;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::Function;
@@ -76,7 +77,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
         ("array_join", F::unknown("array_join")),
         ("array_max", F::unknown("array_max")),
         ("array_min", F::unknown("array_min")),
-        ("array_position", F::unknown("array_position")),
+        ("array_position", F::scalar_udf(array_position_udf)),
         ("array_prepend", F::binary(expr_fn::array_prepend)),
         ("array_remove", F::binary(expr_fn::array_remove_all)),
         ("array_repeat", F::binary(array_repeat)),
