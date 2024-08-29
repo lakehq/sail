@@ -1,7 +1,25 @@
 use datafusion::functions::expr_fn;
+use datafusion_common::ScalarValue;
+use datafusion_expr::{expr, lit};
 
+use crate::error::PlanResult;
 use crate::function::common::Function;
+use crate::utils::ItemTaker;
 
+fn year(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    let date = args.one()?;
+    let part = lit(ScalarValue::Utf8(Some("YEAR".to_string())));
+    Ok(expr_fn::date_part(part, date))
+}
+
+fn trunc(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    let (date, part) = args.two()?;
+    Ok(expr_fn::date_trunc(part, date))
+}
+
+// FIXME: Spark displays dates and timestamps according to the session time zone.
+//  We should be setting the DataFusion config `datafusion.execution.time_zone`
+//  and casting any datetime functions that don't use the DataFusion config.
 pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -10,7 +28,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("convert_timezone", F::unknown("convert_timezone")),
         ("curdate", F::nullary(expr_fn::current_date)),
         ("current_date", F::nullary(expr_fn::current_date)),
-        ("current_timestamp", F::unknown("current_timestamp")),
+        ("current_timestamp", F::nullary(expr_fn::now)),
         ("current_timezone", F::unknown("current_timezone")),
         ("date_add", F::unknown("date_add")),
         ("date_diff", F::unknown("date_diff")),
@@ -56,7 +74,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("to_timestamp_ntz", F::unknown("to_timestamp_ntz")),
         ("to_unix_timestamp", F::unknown("to_unix_timestamp")),
         ("to_utc_timestamp", F::unknown("to_utc_timestamp")),
-        ("trunc", F::unknown("trunc")),
+        ("trunc", F::custom(trunc)),
         ("try_to_timestamp", F::unknown("try_to_timestamp")),
         ("unix_date", F::unknown("unix_date")),
         ("unix_micros", F::unknown("unix_micros")),
@@ -67,6 +85,6 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("weekofyear", F::unknown("weekofyear")),
         ("window", F::unknown("window")),
         ("window_time", F::unknown("window_time")),
-        ("year", F::unknown("year")),
+        ("year", F::custom(year)),
     ]
 }

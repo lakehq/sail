@@ -88,6 +88,18 @@ impl FunctionBuilder {
         })
     }
 
+    pub fn scalar_udf<F>(f: F) -> Function
+    where
+        F: Fn() -> Arc<ScalarUDF> + Send + Sync + 'static,
+    {
+        Arc::new(move |args| {
+            Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func: f(),
+                args,
+            }))
+        })
+    }
+
     pub fn dynamic_udf<F, U>(f: F) -> Function
     where
         F: Fn(Vec<expr::Expr>) -> PlanResult<U> + Send + Sync + 'static,

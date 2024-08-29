@@ -370,7 +370,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: current_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -392,7 +392,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: current_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -2504,7 +2504,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: trunc"
+        "failure": "error in DataFusion: Execution error: Unsupported date_trunc granularity: mm"
       }
     },
     {
@@ -2526,7 +2526,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: trunc"
+        "success": "ok"
       }
     },
     {
@@ -2548,7 +2548,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: trunc"
+        "success": "ok"
       }
     },
     {
@@ -2570,7 +2570,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: trunc"
+        "success": "ok"
       }
     },
     {
@@ -2834,7 +2834,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: year"
+        "success": "ok"
       }
     }
   ]

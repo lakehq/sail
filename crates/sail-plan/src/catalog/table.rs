@@ -300,11 +300,20 @@ impl<'a> CatalogManager<'a> {
             return exec_err!("DROP TABLE ... PURGE is not supported");
         }
         let ddl = LogicalPlan::Ddl(DdlStatement::DropTable(DropTable {
-            name: table,
-            if_exists,
+            name: table.clone(),
+            if_exists: false,
             schema: DFSchemaRef::new(DFSchema::empty()),
         }));
-        self.ctx.execute_logical_plan(ddl).await?;
-        Ok(())
+        let result = self.ctx.execute_logical_plan(ddl).await;
+        match result {
+            // We don't know what type of table to drop from a SQL query like "DROP TABLE ...".
+            // This is because TableSaveMethod::SaveAsTable on a DF saves as View in the Sail code,
+            // and Spark expects "DROP TABLE ..." to work on tables created via DF SaveAsTable.
+            Ok(_) => Ok(()),
+            Err(_) => {
+                self.drop_view(table, if_exists).await?;
+                Ok(())
+            }
+        }
     }
 }

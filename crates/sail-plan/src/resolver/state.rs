@@ -75,6 +75,10 @@ impl PlanResolverState {
         self.attributes.insert((plan_id, name), resolved);
     }
 
+    pub fn get_fields(&self) -> &HashMap<ResolvedFieldName, FieldName> {
+        &self.fields
+    }
+
     pub fn get_field_name(&self, resolved: &str) -> PlanResult<&FieldName> {
         self.fields
             .get(resolved)

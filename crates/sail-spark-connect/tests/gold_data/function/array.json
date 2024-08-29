@@ -463,7 +463,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: array_position"
+        "success": "ok"
       }
     },
     {
@@ -485,7 +485,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: array_position"
+        "success": "ok"
       }
     },
     {
