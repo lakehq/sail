@@ -28,7 +28,8 @@ use datafusion_expr::utils::{
     find_aggregate_exprs,
 };
 use datafusion_expr::{
-    build_join_schema, col, lit, when, BinaryExpr, LogicalPlanBuilder, Operator, ScalarUDF,
+    build_join_schema, col, lit, when, BinaryExpr, ExprSchemable, LogicalPlanBuilder, Operator,
+    ScalarUDF, TryCast,
 };
 use sail_common::spec;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
@@ -284,8 +285,13 @@ impl PlanResolver<'_> {
             QueryNode::CommonInlineUserDefinedTableFunction(udtf) => {
                 self.resolve_query_common_inline_udtf(udtf, state).await?
             }
-            QueryNode::FillNa { .. } => {
-                return Err(PlanError::todo("fill na"));
+            QueryNode::FillNa {
+                input,
+                columns,
+                values,
+            } => {
+                self.resolve_query_fill_na(*input, columns, values, state)
+                    .await?
             }
             QueryNode::DropNa {
                 input,
@@ -2033,6 +2039,83 @@ impl PlanResolver<'_> {
         Ok(plan)
     }
 
+    async fn resolve_query_fill_na(
+        &self,
+        input: spec::QueryPlan,
+        columns: Vec<spec::Identifier>,
+        values: Vec<spec::Expr>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        if values.len() > 1 && values.len() != columns.len() {
+            return Err(PlanError::invalid(
+                "fill na number of values does not match number of columns",
+            ));
+        }
+
+        let input = self.resolve_query_plan(input, state).await?;
+        let schema = input.schema();
+        let values = self.resolve_expressions(values, schema, state).await?;
+        let columns: Vec<String> = columns.into_iter().map(|x| x.into()).collect();
+
+        let fill_na_exprs = schema
+            .columns()
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let column_expr = col(c.clone());
+                let column_data_type = column_expr.get_type(schema)?;
+                let column_name = state.get_field_name(c.name())?;
+                let expr = if columns.is_empty() || columns.iter().any(|col| col == column_name) {
+                    let (value_data_type, value) = if values.len() == 1 {
+                        let single_value = values[0].clone();
+                        (single_value.get_type(schema)?, single_value)
+                    } else {
+                        let value = values
+                            .get(i)
+                            .ok_or_else(|| PlanError::invalid("No matching value for column type"))?
+                            .clone();
+                        let value_data_type = value.get_type(schema)?;
+                        (value_data_type, value)
+                    };
+                    if self.can_cast_fill_na_types(&value_data_type, &column_data_type) {
+                        let value = Expr::TryCast(TryCast {
+                            expr: Box::new(value),
+                            data_type: column_data_type,
+                        });
+                        when(column_expr.clone().is_null(), value).otherwise(column_expr)?
+                    } else {
+                        column_expr
+                    }
+                } else {
+                    column_expr
+                };
+                Ok(NamedExpr::new(vec![column_name.into()], expr))
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+
+        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+            self.rewrite_named_expressions(fill_na_exprs, state)?,
+            Arc::new(input),
+        )?))
+    }
+
+    fn can_cast_fill_na_types(&self, from_type: &adt::DataType, to_type: &adt::DataType) -> bool {
+        // Spark only supports 4 data types for fill na: bool, long, double, string
+        if from_type == to_type {
+            return true;
+        }
+        match (from_type, to_type) {
+            (
+                adt::DataType::Utf8 | adt::DataType::LargeUtf8,
+                adt::DataType::Utf8 | adt::DataType::LargeUtf8,
+            ) => true,
+            (adt::DataType::Null, _) => true,
+            (_, adt::DataType::Null) => true,
+            // Only care about checking numeric types because we do TryCast.
+            (_, _) => from_type.is_numeric() && to_type.is_numeric(),
+        }
+    }
+
     async fn resolve_query_drop_na(
         &self,
         input: spec::QueryPlan,
@@ -2107,9 +2190,9 @@ impl PlanResolver<'_> {
         if invalid.is_empty() {
             Ok(())
         } else {
+            let valid = state.get_fields();
             Err(PlanError::internal(format!(
-                "a plan resolver bug has produced invalid fields: {:?}",
-                invalid,
+                "a plan resolver bug has produced invalid fields: {invalid:?}, valid fields: {valid:?}",
             )))
         }
     }
