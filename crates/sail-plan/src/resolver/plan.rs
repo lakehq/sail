@@ -2060,8 +2060,7 @@ impl PlanResolver<'_> {
         let fill_na_exprs = schema
             .columns()
             .into_iter()
-            .enumerate()
-            .map(|(i, c)| {
+            .map(|c| {
                 let column_expr = col(c.clone());
                 let column_data_type = column_expr.get_type(schema)?;
                 let column_name = state.get_field_name(c.name())?;
@@ -2070,8 +2069,14 @@ impl PlanResolver<'_> {
                         let single_value = values[0].clone();
                         (single_value.get_type(schema)?, single_value)
                     } else {
+                        let pos = columns
+                            .iter()
+                            .position(|col| col == column_name)
+                            .ok_or_else(|| {
+                                PlanError::invalid("No matching column in specified columns")
+                            })?;
                         let value = values
-                            .get(i)
+                            .get(pos)
                             .ok_or_else(|| PlanError::invalid("No matching value for column type"))?
                             .clone();
                         let value_data_type = value.get_type(schema)?;
