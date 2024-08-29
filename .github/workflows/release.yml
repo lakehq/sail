@@ -291,6 +291,8 @@ jobs:
       - name: Show release artifacts
         shell: bash
         run: |
+          find dist -name '*.tar.gz' -exec echo '{}' \; -exec tar -tvf '{}' \;
+          find dist -name '*.whl' -exec unzip -l '{}' \;
           ls -lah dist
           md5sum dist/*
 

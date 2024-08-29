@@ -16,9 +16,6 @@ pip install pysail
 
 You can follow the [Getting Started](https://docs.lakesail.com/sail/latest/guide/getting-started/) guide to learn more about Sail.
 
-**Note**: Currently only a source-only pre-release is available, so you need the Rust toolchain to install Sail.
-A proper release with pre-built wheels will be available soon.
-
 ## Documentation
 
 The documentation of the latest Sail version can be found [here](https://docs.lakesail.com/sail/latest/).
