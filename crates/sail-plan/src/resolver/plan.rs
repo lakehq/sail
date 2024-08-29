@@ -24,10 +24,10 @@ use datafusion_common::{
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::{
-    columnize_expr, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
+    columnize_expr, conjunction, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
     find_aggregate_exprs,
 };
-use datafusion_expr::{build_join_schema, LogicalPlanBuilder, ScalarUDF};
+use datafusion_expr::{build_join_schema, col, LogicalPlanBuilder, ScalarUDF};
 use sail_common::spec;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
@@ -285,8 +285,13 @@ impl PlanResolver<'_> {
             QueryNode::FillNa { .. } => {
                 return Err(PlanError::todo("fill na"));
             }
-            QueryNode::DropNa { .. } => {
-                return Err(PlanError::todo("drop na"));
+            QueryNode::DropNa {
+                input,
+                columns,
+                min_non_nulls,
+            } => {
+                self.resolve_query_drop_na(*input, columns, min_non_nulls, state)
+                    .await?
             }
             QueryNode::ReplaceNa { .. } => {
                 return Err(PlanError::todo("replace"));
@@ -2024,6 +2029,40 @@ impl PlanResolver<'_> {
             LogicalPlanBuilder::insert_into(input, table_reference, arrow_schema, overwrite)?
                 .build()?;
         Ok(plan)
+    }
+
+    async fn resolve_query_drop_na(
+        &self,
+        input: spec::QueryPlan,
+        columns: Vec<spec::Identifier>,
+        min_non_nulls: Option<usize>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        if min_non_nulls.is_some() {
+            return Err(PlanError::todo("drop na with min non-nulls"));
+        }
+        let input = self.resolve_query_plan(input, state).await?;
+        let schema = input.schema();
+
+        let not_null_exprs = if columns.is_empty() {
+            schema
+                .columns()
+                .into_iter()
+                .filter(|column| state.get_field_name(column.name()).is_ok())
+                .map(|column| col(column).is_not_null())
+                .collect::<Vec<Expr>>()
+        } else {
+            let columns: Vec<String> = columns.into_iter().map(String::from).collect();
+            columns
+                .into_iter()
+                .map(|c| col(c).is_not_null())
+                .collect::<Vec<Expr>>()
+        };
+
+        Ok(LogicalPlan::Filter(plan::Filter::try_new(
+            conjunction(not_null_exprs).unwrap(),
+            Arc::new(input),
+        )?))
     }
 
     fn verify_query_plan(&self, plan: &LogicalPlan, state: &PlanResolverState) -> PlanResult<()> {
