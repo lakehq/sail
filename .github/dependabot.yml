@@ -20,3 +20,4 @@ updates:
       - dependency-name: "arrow-*"
       - dependency-name: "sqlparser"
       - dependency-name: "pyo3"
+      - dependency-name: "object_store"

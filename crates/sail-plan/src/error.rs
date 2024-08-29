@@ -1,3 +1,4 @@
+use arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use sail_common::error::CommonError;
 use thiserror::Error;
@@ -8,6 +9,8 @@ pub type PlanResult<T> = Result<T, PlanError>;
 pub enum PlanError {
     #[error("error in DataFusion: {0}")]
     DataFusionError(#[from] DataFusionError),
+    #[error("error in Arrow: {0}")]
+    ArrowError(#[from] ArrowError),
     #[error("missing argument: {0}")]
     MissingArgument(String),
     #[error("invalid argument: {0}")]

@@ -125,7 +125,9 @@ fn format_type_name(f: &mut fmt::Formatter, data_type: Option<&sc::DataType>) ->
 }
 
 fn format_prefix(f: &mut fmt::Formatter, level: i32) -> fmt::Result {
-    write!(f, "{}", " |   ".repeat((level - 1) as usize))?;
+    for _ in 0..(level - 1) {
+        write!(f, " |   ")?;
+    }
     write!(f, " |-- ")
 }
 

@@ -35,3 +35,7 @@ tokio = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
+url = { workspace = true }
+object_store = { workspace = true }
+aws-config = { workspace = true }
+aws-credential-types = { workspace = true }
