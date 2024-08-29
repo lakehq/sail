@@ -27,7 +27,9 @@ use datafusion_expr::utils::{
     columnize_expr, conjunction, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
     find_aggregate_exprs,
 };
-use datafusion_expr::{build_join_schema, col, LogicalPlanBuilder, ScalarUDF};
+use datafusion_expr::{
+    build_join_schema, col, lit, when, BinaryExpr, LogicalPlanBuilder, Operator, ScalarUDF,
+};
 use sail_common::spec;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
@@ -2038,9 +2040,6 @@ impl PlanResolver<'_> {
         min_non_nulls: Option<usize>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        if min_non_nulls.is_some() {
-            return Err(PlanError::todo("drop na with min non-nulls"));
-        }
         let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
 
@@ -2048,19 +2047,46 @@ impl PlanResolver<'_> {
             schema
                 .columns()
                 .into_iter()
-                .filter(|column| state.get_field_name(column.name()).is_ok())
-                .map(|column| col(column).is_not_null())
+                .map(|c| col(c).is_not_null())
                 .collect::<Vec<Expr>>()
         } else {
-            let columns: Vec<String> = columns.into_iter().map(String::from).collect();
-            columns
+            let columns: Vec<String> = columns.into_iter().map(|x| x.into()).collect();
+            schema
+                .columns()
                 .into_iter()
+                .filter(|column| {
+                    state
+                        .get_field_name(column.name())
+                        .is_ok_and(|x| columns.contains(x))
+                })
                 .map(|c| col(c).is_not_null())
                 .collect::<Vec<Expr>>()
         };
 
+        let filter_expr = match min_non_nulls {
+            Some(min_non_nulls) => {
+                let min_non_nulls = min_non_nulls as u32;
+                if min_non_nulls > 0 {
+                    let non_null_count = not_null_exprs
+                        .into_iter()
+                        .map(|expr| Ok(when(expr, lit(1)).otherwise(lit(0))?))
+                        .try_fold(lit(0), |acc: Expr, predicate: PlanResult<Expr>| {
+                            Ok(Expr::BinaryExpr(BinaryExpr::new(
+                                Box::new(acc),
+                                Operator::Plus,
+                                Box::new(predicate?),
+                            ))) as PlanResult<Expr>
+                        })?;
+                    non_null_count.gt_eq(lit(min_non_nulls))
+                } else {
+                    conjunction(not_null_exprs).unwrap()
+                }
+            }
+            None => conjunction(not_null_exprs).unwrap(),
+        };
+
         Ok(LogicalPlan::Filter(plan::Filter::try_new(
-            conjunction(not_null_exprs).unwrap(),
+            filter_expr,
             Arc::new(input),
         )?))
     }
