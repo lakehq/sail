@@ -38,13 +38,13 @@ Here is an example Python script.
 from pysail.spark import SparkConnectServer
 from pyspark.sql import SparkSession
 
-server = SparkConnectServer("127.0.0.1", 0)
-server.start(background=True)
-host, port = server.listening_address
+server = SparkConnectServer()
+server.start()
+_, port = server.listening_address
 
-spark = SparkSession.builder.remote(f"sc://{host}:{port}").getOrCreate()
+spark = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
 
-spark.sql("SELECT 1").show()
+spark.sql("SELECT 1 + 1").show()
 ```
 
 ## Running the Sail Spark Connect Server

@@ -50,7 +50,7 @@ pub(super) struct SparkConnectServer {
 #[pymethods]
 impl SparkConnectServer {
     #[new]
-    #[pyo3(signature = (ip="0.0.0.0", port=50051))]
+    #[pyo3(signature = (ip, port, /))]
     fn new(ip: &str, port: u16) -> PyResult<Self> {
         let runtime = Builder::new_multi_thread()
             // FIXME: make thread count and stack size configurable
@@ -78,7 +78,7 @@ impl SparkConnectServer {
         }
     }
 
-    #[pyo3(signature = (*, background=false))]
+    #[pyo3(signature = (*, background))]
     fn start(&mut self, py: Python<'_>, background: bool) -> PyResult<()> {
         if self.state.is_some() {
             return Err(PyErr::new::<PyRuntimeError, _>(
