@@ -2064,6 +2064,7 @@ impl PlanResolver<'_> {
                 let column_expr = col(c.clone());
                 let column_data_type = column_expr.get_type(schema)?;
                 let column_name = state.get_field_name(c.name())?;
+                // TODO: Avoid checking col == column_name twice
                 let expr = if columns.is_empty() || columns.iter().any(|col| col == column_name) {
                     let (value_data_type, value) = if values.len() == 1 {
                         let single_value = values[0].clone();
@@ -2167,10 +2168,12 @@ impl PlanResolver<'_> {
                         })?;
                     non_null_count.gt_eq(lit(min_non_nulls))
                 } else {
-                    conjunction(not_null_exprs).unwrap()
+                    conjunction(not_null_exprs)
+                        .ok_or_else(|| PlanError::invalid("No columns specified for drop_na."))?
                 }
             }
-            None => conjunction(not_null_exprs).unwrap(),
+            None => conjunction(not_null_exprs)
+                .ok_or_else(|| PlanError::invalid("No columns specified for drop_na."))?,
         };
 
         Ok(LogicalPlan::Filter(plan::Filter::try_new(

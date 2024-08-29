@@ -1,8 +1,8 @@
 use arrow::datatypes::DataType;
 use datafusion::functions_nested::expr_fn;
+use datafusion::functions_nested::position::array_position_udf;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, BinaryExpr, Operator};
-use datafusion_functions_nested::position::array_position_udf;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::Function;
