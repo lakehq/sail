@@ -52,7 +52,7 @@ def main():
     if args.command == "server":
         server = SparkConnectServer(args.ip, args.port)
         server.init_telemetry()
-        server.start()
+        server.start(background=False)
     elif args.command == "shell":
         # Listen on only the loopback interface for security.
         server = SparkConnectServer("127.0.0.1", 0)

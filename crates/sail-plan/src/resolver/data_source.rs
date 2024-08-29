@@ -20,7 +20,11 @@ impl PlanResolver<'_> {
                 urls.push(url);
             } else {
                 // The object at the path does not exist, so we treat it as a directory.
-                let path = format!("{}{}", path, object_store::path::DELIMITER);
+                let path = if path.ends_with(object_store::path::DELIMITER) {
+                    path
+                } else {
+                    format!("{}{}", path, object_store::path::DELIMITER)
+                };
                 urls.push(ListingTableUrl::parse(path)?);
             }
         }
