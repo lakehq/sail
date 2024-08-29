@@ -24,7 +24,7 @@ Relative file paths
 
 - For local file systems, the path can refer to a file or a directory.
 - For S3-compatible object storage services, the path can refer to an object or a key prefix.
-We assume the key prefix is followed by `/` and represents a directory.
+  We assume the key prefix is followed by `/` and represents a directory.
 
 :::
 
