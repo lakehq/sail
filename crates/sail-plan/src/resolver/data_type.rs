@@ -30,7 +30,7 @@ impl PlanResolver<'_> {
                 contains_null,
             } => {
                 let field = spec::Field {
-                    name: "element".to_string(),
+                    name: "item".to_string(),
                     data_type: *element_type,
                     nullable: contains_null,
                     metadata: vec![],
