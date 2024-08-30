@@ -3462,6 +3462,7 @@ dependencies = [
  "either",
  "futures",
  "html-escape",
+ "itertools 0.13.0",
  "lazy_static",
  "num-traits",
  "object_store",

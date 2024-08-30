@@ -5,8 +5,9 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, BinaryExpr, Operator};
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::concat::{ArrayAppend, ArrayPrepend};
+use crate::extension::function::concat::{ArrayAppend, ArrayConcat, ArrayPrepend};
 use crate::extension::function::make_nullable_array::MakeNullableArray;
+use crate::extension::function::set_ops::{ArrayDistinct, ArrayIntersect, ArrayUnion};
 use crate::function::common::Function;
 use crate::utils::ItemTaker;
 
@@ -70,12 +71,13 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
     vec![
         ("array", F::udf(MakeNullableArray::new())),
         ("array_append", F::udf(ArrayAppend::new())),
+        ("array_concat", F::udf(ArrayConcat::new())),
         ("array_compact", F::unary(array_compact)),
         ("array_contains", F::binary(expr_fn::array_has)),
-        ("array_distinct", F::unary(expr_fn::array_distinct)),
+        ("array_distinct", F::udf(ArrayDistinct::new())),
         ("array_except", F::binary(expr_fn::array_except)),
         ("array_insert", F::unknown("array_insert")),
-        ("array_intersect", F::binary(expr_fn::array_intersect)),
+        ("array_intersect", F::udf(ArrayIntersect::new())),
         ("array_join", F::unknown("array_join")),
         ("array_max", F::unknown("array_max")),
         ("array_min", F::unknown("array_min")),
@@ -83,7 +85,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
         ("array_prepend", F::udf(ArrayPrepend::new())),
         ("array_remove", F::binary(expr_fn::array_remove_all)),
         ("array_repeat", F::binary(array_repeat)),
-        ("array_union", F::binary(expr_fn::array_union)),
+        ("array_union", F::udf(ArrayUnion::new())),
         ("arrays_overlap", F::unknown("arrays_overlap")),
         ("arrays_zip", F::unknown("arrays_zip")),
         ("flatten", F::unary(expr_fn::flatten)),

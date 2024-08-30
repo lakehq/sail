@@ -201,7 +201,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Arrow error: Invalid argument error: column types must match schema types, expected List(Field { name: \"element\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) but found List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) at column index 0"
       }
     },
     {
