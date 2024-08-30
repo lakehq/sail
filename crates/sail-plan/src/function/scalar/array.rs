@@ -1,4 +1,5 @@
 use arrow::datatypes::DataType;
+use datafusion::functions_aggregate::expr_fn as agg_expr_fn;
 use datafusion::functions_nested::expr_fn;
 use datafusion::functions_nested::position::array_position_udf;
 use datafusion_common::ScalarValue;
@@ -62,6 +63,33 @@ fn sort_array(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     Ok(expr_fn::array_sort(array, sort, nulls))
 }
 
+fn array_prepend(array: expr::Expr, element: expr::Expr) -> expr::Expr {
+    expr_fn::array_prepend(element, array)
+}
+
+fn array_union(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    Ok(expr_fn::array_distinct(expr_fn::array_concat(args)))
+}
+
+// TODO: Add in optional third argument null replacement
+fn array_join(array: expr::Expr, delimiter: expr::Expr) -> expr::Expr {
+    expr_fn::array_to_string(array, delimiter)
+}
+
+fn array_max(array: expr::Expr) -> expr::Expr {
+    // agg_expr_fn::max(array) doesn;t seem to work.
+    let sort = lit(ScalarValue::Utf8(Some("DESC".to_string())));
+    let nulls = lit(ScalarValue::Utf8(Some("NULLS LAST".to_string())));
+    agg_expr_fn::first_value(expr_fn::array_sort(array, sort, nulls), None)
+}
+
+fn array_min(array: expr::Expr) -> expr::Expr {
+    // agg_expr_fn::min(array) doesn;t seem to work.
+    let sort = lit(ScalarValue::Utf8(Some("ASC".to_string())));
+    let nulls = lit(ScalarValue::Utf8(Some("NULLS LAST".to_string())));
+    agg_expr_fn::first_value(expr_fn::array_sort(array, sort, nulls), None)
+}
+
 pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -74,14 +102,14 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
         ("array_except", F::binary(expr_fn::array_except)),
         ("array_insert", F::unknown("array_insert")),
         ("array_intersect", F::binary(expr_fn::array_intersect)),
-        ("array_join", F::unknown("array_join")),
-        ("array_max", F::unknown("array_max")),
-        ("array_min", F::unknown("array_min")),
+        ("array_join", F::binary(array_join)),
+        ("array_max", F::unary(array_max)),
+        ("array_min", F::unary(array_min)),
         ("array_position", F::scalar_udf(array_position_udf)),
-        ("array_prepend", F::binary(expr_fn::array_prepend)),
+        ("array_prepend", F::binary(array_prepend)),
         ("array_remove", F::binary(expr_fn::array_remove_all)),
         ("array_repeat", F::binary(array_repeat)),
-        ("array_union", F::binary(expr_fn::array_union)),
+        ("array_union", F::custom(array_union)),
         ("arrays_overlap", F::unknown("arrays_overlap")),
         ("arrays_zip", F::unknown("arrays_zip")),
         ("flatten", F::unary(expr_fn::flatten)),
