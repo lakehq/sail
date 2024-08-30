@@ -16,6 +16,6 @@
     "docs/.vitepress/*.d.ts",
     "docs/.vitepress/theme/**/*",
     "docs/**/*.data.ts",
-    "docs/**/*.paths.ts",
+    "docs/**/*.paths.ts"
   ]
 }
