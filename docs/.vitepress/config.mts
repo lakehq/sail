@@ -115,7 +115,7 @@ class TransformPageData {
   static sphinx(pageData: PageData): void {
     if (pageData.params?.sphinx) {
       pageData.title = pageData.params.current.text;
-      pageData.titleTemplate = `:title - Sail Python API Reference`;
+      pageData.titleTemplate = ":title - Sail Python API Reference";
       pageData.frontmatter.prev = pageData.params.prev ?? {
         link: "/reference/",
         text: "Reference",
@@ -207,7 +207,7 @@ export default async () => {
     base: Site.base(),
     lang: "en-US",
     title: "Sail",
-    titleTemplate: `:title - Sail Documentation`,
+    titleTemplate: ":title - Sail Documentation",
     description: "The Sail documentation site",
     head: [
       [
