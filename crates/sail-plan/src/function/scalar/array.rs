@@ -5,6 +5,8 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, BinaryExpr, Operator};
 
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::concat::{ArrayAppend, ArrayPrepend};
+use crate::extension::function::make_nullable_array::MakeNullableArray;
 use crate::function::common::Function;
 use crate::utils::ItemTaker;
 
@@ -66,8 +68,8 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
     vec![
-        ("array", F::var_arg(expr_fn::make_array)),
-        ("array_append", F::binary(expr_fn::array_append)),
+        ("array", F::udf(MakeNullableArray::new())),
+        ("array_append", F::udf(ArrayAppend::new())),
         ("array_compact", F::unary(array_compact)),
         ("array_contains", F::binary(expr_fn::array_has)),
         ("array_distinct", F::unary(expr_fn::array_distinct)),
@@ -78,7 +80,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
         ("array_max", F::unknown("array_max")),
         ("array_min", F::unknown("array_min")),
         ("array_position", F::scalar_udf(array_position_udf)),
-        ("array_prepend", F::binary(expr_fn::array_prepend)),
+        ("array_prepend", F::udf(ArrayPrepend::new())),
         ("array_remove", F::binary(expr_fn::array_remove_all)),
         ("array_repeat", F::binary(array_repeat)),
         ("array_union", F::binary(expr_fn::array_union)),

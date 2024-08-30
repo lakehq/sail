@@ -1,10 +1,29 @@
-use datafusion::functions_array::expr_fn;
-use datafusion_expr::expr;
+use std::sync::Arc;
 
+use datafusion::functions::expr_fn::concat_ws;
+use datafusion::functions_nested::expr_fn;
+use datafusion_common::ScalarValue;
+use datafusion_expr::{expr, ScalarUDF};
+
+use crate::extension::function::concat::ArrayConcat;
 use crate::function::common::Function;
 
 fn concat(array1: expr::Expr, array2: expr::Expr) -> expr::Expr {
-    expr_fn::array_concat(vec![array1, array2])
+    match (&array1, &array2) {
+        (
+            expr::Expr::Literal(ScalarValue::List(_))
+            | expr::Expr::Literal(ScalarValue::LargeList(_)),
+            expr::Expr::Literal(ScalarValue::List(_))
+            | expr::Expr::Literal(ScalarValue::LargeList(_)),
+        ) => expr::Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(ArrayConcat::new())),
+            args: vec![array1, array2],
+        }),
+        _ => concat_ws(
+            expr::Expr::Literal(ScalarValue::Utf8(Some("".to_string()))),
+            vec![array1, array2],
+        ),
+    }
 }
 
 pub(super) fn list_built_in_collection_functions() -> Vec<(&'static str, Function)> {

@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CommonError, CommonResult};
 
+pub const DEFAULT_LIST_FIELD_NAME: &str = "element";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum DataType {

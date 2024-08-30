@@ -1,8 +1,9 @@
 use std::io::Cursor;
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::array::{ArrayRef, ListArray, RecordBatch};
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::ipc::reader::StreamReader;
 use arrow_cast::cast;
 use datafusion::physical_expr::expressions::Column;
@@ -11,6 +12,8 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_expr::{Expr, LogicalPlan, Projection};
+
+use crate::spec::DEFAULT_LIST_FIELD_NAME;
 
 pub fn cast_record_batch(batch: RecordBatch, schema: SchemaRef) -> Result<RecordBatch> {
     let fields = schema.fields();
@@ -102,4 +105,18 @@ pub fn rename_physical_plan(
         })
         .collect();
     Ok(Arc::new(ProjectionExec::try_new(expr, plan)?))
+}
+
+pub fn array_into_list_array(arr: ArrayRef, nullable: bool) -> ListArray {
+    let offsets = OffsetBuffer::from_lengths([arr.len()]);
+    ListArray::new(
+        Arc::new(new_list_field(arr.data_type().to_owned(), nullable)),
+        offsets,
+        arr,
+        None,
+    )
+}
+
+pub fn new_list_field(data_type: DataType, nullable: bool) -> Field {
+    Field::new(DEFAULT_LIST_FIELD_NAME, data_type, nullable)
 }

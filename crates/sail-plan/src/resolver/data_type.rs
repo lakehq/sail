@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use arrow::datatypes as adt;
 use sail_common::spec;
+use sail_common::spec::DEFAULT_LIST_FIELD_NAME;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -30,7 +31,7 @@ impl PlanResolver<'_> {
                 contains_null,
             } => {
                 let field = spec::Field {
-                    name: "element".to_string(),
+                    name: DEFAULT_LIST_FIELD_NAME.to_string(),
                     data_type: *element_type,
                     nullable: contains_null,
                     metadata: vec![],

@@ -4,6 +4,7 @@ use std::fmt::Display;
 use datafusion::arrow::datatypes as adt;
 use sail_common::schema::escape_meta_characters;
 use sail_common::spec;
+use sail_common::spec::DEFAULT_LIST_FIELD_NAME;
 use sail_plan::resolver::PlanResolver;
 
 use crate::error::SparkResult;
@@ -155,7 +156,7 @@ fn format_tree_string(
     match kind {
         Kind::Array(array) => {
             format_prefix(f, level)?;
-            write!(f, "element: ")?;
+            write!(f, "{DEFAULT_LIST_FIELD_NAME}: ")?;
             format_type_name(f, array.element_type.as_deref())?;
             write!(f, " (containsNull = ",)?;
             format_bool(f, array.contains_null)?;

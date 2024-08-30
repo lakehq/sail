@@ -1,7 +1,11 @@
 pub(crate) mod array;
+pub(crate) mod concat;
 pub(crate) mod drop_struct_field;
 pub(crate) mod explode;
+mod functions_nested_utils;
+mod functions_utils;
 pub(crate) mod levenshtein;
+pub(crate) mod make_nullable_array;
 pub(crate) mod map_function;
 pub(crate) mod multi_expr;
 pub(crate) mod raise_error;
@@ -9,4 +13,3 @@ pub(crate) mod randn;
 pub(crate) mod random;
 pub(crate) mod struct_function;
 pub(crate) mod update_struct_field;
-mod utils;
