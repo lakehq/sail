@@ -1,5 +1,4 @@
 use arrow::datatypes::DataType;
-use datafusion::functions_aggregate::expr_fn as agg_expr_fn;
 use datafusion::functions_nested::expr_fn;
 use datafusion::functions_nested::position::array_position_udf;
 use datafusion_common::ScalarValue;
@@ -67,27 +66,38 @@ fn array_prepend(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     expr_fn::array_prepend(element, array)
 }
 
-fn array_union(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    Ok(expr_fn::array_distinct(expr_fn::array_concat(args)))
-}
-
 // TODO: Add in optional third argument null replacement
 fn array_join(array: expr::Expr, delimiter: expr::Expr) -> expr::Expr {
     expr_fn::array_to_string(array, delimiter)
 }
 
+fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
+    let element = expr::Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(element),
+        op: Operator::Plus,
+        right: Box::new(lit(ScalarValue::Int64(Some(1)))),
+    });
+    expr_fn::array_element(array, element)
+}
+
 fn array_max(array: expr::Expr) -> expr::Expr {
-    // agg_expr_fn::max(array) doesn;t seem to work.
+    // agg_expr_fn::max(array) doesn't seem to work.
     let sort = lit(ScalarValue::Utf8(Some("DESC".to_string())));
     let nulls = lit(ScalarValue::Utf8(Some("NULLS LAST".to_string())));
-    agg_expr_fn::first_value(expr_fn::array_sort(array, sort, nulls), None)
+    array_element(
+        expr_fn::array_sort(array, sort, nulls),
+        lit(ScalarValue::Int64(Some(0))),
+    )
 }
 
 fn array_min(array: expr::Expr) -> expr::Expr {
-    // agg_expr_fn::min(array) doesn;t seem to work.
+    // agg_expr_fn::min(array) doesn't seem to work.
     let sort = lit(ScalarValue::Utf8(Some("ASC".to_string())));
     let nulls = lit(ScalarValue::Utf8(Some("NULLS LAST".to_string())));
-    agg_expr_fn::first_value(expr_fn::array_sort(array, sort, nulls), None)
+    array_element(
+        expr_fn::array_sort(array, sort, nulls),
+        lit(ScalarValue::Int64(Some(0))),
+    )
 }
 
 pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
@@ -109,11 +119,11 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
         ("array_prepend", F::binary(array_prepend)),
         ("array_remove", F::binary(expr_fn::array_remove_all)),
         ("array_repeat", F::binary(array_repeat)),
-        ("array_union", F::custom(array_union)),
-        ("arrays_overlap", F::unknown("arrays_overlap")),
+        ("array_union", F::binary(expr_fn::array_union)),
+        ("arrays_overlap", F::binary(expr_fn::array_has_any)),
         ("arrays_zip", F::unknown("arrays_zip")),
         ("flatten", F::unary(expr_fn::flatten)),
-        ("get", F::binary(expr_fn::array_element)),
+        ("get", F::binary(array_element)),
         ("sequence", F::ternary(expr_fn::gen_series)),
         ("shuffle", F::unknown("shuffle")),
         ("slice", F::ternary(slice)),

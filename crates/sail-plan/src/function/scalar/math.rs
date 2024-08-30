@@ -34,11 +34,18 @@ fn minus(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     }
 }
 
-fn ceil(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    Ok(expr::Expr::Cast(expr::Cast {
-        expr: Box::new(expr_fn::ceil(args.one()?)),
+fn ceil(num: expr::Expr) -> expr::Expr {
+    expr::Expr::Cast(expr::Cast {
+        expr: Box::new(expr_fn::ceil(num)),
         data_type: DataType::Int64,
-    }))
+    })
+}
+
+fn floor(num: expr::Expr) -> expr::Expr {
+    expr::Expr::Cast(expr::Cast {
+        expr: Box::new(expr_fn::floor(num)),
+        data_type: DataType::Int64,
+    })
 }
 
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
@@ -61,8 +68,8 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("bin", F::unknown("bin")),
         ("bround", F::unknown("bround")),
         ("cbrt", F::unary(expr_fn::cbrt)),
-        ("ceil", F::custom(ceil)),
-        ("ceiling", F::custom(ceil)),
+        ("ceil", F::unary(ceil)),
+        ("ceiling", F::unary(ceil)),
         ("conv", F::unknown("conv")),
         ("cos", F::unary(expr_fn::cos)),
         ("cosh", F::unary(expr_fn::cosh)),
@@ -74,7 +81,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("exp", F::unary(expr_fn::exp)),
         ("expm1", F::unknown("expm1")),
         ("factorial", F::unary(expr_fn::factorial)),
-        ("floor", F::unary(expr_fn::floor)),
+        ("floor", F::unary(floor)),
         ("greatest", F::unknown("greatest")),
         ("hex", F::unknown("hex")),
         ("hypot", F::unknown("hypot")),
