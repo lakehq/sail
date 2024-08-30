@@ -349,6 +349,11 @@ impl PlanFormatter for DefaultPlanFormatter {
                 result.push_str(" END");
                 Ok(result)
             }
+            // This case is only reached when both conditions are true:
+            //   1. The explode operation is `ExplodeKind::ExplodeOuter`
+            //   2. The data type being exploded is `ExplodeDataType::List`
+            // In this specific scenario, we always use "col" as the column name.
+            "explode_outer" => Ok("col".to_string()),
             "acos" | "acosh" | "asin" | "asinh" | "atan" | "atanh" | "cbrt" | "ceil" | "exp"
             | "floor" | "log10" | "regexp" | "regexp_like" | "signum" | "sqrt" => {
                 let arguments = arguments.join(", ");
