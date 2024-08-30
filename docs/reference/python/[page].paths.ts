@@ -46,7 +46,7 @@ type SphinxPageConfig = {
 };
 
 function transform(
-  tree: TreeNode<SphinxPagePath>,
+  tree: TreeNode<SphinxPagePath | null>,
   prefix?: string,
 ): TreeNode<SphinxPageConfig> {
   prefix = prefix ?? "";
