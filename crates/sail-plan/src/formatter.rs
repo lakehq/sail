@@ -349,6 +349,11 @@ impl PlanFormatter for DefaultPlanFormatter {
                 result.push_str(" END");
                 Ok(result)
             }
+            "acos" | "acosh" | "asin" | "asinh" | "atan" | "atanh" | "cbrt" | "ceil" | "exp"
+            | "floor" | "log10" | "regexp" | "regexp_like" | "signum" | "sqrt" => {
+                let arguments = arguments.join(", ");
+                Ok(format!("{}({})", name.to_uppercase(), arguments))
+            }
             _ => {
                 let arguments = arguments.join(", ");
                 Ok(format!("{}({})", name, arguments))
