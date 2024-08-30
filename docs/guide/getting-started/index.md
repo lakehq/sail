@@ -63,3 +63,14 @@ The `--help` option shows the available options for the server.
 Currently, we use the `RUST_LOG` environment variable to control the logging level of the server.
 This may change in the future.
 :::
+
+In another terminal, you can connect to the Sail Spark Connect server using PySpark.
+
+```bash
+env SPARK_CONNECT_MODE_ENABLED=1 SPARK_REMOTE="sc://localhost:50051" pyspark
+```
+
+::: info
+You can refer to the [Spark documentation](https://spark.apache.org/docs/latest/spark-connect-overview.html)
+for more information about Spark Connect.
+:::
