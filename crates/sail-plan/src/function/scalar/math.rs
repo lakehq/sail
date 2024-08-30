@@ -48,6 +48,13 @@ fn floor(num: expr::Expr) -> expr::Expr {
     })
 }
 
+fn power(base: expr::Expr, exponent: expr::Expr) -> expr::Expr {
+    expr::Expr::Cast(expr::Cast {
+        expr: Box::new(expr_fn::power(base, exponent)),
+        data_type: DataType::Float64,
+    })
+}
+
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -96,8 +103,8 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("pi", F::unknown("pi")),
         ("pmod", F::unknown("pmod")),
         ("positive", F::unknown("positive")),
-        ("pow", F::binary(expr_fn::power)),
-        ("power", F::binary(expr_fn::power)),
+        ("pow", F::binary(power)),
+        ("power", F::binary(power)),
         ("radians", F::unary(expr_fn::radians)),
         ("rand", F::udf(Random::new())),
         ("randn", F::udf(Randn::new())),

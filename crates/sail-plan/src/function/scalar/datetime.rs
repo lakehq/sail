@@ -1,3 +1,4 @@
+use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit};
@@ -6,10 +7,12 @@ use crate::error::PlanResult;
 use crate::function::common::Function;
 use crate::utils::ItemTaker;
 
-fn year(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    let date = args.one()?;
-    let part = lit(ScalarValue::Utf8(Some("YEAR".to_string())));
-    Ok(expr_fn::date_part(part, date))
+fn integer_part(expr: expr::Expr, part: String) -> expr::Expr {
+    let part = lit(ScalarValue::Utf8(Some(part.to_uppercase())));
+    expr::Expr::Cast(expr::Cast {
+        expr: Box::new(expr_fn::date_part(part, expr)),
+        data_type: DataType::Int32,
+    })
 }
 
 fn trunc(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
@@ -40,7 +43,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("dateadd", F::unknown("dateadd")),
         ("datediff", F::unknown("datediff")),
         ("datepart", F::binary(expr_fn::date_part)),
-        ("day", F::unknown("day")),
+        ("day", F::unary(|x| integer_part(x, "DAY".to_string()))),
         ("dayofmonth", F::unknown("dayofmonth")),
         ("dayofweek", F::unknown("dayofweek")),
         ("dayofyear", F::unknown("dayofyear")),
@@ -58,10 +61,10 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("make_timestamp_ntz", F::unknown("make_timestamp_ntz")),
         ("make_ym_interval", F::unknown("make_ym_interval")),
         ("minute", F::unknown("minute")),
-        ("month", F::unknown("month")),
+        ("month", F::unary(|x| integer_part(x, "MONTH".to_string()))),
         ("months_between", F::unknown("months_between")),
         ("next_day", F::unknown("next_day")),
-        ("now", F::unknown("now")),
+        ("now", F::nullary(expr_fn::now)),
         ("quarter", F::unknown("quarter")),
         ("second", F::unknown("second")),
         ("session_window", F::unknown("session_window")),
@@ -85,6 +88,6 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("weekofyear", F::unknown("weekofyear")),
         ("window", F::unknown("window")),
         ("window_time", F::unknown("window_time")),
-        ("year", F::custom(year)),
+        ("year", F::unary(|x| integer_part(x, "YEAR".to_string()))),
     ]
 }

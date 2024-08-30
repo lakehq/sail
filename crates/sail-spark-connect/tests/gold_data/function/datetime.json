@@ -1096,7 +1096,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: day"
+        "success": "ok"
       }
     },
     {
@@ -2042,7 +2042,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: month"
+        "success": "ok"
       }
     },
     {
@@ -2130,7 +2130,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: now"
+        "success": "ok"
       }
     },
     {
