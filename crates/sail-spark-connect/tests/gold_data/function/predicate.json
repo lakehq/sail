@@ -1499,7 +1499,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: SQL set variable"
+        "failure": "error in DataFusion: Invalid or Unsupported Configuration: Could not find config namespace \"spark\""
       }
     },
     {
@@ -1527,7 +1527,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: SQL set variable"
+        "failure": "error in DataFusion: Invalid or Unsupported Configuration: Could not find config namespace \"spark\""
       }
     }
   ]

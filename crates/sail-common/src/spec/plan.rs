@@ -394,6 +394,10 @@ pub enum CommandNode {
         partition_spec: Vec<Expr>,
         overwrite: bool,
     },
+    SetVariable {
+        variable: Identifier,
+        value: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

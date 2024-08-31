@@ -9,7 +9,10 @@ use crate::expression::{from_ast_expression, from_ast_object_name};
 use crate::parse::{parse_comment, parse_file_format, parse_value_options};
 use crate::parser::{fail_on_extra_token, SparkDialect};
 use crate::query::from_ast_query;
-use crate::utils::{build_column_defaults, build_schema_from_columns, normalize_ident};
+use crate::utils::{
+    build_column_defaults, build_schema_from_columns, normalize_ident, object_name_to_string,
+    value_to_string,
+};
 
 enum Statement {
     Standard(ast::Statement),
@@ -210,7 +213,7 @@ fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement> {
                 table_partition_cols = parser
                     .parse_comma_separated(Parser::parse_column_def)?
                     .iter()
-                    .map(|x| spec::Identifier::from(normalize_ident(x.name.clone()).to_string()))
+                    .map(|x| spec::Identifier::from(normalize_ident(&x.name).to_string()))
                     .collect();
                 parser.expect_token(&Token::RParen)?;
             }
@@ -367,7 +370,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             let table_name = from_ast_object_name(table_name)?;
             let columns: Vec<spec::Identifier> = columns
                 .iter()
-                .map(|x| spec::Identifier::from(normalize_ident(x.clone())))
+                .map(|x| spec::Identifier::from(normalize_ident(x)))
                 .collect();
             let partitioned: Vec<spec::Expr> = match partitioned {
                 Some(partitioned_vec) => partitioned_vec
@@ -378,7 +381,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             };
             let after_columns: Vec<spec::Identifier> = after_columns
                 .iter()
-                .map(|x| spec::Identifier::from(normalize_ident(x.clone())))
+                .map(|x| spec::Identifier::from(normalize_ident(x)))
                 .collect();
             let columns = if columns.is_empty() && !after_columns.is_empty() {
                 // after_columns and columns are the same. SQLParser just parses this weird.
@@ -537,7 +540,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
                         )))
                     } else {
                         Ok(spec::Identifier::from(normalize_ident(
-                            view_column_def.name,
+                            &view_column_def.name,
                         )))
                     }
                 })
@@ -617,6 +620,66 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        Statement::SetVariable {
+            local,
+            hivevar,
+            variables,
+            value,
+        } => {
+            if local {
+                return Err(SqlError::unsupported("LOCAL is not supported."));
+            }
+            if hivevar {
+                return Err(SqlError::unsupported("HIVEVAR is not supported."));
+            }
+
+            let variable = match variables {
+                ast::OneOrManyWithParens::One(var) => object_name_to_string(&var),
+                ast::OneOrManyWithParens::Many(vars) => {
+                    return Err(SqlError::unsupported(format!(
+                        "SET only supports single variable assignment: {vars:?}"
+                    )));
+                }
+            };
+            let mut variable_lower = variable.to_lowercase();
+            if variable_lower == "timezone" || variable_lower == "time.zone" {
+                variable_lower = "datafusion.execution.time_zone".to_string();
+            }
+
+            let value_string = match &value[0] {
+                ast::Expr::Identifier(i) => normalize_ident(i),
+                ast::Expr::Value(val) => match value_to_string(val) {
+                    None => {
+                        return Err(SqlError::unsupported(format!(
+                            "Unsupported Value {}",
+                            value[0]
+                        )));
+                    }
+                    Some(val) => val,
+                },
+                ast::Expr::UnaryOp { op, expr } => match op {
+                    ast::UnaryOperator::Plus => format!("+{expr}"),
+                    ast::UnaryOperator::Minus => format!("-{expr}"),
+                    _ => {
+                        return Err(SqlError::unsupported(format!(
+                            "Unsupported Value {}",
+                            value[0]
+                        )));
+                    }
+                },
+                _ => {
+                    return Err(SqlError::unsupported(format!(
+                        "Unsupported Value {}",
+                        value[0]
+                    )));
+                }
+            };
+            let node = spec::CommandNode::SetVariable {
+                variable: spec::Identifier::from(variable_lower),
+                value: value_string,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::DropFunction { .. } => Err(SqlError::todo("SQL drop function")),
         Statement::Merge { .. } => Err(SqlError::todo("SQL merge")),
         Statement::ShowCreate { .. } => Err(SqlError::todo("SQL show create")),
@@ -626,7 +689,6 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
         Statement::Truncate { .. } => Err(SqlError::todo("SQL truncate")),
         Statement::Update { .. } => Err(SqlError::todo("SQL update")),
         Statement::Use { .. } => Err(SqlError::todo("SQL use")),
-        Statement::SetVariable { .. } => Err(SqlError::todo("SQL set variable")),
         Statement::Cache { .. } => Err(SqlError::todo("SQL cache")),
         Statement::UNCache { .. } => Err(SqlError::todo("SQL uncache")),
         Statement::Install { .. }

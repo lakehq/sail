@@ -555,6 +555,9 @@ impl PlanResolver<'_> {
                 )
                 .await
             }
+            CommandNode::SetVariable { variable, value } => {
+                self.resolve_command_set_variable(variable, value).await
+            }
         }
     }
 
@@ -2180,6 +2183,20 @@ impl PlanResolver<'_> {
             filter_expr,
             Arc::new(input),
         )?))
+    }
+
+    async fn resolve_command_set_variable(
+        &self,
+        variable: spec::Identifier,
+        value: String,
+    ) -> PlanResult<LogicalPlan> {
+        let statement = plan::Statement::SetVariable(plan::SetVariable {
+            variable: variable.into(),
+            value,
+            schema: DFSchemaRef::new(DFSchema::empty()),
+        });
+
+        Ok(LogicalPlan::Statement(statement))
     }
 
     fn verify_query_plan(&self, plan: &LogicalPlan, state: &PlanResolverState) -> PlanResult<()> {
