@@ -1210,25 +1210,24 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
-        let mut aliases: HashMap<String, (Expr, bool)> = async {
-            let mut results: HashMap<String, (Expr, bool)> = HashMap::new();
+        let mut aliases: HashMap<String, (Expr, bool, Vec<_>)> = async {
+            let mut results: HashMap<String, (Expr, bool, Vec<_>)> = HashMap::new();
             for alias in aliases {
-                let (name, expr) = match alias {
-                    // TODO: handle alias metadata
+                let (name, expr, metadata) = match alias {
                     spec::Expr::Alias {
                         name,
                         expr,
-                        metadata: _,
+                        metadata,
                     } => {
                         let name = name
                             .one()
                             .map_err(|_| PlanError::invalid("multi-alias for column"))?;
-                        (name, *expr)
+                        (name, *expr, metadata.unwrap_or(Vec::new()))
                     }
                     _ => return Err(PlanError::invalid("alias expression expected for column")),
                 };
                 let expr = self.resolve_expression(expr, schema, state).await?;
-                results.insert(name.into(), (expr, false));
+                results.insert(name.into(), (expr, false, metadata));
             }
             Ok(results) as PlanResult<_>
         }
@@ -1239,17 +1238,29 @@ impl PlanResolver<'_> {
             .map(|column| {
                 let name = state.get_field_name(column.name())?;
                 match aliases.get_mut(name) {
-                    Some((e, exists)) => {
+                    Some((e, exists, metadata)) => {
                         *exists = true;
-                        Ok(NamedExpr::new(vec![name.to_string()], e.clone()))
+                        if !metadata.is_empty() {
+                            Ok(NamedExpr::new(vec![name.to_string()], e.clone())
+                                .with_metadata(metadata.clone()))
+                        } else {
+                            Ok(NamedExpr::new(vec![name.to_string()], e.clone()))
+                        }
                     }
                     None => Ok(NamedExpr::new(vec![name.to_string()], Expr::Column(column))),
                 }
             })
             .collect::<PlanResult<Vec<_>>>()?;
-        for (name, (e, exists)) in &aliases {
+        for (name, (e, exists, metadata)) in &aliases {
             if !exists {
-                expr.push(NamedExpr::new(vec![name.clone()], e.clone()));
+                if !metadata.is_empty() {
+                    expr.push(
+                        NamedExpr::new(vec![name.clone()], e.clone())
+                            .with_metadata(metadata.clone()),
+                    );
+                } else {
+                    expr.push(NamedExpr::new(vec![name.clone()], e.clone()));
+                }
             }
         }
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
@@ -2404,9 +2415,10 @@ impl PlanResolver<'_> {
                     expr,
                     metadata: _, // TODO: set field metadata
                 } = e;
-                let name = name
-                    .one()
-                    .map_err(|_| PlanError::invalid("one name expected for expression"))?;
+                let name = name.clone().one().map_err(|_| {
+                    let names = format!("({})", name.join(", "));
+                    PlanError::invalid(format!("one name expected for expression, got: {names}"))
+                })?;
                 if let Expr::Column(Column {
                     name: column_name, ..
                 }) = &expr

@@ -1009,9 +1009,10 @@ impl PlanResolver<'_> {
         let NamedExpr { name, expr, .. } = self
             .resolve_named_expression(struct_expression, schema, state)
             .await?;
-        let name = name
-            .one()
-            .map_err(|_| PlanError::invalid("one name expected for expression"))?;
+        let name = name.clone().one().map_err(|_| {
+            let names = format!("({})", name.join(", "));
+            PlanError::invalid(format!("one name expected for expression, got: {names}"))
+        })?;
 
         let new_expr = if let Some(value_expression) = value_expression {
             let value_expr = self
