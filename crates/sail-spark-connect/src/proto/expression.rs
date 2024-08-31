@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use sail_common::spec;
 use sail_sql::data_type::parse_data_type;
 use sail_sql::expression::{
-    parse_object_name, parse_qualified_wildcard, parse_wildcard_expression,
+    parse_expression, parse_object_name, parse_qualified_wildcard, parse_wildcard_expression,
 };
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
@@ -54,7 +54,9 @@ impl TryFrom<Expression> for spec::Expr {
                 is_user_defined_function,
             }),
             ExprType::ExpressionString(ExpressionString { expression }) => {
-                Ok(parse_wildcard_expression(expression.as_str())?)
+                let expr = parse_expression(expression.as_str())
+                    .or_else(|_| parse_wildcard_expression(expression.as_str()))?;
+                Ok(expr)
             }
             ExprType::UnresolvedStar(UnresolvedStar { unparsed_target }) => {
                 let target = unparsed_target
