@@ -503,7 +503,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: equal_null"
+        "success": "ok"
       }
     },
     {
@@ -525,7 +525,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: equal_null"
+        "success": "ok"
       }
     },
     {
@@ -547,7 +547,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: equal_null"
+        "success": "ok"
       }
     },
     {
@@ -569,7 +569,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: equal_null"
+        "success": "ok"
       }
     },
     {
@@ -591,7 +591,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: equal_null"
+        "success": "ok"
       }
     },
     {
@@ -832,7 +832,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: raise_error"
+        "failure": "error in DataFusion: Execution error: custom error message"
       }
     },
     {
@@ -1030,7 +1030,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: uuid"
+        "success": "ok"
       }
     },
     {

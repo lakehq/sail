@@ -78,6 +78,55 @@ fn hex(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     }
 }
 
+fn expm1(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    let num = args.one()?;
+    minus(vec![
+        expr_fn::exp(num),
+        expr::Expr::Literal(ScalarValue::Float64(Some(1.0))),
+    ])
+}
+
+fn hypot(expr1: expr::Expr, expr2: expr::Expr) -> expr::Expr {
+    let expr1 = expr::Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(expr1.clone()),
+        op: Operator::Multiply,
+        right: Box::new(expr1),
+    });
+    let expr2 = expr::Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(expr2.clone()),
+        op: Operator::Multiply,
+        right: Box::new(expr2),
+    });
+    let sum = expr::Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(expr1),
+        op: Operator::Plus,
+        right: Box::new(expr2),
+    });
+    expr::Expr::Cast(expr::Cast {
+        expr: Box::new(expr_fn::sqrt(sum)),
+        data_type: DataType::Float64,
+    })
+}
+
+fn log1p(expr: expr::Expr) -> expr::Expr {
+    let expr = expr::Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(expr),
+        op: Operator::Plus,
+        right: Box::new(expr::Expr::Literal(ScalarValue::Float64(Some(1.0)))),
+    });
+    expr_fn::ln(expr)
+}
+fn positive(expr: expr::Expr) -> expr::Expr {
+    expr
+}
+
+fn rint(expr: expr::Expr) -> expr::Expr {
+    expr::Expr::Cast(expr::Cast {
+        expr: Box::new(expr_fn::round(vec![expr])),
+        data_type: DataType::Int64,
+    })
+}
+
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -109,34 +158,34 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("div", F::unknown("div")),
         ("e", F::unknown("e")),
         ("exp", F::unary(expr_fn::exp)),
-        ("expm1", F::unknown("expm1")),
+        ("expm1", F::custom(expm1)),
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::unary(floor)),
         ("greatest", F::unknown("greatest")),
         ("hex", F::custom(hex)),
-        ("hypot", F::unknown("hypot")),
+        ("hypot", F::binary(hypot)),
         ("least", F::unknown("least")),
         ("ln", F::unary(expr_fn::ln)),
         ("log", F::binary(expr_fn::log)),
         ("log10", F::unary(expr_fn::log10)),
-        ("log1p", F::unknown("log1p")),
+        ("log1p", F::unary(log1p)),
         ("log2", F::unary(expr_fn::log2)),
-        ("mod", F::unknown("mod")),
+        ("mod", F::binary_op(Operator::Modulo)),
         ("negative", F::unary(|x| expr::Expr::Negative(Box::new(x)))),
-        ("pi", F::unknown("pi")),
+        ("pi", F::nullary(expr_fn::pi)),
         ("pmod", F::unknown("pmod")),
-        ("positive", F::unknown("positive")),
+        ("positive", F::unary(positive)),
         ("pow", F::binary(power)),
         ("power", F::binary(power)),
         ("radians", F::unary(expr_fn::radians)),
         ("rand", F::udf(Random::new())),
         ("randn", F::udf(Randn::new())),
         ("random", F::udf(Random::new())),
-        ("rint", F::unknown("rint")),
+        ("rint", F::unary(rint)),
         ("round", F::var_arg(expr_fn::round)),
         ("sec", F::unknown("sec")),
         ("shiftleft", F::binary_op(Operator::BitwiseShiftLeft)),
-        ("sign", F::unknown("sign")),
+        ("sign", F::unary(expr_fn::signum)),
         ("signum", F::unary(expr_fn::signum)),
         ("sin", F::unary(expr_fn::sin)),
         ("sinh", F::unary(expr_fn::sinh)),

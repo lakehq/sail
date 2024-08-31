@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: sha2"
+        "success": "ok"
       }
     },
     {

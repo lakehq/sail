@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit, ScalarUDF};
+use datafusion_expr::{expr, lit, Operator, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::raise_error::RaiseError;
@@ -55,7 +56,7 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, Function)> {
         ("current_database", F::unknown("current_database")),
         ("current_schema", F::unknown("current_schema")),
         ("current_user", F::unknown("current_user")),
-        ("equal_null", F::unknown("equal_null")),
+        ("equal_null", F::binary_op(Operator::IsNotDistinctFrom)),
         ("hll_sketch_estimate", F::unknown("hll_sketch_estimate")),
         ("hll_union", F::unknown("hll_union")),
         (
@@ -72,13 +73,13 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, Function)> {
             "monotonically_increasing_id",
             F::unknown("monotonically_increasing_id"),
         ),
-        ("raise_error", F::unknown("raise_error")),
+        ("raise_error", F::udf(RaiseError::new())),
         ("reflect", F::unknown("reflect")),
         ("spark_partition_id", F::unknown("spark_partition_id")),
         ("try_aes_decrypt", F::unknown("try_aes_decrypt")),
         ("typeof", F::unknown("typeof")),
         ("user", F::unknown("user")),
-        ("uuid", F::unknown("uuid")),
+        ("uuid", F::nullary(expr_fn::uuid)),
         ("version", F::unknown("version")),
     ]
 }
