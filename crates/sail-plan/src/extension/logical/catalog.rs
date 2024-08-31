@@ -396,7 +396,17 @@ impl CatalogCommand {
             CatalogCommand::FunctionExists { .. } => return not_impl_err!("function exists"),
             CatalogCommand::GetFunction { .. } => return not_impl_err!("get function"),
             CatalogCommand::ListFunctions { .. } => return not_impl_err!("list functions"),
-            CatalogCommand::DropFunction { .. } => return not_impl_err!("drop function"),
+            CatalogCommand::DropFunction {
+                function,
+                if_exists,
+                is_temporary,
+            } => {
+                manager
+                    .drop_function(function, if_exists, is_temporary)
+                    .await?;
+                let rows = vec![SingleValueMetadata { value: true }];
+                build_record_batch(command_schema, &rows)?
+            }
             CatalogCommand::RegisterFunction { udf } => {
                 manager.register_function(udf)?;
                 let rows: Vec<EmptyMetadata> = vec![];

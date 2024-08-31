@@ -1,3 +1,4 @@
+use datafusion::sql::sqlparser::ast as df_ast;
 use sail_common::spec;
 use sqlparser::ast;
 
@@ -89,4 +90,17 @@ pub fn value_to_string(value: &ast::Value) -> Option<String> {
         | ast::Value::Null
         | ast::Value::Placeholder(_) => None,
     }
+}
+
+pub fn to_datafusion_ast_object_name(object_name: &ast::ObjectName) -> df_ast::ObjectName {
+    df_ast::ObjectName(
+        object_name
+            .0
+            .iter()
+            .map(|ident| df_ast::Ident {
+                value: ident.value.clone(),
+                quote_style: ident.quote_style,
+            })
+            .collect(),
+    )
 }

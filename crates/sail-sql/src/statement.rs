@@ -1,3 +1,4 @@
+use datafusion::sql::planner::object_name_to_qualifier;
 use sail_common::spec;
 use sqlparser::ast;
 use sqlparser::keywords::Keyword;
@@ -11,7 +12,7 @@ use crate::parser::{fail_on_extra_token, SparkDialect};
 use crate::query::from_ast_query;
 use crate::utils::{
     build_column_defaults, build_schema_from_columns, normalize_ident, object_name_to_string,
-    value_to_string,
+    to_datafusion_ast_object_name, value_to_string,
 };
 
 enum Statement {
@@ -680,17 +681,85 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::DropFunction { .. } => Err(SqlError::todo("SQL drop function")),
-        Statement::Merge { .. } => Err(SqlError::todo("SQL merge")),
-        Statement::ShowCreate { .. } => Err(SqlError::todo("SQL show create")),
-        Statement::ShowFunctions { .. } => Err(SqlError::todo("SQL show functions")),
-        Statement::ShowTables { .. } => Err(SqlError::todo("SQL show tables")),
-        Statement::ShowColumns { .. } => Err(SqlError::todo("SQL show columns")),
-        Statement::Truncate { .. } => Err(SqlError::todo("SQL truncate")),
+        Statement::ShowCreate { obj_type, obj_name } => match obj_type {
+            ast::ShowCreateObject::Table => {
+                let where_clause =
+                    object_name_to_qualifier(&to_datafusion_ast_object_name(&obj_name), true);
+                let query = format!("SELECT * FROM information_schema.views WHERE {where_clause};");
+                parse_sql_statement(&query)
+            }
+            _ => Err(SqlError::unsupported(
+                "Only `SHOW CREATE TABLE ...` is supported.",
+            )),
+        },
+        Statement::ShowTables {
+            extended: _,
+            full: _,
+            db_name,
+            filter,
+        } => {
+            if db_name.is_some() {
+                return Err(SqlError::unsupported(
+                    "SHOW TABLES with db_name not supported.",
+                ));
+            }
+            if filter.is_some() {
+                return Err(SqlError::unsupported(
+                    "SHOW TABLES with WHERE, LIKE, or ILIKE not supported.",
+                ));
+            }
+            parse_sql_statement("SELECT * FROM information_schema.tables;")
+        }
+        Statement::ShowColumns {
+            extended: _,
+            full: _,
+            table_name,
+            filter,
+        } => {
+            if filter.is_some() {
+                return Err(SqlError::unsupported(
+                    "SHOW COLUMNS with WHERE, LIKE, or ILIKE not supported.",
+                ));
+            }
+            let where_clause =
+                object_name_to_qualifier(&to_datafusion_ast_object_name(&table_name), true);
+            let query = format!("SELECT * FROM information_schema.columns WHERE {where_clause};");
+            parse_sql_statement(&query)
+        }
+        Statement::DropFunction {
+            if_exists,
+            func_desc,
+            option,
+        } => {
+            if option.is_some() {
+                return Err(SqlError::unsupported(
+                    "DROP FUNCTION with RESTRICT or CASCADE not supported.",
+                ));
+            }
+            if func_desc.len() > 1 {
+                return Err(SqlError::unsupported(
+                    "DROP FUNCTION with multiple functions not supported.",
+                ));
+            }
+            if let Some(desc) = func_desc.first() {
+                let function = from_ast_object_name(desc.name.clone())?;
+                let node = spec::CommandNode::DropFunction {
+                    function,
+                    if_exists,
+                    is_temporary: false, // TODO: support temporary functions
+                };
+                Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+            } else {
+                Err(SqlError::invalid("Function name not provided."))
+            }
+        }
         Statement::Update { .. } => Err(SqlError::todo("SQL update")),
         Statement::Use { .. } => Err(SqlError::todo("SQL use")),
         Statement::Cache { .. } => Err(SqlError::todo("SQL cache")),
         Statement::UNCache { .. } => Err(SqlError::todo("SQL uncache")),
+        Statement::ShowFunctions { .. } => Err(SqlError::todo("SQL show functions")),
+        Statement::Truncate { .. } => Err(SqlError::todo("SQL truncate")),
+        Statement::Merge { .. } => Err(SqlError::todo("SQL merge")),
         Statement::Install { .. }
         | Statement::Msck { .. }
         | Statement::Load { .. }
