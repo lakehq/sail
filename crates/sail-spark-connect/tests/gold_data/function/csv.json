@@ -111,7 +111,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: named_struct"
+        "failure": "not implemented: function: to_csv"
       }
     },
     {
@@ -133,7 +133,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: named_struct"
+        "failure": "not implemented: function: to_csv"
       }
     }
   ]

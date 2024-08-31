@@ -1,8 +1,9 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
+use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, BinaryExpr, Operator};
 
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::extension::function::randn::Randn;
 use crate::extension::function::random::Random;
 use crate::function::common::Function;
@@ -55,6 +56,28 @@ fn power(base: expr::Expr, exponent: expr::Expr) -> expr::Expr {
     })
 }
 
+fn hex(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    let expr = args.one()?;
+    let data_type = match &expr {
+        expr::Expr::Literal(l) => Ok(l.data_type()),
+        _ => Err(PlanError::invalid("hex requires a literal argument")),
+    }?;
+    match data_type {
+        DataType::Int32 => {
+            let expr = expr::Expr::Cast(expr::Cast {
+                expr: Box::new(expr),
+                data_type: DataType::Int64,
+            });
+            Ok(expr_fn::to_hex(expr))
+        }
+        DataType::Int64 => Ok(expr_fn::to_hex(expr)),
+        _ => Ok(expr_fn::encode(
+            expr,
+            expr::Expr::Literal(ScalarValue::Utf8(Some("hex".to_string()))),
+        )),
+    }
+}
+
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -90,7 +113,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::unary(floor)),
         ("greatest", F::unknown("greatest")),
-        ("hex", F::unknown("hex")),
+        ("hex", F::custom(hex)),
         ("hypot", F::unknown("hypot")),
         ("least", F::unknown("least")),
         ("ln", F::unary(expr_fn::ln)),

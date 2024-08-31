@@ -1185,7 +1185,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: hex"
+        "success": "ok"
       }
     },
     {
@@ -1207,7 +1207,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: hex"
+        "success": "ok"
       }
     },
     {

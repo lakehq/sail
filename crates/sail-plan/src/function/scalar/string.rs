@@ -47,6 +47,19 @@ fn concat_ws(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     Ok(expr_fn::concat_ws(delimiter, args))
 }
 
+fn to_binary(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    if args.len() == 1 {
+        let expr = args.one()?;
+        let format = expr::Expr::Literal(ScalarValue::Utf8(Some("hex".to_string())));
+        return Ok(expr_fn::encode(expr, format));
+    }
+    if args.len() == 2 {
+        let (expr, format) = args.two()?;
+        return Ok(expr_fn::encode(expr, format));
+    }
+    Err(PlanError::invalid("to_binary requires 1 or 2 arguments"))
+}
+
 pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -105,7 +118,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("substr", F::custom(substr)),
         ("substring", F::custom(substr)),
         ("substring_index", F::ternary(expr_fn::substr_index)),
-        ("to_binary", F::unknown("to_binary")),
+        ("to_binary", F::custom(to_binary)),
         ("to_char", F::unknown("to_char")),
         ("to_number", F::unknown("to_number")),
         ("to_varchar", F::unknown("to_varchar")),
