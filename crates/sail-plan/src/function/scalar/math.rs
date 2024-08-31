@@ -123,7 +123,7 @@ fn positive(expr: expr::Expr) -> expr::Expr {
 fn rint(expr: expr::Expr) -> expr::Expr {
     expr::Expr::Cast(expr::Cast {
         expr: Box::new(expr_fn::round(vec![expr])),
-        data_type: DataType::Int64,
+        data_type: DataType::Float64,
     })
 }
 

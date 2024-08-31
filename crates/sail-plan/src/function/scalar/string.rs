@@ -51,11 +51,11 @@ fn to_binary(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     if args.len() == 1 {
         let expr = args.one()?;
         let format = expr::Expr::Literal(ScalarValue::Utf8(Some("hex".to_string())));
-        return Ok(expr_fn::encode(expr, format));
+        return Ok(expr_fn::decode(expr, format));
     }
     if args.len() == 2 {
         let (expr, format) = args.two()?;
-        return Ok(expr_fn::encode(expr, format));
+        return Ok(expr_fn::decode(expr, format));
     }
     Err(PlanError::invalid("to_binary requires 1 or 2 arguments"))
 }

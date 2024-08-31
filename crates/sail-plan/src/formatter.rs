@@ -357,7 +357,7 @@ impl PlanFormatter for DefaultPlanFormatter {
             "acos" | "acosh" | "asin" | "asinh" | "atan" | "atan2" | "atanh" | "cbrt" | "ceil"
             | "exp" | "floor" | "log10" | "regexp" | "regexp_like" | "signum" | "sqrt" | "cos"
             | "cosh" | "cot" | "degrees" | "power" | "radians" | "sin" | "sinh" | "tan"
-            | "tanh" => {
+            | "tanh" | "pi" => {
                 let arguments = arguments.join(", ");
                 Ok(format!("{}({})", name.to_uppercase(), arguments))
             }
