@@ -1,5 +1,8 @@
 ---
 outline: false
+description: >-
+  Sail: the computation framework with a mission to unify stream processing, batch processing,
+  and compute-intensive (AI) workloads.
 ---
 
 # Welcome

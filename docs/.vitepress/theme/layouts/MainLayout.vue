@@ -8,7 +8,7 @@
     <template #doc-before>
       <div class="vp-doc external-link-icon-enabled">
         <div
-          v-if="version !== 'latest' && !isDevelopment"
+          v-if="version !== 'latest' && !isDevGuide"
           class="warning custom-block py-4"
         >
           <p>
@@ -22,7 +22,7 @@
           </p>
         </div>
         <div
-          v-if="version !== 'main' && isDevelopment"
+          v-if="version !== 'main' && isDevGuide"
           class="warning custom-block py-4"
         >
           <p>
@@ -33,7 +33,7 @@
           </p>
         </div>
         <div
-          v-if="version === 'main' && isDevelopment"
+          v-if="version === 'main' && isDevGuide"
           class="info custom-block py-4"
         >
           <p>
@@ -57,7 +57,7 @@ const route = useRoute();
 
 const version = computed(() => site.value.contentProps?.version);
 const libVersion = computed(() => site.value.contentProps?.libVersion);
-const isDevelopment = computed(() =>
+const isDevGuide = computed(() =>
   route.data.relativePath.startsWith("development/"),
 );
 

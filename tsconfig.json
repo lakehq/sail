@@ -14,6 +14,8 @@
   "include": [
     "docs/.vitepress/config.mts",
     "docs/.vitepress/*.d.ts",
-    "docs/.vitepress/theme/**/*"
+    "docs/.vitepress/theme/**/*",
+    "docs/**/*.data.ts",
+    "docs/**/*.paths.ts"
   ]
 }

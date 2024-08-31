@@ -48,13 +48,6 @@ class Site {
   }
 }
 
-class Head {
-  static readonly title = "Sail Documentation";
-  static readonly description =
-    "The computation framework with a mission to unify stream processing, batch processing, and compute-intensive (AI) workloads.";
-  static readonly image = `${Site.url()}logo.png`;
-}
-
 class Analytics {
   static head(): HeadConfig[] {
     const siteId = process.env.SAIL_FATHOM_SITE_ID;
@@ -76,16 +69,6 @@ class Analytics {
   }
 }
 
-class Robots {
-  static head(): HeadConfig[] {
-    if (Site.version() !== "latest") {
-      return [["meta", { name: "robots", content: "noindex, nofollow" }]];
-    } else {
-      return [];
-    }
-  }
-}
-
 class Markdown {
   static options(): MarkdownOptions {
     return {
@@ -99,7 +82,7 @@ class Markdown {
 }
 
 class TransformPageData {
-  static canonicalUrl(pageData: PageData): void {
+  static meta(pageData: PageData): void {
     const canonicalUrl = `${Site.url()}${pageData.relativePath}`
       .replace(/\/index\.md$/, "/")
       .replace(/\.md$/, ".html");
@@ -109,21 +92,41 @@ class TransformPageData {
       "link",
       { rel: "canonical", href: canonicalUrl },
     ]);
-    pageData.frontmatter.head.push([
-      "meta",
-      { property: "og:url", content: canonicalUrl },
-    ]);
+    pageData.frontmatter.head.push(
+      ["meta", { property: "og:url", content: canonicalUrl }],
+      ["meta", { property: "og:title", content: pageData.title }],
+      ["meta", { property: "og:description", content: pageData.description }],
+      ["meta", { property: "og:image", content: `${Site.url()}logo.png` }],
+      ["meta", { property: "og:type", content: "article" }],
+      ["meta", { property: "og:site_name", content: "Sail Documentation" }],
+    );
   }
 
   static sphinx(pageData: PageData): void {
     if (pageData.params?.sphinx) {
-      pageData.title = pageData.params.title;
+      pageData.title = pageData.params.current.text;
+      pageData.titleTemplate = ":title - Sail Python API Reference";
       pageData.frontmatter.prev = pageData.params.prev ?? {
         link: "/reference/",
         text: "Reference",
       };
       pageData.frontmatter.next = pageData.params.next ?? false;
     }
+  }
+
+  static robots(pageData: PageData): void {
+    const isDevGuide = pageData.relativePath.startsWith("development/");
+    if (
+      (Site.version() === "latest" && !isDevGuide) ||
+      (Site.version() === "main" && isDevGuide)
+    ) {
+      return;
+    }
+    pageData.frontmatter.head ??= [];
+    pageData.frontmatter.head.push([
+      "meta",
+      { name: "robots", content: "noindex, nofollow" },
+    ]);
   }
 }
 
@@ -208,31 +211,21 @@ export default async () => {
   return defineConfig({
     base: Site.base(),
     lang: "en-US",
-    title: Head.title,
-    titleTemplate: `:title - ${Head.title}`,
-    description: Head.description,
+    title: "Sail",
+    titleTemplate: ":title - Sail Documentation",
+    description: "The Sail documentation site",
     head: [
-      ["meta", { property: "title", content: Head.title }],
-      ["meta", { property: "description", content: Head.description }],
-      ["meta", { property: "twitter:title", content: Head.title }],
-      ["meta", { property: "twitter:description", content: Head.description }],
-      ["meta", { property: "twitter:card", content: "summary" }],
-      ["meta", { property: "twitter:image", content: Head.image }],
-      ["meta", { property: "og:title", content: Head.title }],
-      ["meta", { property: "og:description", content: Head.description }],
-      ["meta", { property: "og:image", content: Head.image }],
-      ["meta", { property: "og:type", content: "website" }],
-      ["meta", { property: "og:site_name", content: "Sail documentation" }],
       [
         "link",
         { rel: "icon", type: "image/png", href: `${Site.base()}favicon.png` },
       ],
       ...Analytics.head(),
-      ...Robots.head(),
     ],
     transformPageData(pageData) {
-      TransformPageData.canonicalUrl(pageData);
+      TransformPageData.robots(pageData);
       TransformPageData.sphinx(pageData);
+      // Add common meta tags at the end of the transformation.
+      TransformPageData.meta(pageData);
     },
     markdown: Markdown.options(),
     // Exclude directories starting with an underscore. Such directories are
