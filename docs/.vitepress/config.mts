@@ -69,16 +69,6 @@ class Analytics {
   }
 }
 
-class Robots {
-  static head(): HeadConfig[] {
-    if (Site.version() !== "latest") {
-      return [["meta", { name: "robots", content: "noindex, nofollow" }]];
-    } else {
-      return [];
-    }
-  }
-}
-
 class Markdown {
   static options(): MarkdownOptions {
     return {
@@ -122,6 +112,21 @@ class TransformPageData {
       };
       pageData.frontmatter.next = pageData.params.next ?? false;
     }
+  }
+
+  static robots(pageData: PageData): void {
+    const isDevGuide = pageData.relativePath.startsWith("development/");
+    if (
+      (Site.version() === "latest" && !isDevGuide) ||
+      (Site.version() === "main" && isDevGuide)
+    ) {
+      return;
+    }
+    pageData.frontmatter.head ??= [];
+    pageData.frontmatter.head.push([
+      "meta",
+      { name: "robots", content: "noindex, nofollow" },
+    ]);
   }
 }
 
@@ -215,9 +220,9 @@ export default async () => {
         { rel: "icon", type: "image/png", href: `${Site.base()}favicon.png` },
       ],
       ...Analytics.head(),
-      ...Robots.head(),
     ],
     transformPageData(pageData) {
+      TransformPageData.robots(pageData);
       TransformPageData.sphinx(pageData);
       // Add common meta tags at the end of the transformation.
       TransformPageData.meta(pageData);
