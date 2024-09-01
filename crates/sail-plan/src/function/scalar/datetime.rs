@@ -79,6 +79,48 @@ fn format_interval(interval: Expr, unit: &str) -> Expr {
     })
 }
 
+fn make_date(year: Expr, month: Expr, day: Expr) -> Expr {
+    if matches!(&year, Expr::Literal(ScalarValue::Null))
+        || matches!(&month, Expr::Literal(ScalarValue::Null))
+        || matches!(&day, Expr::Literal(ScalarValue::Null))
+    {
+        Expr::Literal(ScalarValue::Null)
+    } else {
+        expr_fn::make_date(year, month, day)
+    }
+}
+
+fn date_days_arithmetic(dt1: Expr, dt2: Expr, op: Operator) -> Expr {
+    let (dt1, dt2) = match (&dt1, &dt2) {
+        (Expr::Literal(ScalarValue::Date32(_)), Expr::Literal(ScalarValue::Date32(_))) => {
+            (dt1, dt2)
+        }
+        _ => (
+            Expr::Cast(expr::Cast {
+                expr: Box::new(dt1),
+                data_type: DataType::Date32,
+            }),
+            Expr::Cast(expr::Cast {
+                expr: Box::new(dt2),
+                data_type: DataType::Date32,
+            }),
+        ),
+    };
+    let dt1 = Expr::Cast(expr::Cast {
+        expr: Box::new(dt1),
+        data_type: DataType::Int64,
+    });
+    let dt2 = Expr::Cast(expr::Cast {
+        expr: Box::new(dt2),
+        data_type: DataType::Int64,
+    });
+    Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(dt1),
+        op,
+        right: Box::new(dt2),
+    })
+}
+
 // FIXME: Spark displays dates and timestamps according to the session time zone.
 //  We should be setting the DataFusion config `datafusion.execution.time_zone`
 //  and casting any datetime functions that don't use the DataFusion config.
@@ -107,8 +149,11 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
             "date_add",
             F::custom(|args| interval_arithmetic(args, "days", Operator::Plus)),
         ),
-        ("date_diff", F::unknown("date_diff")),
-        ("date_format", F::unknown("date_format")),
+        (
+            "date_diff",
+            F::binary(|start, end| date_days_arithmetic(start, end, Operator::Minus)),
+        ),
+        ("date_format", F::binary(expr_fn::to_char)),
         ("date_from_unix_date", F::unknown("date_from_unix_date")),
         ("date_part", F::binary(expr_fn::date_part)),
         (
@@ -120,7 +165,10 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
             "dateadd",
             F::custom(|args| interval_arithmetic(args, "days", Operator::Plus)),
         ),
-        ("datediff", F::unknown("datediff")),
+        (
+            "datediff",
+            F::binary(|start, end| date_days_arithmetic(start, end, Operator::Minus)),
+        ),
         ("datepart", F::binary(expr_fn::date_part)),
         ("day", F::unary(|x| integer_part(x, "DAY".to_string()))),
         ("dayofmonth", F::unknown("dayofmonth")),
@@ -132,7 +180,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("hour", F::unknown("hour")),
         ("last_day", F::unknown("last_day")),
         ("localtimestamp", F::unknown("localtimestamp")),
-        ("make_date", F::unknown("make_date")),
+        ("make_date", F::ternary(make_date)),
         ("make_dt_interval", F::unknown("make_dt_interval")),
         ("make_interval", F::unknown("make_interval")),
         ("make_timestamp", F::unknown("make_timestamp")),

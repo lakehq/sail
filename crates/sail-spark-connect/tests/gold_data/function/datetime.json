@@ -458,7 +458,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_diff"
+        "success": "ok"
       }
     },
     {
@@ -480,7 +480,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_diff"
+        "success": "ok"
       }
     },
     {
@@ -502,7 +502,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_format"
+        "success": "ok"
       }
     },
     {
@@ -876,7 +876,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: datediff"
+        "success": "ok"
       }
     },
     {
@@ -898,7 +898,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: datediff"
+        "success": "ok"
       }
     },
     {
@@ -1492,7 +1492,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_date"
+        "success": "ok"
       }
     },
     {
@@ -1514,7 +1514,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_date"
+        "success": "ok"
       }
     },
     {
