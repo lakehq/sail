@@ -436,7 +436,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_add"
+        "success": "ok"
       }
     },
     {
@@ -722,7 +722,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_sub"
+        "success": "ok"
       }
     },
     {
@@ -854,7 +854,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: dateadd"
+        "success": "ok"
       }
     },
     {

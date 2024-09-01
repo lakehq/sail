@@ -1,43 +1,81 @@
-use datafusion::arrow::datatypes::{DataType, IntervalUnit, IntervalYearMonthType};
+use datafusion::arrow::datatypes::{
+    DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType,
+};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit, BinaryExpr, Operator};
+use datafusion_expr::expr::{self, Expr};
+use datafusion_expr::{lit, BinaryExpr, Operator};
 
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::function::common::Function;
 use crate::utils::ItemTaker;
 
-fn integer_part(expr: expr::Expr, part: String) -> expr::Expr {
+fn integer_part(expr: Expr, part: String) -> Expr {
     let part = lit(ScalarValue::Utf8(Some(part.to_uppercase())));
-    expr::Expr::Cast(expr::Cast {
+    Expr::Cast(expr::Cast {
         expr: Box::new(expr_fn::date_part(part, expr)),
         data_type: DataType::Int32,
     })
 }
 
-fn trunc(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+fn trunc(args: Vec<Expr>) -> PlanResult<Expr> {
     let (date, part) = args.two()?;
     Ok(expr_fn::date_trunc(part, date))
 }
 
-fn add_months(date: expr::Expr, months: expr::Expr) -> expr::Expr {
-    let date = expr::Expr::Cast(expr::Cast {
+fn interval_arithmetic(args: Vec<Expr>, unit: &str, op: Operator) -> PlanResult<Expr> {
+    let (date, interval) = args.two()?;
+    let date = Expr::Cast(expr::Cast {
         expr: Box::new(date),
         data_type: DataType::Date32,
     });
-    let interval = match months {
-        expr::Expr::Literal(ScalarValue::Int32(Some(months))) => lit(
-            ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, months))),
-        ),
-        _ => expr::Expr::Cast(expr::Cast {
-            expr: Box::new(months),
-            data_type: DataType::Interval(IntervalUnit::YearMonth),
-        }),
+    let interval = match unit.to_lowercase().as_str() {
+        "years" | "year" => match interval {
+            Expr::Literal(ScalarValue::Int32(Some(years))) => lit(ScalarValue::IntervalYearMonth(
+                Some(IntervalYearMonthType::make_value(years, 0)),
+            )),
+            _ => Expr::Cast(expr::Cast {
+                expr: Box::new(format_interval(interval, "years")),
+                data_type: DataType::Interval(IntervalUnit::YearMonth),
+            }),
+        },
+        "months" | "month" => match interval {
+            Expr::Literal(ScalarValue::Int32(Some(months))) => lit(ScalarValue::IntervalYearMonth(
+                Some(IntervalYearMonthType::make_value(0, months)),
+            )),
+            _ => Expr::Cast(expr::Cast {
+                expr: Box::new(format_interval(interval, "months")),
+                data_type: DataType::Interval(IntervalUnit::YearMonth),
+            }),
+        },
+        "days" | "day" => match interval {
+            Expr::Literal(ScalarValue::Int32(Some(days))) => lit(ScalarValue::IntervalDayTime(
+                Some(IntervalDayTimeType::make_value(days, 0)),
+            )),
+            _ => Expr::Cast(expr::Cast {
+                expr: Box::new(format_interval(interval, "days")),
+                data_type: DataType::Interval(IntervalUnit::DayTime),
+            }),
+        },
+        _ => {
+            return Err(PlanError::invalid(format!(
+                "add_interval does not support interval unit type '{}'",
+                unit
+            )))
+        }
     };
-    expr::Expr::BinaryExpr(BinaryExpr {
+    Ok(Expr::BinaryExpr(BinaryExpr {
         left: Box::new(date),
-        op: Operator::Plus,
+        op,
         right: Box::new(interval),
+    }))
+}
+
+fn format_interval(interval: Expr, unit: &str) -> Expr {
+    Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(interval),
+        op: Operator::StringConcat,
+        right: Box::new(lit(format!(" {unit}"))),
     })
 }
 
@@ -48,20 +86,40 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
     use crate::function::common::FunctionBuilder as F;
 
     vec![
-        ("add_months", F::binary(add_months)),
+        (
+            "add_years",
+            F::custom(|args| interval_arithmetic(args, "years", Operator::Plus)),
+        ),
+        (
+            "add_months",
+            F::custom(|args| interval_arithmetic(args, "months", Operator::Plus)),
+        ),
+        (
+            "add_days",
+            F::custom(|args| interval_arithmetic(args, "days", Operator::Plus)),
+        ),
         ("convert_timezone", F::unknown("convert_timezone")),
         ("curdate", F::nullary(expr_fn::current_date)),
         ("current_date", F::nullary(expr_fn::current_date)),
         ("current_timestamp", F::nullary(expr_fn::now)),
         ("current_timezone", F::unknown("current_timezone")),
-        ("date_add", F::unknown("date_add")),
+        (
+            "date_add",
+            F::custom(|args| interval_arithmetic(args, "days", Operator::Plus)),
+        ),
         ("date_diff", F::unknown("date_diff")),
         ("date_format", F::unknown("date_format")),
         ("date_from_unix_date", F::unknown("date_from_unix_date")),
         ("date_part", F::binary(expr_fn::date_part)),
-        ("date_sub", F::unknown("date_sub")),
+        (
+            "date_sub",
+            F::custom(|args| interval_arithmetic(args, "days", Operator::Minus)),
+        ),
         ("date_trunc", F::binary(expr_fn::date_trunc)),
-        ("dateadd", F::unknown("dateadd")),
+        (
+            "dateadd",
+            F::custom(|args| interval_arithmetic(args, "days", Operator::Plus)),
+        ),
         ("datediff", F::unknown("datediff")),
         ("datepart", F::binary(expr_fn::date_part)),
         ("day", F::unary(|x| integer_part(x, "DAY".to_string()))),
