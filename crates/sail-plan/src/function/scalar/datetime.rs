@@ -1,7 +1,7 @@
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, IntervalUnit, IntervalYearMonthType};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit};
+use datafusion_expr::{expr, lit, BinaryExpr, Operator};
 
 use crate::error::PlanResult;
 use crate::function::common::Function;
@@ -20,6 +20,27 @@ fn trunc(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     Ok(expr_fn::date_trunc(part, date))
 }
 
+fn add_months(date: expr::Expr, months: expr::Expr) -> expr::Expr {
+    let date = expr::Expr::Cast(expr::Cast {
+        expr: Box::new(date),
+        data_type: DataType::Date32,
+    });
+    let interval = match months {
+        expr::Expr::Literal(ScalarValue::Int32(Some(months))) => lit(
+            ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, months))),
+        ),
+        _ => expr::Expr::Cast(expr::Cast {
+            expr: Box::new(months),
+            data_type: DataType::Interval(IntervalUnit::YearMonth),
+        }),
+    };
+    expr::Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(date),
+        op: Operator::Plus,
+        right: Box::new(interval),
+    })
+}
+
 // FIXME: Spark displays dates and timestamps according to the session time zone.
 //  We should be setting the DataFusion config `datafusion.execution.time_zone`
 //  and casting any datetime functions that don't use the DataFusion config.
@@ -27,7 +48,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
     use crate::function::common::FunctionBuilder as F;
 
     vec![
-        ("add_months", F::unknown("add_months")),
+        ("add_months", F::binary(add_months)),
         ("convert_timezone", F::unknown("convert_timezone")),
         ("curdate", F::nullary(expr_fn::current_date)),
         ("current_date", F::nullary(expr_fn::current_date)),

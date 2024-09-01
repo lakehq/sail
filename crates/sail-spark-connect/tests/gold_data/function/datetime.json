@@ -238,7 +238,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: add_months"
+        "success": "ok"
       }
     },
     {
