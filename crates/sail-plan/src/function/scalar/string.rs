@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::DataType;
 use datafusion::functions;
 use datafusion::functions::expr_fn;
 use datafusion::functions::string::contains::ContainsFunc;
@@ -48,16 +49,37 @@ fn concat_ws(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
 }
 
 fn to_binary(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    let hex_format = expr::Expr::Literal(ScalarValue::Utf8(Some("hex".to_string())));
     if args.len() == 1 {
         let expr = args.one()?;
-        let format = expr::Expr::Literal(ScalarValue::Utf8(Some("hex".to_string())));
+        let format = hex_format;
         return Ok(expr_fn::decode(expr, format));
     }
     if args.len() == 2 {
         let (expr, format) = args.two()?;
-        return Ok(expr_fn::decode(expr, format));
+        return match format {
+            expr::Expr::Literal(ScalarValue::Utf8(Some(ref s)))
+                if s.to_lowercase() == "utf-8" || s.to_lowercase() == "utf8" =>
+            {
+                Ok(expr::Expr::Cast(expr::Cast {
+                    expr: Box::new(expr),
+                    data_type: DataType::Binary,
+                }))
+            }
+            _ => Ok(expr_fn::decode(expr, format)),
+        };
     }
     Err(PlanError::invalid("to_binary requires 1 or 2 arguments"))
+}
+
+fn base64(expr: expr::Expr) -> expr::Expr {
+    let format = expr::Expr::Literal(ScalarValue::Utf8(Some("base64".to_string())));
+    expr_fn::encode(expr, format)
+}
+
+fn unbase64(expr: expr::Expr) -> expr::Expr {
+    let format = expr::Expr::Literal(ScalarValue::Utf8(Some("base64".to_string())));
+    expr_fn::decode(expr, format)
 }
 
 pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> {
@@ -65,7 +87,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
 
     vec![
         ("ascii", F::unary(expr_fn::ascii)),
-        ("base64", F::unknown("base64")),
+        ("base64", F::unary(base64)),
         ("bit_length", F::unary(expr_fn::bit_length)),
         ("btrim", F::var_arg(expr_fn::btrim)),
         ("char", F::unary(expr_fn::chr)),
@@ -127,7 +149,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("try_to_binary", F::unknown("try_to_binary")),
         ("try_to_number", F::unknown("try_to_number")),
         ("ucase", F::unary(expr_fn::upper)),
-        ("unbase64", F::unknown("unbase64")),
+        ("unbase64", F::unary(unbase64)),
         ("upper", F::unary(expr_fn::upper)),
     ]
 }
