@@ -349,6 +349,10 @@ impl PlanFormatter for DefaultPlanFormatter {
                 result.push_str(" END");
                 Ok(result)
             }
+            "dateadd" => {
+                let arguments = arguments.join(", ");
+                Ok(format!("date_add({arguments})"))
+            }
             // This case is only reached when both conditions are true:
             //   1. The explode operation is `ExplodeKind::ExplodeOuter`
             //   2. The data type being exploded is `ExplodeDataType::List`
