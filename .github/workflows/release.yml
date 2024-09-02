@@ -4,10 +4,14 @@ on:
   push:
     tags:
       - "v*"
-      - "test/v*"
-  # We can run the workflow manually to test package release without publishing to PyPI.
+  # We can run the workflow manually to test package release.
   # Only the repository maintainers have the permission to do this.
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Whether or not to publish the package to Test PyPI
+        type: boolean
+        required: true
 
 jobs:
   setup:
@@ -56,8 +60,6 @@ jobs:
         run: |
           if [[ "${RELEASE_TAG}" == "refs/tags/v${RELEASE_VERSION}" ]]; then
             echo "The package version ${RELEASE_VERSION} will be published to PyPI."
-          elif [[ "${RELEASE_TAG}" == "refs/tags/test/v${RELEASE_VERSION}" ]]; then
-            echo "The package version ${RELEASE_VERSION} will be published to Test PyPI."
           else
             echo "The package version ${RELEASE_VERSION} and the Git tag ${RELEASE_TAG} do not match."
             exit 1
@@ -298,7 +300,7 @@ jobs:
 
   release:
     name: Release
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true') }}
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -311,10 +313,10 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Publish to PyPI
+      - name: Publish
         uses: PyO3/maturin-action@v1
         env:
-          MATURIN_REPOSITORY: "${{ startsWith(github.ref, 'refs/tags/v') && 'pypi' || 'testpypi' }}"
+          MATURIN_REPOSITORY: "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && 'pypi' || 'testpypi' }}"
         with:
           command: upload
           args: --non-interactive --skip-existing dist/*

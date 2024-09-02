@@ -4,6 +4,10 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+version = "0.1.1"
+edition = "2021"
+
 [workspace.dependencies]
 tracing = { version = "0.1.40", features = ["attributes", "std", "log"] }
 tracing-opentelemetry = { version = "0.24.0" }
