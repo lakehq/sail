@@ -4,6 +4,7 @@ use mimalloc::MiMalloc;
 static GLOBAL: MiMalloc = MiMalloc;
 
 mod config;
+mod debug;
 pub mod entrypoint;
 mod error;
 mod executor;

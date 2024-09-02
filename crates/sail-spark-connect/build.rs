@@ -1,17 +1,24 @@
 use std::path::PathBuf;
 
+use prost_build::Config;
 use quote::{format_ident, quote};
 use serde::Deserialize;
 
 fn build_proto() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);
     let descriptor_path = out_dir.join("spark_connect_descriptor.bin");
+    let mut config = Config::new();
+    config.skip_debug([
+        "spark.connect.LocalRelation",
+        "spark.connect.ExecutePlanResponse.ArrowBatch",
+    ]);
     tonic_build::configure()
         .file_descriptor_set_path(&descriptor_path)
         .compile_well_known_types(true)
         .extern_path(".google.protobuf", "::pbjson_types")
         .build_server(true)
-        .compile(
+        .compile_with_config(
+            config,
             &[
                 "proto/spark/connect/base.proto",
                 "proto/spark/connect/catalog.proto",

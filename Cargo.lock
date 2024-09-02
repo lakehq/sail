@@ -3547,6 +3547,7 @@ dependencies = [
  "phf",
  "prettyplease",
  "prost",
+ "prost-build",
  "prost-types",
  "pyo3",
  "quote",
