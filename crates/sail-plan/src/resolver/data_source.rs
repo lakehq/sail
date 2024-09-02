@@ -9,6 +9,13 @@ use sail_common::spec;
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 
+/// See also: <https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/listing/url.rs>
+const GLOB_START_CHARS: [char; 3] = ['?', '*', '['];
+
+fn is_glob_path(path: &str) -> bool {
+    GLOB_START_CHARS.iter().any(|c| path.contains(*c))
+}
+
 impl PlanResolver<'_> {
     pub(super) async fn resolve_listing_urls(
         &self,
@@ -16,19 +23,24 @@ impl PlanResolver<'_> {
     ) -> PlanResult<Vec<ListingTableUrl>> {
         let mut urls = vec![];
         for path in paths {
-            let url = ListingTableUrl::parse(&path)?;
-            let store = self.ctx.runtime_env().object_store(&url)?;
-            if store.head(url.prefix()).await.is_ok() {
-                urls.push(url);
-            } else {
-                // The object at the path does not exist, so we treat it as a directory.
-                let path = if path.ends_with(object_store::path::DELIMITER) {
-                    path
+            let url = {
+                // TODO: support glob for paths with a URL scheme.
+                //   https://github.com/apache/datafusion/issues/7393
+                let url = ListingTableUrl::parse(&path)?;
+                if is_glob_path(&path) || path.ends_with(object_store::path::DELIMITER) {
+                    url
                 } else {
-                    format!("{}{}", path, object_store::path::DELIMITER)
-                };
-                urls.push(ListingTableUrl::parse(path)?);
-            }
+                    let store = self.ctx.runtime_env().object_store(&url)?;
+                    if store.head(url.prefix()).await.is_ok() {
+                        url
+                    } else {
+                        // The object at the path does not exist, so we treat it as a directory.
+                        let path = format!("{}{}", path, object_store::path::DELIMITER);
+                        ListingTableUrl::parse(path)?
+                    }
+                }
+            };
+            urls.push(url);
         }
         Ok(urls)
     }

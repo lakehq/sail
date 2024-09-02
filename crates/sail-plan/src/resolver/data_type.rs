@@ -111,13 +111,9 @@ impl PlanResolver<'_> {
             adt::DataType::Float16 => Err(PlanError::unsupported("float16")),
             adt::DataType::Float32 => Ok(DataType::Float),
             adt::DataType::Float64 => Ok(DataType::Double),
-            adt::DataType::Timestamp(adt::TimeUnit::Microsecond, None) => {
-                Ok(DataType::TimestampNtz)
-            }
-            adt::DataType::Timestamp(adt::TimeUnit::Microsecond, Some(_)) => {
-                Ok(DataType::Timestamp)
-            }
-            adt::DataType::Timestamp(_, _) => Err(PlanError::unsupported("timestamp")),
+            // TODO: support timestamp precision in data type spec
+            adt::DataType::Timestamp(_, None) => Ok(DataType::TimestampNtz),
+            adt::DataType::Timestamp(_, Some(_)) => Ok(DataType::Timestamp),
             adt::DataType::Date32 => Ok(DataType::Date),
             adt::DataType::Date64 => Err(PlanError::unsupported("date64")),
             adt::DataType::Time32(_) => Err(PlanError::unsupported("time32")),
