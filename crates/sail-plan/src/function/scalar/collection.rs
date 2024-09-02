@@ -1,10 +1,20 @@
-use datafusion::functions_array::expr_fn;
+use datafusion::functions::string::expr_fn as str_expr_fn;
+use datafusion::functions_nested::expr_fn;
+use datafusion_common::ScalarValue;
 use datafusion_expr::expr;
 
+use crate::error::PlanResult;
+use crate::extension::function::size::Size;
 use crate::function::common::Function;
 
-fn concat(array1: expr::Expr, array2: expr::Expr) -> expr::Expr {
-    expr_fn::array_concat(vec![array1, array2])
+fn concat(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    match args.first() {
+        None
+        | Some(expr::Expr::Literal(ScalarValue::Utf8(_)))
+        | Some(expr::Expr::Literal(ScalarValue::Utf8View(_)))
+        | Some(expr::Expr::Literal(ScalarValue::LargeUtf8(_))) => Ok(str_expr_fn::concat(args)),
+        _ => Ok(expr_fn::array_concat(args)),
+    }
 }
 
 pub(super) fn list_built_in_collection_functions() -> Vec<(&'static str, Function)> {
@@ -12,13 +22,9 @@ pub(super) fn list_built_in_collection_functions() -> Vec<(&'static str, Functio
 
     vec![
         ("array_size", F::unary(expr_fn::cardinality)),
-        // FIXME: expr_fn::cardinality doesn't fully match expected behavior.
-        //  Spark's cardinality function seems to be the same as the size function.
-        //  `cardinality`: https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.cardinality.html
-        //  `size`: https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.size.html
-        ("cardinality", F::unary(expr_fn::cardinality)),
-        ("size", F::unary(expr_fn::cardinality)),
-        ("concat", F::binary(concat)),
+        ("cardinality", F::udf(Size::new())),
+        ("size", F::udf(Size::new())),
+        ("concat", F::custom(concat)),
         ("reverse", F::unary(expr_fn::array_reverse)),
     ]
 }

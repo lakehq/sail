@@ -349,6 +349,22 @@ impl PlanFormatter for DefaultPlanFormatter {
                 result.push_str(" END");
                 Ok(result)
             }
+            "dateadd" => {
+                let arguments = arguments.join(", ");
+                Ok(format!("date_add({arguments})"))
+            }
+            // This case is only reached when both conditions are true:
+            //   1. The explode operation is `ExplodeKind::ExplodeOuter`
+            //   2. The data type being exploded is `ExplodeDataType::List`
+            // In this specific scenario, we always use "col" as the column name.
+            "explode_outer" => Ok("col".to_string()),
+            "acos" | "acosh" | "asin" | "asinh" | "atan" | "atan2" | "atanh" | "cbrt" | "ceil"
+            | "exp" | "floor" | "log10" | "regexp" | "regexp_like" | "signum" | "sqrt" | "cos"
+            | "cosh" | "cot" | "degrees" | "power" | "radians" | "sin" | "sinh" | "tan"
+            | "tanh" | "pi" | "expm1" | "hypot" | "log1p" => {
+                let arguments = arguments.join(", ");
+                Ok(format!("{}({})", name.to_uppercase(), arguments))
+            }
             _ => {
                 let arguments = arguments.join(", ");
                 Ok(format!("{}({})", name, arguments))

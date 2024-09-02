@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use sail_common::spec;
 use sail_sql::data_type::parse_data_type;
 use sail_sql::expression::{
-    parse_object_name, parse_qualified_wildcard, parse_wildcard_expression,
+    parse_expression, parse_object_name, parse_qualified_wildcard, parse_wildcard_expression,
 };
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
@@ -54,7 +54,9 @@ impl TryFrom<Expression> for spec::Expr {
                 is_user_defined_function,
             }),
             ExprType::ExpressionString(ExpressionString { expression }) => {
-                Ok(parse_wildcard_expression(expression.as_str())?)
+                let expr = parse_expression(expression.as_str())
+                    .or_else(|_| parse_wildcard_expression(expression.as_str()))?;
+                Ok(expr)
             }
             ExprType::UnresolvedStar(UnresolvedStar { unparsed_target }) => {
                 let target = unparsed_target
@@ -70,7 +72,19 @@ impl TryFrom<Expression> for spec::Expr {
                 } = *alias;
                 let expr = expr.required("alias expression")?;
                 let metadata: Option<HashMap<String, String>> = metadata
-                    .map(|x| serde_json::from_str(&x).map_err(SparkError::from))
+                    .map(|x| {
+                        serde_json::from_str(&x).map_err(SparkError::from).and_then(
+                            |x: serde_json::Value| {
+                                x.as_object()
+                                    .ok_or_else(|| SparkError::invalid("alias metadata"))
+                                    .map(|x| {
+                                        x.into_iter()
+                                            .map(|(k, v)| (k.clone(), v.to_string()))
+                                            .collect()
+                                    })
+                            },
+                        )
+                    })
                     .transpose()?;
                 let name: Vec<spec::Identifier> = name.into_iter().map(|x| x.into()).collect();
                 Ok(spec::Expr::Alias {

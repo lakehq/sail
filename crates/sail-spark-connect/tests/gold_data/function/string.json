@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: base64"
+        "success": "ok"
       }
     },
     {
@@ -151,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: base64"
+        "success": "ok"
       }
     },
     {
@@ -3055,7 +3055,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_binary"
+        "success": "ok"
       }
     },
     {
@@ -3759,7 +3759,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unbase64"
+        "success": "ok"
       }
     },
     {

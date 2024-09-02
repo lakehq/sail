@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use datafusion::datasource::function::TableFunctionImpl;
-use datafusion_common::Result;
-use datafusion_expr::ScalarUDF;
+use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
+use datafusion_expr::{DdlStatement, DropFunction, LogicalPlan, ScalarUDF};
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::CatalogManager;
@@ -33,6 +33,21 @@ impl<'a> CatalogManager<'a> {
             CatalogTableFunction::PySparkUDTF(x) => Arc::new(x),
         };
         self.ctx.register_udtf(name.as_str(), f);
+        Ok(())
+    }
+
+    pub(crate) async fn drop_function(
+        &self,
+        function: TableReference,
+        if_exists: bool,
+        _is_temporary: bool,
+    ) -> Result<()> {
+        let ddl = LogicalPlan::Ddl(DdlStatement::DropFunction(DropFunction {
+            name: function.to_string(),
+            if_exists,
+            schema: DFSchemaRef::new(DFSchema::empty()),
+        }));
+        self.ctx.execute_logical_plan(ddl).await?;
         Ok(())
     }
 }

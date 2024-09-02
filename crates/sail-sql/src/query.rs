@@ -568,7 +568,7 @@ fn with_ast_table_alias(
         Some(ast::TableAlias { name, columns }) => {
             Ok(spec::QueryPlan::new(spec::QueryNode::TableAlias {
                 input: Box::new(plan),
-                name: spec::Identifier::from(normalize_ident(name)),
+                name: spec::Identifier::from(normalize_ident(&name)),
                 columns: columns.into_iter().map(|c| c.value.into()).collect(),
             }))
         }
@@ -578,7 +578,7 @@ fn with_ast_table_alias(
 pub fn from_ast_with(with: ast::With) -> SqlResult<Vec<(spec::Identifier, spec::QueryPlan)>> {
     let mut ctes: Vec<(spec::Identifier, spec::QueryPlan)> = Vec::new();
     for cte in with.cte_tables {
-        let cte_name = spec::Identifier::from(normalize_ident(cte.alias.name.clone()));
+        let cte_name = spec::Identifier::from(normalize_ident(&cte.alias.name));
         let plan = from_ast_query(*cte.query)?;
         ctes.push((cte_name, plan));
     }

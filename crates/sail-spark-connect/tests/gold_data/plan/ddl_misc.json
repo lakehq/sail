@@ -51,25 +51,373 @@
     {
       "input": "SHOW COLUMNS FROM db1.t1 IN db1",
       "output": {
-        "failure": "not implemented: SQL show columns"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "filter": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "information_schema",
+                          "columns"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "condition": {
+                    "unresolvedFunction": {
+                      "functionName": "and",
+                      "arguments": [
+                        {
+                          "unresolvedFunction": {
+                            "functionName": "and",
+                            "arguments": [
+                              {
+                                "unresolvedFunction": {
+                                  "functionName": "==",
+                                  "arguments": [
+                                    {
+                                      "unresolvedAttribute": {
+                                        "name": [
+                                          "table_name"
+                                        ],
+                                        "planId": null
+                                      }
+                                    },
+                                    {
+                                      "literal": {
+                                        "string": "t1"
+                                      }
+                                    }
+                                  ],
+                                  "isDistinct": false,
+                                  "isUserDefinedFunction": false
+                                }
+                              },
+                              {
+                                "unresolvedFunction": {
+                                  "functionName": "==",
+                                  "arguments": [
+                                    {
+                                      "unresolvedAttribute": {
+                                        "name": [
+                                          "table_schema"
+                                        ],
+                                        "planId": null
+                                      }
+                                    },
+                                    {
+                                      "literal": {
+                                        "string": "db1"
+                                      }
+                                    }
+                                  ],
+                                  "isDistinct": false,
+                                  "isUserDefinedFunction": false
+                                }
+                              }
+                            ],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false
+                          }
+                        },
+                        {
+                          "unresolvedFunction": {
+                            "functionName": "==",
+                            "arguments": [
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "table_catalog"
+                                  ],
+                                  "planId": null
+                                }
+                              },
+                              {
+                                "literal": {
+                                  "string": "db1"
+                                }
+                              }
+                            ],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SHOW COLUMNS FROM t1",
       "output": {
-        "failure": "not implemented: SQL show columns"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "filter": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "information_schema",
+                          "columns"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "condition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "table_name"
+                            ],
+                            "planId": null
+                          }
+                        },
+                        {
+                          "literal": {
+                            "string": "t1"
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SHOW COLUMNS FROM t1 IN db1",
       "output": {
-        "failure": "not implemented: SQL show columns"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "filter": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "information_schema",
+                          "columns"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "condition": {
+                    "unresolvedFunction": {
+                      "functionName": "and",
+                      "arguments": [
+                        {
+                          "unresolvedFunction": {
+                            "functionName": "==",
+                            "arguments": [
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "table_name"
+                                  ],
+                                  "planId": null
+                                }
+                              },
+                              {
+                                "literal": {
+                                  "string": "t1"
+                                }
+                              }
+                            ],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false
+                          }
+                        },
+                        {
+                          "unresolvedFunction": {
+                            "functionName": "==",
+                            "arguments": [
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "table_schema"
+                                  ],
+                                  "planId": null
+                                }
+                              },
+                              {
+                                "literal": {
+                                  "string": "db1"
+                                }
+                              }
+                            ],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SHOW COLUMNS IN db1.t1",
       "output": {
-        "failure": "not implemented: SQL show columns"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "filter": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "information_schema",
+                          "columns"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "condition": {
+                    "unresolvedFunction": {
+                      "functionName": "and",
+                      "arguments": [
+                        {
+                          "unresolvedFunction": {
+                            "functionName": "==",
+                            "arguments": [
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "table_name"
+                                  ],
+                                  "planId": null
+                                }
+                              },
+                              {
+                                "literal": {
+                                  "string": "t1"
+                                }
+                              }
+                            ],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false
+                          }
+                        },
+                        {
+                          "unresolvedFunction": {
+                            "functionName": "==",
+                            "arguments": [
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "table_schema"
+                                  ],
+                                  "planId": null
+                                }
+                              },
+                              {
+                                "literal": {
+                                  "string": "db1"
+                                }
+                              }
+                            ],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

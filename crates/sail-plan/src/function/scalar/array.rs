@@ -62,6 +62,46 @@ fn sort_array(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     Ok(expr_fn::array_sort(array, sort, nulls))
 }
 
+fn array_prepend(array: expr::Expr, element: expr::Expr) -> expr::Expr {
+    expr_fn::array_prepend(element, array)
+}
+
+// TODO: Add in optional third argument null replacement
+fn array_join(array: expr::Expr, delimiter: expr::Expr) -> expr::Expr {
+    expr_fn::array_to_string(array, delimiter)
+}
+
+fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
+    let element = expr::Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(element),
+        op: Operator::Plus,
+        right: Box::new(lit(ScalarValue::Int64(Some(1)))),
+    });
+    expr_fn::array_element(array, element)
+}
+
+// FIXME: This is not efficient.
+fn array_max(array: expr::Expr) -> expr::Expr {
+    // agg_expr_fn::max(array) doesn't seem to work.
+    let sort = lit(ScalarValue::Utf8(Some("DESC".to_string())));
+    let nulls = lit(ScalarValue::Utf8(Some("NULLS LAST".to_string())));
+    array_element(
+        expr_fn::array_sort(array, sort, nulls),
+        lit(ScalarValue::Int64(Some(0))),
+    )
+}
+
+// FIXME: This is not efficient.
+fn array_min(array: expr::Expr) -> expr::Expr {
+    // agg_expr_fn::min(array) doesn't seem to work.
+    let sort = lit(ScalarValue::Utf8(Some("ASC".to_string())));
+    let nulls = lit(ScalarValue::Utf8(Some("NULLS LAST".to_string())));
+    array_element(
+        expr_fn::array_sort(array, sort, nulls),
+        lit(ScalarValue::Int64(Some(0))),
+    )
+}
+
 pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -74,18 +114,18 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
         ("array_except", F::binary(expr_fn::array_except)),
         ("array_insert", F::unknown("array_insert")),
         ("array_intersect", F::binary(expr_fn::array_intersect)),
-        ("array_join", F::unknown("array_join")),
-        ("array_max", F::unknown("array_max")),
-        ("array_min", F::unknown("array_min")),
+        ("array_join", F::binary(array_join)),
+        ("array_max", F::unary(array_max)),
+        ("array_min", F::unary(array_min)),
         ("array_position", F::scalar_udf(array_position_udf)),
-        ("array_prepend", F::binary(expr_fn::array_prepend)),
+        ("array_prepend", F::binary(array_prepend)),
         ("array_remove", F::binary(expr_fn::array_remove_all)),
         ("array_repeat", F::binary(array_repeat)),
         ("array_union", F::binary(expr_fn::array_union)),
-        ("arrays_overlap", F::unknown("arrays_overlap")),
+        ("arrays_overlap", F::binary(expr_fn::array_has_any)),
         ("arrays_zip", F::unknown("arrays_zip")),
         ("flatten", F::unary(expr_fn::flatten)),
-        ("get", F::binary(expr_fn::array_element)),
+        ("get", F::binary(array_element)),
         ("sequence", F::ternary(expr_fn::gen_series)),
         ("shuffle", F::unknown("shuffle")),
         ("slice", F::ternary(slice)),

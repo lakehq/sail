@@ -9,7 +9,7 @@ use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
-use crate::extension::function::utils::{make_scalar_function, utf8_to_int_type};
+use crate::extension::function::functions_utils::{make_scalar_function, utf8_to_int_type};
 
 #[derive(Debug)]
 pub struct Levenshtein {

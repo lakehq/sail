@@ -1,3 +1,4 @@
+use datafusion::sql::planner::object_name_to_qualifier;
 use sail_common::spec;
 use sqlparser::ast;
 use sqlparser::keywords::Keyword;
@@ -9,7 +10,10 @@ use crate::expression::{from_ast_expression, from_ast_object_name};
 use crate::parse::{parse_comment, parse_file_format, parse_value_options};
 use crate::parser::{fail_on_extra_token, SparkDialect};
 use crate::query::from_ast_query;
-use crate::utils::{build_column_defaults, build_schema_from_columns, normalize_ident};
+use crate::utils::{
+    build_column_defaults, build_schema_from_columns, normalize_ident, object_name_to_string,
+    to_datafusion_ast_object_name, value_to_string,
+};
 
 enum Statement {
     Standard(ast::Statement),
@@ -210,7 +214,7 @@ fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement> {
                 table_partition_cols = parser
                     .parse_comma_separated(Parser::parse_column_def)?
                     .iter()
-                    .map(|x| spec::Identifier::from(normalize_ident(x.name.clone()).to_string()))
+                    .map(|x| spec::Identifier::from(normalize_ident(&x.name).to_string()))
                     .collect();
                 parser.expect_token(&Token::RParen)?;
             }
@@ -367,7 +371,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             let table_name = from_ast_object_name(table_name)?;
             let columns: Vec<spec::Identifier> = columns
                 .iter()
-                .map(|x| spec::Identifier::from(normalize_ident(x.clone())))
+                .map(|x| spec::Identifier::from(normalize_ident(x)))
                 .collect();
             let partitioned: Vec<spec::Expr> = match partitioned {
                 Some(partitioned_vec) => partitioned_vec
@@ -378,7 +382,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             };
             let after_columns: Vec<spec::Identifier> = after_columns
                 .iter()
-                .map(|x| spec::Identifier::from(normalize_ident(x.clone())))
+                .map(|x| spec::Identifier::from(normalize_ident(x)))
                 .collect();
             let columns = if columns.is_empty() && !after_columns.is_empty() {
                 // after_columns and columns are the same. SQLParser just parses this weird.
@@ -537,7 +541,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
                         )))
                     } else {
                         Ok(spec::Identifier::from(normalize_ident(
-                            view_column_def.name,
+                            &view_column_def.name,
                         )))
                     }
                 })
@@ -617,18 +621,149 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::DropFunction { .. } => Err(SqlError::todo("SQL drop function")),
-        Statement::Merge { .. } => Err(SqlError::todo("SQL merge")),
-        Statement::ShowCreate { .. } => Err(SqlError::todo("SQL show create")),
-        Statement::ShowFunctions { .. } => Err(SqlError::todo("SQL show functions")),
-        Statement::ShowTables { .. } => Err(SqlError::todo("SQL show tables")),
-        Statement::ShowColumns { .. } => Err(SqlError::todo("SQL show columns")),
-        Statement::Truncate { .. } => Err(SqlError::todo("SQL truncate")),
+        Statement::SetVariable {
+            local,
+            hivevar,
+            variables,
+            value,
+        } => {
+            if local {
+                return Err(SqlError::unsupported("LOCAL is not supported."));
+            }
+            if hivevar {
+                return Err(SqlError::unsupported("HIVEVAR is not supported."));
+            }
+
+            let variable = match variables {
+                ast::OneOrManyWithParens::One(var) => object_name_to_string(&var),
+                ast::OneOrManyWithParens::Many(vars) => {
+                    return Err(SqlError::unsupported(format!(
+                        "SET only supports single variable assignment: {vars:?}"
+                    )));
+                }
+            };
+            // FIXME: move the logic to the resolver
+            let mut variable_lower = variable.to_lowercase();
+            if variable_lower == "timezone" || variable_lower == "time.zone" {
+                variable_lower = "datafusion.execution.time_zone".to_string();
+            }
+
+            let value_string = match &value[0] {
+                ast::Expr::Identifier(i) => normalize_ident(i),
+                ast::Expr::Value(val) => match value_to_string(val) {
+                    None => {
+                        return Err(SqlError::unsupported(format!(
+                            "Unsupported Value {}",
+                            value[0]
+                        )));
+                    }
+                    Some(val) => val,
+                },
+                ast::Expr::UnaryOp { op, expr } => match op {
+                    ast::UnaryOperator::Plus => format!("+{expr}"),
+                    ast::UnaryOperator::Minus => format!("-{expr}"),
+                    _ => {
+                        return Err(SqlError::unsupported(format!(
+                            "Unsupported Value {}",
+                            value[0]
+                        )));
+                    }
+                },
+                _ => {
+                    return Err(SqlError::unsupported(format!(
+                        "Unsupported Value {}",
+                        value[0]
+                    )));
+                }
+            };
+            let node = spec::CommandNode::SetVariable {
+                variable: spec::Identifier::from(variable_lower),
+                value: value_string,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        // TODO: avoid using SQL string
+        // TODO: some of the logic below may need to be moved to the resolver
+        //   We should define a plan spec instead of constructing `information_schema` queries here.
+        Statement::ShowCreate { obj_type, obj_name } => match obj_type {
+            ast::ShowCreateObject::Table => {
+                let where_clause =
+                    object_name_to_qualifier(&to_datafusion_ast_object_name(&obj_name), true);
+                let query = format!("SELECT * FROM information_schema.views WHERE {where_clause};");
+                parse_sql_statement(&query)
+            }
+            _ => Err(SqlError::unsupported(
+                "Only `SHOW CREATE TABLE ...` is supported.",
+            )),
+        },
+        Statement::ShowTables {
+            extended: _,
+            full: _,
+            db_name,
+            filter,
+        } => {
+            if db_name.is_some() {
+                return Err(SqlError::unsupported(
+                    "SHOW TABLES with db_name not supported.",
+                ));
+            }
+            if filter.is_some() {
+                return Err(SqlError::unsupported(
+                    "SHOW TABLES with WHERE, LIKE, or ILIKE not supported.",
+                ));
+            }
+            parse_sql_statement("SELECT * FROM information_schema.tables;")
+        }
+        Statement::ShowColumns {
+            extended: _,
+            full: _,
+            table_name,
+            filter,
+        } => {
+            if filter.is_some() {
+                return Err(SqlError::unsupported(
+                    "SHOW COLUMNS with WHERE, LIKE, or ILIKE not supported.",
+                ));
+            }
+            let where_clause =
+                object_name_to_qualifier(&to_datafusion_ast_object_name(&table_name), true);
+            let query = format!("SELECT * FROM information_schema.columns WHERE {where_clause};");
+            parse_sql_statement(&query)
+        }
+        Statement::DropFunction {
+            if_exists,
+            func_desc,
+            option,
+        } => {
+            if option.is_some() {
+                return Err(SqlError::unsupported(
+                    "DROP FUNCTION with RESTRICT or CASCADE not supported.",
+                ));
+            }
+            if func_desc.len() > 1 {
+                return Err(SqlError::unsupported(
+                    "DROP FUNCTION with multiple functions not supported.",
+                ));
+            }
+            if let Some(desc) = func_desc.first() {
+                let function = from_ast_object_name(desc.name.clone())?;
+                let node = spec::CommandNode::DropFunction {
+                    function,
+                    if_exists,
+                    is_temporary: false, // TODO: support temporary functions
+                };
+                Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+            } else {
+                Err(SqlError::invalid("Function name not provided."))
+            }
+        }
         Statement::Update { .. } => Err(SqlError::todo("SQL update")),
         Statement::Use { .. } => Err(SqlError::todo("SQL use")),
-        Statement::SetVariable { .. } => Err(SqlError::todo("SQL set variable")),
         Statement::Cache { .. } => Err(SqlError::todo("SQL cache")),
         Statement::UNCache { .. } => Err(SqlError::todo("SQL uncache")),
+        Statement::ShowFunctions { .. } => Err(SqlError::todo("SQL show functions")),
+        Statement::Truncate { .. } => Err(SqlError::todo("SQL truncate")),
+        Statement::Merge { .. } => Err(SqlError::todo("SQL merge")),
         Statement::Install { .. }
         | Statement::Msck { .. }
         | Statement::Load { .. }

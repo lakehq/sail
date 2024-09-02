@@ -49,7 +49,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Arrow error: Invalid argument error: column types must match schema types, expected List(Field { name: \"element\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) but found List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) at column index 0"
+        "success": "ok"
       }
     },
     {
@@ -353,7 +353,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: array_join"
+        "success": "ok"
       }
     },
     {
@@ -375,7 +375,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: array_join"
+        "success": "ok"
       }
     },
     {
@@ -397,7 +397,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: array_join"
+        "failure": "error in DataFusion: Error during planning: two values expected: [Alias(Alias { expr: ScalarFunction(ScalarFunction { func: ScalarUDF { inner: MakeArray { signature: Signature { type_signature: OneOf([UserDefined, Any(0)]), volatility: Immutable }, aliases: [\"make_list\"] } }, args: [Literal(Utf8(\"hello\")), Literal(NULL), Literal(Utf8(\"world\"))] }), relation: None, name: \"array(hello, NULL, world)\" }), Literal(Utf8(\" \")), Literal(Utf8(\",\"))]"
       }
     },
     {
@@ -419,7 +419,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: array_max"
+        "success": "ok"
       }
     },
     {
@@ -441,7 +441,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: array_min"
+        "success": "ok"
       }
     },
     {
@@ -511,7 +511,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [List(Field { name: \"element\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Int32] to the signature ArraySignature(ElementAndArray) failed. No function matches the given name and argument types 'array_prepend(List(Field { name: \"element\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarray_prepend(element, array)"
+        "success": "ok"
       }
     },
     {
@@ -537,7 +537,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [List(Field { name: \"item\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Utf8] to the signature ArraySignature(ElementAndArray) failed. No function matches the given name and argument types 'array_prepend(List(Field { name: \"item\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarray_prepend(element, array)"
+        "success": "ok"
       }
     },
     {
@@ -563,7 +563,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Null] to the signature ArraySignature(ElementAndArray) failed. No function matches the given name and argument types 'array_prepend(List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Null)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarray_prepend(element, array)"
+        "success": "ok"
       }
     },
     {
@@ -663,7 +663,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: arrays_overlap"
+        "success": "ok"
       }
     },
     {

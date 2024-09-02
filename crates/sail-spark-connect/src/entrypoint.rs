@@ -12,6 +12,10 @@ use crate::server::SparkConnectServer;
 use crate::session::SessionManager;
 use crate::spark::connect::spark_connect_service_server::SparkConnectServiceServer;
 
+// Same default as Spark
+// https://github.com/apache/spark/blob/9cec3c4f7c1b467023f0eefff69e8b7c5105417d/python/pyspark/sql/connect/client/core.py#L126
+pub const GRPC_MAX_MESSAGE_LENGTH_DEFAULT: usize = 128 * 1024 * 1024;
+
 pub async fn serve<F>(
     // We must use the TCP listener from tokio.
     // The TCP listener from the standard library does not work with graceful shutdown.
@@ -59,7 +63,10 @@ where
         .layer(layer)
         .add_service(reflect_server)
         .add_service(health_server)
-        .add_service(SparkConnectServiceServer::new(server));
+        .add_service(
+            SparkConnectServiceServer::new(server)
+                .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT),
+        );
 
     match signal {
         None => {

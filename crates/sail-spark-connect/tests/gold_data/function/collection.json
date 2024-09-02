@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: The array_concat function can only accept list as the args."
+        "success": "ok"
       }
     },
     {
@@ -111,7 +111,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: two values expected: [Alias(Alias { expr: ScalarFunction(ScalarFunction { func: ScalarUDF { inner: MakeArray { signature: Signature { type_signature: OneOf([UserDefined, Any(0)]), volatility: Immutable }, aliases: [\"make_list\"] } }, args: [Literal(Int32(1)), Literal(Int32(2)), Literal(Int32(3))] }), relation: None, name: \"array(1, 2, 3)\" }), Alias(Alias { expr: ScalarFunction(ScalarFunction { func: ScalarUDF { inner: MakeArray { signature: Signature { type_signature: OneOf([UserDefined, Any(0)]), volatility: Immutable }, aliases: [\"make_list\"] } }, args: [Literal(Int32(4)), Literal(Int32(5))] }), relation: None, name: \"array(4, 5)\" }), Alias(Alias { expr: ScalarFunction(ScalarFunction { func: ScalarUDF { inner: MakeArray { signature: Signature { type_signature: OneOf([UserDefined, Any(0)]), volatility: Immutable }, aliases: [\"make_list\"] } }, args: [Literal(Int32(6))] }), relation: None, name: \"array(6)\" })]"
+        "success": "ok"
       }
     },
     {
