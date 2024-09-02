@@ -1556,6 +1556,13 @@ impl PlanResolver<'_> {
             vertical,
         } = show;
         let input = self.resolve_query_plan(*input, state).await?;
+        // add a `Limit` plan so that the optimizer can push down the limit
+        let input = LogicalPlan::Limit(plan::Limit {
+            skip: 0,
+            // fetch one more row so that the proper message can be displayed if there is more data
+            fetch: Some(num_rows + 1),
+            input: Arc::new(input),
+        });
         let style = match vertical {
             true => ShowStringStyle::Vertical,
             false => ShowStringStyle::Default,

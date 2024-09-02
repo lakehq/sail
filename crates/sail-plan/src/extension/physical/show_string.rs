@@ -11,7 +11,7 @@ use datafusion::physical_expr::{Distribution, EquivalenceProperties, Partitionin
 use datafusion::physical_plan::{
     DisplayAs, ExecutionMode, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{arrow_datafusion_err, exec_err, internal_err, DataFusionError, Result};
+use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
 use futures::{Stream, StreamExt};
 use sail_common::utils::rename_physical_plan;
 
@@ -132,6 +132,13 @@ struct ShowStringStream {
     has_more_data: bool,
 }
 
+enum ShowStringState {
+    Continue,
+    Show,
+    Error(DataFusionError),
+    Stopped,
+}
+
 impl ShowStringStream {
     pub fn new(input: SendableRecordBatchStream, limit: usize, format: ShowStringFormat) -> Self {
         let input_schema = input.schema();
@@ -145,45 +152,40 @@ impl ShowStringStream {
         }
     }
 
-    fn show(&mut self) -> Option<Result<RecordBatch>> {
-        self.input.as_ref()?;
-        self.input = None;
-        let table = concat_batches(&self.input_schema, &self.data)
-            .map_err(|e| arrow_datafusion_err!(e))
-            .and_then(|batch| self.format.show(&batch, self.has_more_data));
-        let table = match table {
-            Ok(x) => x,
-            Err(x) => return Some(Err(x)),
-        };
+    fn show(&self) -> Result<RecordBatch> {
+        let batch = concat_batches(&self.input_schema, &self.data)?;
+        let table = self.format.show(&batch, self.has_more_data)?;
         let array = StringArray::from(vec![table]);
-        let batch = RecordBatch::try_new(self.format.schema(), vec![Arc::new(array)])
-            .map_err(|e| arrow_datafusion_err!(e));
-        Some(batch)
+        let batch = RecordBatch::try_new(self.format.schema(), vec![Arc::new(array)])?;
+        Ok(batch)
     }
 
-    fn wait(&self) -> Option<Result<RecordBatch>> {
-        Some(Ok(RecordBatch::new_empty(self.format.schema())))
-    }
-
-    fn accept_batch(&mut self, batch: Option<Result<RecordBatch>>) -> Option<Result<RecordBatch>> {
-        match batch {
-            Some(Ok(batch)) => {
-                match batch.num_rows() {
-                    n if n <= self.limit => {
-                        self.data.push(batch);
-                        self.limit -= n;
-                    }
-                    _ => {
-                        let batch = batch.slice(0, self.limit);
-                        self.data.push(batch);
-                        self.limit = 0;
-                        self.has_more_data = true;
-                    }
+    fn poll(&mut self, cx: &mut Context<'_>) -> Poll<ShowStringState> {
+        let input = match self.input.as_mut() {
+            Some(x) => x,
+            None => return Poll::Ready(ShowStringState::Stopped),
+        };
+        let poll = input.poll_next_unpin(cx);
+        match poll {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(None) => Poll::Ready(ShowStringState::Show),
+            Poll::Ready(Some(Err(e))) => Poll::Ready(ShowStringState::Error(e)),
+            Poll::Ready(Some(Ok(batch))) => match batch.num_rows() {
+                n if n <= self.limit => {
+                    self.data.push(batch);
+                    self.limit -= n;
+                    // We need to continue one more time when the limit reaches zero,
+                    // since we need to know if there is more data.
+                    Poll::Ready(ShowStringState::Continue)
                 }
-                self.wait()
-            }
-            Some(Err(e)) => Some(Err(e)),
-            None => self.show(),
+                _ => {
+                    let batch = batch.slice(0, self.limit);
+                    self.data.push(batch);
+                    self.limit = 0;
+                    self.has_more_data = true;
+                    Poll::Ready(ShowStringState::Show)
+                }
+            },
         }
     }
 }
@@ -192,11 +194,21 @@ impl Stream for ShowStringStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match &mut self.input {
-            None => Poll::Ready(None),
-            Some(input) => {
-                let poll = input.poll_next_unpin(cx);
-                poll.map(|x| self.accept_batch(x))
+        loop {
+            match self.poll(cx) {
+                Poll::Pending => break Poll::Pending,
+                Poll::Ready(ShowStringState::Show) => {
+                    self.input = None;
+                    break Poll::Ready(Some(self.show()));
+                }
+                Poll::Ready(ShowStringState::Error(e)) => {
+                    self.input = None;
+                    break Poll::Ready(Some(Err(e)));
+                }
+                Poll::Ready(ShowStringState::Stopped) => {
+                    break Poll::Ready(None);
+                }
+                Poll::Ready(ShowStringState::Continue) => continue,
             }
         }
     }
