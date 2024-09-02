@@ -18,7 +18,7 @@ Pushing tags to the GitHub repository triggers GitHub Actions workflows for the 
 
 - The tags should generally point to commits on the `main` branch.
 - The GitHub repository has a few tag rulesets in place so that only the project maintainers can manage the tags
-for the release process.
+  for the release process.
 
 :::
 
