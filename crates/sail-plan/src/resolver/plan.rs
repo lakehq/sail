@@ -2415,10 +2415,14 @@ impl PlanResolver<'_> {
                     expr,
                     metadata: _, // TODO: set field metadata
                 } = e;
-                let name = name.clone().one().map_err(|_| {
+                let name = if name.len() == 1 {
+                    name.one()?
+                } else {
                     let names = format!("({})", name.join(", "));
-                    PlanError::invalid(format!("one name expected for expression, got: {names}"))
-                })?;
+                    return Err(PlanError::invalid(format!(
+                        "one name expected for expression, got: {names}"
+                    )));
+                };
                 if let Expr::Column(Column {
                     name: column_name, ..
                 }) = &expr

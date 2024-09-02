@@ -23,6 +23,7 @@ pub fn normalize_ident(id: &ast::Ident) -> String {
 }
 
 pub fn object_name_to_string(object_name: &ast::ObjectName) -> String {
+    // FIXME: handle identifiers with special characters such as `.`.
     object_name
         .0
         .iter()
@@ -92,6 +93,7 @@ pub fn value_to_string(value: &ast::Value) -> Option<String> {
     }
 }
 
+// TODO: update the patched sqlparser version so that we do not need this.
 pub fn to_datafusion_ast_object_name(object_name: &ast::ObjectName) -> df_ast::ObjectName {
     df_ast::ObjectName(
         object_name

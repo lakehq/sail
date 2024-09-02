@@ -642,6 +642,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
                     )));
                 }
             };
+            // FIXME: move the logic to the resolver
             let mut variable_lower = variable.to_lowercase();
             if variable_lower == "timezone" || variable_lower == "time.zone" {
                 variable_lower = "datafusion.execution.time_zone".to_string();
@@ -681,6 +682,9 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        // TODO: avoid using SQL string
+        // TODO: some of the logic below may need to be moved to the resolver
+        //   We should define a plan spec instead of constructing `information_schema` queries here.
         Statement::ShowCreate { obj_type, obj_name } => match obj_type {
             ast::ShowCreateObject::Table => {
                 let where_clause =

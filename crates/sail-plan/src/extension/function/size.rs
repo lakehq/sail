@@ -1,3 +1,4 @@
+/// [Credit]: <https://github.com/apache/datafusion/blob/b10b820acb6ad92b5d69810e3d4de0ef6f2d6a87/datafusion/functions-nested/src/cardinality.rs>
 use std::any::Any;
 use std::sync::Arc;
 
@@ -13,6 +14,15 @@ use crate::extension::function::functions_nested_utils::{
     compute_array_dims, make_scalar_function,
 };
 
+// expr_fn::cardinality doesn't fully match expected behavior.
+// Spark's cardinality function seems to be the same as the size function.
+// `cardinality`: https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.cardinality.html
+// `size`: https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.size.html
+#[derive(Debug)]
+pub struct Size {
+    signature: Signature,
+}
+
 impl Size {
     pub fn new() -> Self {
         Self {
@@ -25,11 +35,6 @@ impl Size {
             ),
         }
     }
-}
-
-#[derive(Debug)]
-pub struct Size {
-    signature: Signature,
 }
 
 impl ScalarUDFImpl for Size {

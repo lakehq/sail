@@ -80,6 +80,7 @@ fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     expr_fn::array_element(array, element)
 }
 
+// FIXME: This is not efficient.
 fn array_max(array: expr::Expr) -> expr::Expr {
     // agg_expr_fn::max(array) doesn't seem to work.
     let sort = lit(ScalarValue::Utf8(Some("DESC".to_string())));
@@ -90,6 +91,7 @@ fn array_max(array: expr::Expr) -> expr::Expr {
     )
 }
 
+// FIXME: This is not efficient.
 fn array_min(array: expr::Expr) -> expr::Expr {
     // agg_expr_fn::min(array) doesn't seem to work.
     let sort = lit(ScalarValue::Utf8(Some("ASC".to_string())));

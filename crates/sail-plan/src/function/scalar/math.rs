@@ -78,6 +78,7 @@ fn hex(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     }
 }
 
+// FIXME: Implement the UDF for better numerical precision.
 fn expm1(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     let num = args.one()?;
     minus(vec![
@@ -116,6 +117,7 @@ fn log1p(expr: expr::Expr) -> expr::Expr {
     });
     expr_fn::ln(expr)
 }
+
 fn positive(expr: expr::Expr) -> expr::Expr {
     expr
 }

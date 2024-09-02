@@ -8,10 +8,11 @@ use crate::extension::function::size::Size;
 use crate::function::common::Function;
 
 fn concat(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    match &args[0] {
-        expr::Expr::Literal(ScalarValue::Utf8(_))
-        | expr::Expr::Literal(ScalarValue::Utf8View(_))
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_)) => Ok(str_expr_fn::concat(args)),
+    match args.first() {
+        None
+        | Some(expr::Expr::Literal(ScalarValue::Utf8(_)))
+        | Some(expr::Expr::Literal(ScalarValue::Utf8View(_)))
+        | Some(expr::Expr::Literal(ScalarValue::LargeUtf8(_))) => Ok(str_expr_fn::concat(args)),
         _ => Ok(expr_fn::array_concat(args)),
     }
 }
