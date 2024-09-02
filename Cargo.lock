@@ -3425,7 +3425,7 @@ checksum = "f3cb5ba0dc43242ce17de99c180e96db90b235b8a9fdc9543c96d2209116bd9f"
 
 [[package]]
 name = "sail-common"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arrow",
  "arrow-cast",
@@ -3445,7 +3445,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arrow",
  "arrow-cast",
@@ -3485,7 +3485,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "futures",
  "pyo3",
@@ -3498,7 +3498,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python-udf"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arrow",
  "arrow-cast",
@@ -3518,7 +3518,7 @@ dependencies = [
 
 [[package]]
 name = "sail-spark-connect"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arrow",
  "arrow-cast",
@@ -3579,7 +3579,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -3595,7 +3595,7 @@ dependencies = [
 
 [[package]]
 name = "sail-telemetry"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",

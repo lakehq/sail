@@ -110,7 +110,10 @@ class TransformPageData {
         link: "/reference/",
         text: "Reference",
       };
-      pageData.frontmatter.next = pageData.params.next ?? false;
+      pageData.frontmatter.next = pageData.params.next ?? {
+        link: "/reference/changelog/",
+        text: "Changelog",
+      };
     }
   }
 
@@ -179,6 +182,10 @@ class Sidebar {
           {
             text: "Python API Reference",
             link: "/reference/python/",
+          },
+          {
+            text: "Changelog",
+            link: "/reference/changelog/",
           },
         ],
       },
