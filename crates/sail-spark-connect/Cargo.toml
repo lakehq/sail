@@ -56,6 +56,7 @@ phf = { workspace = true }
 mimalloc = { workspace = true }
 
 [build-dependencies]
+prost-build = { workspace = true }
 tonic-build = { workspace = true }
 pbjson-build = { workspace = true }
 serde = { workspace = true }
