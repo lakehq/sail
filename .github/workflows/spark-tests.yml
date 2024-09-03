@@ -130,7 +130,7 @@ jobs:
         id: baseline-workflow
         with:
           sha: ${{ steps.baseline.outputs.sha }}
-          workflow_name: Spark tests
+          workflow_name: Build
           artifact_name: spark-tests-logs
 
       - name: Download test logs
