@@ -13,6 +13,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: ./.github/actions/commit-baseline
+        id: baseline
+
+      - uses: ./.github/actions/commit-workflow
+        id: baseline-workflow
+        with:
+          sha: ${{ steps.baseline.outputs.sha }}
+          workflow_name: Spark tests
+          artifact_name: test-logs-after
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
