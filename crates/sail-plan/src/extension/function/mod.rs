@@ -1,4 +1,5 @@
 pub(crate) mod array;
+pub(crate) mod array_min_max;
 pub(crate) mod drop_struct_field;
 pub(crate) mod explode;
 mod functions_nested_utils;
