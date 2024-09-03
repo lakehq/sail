@@ -32,7 +32,7 @@ COPY . .
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=${TARGETPLATFORM} \
     --mount=type=cache,target=/app/target,id=${TARGETPLATFORM} \
-    cargo build --release -p sail-spark-connect --example server && \
+    cargo build --release -p sail-spark-connect && \
     cargo strip && \
     cp /app/target/release/examples/server /app
 

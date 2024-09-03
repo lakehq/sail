@@ -8,7 +8,6 @@ python_version="$(hatch run python -c 'import sys; print("%s.%s" % (sys.version_
 export PYO3_PYTHON="${python_env_path}/bin/python"
 export RUST_LOG="${RUST_LOG:-sail_spark_connect=debug}"
 export RUST_BACKTRACE="${RUST_BACKTRACE:-full}"
-export RUST_MIN_STACK="${RUST_MIN_STACK:-8388608}"
 # We have to set `PYTHONPATH` even if we are using the virtual environment.
 # This is because the Python executable is the Rust program itself, and there is
 # no `pyvenv.cfg` at its required location (one directory above the executable).

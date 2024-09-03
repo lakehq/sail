@@ -21,6 +21,19 @@ scripts/spark-tests/build-pyspark.sh
 
 ::: info
 
+You should install the required Java version according to the [Java Setup](../setup/java) instructions.
+
+It is recommended to set the `JAVA_HOME` environment variable.
+If the `JAVA_HOME` environment variable is not set, the Spark build script will try to find the Java installation
+using the following heuristics.
+
+- For Linux, the Java installation is assumed to be the location of `javac`.
+- For macOS, the Java installation is retrieved from the output of the `/usr/libexec/java_home` command.
+
+:::
+
+::: info
+
 Here are some notes about the `build-pyspark.sh` script.
 
 1. The script will fail with an error if the Spark directory is not clean. The script internally applies a patch

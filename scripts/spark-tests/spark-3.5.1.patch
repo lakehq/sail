@@ -145,7 +145,7 @@ index 077d854b1dd..513a8f5d516 100644
      @classmethod
      def scalaUDT(cls):
 diff --git a/python/setup.py b/python/setup.py
-index b8e4c9a40e0..b0b54b932f1 100755
+index b8e4c9a40e0..48edf004d30 100755
 --- a/python/setup.py
 +++ b/python/setup.py
 @@ -183,6 +183,9 @@ try:
@@ -229,7 +229,8 @@ index b8e4c9a40e0..b0b54b932f1 100755
 +                "test_support/streaming/*.txt",
 +            ],
              "pyspark.python.lib": ["*.zip"],
-             "pyspark.data": ["*.txt", "*.data"],
+-            "pyspark.data": ["*.txt", "*.data"],
++            "pyspark.data": ["*.txt", "*.data", "artifact-tests/*.jar"],
              "pyspark.licenses": ["*.txt"],
              "pyspark.examples.src.main.python": ["*.py", "*/*.py"],
 +            "pyspark.ml.tests": ["typing/*.yml"],
