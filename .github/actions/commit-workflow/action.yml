@@ -1,0 +1,51 @@
+name: Commit workflow
+description: Infer workflow run for commit
+inputs:
+  workflow_name:
+    description: The name of the workflow to match
+    required: true
+    type: string
+  artifact_name:
+    description: The name of the artifact to match
+    required: true
+    type: string
+outputs:
+  workflow_run_id:
+    description: The ID of the workflow run for the commit, or empty if the workflow run does not exist
+    value: ${{ steps.workflow.outputs.result }}
+runs:
+  using: composite
+  steps:
+    - id: workflow
+      uses: actions/github-script@v7
+      env:
+        COMMIT_SHA: ${{ github.sha }}
+        WORKFLOW_NAME: ${{ inputs.workflow_name }}
+        ARTIFACT_NAME: ${{ inputs.artifact_name }}
+      with:
+        result-encoding: string
+        # We may return the workflow run ID when the artifact is about to expire.
+        # The dependent job may fail when downloading the artifact that has just expired.
+        # This is acceptable since this race condition is rare in practice.
+        script: |
+          const workflows = await github.paginate(github.rest.actions.listWorkflowRunsForRepo.endpoint.merge({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            status: 'success',
+            head_sha: process.env.COMMIT_SHA,
+          }));
+          for (const workflow of workflows) {
+            if (workflow.name === process.env.WORKFLOW_NAME) {
+              const artifacts = await github.paginate(github.actions.listWorkflowRunArtifacts.endpoint.merge({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: workflow.id,
+              });
+              for (const artifact of artifacts) {
+                if (artifact.name === process.env.ARTIFACT_NAME && !artifact.expired) {
+                  return workflow.id;
+                }
+              }
+            }
+          }
+          return '';
