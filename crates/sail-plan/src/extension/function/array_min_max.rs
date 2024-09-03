@@ -58,7 +58,7 @@ impl ScalarUDFImpl for ArrayMin {
                 Ok((array.values(), field.data_type()))
             }
             _ => exec_err!(
-                "array_element does not support type: {:?}",
+                "array_min does not support type: {:?}",
                 &args[0].data_type()
             ),
         }?;
