@@ -54,6 +54,7 @@ sqlparser = { workspace = true }
 serde_arrow = { workspace = true }
 phf = { workspace = true }
 mimalloc = { workspace = true }
+clap = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

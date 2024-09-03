@@ -10,14 +10,13 @@ RustRover.
 In **Run** > **Edit Configurations**, add a new **Cargo** configuration with the following settings:
 
 1. Name: **Run Spark Connect server** (You can use any name you like.)
-2. Command: `run -p sail-spark-connect --example server`
+2. Command: `run -p sail-spark-connect`
 3. Environment Variables:
    - (required) `PYTHONPATH`: `.venvs/default/lib/python<version>/site-packages` (Please replace `<version>` with the
      actual Python version, e.g. `3.11`.)
    - (required) `PYO3_PYTHON`: `<project>/.venvs/default/bin/python` (Please replace `<project>` with the actual
      project
      path. **This must be an absolute path.**)
-   - (required) `RUST_MIN_STACK`: `8388608`
    - (optional) `RUST_BACKTRACE`: `full`
    - (optional) `RUST_LOG`: `sail_spark_connect=debug`
 

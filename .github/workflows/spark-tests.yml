@@ -91,7 +91,7 @@ jobs:
 
       - name: Run Spark Connect server
         run: |
-          nohup hatch run test:python -m pysail.spark server > /dev/null 2>&1 < /dev/null &
+          nohup hatch run test:python -m pysail.spark server -C opt/spark > /dev/null 2>&1 < /dev/null &
 
       - name: Wait for Spark Connect server to start
         run: |

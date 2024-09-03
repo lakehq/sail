@@ -67,6 +67,7 @@ url = "2.5.2"
 lexical-core = { version = "0.8.5", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 aws-config = "1.5.5"
 aws-credential-types = "1.2.1"
+clap = { version = "4.5.16", features = ["derive"] }
 
 ######
 # The versions of the following dependencies are managed manually.

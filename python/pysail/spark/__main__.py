@@ -33,6 +33,7 @@ SparkSession available as 'spark'."""
 
 def main():
     import argparse
+    import os
 
     parser = argparse.ArgumentParser(prog="spark.py")
     subparsers = parser.add_subparsers(dest="command", description="the command to run", required=True)
@@ -44,12 +45,15 @@ def main():
         help="the IP address to bind the server to",
     )
     subparser.add_argument("--port", type=int, default=50051, help="the port to bind the server to")
+    subparser.add_argument("-C", "--directory", type=str, help="the directory to change to before starting the server")
     _ = subparsers.add_parser(
         "shell", description="start the PySpark shell with a Spark Connect server running in the background"
     )
     args = parser.parse_args()
 
     if args.command == "server":
+        if args.directory:
+            os.chdir(args.directory)
         server = SparkConnectServer(args.ip, args.port)
         server.init_telemetry()
         server.start(background=False)
