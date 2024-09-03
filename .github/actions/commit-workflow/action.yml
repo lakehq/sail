@@ -40,7 +40,7 @@ runs:
           }));
           for (const workflow of workflows) {
             if (workflow.name === process.env.WORKFLOW_NAME) {
-              const artifacts = await github.paginate(github.actions.listWorkflowRunArtifacts.endpoint.merge({
+              const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts.endpoint.merge({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 run_id: workflow.id,
