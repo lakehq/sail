@@ -127,8 +127,9 @@ jobs:
         id: baseline
 
       - uses: ./.github/actions/commit-workflow
-        id: workflow
+        id: baseline-workflow
         with:
+          sha: ${{ steps.baseline.outputs.sha }}
           workflow_name: Spark tests
           artifact_name: spark-tests-logs
 
@@ -139,22 +140,22 @@ jobs:
           path: /tmp/test-after
 
       - name: Download test logs (baseline)
-        if: ${{ steps.workflow.outputs.workflow_run_id != '' }}
+        if: ${{ steps.baseline-workflow.outputs.workflow_run_id != '' }}
         uses: actions/download-artifact@v4
         with:
           name: spark-tests-logs
           path: /tmp/test-before
-          run-id: ${{ steps.workflow.outputs.workflow_run_id }}
+          run-id: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download test logs (no baseline)
-        if: ${{ steps.workflow.outputs.workflow_run_id == '' }}
+        if: ${{ steps.baseline-workflow.outputs.workflow_run_id == '' }}
         run: |
           cp -r /tmp/test-after /tmp/test-before
 
       - name: Generate test report
         env:
-          BASELINE_WORKFLOW_RUN_ID: ${{ steps.baseline.outputs.workflow_run_id }}
+          BASELINE_WORKFLOW_RUN_ID: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
         run: |
           report="/tmp/report.md"
           if [[ -z "$BASELINE_WORKFLOW_RUN_ID" ]]; then

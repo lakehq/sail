@@ -1,6 +1,10 @@
 name: Commit workflow
 description: Infer workflow run for commit
 inputs:
+  sha:
+    description: The Git SHA of the commit
+    required: true
+    type: string
   workflow_name:
     description: The name of the workflow to match
     required: true
@@ -19,7 +23,7 @@ runs:
     - id: workflow
       uses: actions/github-script@v7
       env:
-        COMMIT_SHA: ${{ github.sha }}
+        COMMIT_SHA: ${{ inputs.sha }}
         WORKFLOW_NAME: ${{ inputs.workflow_name }}
         ARTIFACT_NAME: ${{ inputs.artifact_name }}
       with:
@@ -40,7 +44,7 @@ runs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 run_id: workflow.id,
-              });
+              }));
               for (const artifact of artifacts) {
                 if (artifact.name === process.env.ARTIFACT_NAME && !artifact.expired) {
                   return workflow.id;
