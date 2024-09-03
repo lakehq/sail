@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use clap::Parser;
 use sail_spark_connect::entrypoint::serve;
 use sail_telemetry::telemetry::init_telemetry;
@@ -11,7 +13,7 @@ const SERVER_SHUTDOWN_TIMEOUT_SECONDS: u64 = 5;
 struct Args {
     /// The IP address that the server binds to
     #[clap(long, default_value = "127.0.0.1")]
-    ip: std::net::IpAddr,
+    ip: IpAddr,
     /// The port number that the server listens on
     #[clap(long, default_value = "50051")]
     port: u16,
@@ -38,7 +40,7 @@ async fn shutdown() {
     info!("Shutting down the Spark Connect server...");
 }
 
-async fn run(ip: &str, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+async fn run(ip: &IpAddr, port: u16) -> Result<(), Box<dyn std::error::Error>> {
     init_telemetry()?;
 
     // A secure connection can be handled by a gateway in production.
@@ -61,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .thread_stack_size(SERVER_STACK_SIZE)
         .enable_all()
         .build()?;
-    runtime.block_on(run(&args.ip.to_string(), args.port))?;
+    runtime.block_on(run(&args.ip, args.port))?;
     // Shutdown the runtime with a timeout.
     // When the timeout is reached, the `main()` function returns and
     // the process exits immediately (though the exit code is still zero).
