@@ -159,7 +159,7 @@ jobs:
         run: |
           report="/tmp/report.md"
           if [[ -z "$BASELINE_WORKFLOW_RUN_ID" ]]; then
-            printf "> [!WARNING]\n> The baseline is not found.\n\n" >> "$report"
+            printf "> [!WARNING]\n> The baseline was not found.\n\n" >> "$report"
           fi
           scripts/spark-tests/generate-test-report.sh /tmp/test-after /tmp/test-before >> "$report"
           cat "$report" >> "$GITHUB_STEP_SUMMARY"
