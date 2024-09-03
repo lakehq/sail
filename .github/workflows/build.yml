@@ -23,6 +23,9 @@ jobs:
           workflow_name: Spark tests
           artifact_name: test-logs-after
 
+      - run: |
+          echo "${{ steps.baseline-workflow.outputs.workflow_run_id }}"
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
