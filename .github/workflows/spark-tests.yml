@@ -2,6 +2,11 @@ name: Spark tests
 
 on:
   workflow_call:
+    inputs:
+      spark_version:
+        description: The Spark version to test
+        type: string
+        default: "3.5.1"
 
 jobs:
   setup:
@@ -9,15 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       run_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.match.outputs.result == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
-      sha_before: ${{ steps.info.outputs.sha_before }}
-      sha_after: ${{ steps.info.outputs.sha_after }}
-      ref_before: ${{ steps.info.outputs.ref_before }}
-      ref_after: ${{ steps.info.outputs.ref_after }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: ./.github/actions/commit-info
-        id: info
 
       - uses: ./.github/actions/commit-message-match
         id: match
@@ -25,62 +23,152 @@ jobs:
           pattern: "\\[(spark )?tests?\\]"
           ignore_case: true
 
-  test-after:
-    name: Test after
+  test:
+    name: Test
     if: needs.setup.outputs.run_tests == 'true'
-    uses: ./.github/workflows/spark-tests-internal.yml
-    with:
-      sha: ${{ needs.setup.outputs.sha_after }}
-      ref: ${{ needs.setup.outputs.ref_after }}
-      name: after
+    runs-on: ubuntu-latest
     needs:
       - setup
+    steps:
+      - uses: actions/checkout@v4
 
-  test-before:
-    name: Test before
-    if: needs.setup.outputs.run_tests == 'true'
-    uses: ./.github/workflows/spark-tests-internal.yml
-    with:
-      sha: ${{ needs.setup.outputs.sha_before }}
-      ref: ${{ needs.setup.outputs.ref_before }}
-      name: before
-    needs:
-      - setup
-      - test-after # test sequentially to improve cache hit rate
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "corretto"
+          java-version: "17"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Hatch
+        uses: pypa/hatch@install
+
+      - name: Install grpc_health_probe
+        run: |
+          wget -q -O /usr/local/bin/grpc_health_probe "https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.26/grpc_health_probe-linux-amd64"
+          chmod +x /usr/local/bin/grpc_health_probe
+          grpc_health_probe -version
+
+      # Building PySpark package is slow (~40 minutes on GitHub Linux runners),
+      # so we create a dedicated cache for them to increase the cache hit rate.
+      - uses: actions/cache@v4
+        name: Cache PySpark package
+        id: cache-pyspark
+        with:
+          path: |
+            opt/spark/python/dist/pyspark-*.tar.gz
+          # We must use `format()` to define the key here since nested variable substitution is not supported.
+          key: ${{ format('spark-tests-pyspark-{0}-{1}-{2}-{3}', inputs.spark_version, runner.os, runner.arch, hashFiles(format('scripts/spark-tests/spark-{0}.patch', inputs.spark_version), 'scripts/spark-tests/build-pyspark.sh')) }}
+
+      - if: steps.cache-pyspark.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        name: Checkout Spark
+        with:
+          repository: apache/spark
+          path: opt/spark
+          ref: v${{ inputs.spark_version }}
+          fetch-depth: 1
+
+      - if: steps.cache-pyspark.outputs.cache-hit != 'true'
+        name: Build PySpark package
+        run: |
+          scripts/spark-tests/build-pyspark.sh
+
+      - name: Download Python package
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package
+          path: target/wheels
+
+      # We do not cache the environments since package installation via `uv` is fast, while downloading
+      # the environments from the cache still takes time.
+      - name: Set up Hatch environment
+        run: |
+          hatch env create test
+          hatch run test:install-pyspark
+          hatch run test:install-pysail
+
+      - name: Run Spark Connect server
+        run: |
+          nohup hatch run test:python -m pysail.spark server > /dev/null 2>&1 < /dev/null &
+
+      - name: Wait for Spark Connect server to start
+        run: |
+          scripts/spark-tests/wait-for-server.sh
+
+      - name: Run Spark tests
+        # We set a timeout to prevent the tests from hanging indefinitely,
+        # which can happen occasionally for unknown reasons.
+        # The timeout value should be adjusted as we add more tests.
+        timeout-minutes: 5
+        env:
+          TEST_RUN_GIT_COMMIT: ${{ github.sha }}
+          TEST_RUN_GIT_REF: ${{ github.ref }}
+        run: |
+          scripts/spark-tests/run-tests.sh
+
+      - name: Upload test logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: spark-tests-logs
+          path: tmp/spark-tests/latest
+          retention-days: 30
 
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
     needs:
-      - test-after
-      - test-before
+      - test
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download test logs after the code change
+      - uses: ./.github/actions/commit-baseline
+        id: baseline
+
+      - uses: ./.github/actions/commit-workflow
+        id: baseline-workflow
+        with:
+          sha: ${{ steps.baseline.outputs.sha }}
+          workflow_name: Build
+          artifact_name: spark-tests-logs
+
+      - name: Download test logs
         uses: actions/download-artifact@v4
         with:
-          name: test-logs-after
+          name: spark-tests-logs
           path: /tmp/test-after
 
-      - name: Download test logs before the code change
+      - name: Download test logs (baseline)
+        if: ${{ steps.baseline-workflow.outputs.workflow_run_id != '' }}
         uses: actions/download-artifact@v4
         with:
-          name: test-logs-before
+          name: spark-tests-logs
           path: /tmp/test-before
+          run-id: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download test logs (no baseline)
+        if: ${{ steps.baseline-workflow.outputs.workflow_run_id == '' }}
+        run: |
+          cp -r /tmp/test-after /tmp/test-before
 
       - name: Generate test report
+        env:
+          BASELINE_WORKFLOW_RUN_ID: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
         run: |
-          scripts/spark-tests/generate-test-report.sh \
-          /tmp/test-after /tmp/test-before \
-          > /tmp/test-report.md
-          cat /tmp/test-report.md >> "$GITHUB_STEP_SUMMARY"
+          report="/tmp/report.md"
+          if [[ -z "$BASELINE_WORKFLOW_RUN_ID" ]]; then
+            printf "> [!WARNING]\n> The baseline was not found.\n\n" >> "$report"
+          fi
+          scripts/spark-tests/generate-test-report.sh /tmp/test-after /tmp/test-before >> "$report"
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload test report
         uses: actions/upload-artifact@v4
         with:
           name: test-report
-          path: /tmp/test-report.md
+          path: /tmp/report.md
           retention-days: 1
 
   report:
@@ -102,4 +190,4 @@ jobs:
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: spark-test-report
-          path: /tmp/test-report.md
+          path: /tmp/report.md

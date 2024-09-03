@@ -30,16 +30,15 @@ jobs:
       - name: Test
         run: cargo test
 
-      - name: Cache Python package
-        id: cache-python-package
-        uses: actions/cache@v4
-        with:
-          path: target/wheels
-          key: python-package-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
-
-      - if: steps.cache-python-package.outputs.cache-hit != 'true'
-        name: Build Python package
+      - name: Build Python package
         uses: PyO3/maturin-action@v1
+
+      - name: Upload Python package
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package
+          path: target/wheels
+          retention-days: 1
 
   spark-tests:
     name: Spark tests

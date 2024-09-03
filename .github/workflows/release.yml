@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Whether or not to publish the package to Test PyPI
+        description: Publish the package to Test PyPI
         type: boolean
         required: true
 
