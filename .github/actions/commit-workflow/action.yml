@@ -46,7 +46,7 @@ runs:
                 run_id: workflow.id,
               }));
               for (const artifact of artifacts) {
-                if (artifact.name === process.env.ARTIFACT_NAME && !artifact.expired) {
+                if (artifact.name === process.env.ARTIFACT_NAME && artifact.expired === false) {
                   return workflow.id;
                 }
               }
