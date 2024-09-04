@@ -181,7 +181,7 @@
                               "name": "deciMal",
                               "dataType": {
                                 "decimal": {
-                                  "precision": 38,
+                                  "precision": 10,
                                   "scale": 0
                                 }
                               },
