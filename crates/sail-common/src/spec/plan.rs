@@ -312,11 +312,6 @@ pub enum CommandNode {
         #[serde(flatten)]
         definition: TableDefinition,
     },
-    DropTemporaryView {
-        view: ObjectName,
-        is_global: bool,
-        if_exists: bool,
-    },
     RecoverPartitions {
         table: ObjectName,
     },
@@ -372,13 +367,15 @@ pub enum CommandNode {
         if_exists: bool,
         purge: bool,
     },
-    CreateTemporaryView {
+    CreateView {
         view: ObjectName,
         #[serde(flatten)]
-        definition: TemporaryViewDefinition,
+        definition: ViewDefinition,
     },
     DropView {
         view: ObjectName,
+        /// An optional view kind to match the view name.
+        kind: Option<ViewKind>,
         if_exists: bool,
     },
     Write(Write),
@@ -641,15 +638,23 @@ pub struct CatalogDefinition {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TemporaryViewDefinition {
+pub enum ViewKind {
+    /// A view that is stored in the catalog.
+    Default,
+    /// A temporary view that is tied to the session.
+    Temporary,
+    /// A temporary view that is available for all sessions in the same Spark application.
+    /// See also: <https://spark.apache.org/docs/latest/sql-getting-started.html#global-temporary-view>
+    GlobalTemporary,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewDefinition {
     pub input: Box<QueryPlan>,
     pub columns: Option<Vec<Identifier>>,
-    pub is_global: bool,
+    pub kind: ViewKind,
     pub replace: bool,
-    /// Whether to create a temporary view.
-    /// The Spark Connect operation creates a temporary view,
-    /// while the SQL command creates a view.
-    pub temporary: bool,
     pub definition: Option<String>,
 }
 

@@ -19,6 +19,7 @@ use sail_plan::function::BUILT_IN_SCALAR_FUNCTIONS;
 use sail_plan::object_store::{DynamicObjectStoreRegistry, ObjectStoreConfig};
 use sail_plan::resolver::plan::NamedPlan;
 use sail_plan::resolver::PlanResolver;
+use sail_plan::temp_view::TemporaryViewManager;
 use sail_plan::{execute_logical_plan, new_query_planner};
 
 use crate::config::{ConfigKeyValueList, SparkRuntimeConfig};
@@ -28,7 +29,7 @@ use crate::executor::read_stream;
 use crate::executor::Executor;
 use crate::spark::config::{
     SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH,
-    SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY,
+    SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY, SPARK_SQL_GLOBAL_TEMP_DATABASE,
     SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME,
     SPARK_SQL_SESSION_TIME_ZONE, SPARK_SQL_SOURCES_DEFAULT, SPARK_SQL_WAREHOUSE_DIR,
 };
@@ -64,6 +65,7 @@ impl Session {
             .with_create_default_catalog_and_schema(true)
             .with_default_catalog_and_schema(DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA)
             .with_information_schema(true)
+            .with_extension(Arc::new(TemporaryViewManager::default()))
             .set_usize(
                 "datafusion.execution.batch_size",
                 std::env::var("DATAFUSION_BATCH_SIZE")
@@ -178,6 +180,11 @@ impl Session {
             .get(SPARK_SQL_WAREHOUSE_DIR)?
             .map(|x| x.to_string())
             .unwrap_or_else(|| PlanConfig::default().default_warehouse_directory);
+        let global_temp_database = state
+            .config
+            .get(SPARK_SQL_GLOBAL_TEMP_DATABASE)?
+            .map(|x| x.to_string())
+            .unwrap_or_else(|| PlanConfig::default().global_temp_database);
         Ok(Arc::new(PlanConfig {
             time_zone,
             // TODO: get the default timestamp type from configuration
@@ -186,6 +193,7 @@ impl Session {
             spark_udf_config,
             default_bounded_table_file_format,
             default_warehouse_directory,
+            global_temp_database,
             ..PlanConfig::default()
         }))
     }

@@ -38,8 +38,8 @@ function run_pytest() {
   # We ignore the pytext exit code so that the command can complete successfully.
   # The plugins are available on `PYTHONPATH` for the `test` environment configured in `pyproject.toml`.
   hatch run test:pytest \
-    -p "plugins.spark" \
-    -p "plugins.ibis" \
+    -p plugins.spark \
+    -p plugins.ibis \
     -o "doctest_optionflags=ELLIPSIS NORMALIZE_WHITESPACE" \
     -o "faulthandler_timeout=30" \
     --basetemp="${pytest_tmp_dir}" \
@@ -60,11 +60,13 @@ echo "${TEST_RUN_GIT_REF:-unknown}" > "${logs_dir}/ref"
 pytest_args=("$@")
 
 if [ "${#pytest_args[@]}" -ne 0 ]; then
-  run_pytest "test" "${pytest_args[@]}"
+  run_pytest test "${pytest_args[@]}"
 else
   pytest_args=("--tb=no" "-rN")
-  run_pytest "test-connect" "--pyargs" "pyspark.sql.tests.connect" "${pytest_args[@]}"
-  run_pytest "doctest-column" "--doctest-modules" "--pyargs" "pyspark.sql.column" "${pytest_args[@]}"
-  run_pytest "doctest-dataframe" "--doctest-modules" "--pyargs" "pyspark.sql.dataframe" "${pytest_args[@]}"
-  run_pytest "doctest-functions" "--doctest-modules" "--pyargs" "pyspark.sql.functions" "${pytest_args[@]}"
+  run_pytest test-connect --pyargs pyspark.sql.tests.connect "${pytest_args[@]}"
+  # The Ibis tests are not run for now due to setup errors related to Spark streaming.
+  # run_pytest test-ibis --pyargs ibis.backends -m pyspark "${pytest_args[@]}"
+  run_pytest doctest-column --doctest-modules --pyargs pyspark.sql.column "${pytest_args[@]}"
+  run_pytest doctest-dataframe --doctest-modules --pyargs pyspark.sql.dataframe "${pytest_args[@]}"
+  run_pytest doctest-functions --doctest-modules --pyargs pyspark.sql.functions "${pytest_args[@]}"
 fi

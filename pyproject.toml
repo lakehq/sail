@@ -61,8 +61,9 @@ python = "3.11"
 installer = "pip"
 dependencies = [
     "pyspark[connect]==3.5.1",
-    "ibis-framework[pyspark]~=9.1",
-    "pytest~=8.2",
+    # We do not specify the extra dependencies for Ibis since we install PySpark explicitly.
+    "ibis-framework~=9.4",
+    "pytest~=8.3",
 ]
 
 [tool.hatch.envs.default.overrides]
@@ -109,12 +110,12 @@ dependencies = [
     "grpcio-status>=1.56,<1.57",
     "googleapis-common-protos==1.56.4",
     # pytest and plugins
-    "pytest~=8.2",
+    "pytest~=8.3",
     "pytest-xdist~=3.6.1",
     "pytest-timeout~=2.3.1",
     "pytest-reportlog~=0.4.0",
     # Ibis and its test dependencies
-    "ibis-framework[pyspark]~=9.1",
+    "ibis-framework~=9.4",
     "filelock>=3.7.0,<4",
     "hypothesis>=6.58.0,<7",
     "packaging>=21.3,<25",

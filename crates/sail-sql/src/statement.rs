@@ -527,7 +527,7 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             comment: _,
             with_no_schema_binding: _,
             if_not_exists: _,
-            temporary: _,
+            temporary,
             to: _,
         } => {
             // TODO: Parse Spark Syntax:
@@ -549,14 +549,19 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
             let query = from_ast_query(*query)?;
             let name = from_ast_object_name(name)?;
 
-            let node = spec::CommandNode::CreateTemporaryView {
+            let kind = if temporary {
+                // TODO: support SQL parsing for global temporary views
+                spec::ViewKind::Temporary
+            } else {
+                spec::ViewKind::Default
+            };
+            let node = spec::CommandNode::CreateView {
                 view: name,
-                definition: spec::TemporaryViewDefinition {
+                definition: spec::ViewDefinition {
                     input: Box::new(query),
                     columns: Some(columns),
-                    is_global: true,
                     replace: or_replace,
-                    temporary: false,
+                    kind,
                     definition: statement_sql,
                 },
             };
@@ -592,14 +597,13 @@ fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::Plan> {
                     if_exists,
                     purge,
                 },
-                (ObjectType::View, true) => spec::CommandNode::DropTemporaryView {
-                    view: name,
-                    // TODO: support global temporary views
-                    is_global: false,
-                    if_exists,
-                },
+                (ObjectType::View, true) => {
+                    // Spark `DROP VIEW` does not accept `TEMPORARY` keyword.
+                    return Err(SqlError::invalid("SQL drop temporary view"));
+                }
                 (ObjectType::View, false) => spec::CommandNode::DropView {
                     view: name,
+                    kind: None,
                     if_exists,
                 },
                 (ObjectType::Schema, false) | (ObjectType::Database, false) => {
