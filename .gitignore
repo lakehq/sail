@@ -14,6 +14,7 @@ target/
 
 # Common build directories
 build/
+!/docs/development/build/
 dist/
 tmp/
 out/
@@ -77,3 +78,11 @@ venvs/
 
 # Python Poetry files
 poetry.lock
+
+# Node modules
+node_modules/
+
+# VitePress build and cache directories
+docs/.vitepress/dist
+docs/.vitepress/cache
+docs/.vitepress/.temp
