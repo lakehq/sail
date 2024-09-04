@@ -5,7 +5,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, BinaryExpr, Operator};
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::array_min_max::ArrayMin;
+use crate::extension::function::array_min_max::{ArrayMax, ArrayMin};
 use crate::function::common::Function;
 use crate::utils::ItemTaker;
 
@@ -81,17 +81,6 @@ fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     expr_fn::array_element(array, element)
 }
 
-// FIXME: This is not efficient.
-fn array_max(array: expr::Expr) -> expr::Expr {
-    // agg_expr_fn::max(array) doesn't seem to work.
-    let sort = lit(ScalarValue::Utf8(Some("DESC".to_string())));
-    let nulls = lit(ScalarValue::Utf8(Some("NULLS LAST".to_string())));
-    array_element(
-        expr_fn::array_sort(array, sort, nulls),
-        lit(ScalarValue::Int64(Some(0))),
-    )
-}
-
 pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -105,7 +94,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
         ("array_insert", F::unknown("array_insert")),
         ("array_intersect", F::binary(expr_fn::array_intersect)),
         ("array_join", F::binary(array_join)),
-        ("array_max", F::unary(array_max)),
+        ("array_max", F::udf(ArrayMax::new())),
         ("array_min", F::udf(ArrayMin::new())),
         ("array_position", F::scalar_udf(array_position_udf)),
         ("array_prepend", F::binary(array_prepend)),
