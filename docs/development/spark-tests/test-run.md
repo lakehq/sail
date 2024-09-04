@@ -37,9 +37,11 @@ the `TEST_RUN_NAME` environment variable whose default value is `latest`.
 scripts/spark-tests/run-tests.sh
 ```
 
-The above command runs a default set of test suites for Spark Connect.
+The command runs a default set of test suites for Spark Connect.
 Each test suite will write its `<suite>.jsonl` and `<suite>.log` files to the log directory,
 where `<suite>` is the test suite name.
+
+### Running Selected Tests
 
 You can pass arguments to the script, which will be forwarded to `pytest`.
 You can also use `PYTEST_` environment variables to customize the test execution.
@@ -53,3 +55,14 @@ env TEST_RUN_NAME=selected \
 
 When you customize the test execution using the above command, a single test suite will be run,
 and the test log files are always `test.jsonl` and `test.log` in the log directory.
+
+### Running Tests against the Original Spark Implementation
+
+As a comparison, you can run the tests against the original Spark implementation,
+by setting the `SPARK_TESTING_REMOTE_PORT` environment variable to an empty string.
+
+```bash
+env SPARK_TESTING_REMOTE_PORT= scripts/spark-tests/run-tests.sh
+```
+
+This can be useful for discovering issues in the test setup.
