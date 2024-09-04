@@ -8,18 +8,15 @@ rank: 20
 ## Preparing the Test Environment
 
 Before running Spark tests, please create the `test` Hatch environment using the following commands.
-Note that you do _not_ need to run `maturin develop` in the `test` environment again after you make code changes.
-We only use the pytest plugins (pure Python code) from the project, which do not need to be rebuilt by Maturin.
 
 ```bash
 hatch env create test
 hatch run test:install-pyspark
-hatch run test:maturin develop
 ```
 
 ::: info
 The Spark test environment depends on the [patched PySpark package](./spark-setup).
-The patched PySpark package will be installed automatically during the environment creation.
+The commands above install the patched PySpark package after environment creation.
 :::
 
 ## Running the Spark Connect Server
@@ -50,9 +47,8 @@ For example, `PYTEST_ADDOPTS="-k <expression>"` can be used to run specific test
 
 ```bash
 # Write the test logs to a different directory (`tmp/spark-tests/selected`).
-export TEST_RUN_NAME=selected
-
-scripts/spark-tests/run-tests.sh --pyargs pyspark.sql.tests.connect -v -k test_sql
+env TEST_RUN_NAME=selected \
+  scripts/spark-tests/run-tests.sh --pyargs pyspark.sql.tests.connect -v -k test_sql
 ```
 
 When you customize the test execution using the above command, a single test suite will be run,

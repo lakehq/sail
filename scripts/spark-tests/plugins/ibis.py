@@ -1,10 +1,13 @@
+from __future__ import annotations
+
+import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import pytest
-from _pytest.fixtures import FixtureDef, SubRequest
 
-IBIS_TESTING_DATA_DIR = Path(__file__).absolute().parents[3] / "opt" / "ibis-testing-data"
+if TYPE_CHECKING:
+    from _pytest.fixtures import FixtureDef, SubRequest
 
 # pytest markers defined in `pyproject.toml` of the Ibis project
 IBIS_MARKERS = [
@@ -45,9 +48,9 @@ IBIS_MARKERS = [
 
 @pytest.fixture(scope="session", autouse=True)
 def patch_ibis_spark_session():
-    from ibis.backends.pyspark.tests.conftest import TestConf
+    from ibis.backends.pyspark.tests.conftest import TestConf, TestConfForStreaming
 
-    def connect(*, tmpdir, worker_id, **kw):
+    def connect(*, tmpdir, worker_id, **kw):  # noqa: ARG001
         import ibis
         from pyspark.sql import SparkSession
 
@@ -55,6 +58,7 @@ def patch_ibis_spark_session():
         return ibis.pyspark.connect(spark, **kw)
 
     TestConf.connect = staticmethod(connect)
+    TestConfForStreaming.connect = staticmethod(connect)
 
 
 def pytest_configure(config):
@@ -63,11 +67,21 @@ def pytest_configure(config):
 
 
 def pytest_fixture_setup(
-        fixturedef: "FixtureDef[Any]", request: "SubRequest"
-) -> Optional[object]:
+    fixturedef: FixtureDef[Any],
+    request: SubRequest,  # noqa: ARG001
+) -> object | None:
     from _pytest.nodes import SEP
 
+    env_var = "IBIS_TESTING_DATA_DIR"
+    data_dir = os.environ.get(env_var)
+    if not data_dir:
+        msg = f"missing environment variable '{env_var}'"
+        raise RuntimeError(msg)
+
+    data_dir = Path(data_dir)
     if fixturedef.argname == "data_dir" and fixturedef.baseid.endswith(f"{SEP}ibis{SEP}backends"):
         # override the result of the `data_dir` fixture
-        fixturedef.cached_result = (IBIS_TESTING_DATA_DIR, None, None)
-        return IBIS_TESTING_DATA_DIR
+        fixturedef.cached_result = (data_dir, None, None)
+        return data_dir
+
+    return None

@@ -126,6 +126,10 @@ dependencies = [
     "pytest-snapshot>=0.9.0,<1",
 ]
 
+[tool.hatch.envs.test.env-vars]
+PYTHONPATH = "{root}/scripts/spark-tests"
+IBIS_TESTING_DATA_DIR = "{root}/opt/ibis-testing-data"
+
 [tool.hatch.envs.test.scripts]
 install-pyspark = "{env:HATCH_UV} pip install opt/spark/python/dist/pyspark-3.5.1.tar.gz"
 install-pysail = "{env:HATCH_UV} pip install pysail --no-index -f target/wheels --force-reinstall"

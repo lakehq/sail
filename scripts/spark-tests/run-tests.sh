@@ -36,9 +36,10 @@ function run_pytest() {
 
   echo "Test suite: ${name}"
   # We ignore the pytext exit code so that the command can complete successfully.
+  # The plugins are available on `PYTHONPATH` for the `test` environment configured in `pyproject.toml`.
   hatch run test:pytest \
-    -p "pysail.testing.spark_plugin" \
-    -p "pysail.testing.ibis_plugin" \
+    -p "plugins.spark" \
+    -p "plugins.ibis" \
     -o "doctest_optionflags=ELLIPSIS NORMALIZE_WHITESPACE" \
     -o "faulthandler_timeout=30" \
     --basetemp="${pytest_tmp_dir}" \
