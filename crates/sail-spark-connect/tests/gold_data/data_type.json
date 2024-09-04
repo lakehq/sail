@@ -15,7 +15,7 @@
                         "name": "deciMal",
                         "dataType": {
                           "decimal": {
-                            "precision": 10,
+                            "precision": 38,
                             "scale": 0
                           }
                         },
@@ -361,7 +361,7 @@
       "output": {
         "success": {
           "decimal": {
-            "precision": 10,
+            "precision": 38,
             "scale": 0
           }
         }
@@ -372,7 +372,7 @@
       "output": {
         "success": {
           "decimal": {
-            "precision": 10,
+            "precision": 38,
             "scale": 0
           }
         }
