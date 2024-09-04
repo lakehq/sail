@@ -13,7 +13,7 @@ pub(crate) const DEFAULT_FIELD_NAME: &str = "value";
 pub(crate) const SPARK_DECIMAL_MAX_PRECISION: u8 = 38;
 #[allow(dead_code)]
 pub(crate) const SPARK_DECIMAL_MAX_SCALE: i8 = 38;
-pub(crate) const SPARK_DECIMAL_USER_DEFAULT_PRECISION: u8 = 10;
+pub(crate) const SPARK_DECIMAL_USER_DEFAULT_PRECISION: u8 = 38;
 pub(crate) const SPARK_DECIMAL_USER_DEFAULT_SCALE: i8 = 0;
 #[allow(dead_code)]
 pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_PRECISION: u8 = 38;

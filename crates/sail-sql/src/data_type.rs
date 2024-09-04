@@ -7,7 +7,7 @@ use sqlparser::tokenizer::Token;
 use crate::error::{SqlError, SqlResult};
 use crate::parser::{fail_on_extra_token, SparkDialect};
 
-pub const SQL_DECIMAL_DEFAULT_PRECISION: u8 = 10;
+pub const SQL_DECIMAL_DEFAULT_PRECISION: u8 = 38;
 pub const SQL_DECIMAL_DEFAULT_SCALE: i8 = 0;
 pub const SQL_DECIMAL_MAX_PRECISION: u8 = 38;
 pub const SQL_DECIMAL_MAX_SCALE: i8 = 38;
