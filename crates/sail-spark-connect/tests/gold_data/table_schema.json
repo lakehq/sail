@@ -180,7 +180,7 @@
                             {
                               "name": "deciMal",
                               "dataType": {
-                                "decimal": {
+                                "decimal128": {
                                   "precision": 10,
                                   "scale": 0
                                 }
@@ -191,7 +191,7 @@
                             {
                               "name": "anotherDecimal",
                               "dataType": {
-                                "decimal": {
+                                "decimal128": {
                                   "precision": 5,
                                   "scale": 2
                                 }

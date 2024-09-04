@@ -38,8 +38,11 @@ impl PlanResolver<'_> {
                 Ok(adt::DataType::List(Arc::new(self.resolve_field(field)?)))
             }
             DataType::Struct { fields } => Ok(adt::DataType::Struct(self.resolve_fields(fields)?)),
-            DataType::Decimal { scale, precision } => {
+            DataType::Decimal128 { scale, precision } => {
                 Ok(adt::DataType::Decimal128(precision, scale))
+            }
+            DataType::Decimal256 { scale, precision } => {
+                Ok(adt::DataType::Decimal256(precision, scale))
             }
             DataType::Char { .. } => Ok(adt::DataType::Utf8),
             DataType::VarChar { .. } => Ok(adt::DataType::Utf8),
@@ -160,9 +163,11 @@ impl PlanResolver<'_> {
             adt::DataType::Union(_, _) => Err(PlanError::unsupported("union")),
             adt::DataType::Dictionary(_, _) => Err(PlanError::unsupported("dictionary")),
             adt::DataType::Decimal128(precision, scale) => {
-                Ok(DataType::Decimal { precision, scale })
+                Ok(DataType::Decimal128 { precision, scale })
             }
-            adt::DataType::Decimal256(_, _) => Err(PlanError::unsupported("decimal256")),
+            adt::DataType::Decimal256(precision, scale) => {
+                Ok(DataType::Decimal256 { precision, scale })
+            }
             adt::DataType::Map(field, _sorted) => {
                 let field: spec::Field = Self::unresolve_field(field.as_ref().clone())?;
                 let fields = match field.data_type {

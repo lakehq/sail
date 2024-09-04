@@ -149,16 +149,23 @@ fn from_ast_value(value: ast::Value) -> SqlResult<spec::Expr> {
                 spec::Expr::try_from(value)
             }
             Some(x) if x.to_uppercase() == "BD" => {
-                let value = LiteralValue::<spec::Decimal>::try_from(value.clone())?;
-                spec::Expr::try_from(value)
+                if let Ok(value) = LiteralValue::<spec::Decimal128>::try_from(value.clone()) {
+                    spec::Expr::try_from(value)
+                } else {
+                    let value = LiteralValue::<spec::Decimal256>::try_from(value.clone())?;
+                    spec::Expr::try_from(value)
+                }
             }
             None | Some("") => {
                 if let Ok(value) = LiteralValue::<i32>::try_from(value.clone()) {
                     spec::Expr::try_from(value)
                 } else if let Ok(value) = LiteralValue::<i64>::try_from(value.clone()) {
                     spec::Expr::try_from(value)
+                } else if let Ok(value) = LiteralValue::<spec::Decimal128>::try_from(value.clone())
+                {
+                    spec::Expr::try_from(value)
                 } else {
-                    let value = LiteralValue::<spec::Decimal>::try_from(value.clone())?;
+                    let value = LiteralValue::<spec::Decimal256>::try_from(value.clone())?;
                     spec::Expr::try_from(value)
                 }
             }
