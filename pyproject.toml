@@ -63,6 +63,8 @@ dependencies = [
     "pyspark[connect]==3.5.1",
     # We do not specify the extra dependencies for Ibis since we install PySpark explicitly.
     "ibis-framework~=9.4",
+    # This is required by non-backend Ibis installation.
+    "pyarrow-hotfix>=0.4,<1",
     "pytest~=8.3",
 ]
 
@@ -116,6 +118,7 @@ dependencies = [
     "pytest-reportlog~=0.4.0",
     # Ibis and its test dependencies
     "ibis-framework~=9.4",
+    "pyarrow-hotfix>=0.4,<1",
     "filelock>=3.7.0,<4",
     "hypothesis>=6.58.0,<7",
     "packaging>=21.3,<25",

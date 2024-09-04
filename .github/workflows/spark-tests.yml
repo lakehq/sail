@@ -107,7 +107,7 @@ jobs:
           TEST_RUN_GIT_COMMIT: ${{ github.sha }}
           TEST_RUN_GIT_REF: ${{ github.ref }}
         run: |
-          scripts/spark-tests/run-tests.sh --pyargs pyspark.sql.tests.connect -k test_parity_group.py
+          scripts/spark-tests/run-tests.sh
 
       - name: Upload test logs
         uses: actions/upload-artifact@v4
