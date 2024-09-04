@@ -1,0 +1,184 @@
+{
+  "tests": [
+    {
+      "input": "INSERT INTO s SELECT /*+ REPARTITION(100), COALESCE(500), COALESCE(10) */ * FROM t",
+      "output": {
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "s"
+              ],
+              "columns": [],
+              "partitionSpec": [],
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "insert into s select * from t",
+      "output": {
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "s"
+              ],
+              "columns": [],
+              "partitionSpec": [],
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "insert into table s partition (c = 'd', e = 1) select * from t",
+      "output": {
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "s"
+              ],
+              "columns": [],
+              "partitionSpec": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "==",
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "c"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      {
+                        "literal": {
+                          "string": "d"
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                },
+                {
+                  "unresolvedFunction": {
+                    "functionName": "==",
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "e"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 1
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ],
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    }
+  ]
+}

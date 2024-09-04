@@ -1,0 +1,2392 @@
+{
+  "tests": [
+    {
+      "input": "\nSELECT -- continued after the following block comments...\n/* Deeply nested comment.\n   This includes a single apostrophe to make sure we aren't decoding this part as a string.\nSELECT 'deep nest' AS n1;\n/* Second level of nesting...\nSELECT 'deeper nest' as n2;\n/* Third level of nesting...\nSELECT 'deepest nest' as n3;\n*/\nHoo boy. Still two deep...\n*/\nNow just one deep...\n*/\n* FROM a\n      ",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "\nSELECT TRANSFORM(a, b, c)\n  ROW FORMAT DELIMITED\n  FIELDS TERMINATED BY '\\t'\n  COLLECTION ITEMS TERMINATED BY '\u0002'\n  MAP KEYS TERMINATED BY '\u0003'\n  LINES TERMINATED BY '\\n'\n  NULL DEFINED AS 'null'\n  USING 'cat' AS (a, b, c)\n  ROW FORMAT DELIMITED\n  FIELDS TERMINATED BY '\\t'\n  COLLECTION ITEMS TERMINATED BY '\u0004'\n  MAP KEYS TERMINATED BY '\u0005'\n  LINES TERMINATED BY '\\n'\n  NULL DEFINED AS 'NULL'\nFROM testData\n      ",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: FORMAT"
+      }
+    },
+    {
+      "input": "\nSELECT TRANSFORM(a, b, c)\nUSING 'cat'\nFROM testData\n      ",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: 'cat'"
+      }
+    },
+    {
+      "input": "\nSELECT TRANSFORM(a, b, c)\nUSING 'cat' AS (a int, b string, c long)\nFROM testData\n      ",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: 'cat'"
+      }
+    },
+    {
+      "input": "\nSELECT TRANSFORM(a, b, c)\nUSING 'cat' AS (a, b, c)\nFROM testData\n      ",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: 'cat'"
+      }
+    },
+    {
+      "input": "SELECT * FROM (INSERT INTO BAR VALUES (2))",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'BAR': missing ')'.(line 1, pos 27)\n\n== SQL ==\nSELECT * FROM (INSERT INTO BAR VALUES (2))\n---------------------------^^^\n",
+      "output": {
+        "failure": "not supported: INSERT statement in set expression"
+      }
+    },
+    {
+      "input": "SELECT * FROM (SELECT a AS x, b AS y FROM t) t(col1, col2)",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expressions": [
+                        {
+                          "alias": {
+                            "expr": {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "a"
+                                ],
+                                "planId": null
+                              }
+                            },
+                            "name": [
+                              "x"
+                            ],
+                            "metadata": null
+                          }
+                        },
+                        {
+                          "alias": {
+                            "expr": {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "b"
+                                ],
+                                "planId": null
+                              }
+                            },
+                            "name": [
+                              "y"
+                            ],
+                            "metadata": null
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "name": "t",
+                  "columns": [
+                    "col1",
+                    "col2"
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT * FROM S WHERE C1 IN (INSERT INTO T VALUES (2))",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'IN'.(line 1, pos 25)\n\n== SQL ==\nSELECT * FROM S WHERE C1 IN (INSERT INTO T VALUES (2))\n-------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: INTO at Line: 1, Column: 37"
+      }
+    },
+    {
+      "input": "SELECT * FROM a",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT * FROM a LIMIT :limitA",
+      "output": {
+        "failure": "invalid argument: expression: Value(Placeholder(\":limitA\"))"
+      }
+    },
+    {
+      "input": "SELECT * FROM a LIMIT ?",
+      "output": {
+        "failure": "invalid argument: expression: Value(Placeholder(\"?\"))"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c FOR SYSTEM_TIME AS OF '2019-01-29 00:37:58'",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: SYSTEM_TIME at Line: 1, Column: 25"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c FOR SYSTEM_TIME AS OF (SELECT current_date())",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: SYSTEM_TIME at Line: 1, Column: 25"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c FOR SYSTEM_TIME AS OF current_date()",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: SYSTEM_TIME at Line: 1, Column: 25"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c FOR SYSTEM_VERSION AS OF 'Snapshot123456789'",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: SYSTEM_VERSION at Line: 1, Column: 25"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c FOR SYSTEM_VERSION AS OF 123456789",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: SYSTEM_VERSION at Line: 1, Column: 25"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c FOR TIMESTAMP AS OF '2019-01-29 00:37:58'",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: TIMESTAMP at Line: 1, Column: 25"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c FOR TIMESTAMP AS OF (SELECT current_date())",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: TIMESTAMP at Line: 1, Column: 25"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c FOR TIMESTAMP AS OF current_date()",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: TIMESTAMP at Line: 1, Column: 25"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c FOR VERSION AS OF 'Snapshot123456789'",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: VERSION at Line: 1, Column: 25"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c FOR VERSION AS OF 123456789",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: VERSION at Line: 1, Column: 25"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c SYSTEM_TIME AS OF '2019-01-29 00:37:58'",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: AS"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c SYSTEM_TIME AS OF (SELECT current_date())",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: AS"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c SYSTEM_TIME AS OF current_date()",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: AS"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c SYSTEM_VERSION AS OF 'Snapshot123456789'",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: AS"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c SYSTEM_VERSION AS OF 123456789",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: AS"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c TIMESTAMP AS OF '2019-01-29 00:37:58'",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: AS"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c TIMESTAMP AS OF (SELECT current_date())",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: AS"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c TIMESTAMP AS OF col",
+      "exception": "\nInvalid time travel spec: timestamp expression cannot refer to any columns.(line 1, pos 36)\n\n== SQL ==\nSELECT * FROM a.b.c TIMESTAMP AS OF col\n------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: AS"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c TIMESTAMP AS OF current_date()",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: AS"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c VERSION AS OF 'Snapshot123456789'",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: AS"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c VERSION AS OF 123456789",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: AS"
+      }
+    },
+    {
+      "input": "SELECT * FROM parquet_t0 TABLESAMPLE(300M) s",
+      "exception": "\nTABLESAMPLE(byteLengthLiteral) is not supported.(line 1, pos 37)\n\n== SQL ==\nSELECT * FROM parquet_t0 TABLESAMPLE(300M) s\n-------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: 300M at Line: 1, Column: 38"
+      }
+    },
+    {
+      "input": "SELECT * FROM parquet_t0 TABLESAMPLE(BUCKET 3 OUT OF 32 ON rand()) s",
+      "exception": "\nTABLESAMPLE(BUCKET x OUT OF y ON function) is not supported.(line 1, pos 37)\n\n== SQL ==\nSELECT * FROM parquet_t0 TABLESAMPLE(BUCKET 3 OUT OF 32 ON rand()) s\n-------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: 3 at Line: 1, Column: 45"
+      }
+    },
+    {
+      "input": "SELECT * FROM range(10) AS t",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "udtf": {
+                        "name": [
+                          "range"
+                        ],
+                        "arguments": [
+                          {
+                            "literal": {
+                              "integer": 10
+                            }
+                          }
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "name": "t",
+                  "columns": []
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT * FROM range(7) AS t(a)",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "udtf": {
+                        "name": [
+                          "range"
+                        ],
+                        "arguments": [
+                          {
+                            "literal": {
+                              "integer": 7
+                            }
+                          }
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "name": "t",
+                  "columns": [
+                    "a"
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT * FROM testData AS t(col1, col2)",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "testData"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "name": "t",
+                  "columns": [
+                    "col1",
+                    "col2"
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT * FROM testcat.db.tab",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "testcat",
+                      "db",
+                      "tab"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT :",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 8)\n\n== SQL ==\nSELECT :\n--------^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: placeholder, found: EOF"
+      }
+    },
+    {
+      "input": "SELECT :-",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '-'.(line 1, pos 8)\n\n== SQL ==\nSELECT :-\n--------^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: placeholder, found: - at Line: 1, Column: 9"
+      }
+    },
+    {
+      "input": "SELECT :param_1",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "placeholder": ":param_1"
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT ?",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "placeholder": "?"
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT OVERLAY('Spark SQL' PLACING 'ANSI ' FROM 7 FOR 0)",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "overlay",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "string": "Spark SQL"
+                        }
+                      },
+                      {
+                        "literal": {
+                          "string": "ANSI "
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 7
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 0
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT OVERLAY('Spark SQL' PLACING 'CORE' FROM 7)",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "overlay",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "string": "Spark SQL"
+                        }
+                      },
+                      {
+                        "literal": {
+                          "string": "CORE"
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 7
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT OVERLAY('Spark SQL' PLACING '_' FROM 6)",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "overlay",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "string": "Spark SQL"
+                        }
+                      },
+                      {
+                        "literal": {
+                          "string": "_"
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 6
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT OVERLAY('Spark SQL' PLACING 'tructured' FROM 2 FOR 4)",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "overlay",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "string": "Spark SQL"
+                        }
+                      },
+                      {
+                        "literal": {
+                          "string": "tructured"
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 2
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 4
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT TRANSFORM(a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\n  USING 'cat' AS (a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\nFROM testData",
+      "exception": "\n[UNSUPPORTED_FEATURE.TRANSFORM_NON_HIVE] The feature is not supported: TRANSFORM with SERDE is only supported in hive mode.(line 1, pos 0)\n\n== SQL ==\nSELECT TRANSFORM(a, b, c)\n^^^\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\n  USING 'cat' AS (a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\nFROM testData\n",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: FORMAT"
+      }
+    },
+    {
+      "input": "SELECT TRIM('xyz' FROM 'yxTomxx')",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "trim",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "string": "yxTomxx"
+                        }
+                      },
+                      {
+                        "literal": {
+                          "string": "xyz"
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT TRIM(BOTH '@$%&( )abc' FROM '@ $ % & ()abc ' )",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "trim",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "string": "@ $ % & ()abc "
+                        }
+                      },
+                      {
+                        "literal": {
+                          "string": "@$%&( )abc"
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT TRIM(BOTH FROM '  bunch o blanks  ')",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: '  bunch o blanks  ' at Line: 1, Column: 23"
+      }
+    },
+    {
+      "input": "SELECT TRIM(LEADING 'c []' FROM '[ ccccbcc ')",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "ltrim",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "string": "[ ccccbcc "
+                        }
+                      },
+                      {
+                        "literal": {
+                          "string": "c []"
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT TRIM(LEADING FROM '  bunch o blanks  ')",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: '  bunch o blanks  ' at Line: 1, Column: 26"
+      }
+    },
+    {
+      "input": "SELECT TRIM(TRAILING 'c&^,.' FROM 'bc...,,,&&&ccc')",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "rtrim",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "string": "bc...,,,&&&ccc"
+                        }
+                      },
+                      {
+                        "literal": {
+                          "string": "c&^,."
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT TRIM(TRAILING FROM '  bunch o blanks  ')",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: '  bunch o blanks  ' at Line: 1, Column: 27"
+      }
+    },
+    {
+      "input": "SELECT abs(:1Abc)",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: placeholder, found: 1Abc at Line: 1, Column: 13"
+      }
+    },
+    {
+      "input": "SELECT abs(?)",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "abs",
+                    "arguments": [
+                      {
+                        "placeholder": "?"
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT interval FROM VALUES ('abc') AS tbl(interval);",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: ("
+      }
+    },
+    {
+      "input": "SELECT t.col1, t.col2 FROM (SELECT a AS x, b AS y FROM t) t(col1, col2)",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expressions": [
+                        {
+                          "alias": {
+                            "expr": {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "a"
+                                ],
+                                "planId": null
+                              }
+                            },
+                            "name": [
+                              "x"
+                            ],
+                            "metadata": null
+                          }
+                        },
+                        {
+                          "alias": {
+                            "expr": {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "b"
+                                ],
+                                "planId": null
+                              }
+                            },
+                            "name": [
+                              "y"
+                            ],
+                            "metadata": null
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "name": "t",
+                  "columns": [
+                    "col1",
+                    "col2"
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "t",
+                      "col1"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "t",
+                      "col2"
+                    ],
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "sELEct * FroM a",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select (select max(b) from s) ss from t",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "alias": {
+                    "expr": {
+                      "scalarSubquery": {
+                        "subquery": {
+                          "project": {
+                            "input": {
+                              "read": {
+                                "namedTable": {
+                                  "name": [
+                                    "s"
+                                  ],
+                                  "options": []
+                                },
+                                "isStreaming": false
+                              },
+                              "planId": null,
+                              "sourceInfo": null
+                            },
+                            "expressions": [
+                              {
+                                "unresolvedFunction": {
+                                  "functionName": "max",
+                                  "arguments": [
+                                    {
+                                      "unresolvedAttribute": {
+                                        "name": [
+                                          "b"
+                                        ],
+                                        "planId": null
+                                      }
+                                    }
+                                  ],
+                                  "isDistinct": false,
+                                  "isUserDefinedFunction": false
+                                }
+                              }
+                            ]
+                          },
+                          "planId": null,
+                          "sourceInfo": null
+                        }
+                      }
+                    },
+                    "name": [
+                      "ss"
+                    ],
+                    "metadata": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select *\nfrom t\nlateral view explode(x) expl\nlateral view outer json_tuple(x, y) jtup q, z",
+      "output": {
+        "failure": "not implemented: LATERAL VIEW clause in SELECT"
+      }
+    },
+    {
+      "input": "select *\nfrom t\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)",
+      "exception": "\n[NOT_ALLOWED_IN_FROM.LATERAL_WITH_PIVOT] Not allowed in the FROM clause: LATERAL together with PIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\n",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: ("
+      }
+    },
+    {
+      "input": "select *\nfrom t\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\nunpivot (\n  val FOR y IN (x)\n)",
+      "exception": "\n[NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT] Not allowed in the FROM clause: UNPIVOT together with PIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\nunpivot (\n  val FOR y IN (x)\n)\n",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: ("
+      }
+    },
+    {
+      "input": "select *\nfrom t\nlateral view explode(x) expl\nunpivot (\n  val FOR y IN (x)\n)",
+      "exception": "\n[NOT_ALLOWED_IN_FROM.LATERAL_WITH_UNPIVOT] Not allowed in the FROM clause: LATERAL together with UNPIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\nunpivot (\n  val FOR y IN (x)\n)\n",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: ("
+      }
+    },
+    {
+      "input": "select * fRoM a",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from (from a select * select *)",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: select at Line: 1, Column: 23"
+      }
+    },
+    {
+      "input": "select * from a, lateral (select * from b) bb, lateral (select * from c) cc",
+      "output": {
+        "failure": "not supported: LATERAL in derived table factor"
+      }
+    },
+    {
+      "input": "select * from default.range(2)",
+      "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_VALUED_FUNC_NAME] Invalid SQL syntax: Table valued function cannot specify database name: `default`.`range`.(line 1, pos 14)\n\n== SQL ==\nselect * from default.range(2)\n--------------^^^\n",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "udtf": {
+                    "name": [
+                      "default",
+                      "range"
+                    ],
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 2
+                        }
+                      }
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from my_tvf(2, arg1 => 'value1', arg2 => true)",
+      "output": {
+        "failure": "invalid argument: unsupported function argument type"
+      }
+    },
+    {
+      "input": "select * from my_tvf(2, table (v1), arg1 => table (select 1))",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: 1 at Line: 1, Column: 59"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => 'value1', 2, arg2 => true)",
+      "output": {
+        "failure": "invalid argument: unsupported function argument type"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => 'value1', arg2 => true)",
+      "output": {
+        "failure": "invalid argument: unsupported function argument type"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table (v1), 2, arg2 => true)",
+      "output": {
+        "failure": "invalid argument: unsupported function argument type"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table (v1), arg2 => table (select 1))",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: 1 at Line: 1, Column: 64"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table v1)",
+      "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_FUNCTION_IDENTIFIER_ARGUMENT_MISSING_PARENTHESES] Invalid SQL syntax: Syntax error: call to table-valued function is invalid because parentheses are missing around the provided TABLE argument `v1`; please surround this with parentheses and try again.(line 1, pos 29)\n\n== SQL ==\nselect * from my_tvf(arg1 => table v1)\n-----------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: v1 at Line: 1, Column: 36"
+      }
+    },
+    {
+      "input": "select * from my_tvf(group => 'abc')",
+      "output": {
+        "failure": "invalid argument: unsupported function argument type"
+      }
+    },
+    {
+      "input": "select * from my_tvf(table (v1), table (select 1))",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: 1 at Line: 1, Column: 48"
+      }
+    },
+    {
+      "input": "select * from range(2)",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "udtf": {
+                    "name": [
+                      "range"
+                    ],
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 2
+                        }
+                      }
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from spark_catalog.default.range(2)",
+      "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_VALUED_FUNC_NAME] Invalid SQL syntax: Table valued function cannot specify database name: `spark_catalog`.`default`.`range`.(line 1, pos 14)\n\n== SQL ==\nselect * from spark_catalog.default.range(2)\n--------------^^^\n",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "udtf": {
+                    "name": [
+                      "spark_catalog",
+                      "default",
+                      "range"
+                    ],
+                    "arguments": [
+                      {
+                        "literal": {
+                          "integer": 2
+                        }
+                      }
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from t",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from t , lateral (select * from u) uu",
+      "output": {
+        "failure": "not supported: LATERAL in derived table factor"
+      }
+    },
+    {
+      "input": "select * from t as tt , u",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "u"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "cross",
+                  "usingColumns": [],
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from t cluster by a distribute by a",
+      "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 1, pos 16)\n\n== SQL ==\nselect * from t cluster by a distribute by a\n----------------^^^\n",
+      "output": {
+        "failure": "not supported: CLUSTER BY clause in SELECT"
+      }
+    },
+    {
+      "input": "select * from t lateral view explode(x) expl as x",
+      "output": {
+        "failure": "not implemented: LATERAL VIEW clause in SELECT"
+      }
+    },
+    {
+      "input": "select * from t lateral view posexplode(x) posexpl as x, y",
+      "output": {
+        "failure": "not implemented: LATERAL VIEW clause in SELECT"
+      }
+    },
+    {
+      "input": "select * from t limit 10",
+      "output": {
+        "success": {
+          "query": {
+            "limit": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "skip": 0,
+              "limit": 10
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from t limit cast(9 / 4 as int)",
+      "output": {
+        "failure": "invalid argument: expression: Cast { kind: Cast, expr: BinaryOp { left: Value(Number(\"9\", None)), op: Divide, right: Value(Number(\"4\", None)) }, data_type: Int(None), format: None }"
+      }
+    },
+    {
+      "input": "select * from t tablesample(100 rows)",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: 100 at Line: 1, Column: 29"
+      }
+    },
+    {
+      "input": "select * from t tablesample(43 percent) as x",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: 43 at Line: 1, Column: 29"
+      }
+    },
+    {
+      "input": "select * from t tablesample(bucket 11 out of 10) as x",
+      "exception": "\nSampling fraction (1.1) must be on interval [0, 1].(line 1, pos 16)\n\n== SQL ==\nselect * from t tablesample(bucket 11 out of 10) as x\n----------------^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: 11 at Line: 1, Column: 36"
+      }
+    },
+    {
+      "input": "select * from t tablesample(bucket 4 out of 10 on x) as x",
+      "exception": "\nTABLESAMPLE(BUCKET x OUT OF y ON colname) is not supported.(line 1, pos 28)\n\n== SQL ==\nselect * from t tablesample(bucket 4 out of 10 on x) as x\n----------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: 4 at Line: 1, Column: 36"
+      }
+    },
+    {
+      "input": "select * from t tablesample(bucket 4 out of 10) as x",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: 4 at Line: 1, Column: 36"
+      }
+    },
+    {
+      "input": "select * from t where a = (select b from s)",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "filter": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "condition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "a"
+                            ],
+                            "planId": null
+                          }
+                        },
+                        {
+                          "scalarSubquery": {
+                            "subquery": {
+                              "project": {
+                                "input": {
+                                  "read": {
+                                    "namedTable": {
+                                      "name": [
+                                        "s"
+                                      ],
+                                      "options": []
+                                    },
+                                    "isStreaming": false
+                                  },
+                                  "planId": null,
+                                  "sourceInfo": null
+                                },
+                                "expressions": [
+                                  {
+                                    "unresolvedAttribute": {
+                                      "name": [
+                                        "b"
+                                      ],
+                                      "planId": null
+                                    }
+                                  }
+                                ]
+                              },
+                              "planId": null,
+                              "sourceInfo": null
+                            }
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from t window w1 as ()",
+      "output": {
+        "failure": "not implemented: named window in SELECT"
+      }
+    },
+    {
+      "input": "select * from t window w1 as () limit 10",
+      "output": {
+        "failure": "not implemented: named window in SELECT"
+      }
+    },
+    {
+      "input": "select 1",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "literal": {
+                    "integer": 1
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select 1;",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "literal": {
+                    "integer": 1
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select a from 1k.2m",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: 1k at Line: 1, Column: 15"
+      }
+    },
+    {
+      "input": "select a, b",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select a, b from db.c",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "db",
+                      "c"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select a, b from db.c having x < 1",
+      "output": {
+        "success": {
+          "query": {
+            "aggregate": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "db",
+                      "c"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "grouping": [],
+              "aggregate": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                }
+              ],
+              "having": {
+                "unresolvedFunction": {
+                  "functionName": "<",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "x"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "literal": {
+                        "integer": 1
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select a, b from db.c where x !< 1",
+      "output": {
+        "failure": "not supported: unary operator: PGPostfixFactorial"
+      }
+    },
+    {
+      "input": "select a, b from db.c where x !> 1",
+      "output": {
+        "failure": "not supported: unary operator: PGPostfixFactorial"
+      }
+    },
+    {
+      "input": "select a, b from db.c where x < 1",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "filter": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "db",
+                          "c"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "condition": {
+                    "unresolvedFunction": {
+                      "functionName": "<",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "x"
+                            ],
+                            "planId": null
+                          }
+                        },
+                        {
+                          "literal": {
+                            "integer": 1
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select a, b from db.c; ;;  ;",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "db",
+                      "c"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select a, b from db.c;;;",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "db",
+                      "c"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select a, b;",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select all a, b from db.c",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "db",
+                      "c"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select distinct a, b from db.c",
+      "output": {
+        "success": {
+          "query": {
+            "deduplicate": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "db",
+                          "c"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "b"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "columnNames": [],
+              "allColumnsAsKeys": true,
+              "withinWatermark": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select from tbl",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected an expression, found: from at Line: 1, Column: 13"
+      }
+    },
+    {
+      "input": "select id from ((((((t0))))))",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t0"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "id"
+                    ],
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select id from (t0)",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t0"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "id"
+                    ],
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select ltrim(both 'S' from 'SS abc S'",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'.(line 1, pos 22)\n\n== SQL ==\nselect ltrim(both 'S' from 'SS abc S'\n----------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: 'S' at Line: 1, Column: 19"
+      }
+    },
+    {
+      "input": "select rtrim(trailing 'S' from 'SS abc S'",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'.(line 1, pos 26)\n\n== SQL ==\nselect rtrim(trailing 'S' from 'SS abc S'\n--------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: 'S' at Line: 1, Column: 23"
+      }
+    }
+  ]
+}

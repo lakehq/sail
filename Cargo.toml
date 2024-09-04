@@ -4,6 +4,10 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+version = "0.1.1"
+edition = "2021"
+
 [workspace.dependencies]
 tracing = { version = "0.1.40", features = ["attributes", "std", "log"] }
 tracing-opentelemetry = { version = "0.24.0" }
@@ -15,14 +19,15 @@ opentelemetry-otlp = { version = "0.16.0", features = ["trace", "metrics", "grpc
 opentelemetry-proto = { version = "0.6.0" }
 opentelemetry-stdout = { version = "0.4.0", features = ["trace"] }
 opentelemetry-resource-detectors = "0.2.0"
-thiserror = { version = "1.0.62" }
-tokio = { version = "1.38.0", features = ["full"] }
+thiserror = { version = "1.0.63" }
+tokio = { version = "1.40.0", features = ["full"] }
 tokio-stream = "0.1.15"
 tonic = { version = "0.11", features = ["tls", "tls-roots"] }
 tonic-build = "0.11"
 tonic-reflection = "0.11"
 tonic-health = "0.11"
 tonic-types = "0.11"
+prost-build = "0.12"
 prost = "0.12"
 prost-types = "0.12"
 pbjson = "0.6"
@@ -31,7 +36,7 @@ pbjson-build = "0.6"
 tower = { version = "0.4", features = ["full"] }
 tower-http = { version = "0.4", features = ["full"] }
 uuid = { version = "1.10.0", features = ["v4"] }
-async-trait = "0.1.81"
+async-trait = "0.1.82"
 async-recursion = "1.1.0"
 async-stream = "0.3"
 lazy_static = "1.5.0"
@@ -46,29 +51,58 @@ chrono-tz = "0.9"
 futures = "0.3"
 comfy-table = "7.1"
 html-escape = "0.2"
-syn = "2.0.71"
-quote = "1.0.36"
-prettyplease = "0.2.20"
+syn = "2.0.77"
+quote = "1.0.37"
+prettyplease = "0.2.22"
 phf = { version = "0.11.2", features = ["macros"] }
 ryu = "1.0.18"
 either = "1.12.0"
-#
+num-traits = "0.2.19"
+serde_arrow = { version = "0.11.7", features = ["arrow-52"] }
+mimalloc = { version = "0.1.43", features = ["local_dynamic_tls"] }
+rand = "0.8.5"
+rand_chacha = "0.3.1"
+rand_distr = "0.4.3"
+url = "2.5.2"
+lexical-core = { version = "0.8.5", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
+aws-config = "1.5.5"
+aws-credential-types = "1.2.1"
+clap = { version = "4.5.16", features = ["derive"] }
+
+######
 # The versions of the following dependencies are managed manually.
-#
-datafusion = { version = "40.0.0", features = ["serde", "pyarrow"] }
-datafusion-common = { version = "40.0.0", features = ["object_store", "pyarrow"] }
-datafusion-expr = "40.0.0"
-datafusion-functions-array = "40.0.0"
+######
+datafusion = { version = "41.0.0", features = ["serde", "pyarrow"] }
+datafusion-common = { version = "41.0.0", features = ["object_store", "pyarrow"] }
+datafusion-expr = "41.0.0"
+datafusion-functions-nested = "41.0.0"
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 # 0.21 breaks when datafusion has pyarrow enabled
 pyo3 = { version = "0.21.2", features = ["auto-initialize", "serde"] }
 # Should be the equivalent of enabling the pyarrow feature in datafusion since we already have pyo3 in the workspace
-arrow = { version = "52.1.0", features = ["ffi", "pyarrow"] }
-arrow-cast = { version = "52.1.0" }
+arrow = { version = "52.2.0", features = ["ffi", "pyarrow"] }
+arrow-cast = { version = "52.2.0" }
+arrow-schema = { version = "52.2.0" }
+# The `object_store` version must match the one used in DataFusion.
+object_store = { version = "0.10.2", features = ["aws", "gcp", "http"] }
 # We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.
 sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "f631629", features = ["serde", "visitor"] }
-serde_arrow = { version = "0.11.6", features = ["arrow-52"] }
+######
+# This is the end of the manually managed dependencies.
+# Do not add more dependencies below.
+######
 
 [patch.crates-io]
 # Override dependencies to use our forked versions.
 # You can use `path = "..."` to temporarily point to your local copy of the crates to speed up local development.
+
+[profile.release]
+# https://doc.rust-lang.org/cargo/reference/profiles.html#release
+opt-level = 3
+debug = false
+debug-assertions = false
+overflow-checks = false
+lto = true
+panic = 'unwind'
+incremental = false
+codegen-units = 1

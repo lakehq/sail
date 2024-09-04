@@ -1,0 +1,2865 @@
+{
+  "tests": [
+    {
+      "input": "!a",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "(a + b).b",
+      "output": {
+        "success": {
+          "unresolvedExtractValue": {
+            "child": {
+              "unresolvedFunction": {
+                "functionName": "+",
+                "arguments": [
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "a"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "b"
+                      ],
+                      "planId": null
+                    }
+                  }
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
+              }
+            },
+            "extraction": {
+              "unresolvedAttribute": {
+                "name": [
+                  "b"
+                ],
+                "planId": null
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "input": "(a as b, b as c)",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: as at Line: 1, Column: 4"
+      }
+    },
+    {
+      "input": "(a)",
+      "output": {
+        "success": {
+          "unresolvedAttribute": {
+            "name": [
+              "a"
+            ],
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "(a) in (select b from c)",
+      "output": {
+        "success": {
+          "inSubquery": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "subquery": {
+              "project": {
+                "input": {
+                  "read": {
+                    "namedTable": {
+                      "name": [
+                        "c"
+                      ],
+                      "options": []
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "b"
+                      ],
+                      "planId": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "negated": false
+          }
+        }
+      }
+    },
+    {
+      "input": "(a, b)",
+      "output": {
+        "failure": "not supported: expression: Tuple([Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None })])"
+      }
+    },
+    {
+      "input": "(a, b) in (select c from d)",
+      "output": {
+        "failure": "not supported: expression: Tuple([Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None })])"
+      }
+    },
+    {
+      "input": "(a, b, c)",
+      "output": {
+        "failure": "not supported: expression: Tuple([Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None }), Identifier(Ident { value: \"c\", quote_style: None })])"
+      }
+    },
+    {
+      "input": "(a, b, c) in (select d, e, f from g)",
+      "output": {
+        "failure": "not supported: expression: Tuple([Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None }), Identifier(Ident { value: \"c\", quote_style: None })])"
+      }
+    },
+    {
+      "input": "(select max(val) from tbl) > current",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": ">",
+            "arguments": [
+              {
+                "scalarSubquery": {
+                  "subquery": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "tbl"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedFunction": {
+                            "functionName": "max",
+                            "arguments": [
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "val"
+                                  ],
+                                  "planId": null
+                                }
+                              }
+                            ],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  }
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "current"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "(x, y) -> x + y",
+      "output": {
+        "success": {
+          "lambdaFunction": {
+            "function": {
+              "unresolvedFunction": {
+                "functionName": "+",
+                "arguments": [
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "x"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "y"
+                      ],
+                      "planId": null
+                    }
+                  }
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
+              }
+            },
+            "arguments": [
+              {
+                "name": [
+                  "x"
+                ]
+              },
+              {
+                "name": [
+                  "y"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "-+~~a",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: an expression:, found: ~~ at Line: 1, Column: 3"
+      }
+    },
+    {
+      "input": "1 + r.r As q",
+      "output": {
+        "success": {
+          "alias": {
+            "expr": {
+              "unresolvedFunction": {
+                "functionName": "+",
+                "arguments": [
+                  {
+                    "literal": {
+                      "integer": 1
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "r",
+                        "r"
+                      ],
+                      "planId": null
+                    }
+                  }
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
+              }
+            },
+            "name": [
+              "q"
+            ],
+            "metadata": null
+          }
+        }
+      }
+    },
+    {
+      "input": "1 - f('o', o(bar))",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "integer": 1
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "f",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "o"
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "o",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "bar"
+                              ],
+                              "planId": null
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "1 - f('o', o(bar)) hello * world",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '*'.(line 1, pos 25)\n\n== SQL ==\n1 - f('o', o(bar)) hello * world\n-------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: extra tokens after wildcard expression: *"
+      }
+    },
+    {
+      "input": "123_",
+      "output": {
+        "success": {
+          "alias": {
+            "expr": {
+              "literal": {
+                "integer": 123
+              }
+            },
+            "name": [
+              "_"
+            ],
+            "metadata": null
+          }
+        }
+      }
+    },
+    {
+      "input": "1a.123_",
+      "output": {
+        "failure": "invalid argument: number postfix: \"1\"Some(\"a\")"
+      }
+    },
+    {
+      "input": "False",
+      "output": {
+        "success": {
+          "literal": {
+            "boolean": false
+          }
+        }
+      }
+    },
+    {
+      "input": "GEO '(10,-6)'",
+      "exception": "\n[UNSUPPORTED_TYPED_LITERAL] Literals of the type \"GEO\" are not supported. Supported types are \"DATE\", \"TIMESTAMP_NTZ\", \"TIMESTAMP_LTZ\", \"TIMESTAMP\", \"INTERVAL\", \"X\".(line 1, pos 0)\n\n== SQL ==\nGEO '(10,-6)'\n^^^\n",
+      "output": {
+        "success": {
+          "alias": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "GEO"
+                ],
+                "planId": null
+              }
+            },
+            "name": [
+              "(10,-6)"
+            ],
+            "metadata": null
+          }
+        }
+      }
+    },
+    {
+      "input": "X'A'",
+      "output": {
+        "failure": "invalid argument: hex string: \"A\""
+      }
+    },
+    {
+      "input": "```fo``o`.```ba``r`",
+      "output": {
+        "success": {
+          "unresolvedAttribute": {
+            "name": [
+              "`fo`o",
+              "`ba`r"
+            ],
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "`c`.a[b]",
+      "output": {
+        "success": {
+          "unresolvedExtractValue": {
+            "child": {
+              "unresolvedAttribute": {
+                "name": [
+                  "c",
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "extraction": {
+              "unresolvedAttribute": {
+                "name": [
+                  "b"
+                ],
+                "planId": null
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "input": "`fo````o`.`ba````r`",
+      "output": {
+        "success": {
+          "unresolvedAttribute": {
+            "name": [
+              "fo``o",
+              "ba``r"
+            ],
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "`fo`o.`ba`r",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '.'.(line 1, pos 5)\n\n== SQL ==\n`fo`o.`ba`r\n-----^^^\n",
+      "output": {
+        "failure": "invalid argument: extra tokens after wildcard expression: ."
+      }
+    },
+    {
+      "input": "`select`",
+      "output": {
+        "success": {
+          "unresolvedAttribute": {
+            "name": [
+              "select"
+            ],
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "`select`(all a, b)",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "`select`",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "`select`.b",
+      "output": {
+        "success": {
+          "unresolvedAttribute": {
+            "name": [
+              "select",
+              "b"
+            ],
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "a",
+      "output": {
+        "success": {
+          "unresolvedAttribute": {
+            "name": [
+              "a"
+            ],
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "a !< b",
+      "output": {
+        "failure": "not supported: unary operator: PGPostfixFactorial"
+      }
+    },
+    {
+      "input": "a != b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "!=",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a !> b",
+      "output": {
+        "failure": "not supported: unary operator: PGPostfixFactorial"
+      }
+    },
+    {
+      "input": "a % b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "%",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a & b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "&",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a * b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "*",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a * t | b ^ c & d - e + f % g DIV h / i * k",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "|",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "*",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "t"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "^",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "b"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "&",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "c"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedFunction": {
+                              "functionName": "+",
+                              "arguments": [
+                                {
+                                  "unresolvedFunction": {
+                                    "functionName": "-",
+                                    "arguments": [
+                                      {
+                                        "unresolvedAttribute": {
+                                          "name": [
+                                            "d"
+                                          ],
+                                          "planId": null
+                                        }
+                                      },
+                                      {
+                                        "unresolvedAttribute": {
+                                          "name": [
+                                            "e"
+                                          ],
+                                          "planId": null
+                                        }
+                                      }
+                                    ],
+                                    "isDistinct": false,
+                                    "isUserDefinedFunction": false
+                                  }
+                                },
+                                {
+                                  "unresolvedFunction": {
+                                    "functionName": "div",
+                                    "arguments": [
+                                      {
+                                        "unresolvedFunction": {
+                                          "functionName": "%",
+                                          "arguments": [
+                                            {
+                                              "unresolvedAttribute": {
+                                                "name": [
+                                                  "f"
+                                                ],
+                                                "planId": null
+                                              }
+                                            },
+                                            {
+                                              "unresolvedAttribute": {
+                                                "name": [
+                                                  "g"
+                                                ],
+                                                "planId": null
+                                              }
+                                            }
+                                          ],
+                                          "isDistinct": false,
+                                          "isUserDefinedFunction": false
+                                        }
+                                      },
+                                      {
+                                        "unresolvedFunction": {
+                                          "functionName": "*",
+                                          "arguments": [
+                                            {
+                                              "unresolvedFunction": {
+                                                "functionName": "/",
+                                                "arguments": [
+                                                  {
+                                                    "unresolvedAttribute": {
+                                                      "name": [
+                                                        "h"
+                                                      ],
+                                                      "planId": null
+                                                    }
+                                                  },
+                                                  {
+                                                    "unresolvedAttribute": {
+                                                      "name": [
+                                                        "i"
+                                                      ],
+                                                      "planId": null
+                                                    }
+                                                  }
+                                                ],
+                                                "isDistinct": false,
+                                                "isUserDefinedFunction": false
+                                              }
+                                            },
+                                            {
+                                              "unresolvedAttribute": {
+                                                "name": [
+                                                  "k"
+                                                ],
+                                                "planId": null
+                                              }
+                                            }
+                                          ],
+                                          "isDistinct": false,
+                                          "isUserDefinedFunction": false
+                                        }
+                                      }
+                                    ],
+                                    "isDistinct": false,
+                                    "isUserDefinedFunction": false
+                                  }
+                                }
+                              ],
+                              "isDistinct": false,
+                              "isUserDefinedFunction": false
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a + b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "+",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a - b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a / b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "/",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a < b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "<",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a <= b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "<=",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a <=> b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "<=>",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a <> b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "!=",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a = (select b from s)",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "==",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "scalarSubquery": {
+                  "subquery": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "s"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "b"
+                            ],
+                            "planId": null
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  }
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a = b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "==",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a = b is not null",
+      "output": {
+        "success": {
+          "isNotNull": {
+            "unresolvedFunction": {
+              "functionName": "==",
+              "arguments": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                }
+              ],
+              "isDistinct": false,
+              "isUserDefinedFunction": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "input": "a = b is null",
+      "output": {
+        "success": {
+          "isNull": {
+            "unresolvedFunction": {
+              "functionName": "==",
+              "arguments": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                }
+              ],
+              "isDistinct": false,
+              "isUserDefinedFunction": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "input": "a == b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "==",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a > b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": ">",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a >= b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": ">=",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a DIV b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "div",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a ^ b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "^",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a and b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "and",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a and b and c and d and e and f",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "and",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "and",
+                  "arguments": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "and",
+                        "arguments": [
+                          {
+                            "unresolvedFunction": {
+                              "functionName": "and",
+                              "arguments": [
+                                {
+                                  "unresolvedFunction": {
+                                    "functionName": "and",
+                                    "arguments": [
+                                      {
+                                        "unresolvedAttribute": {
+                                          "name": [
+                                            "a"
+                                          ],
+                                          "planId": null
+                                        }
+                                      },
+                                      {
+                                        "unresolvedAttribute": {
+                                          "name": [
+                                            "b"
+                                          ],
+                                          "planId": null
+                                        }
+                                      }
+                                    ],
+                                    "isDistinct": false,
+                                    "isUserDefinedFunction": false
+                                  }
+                                },
+                                {
+                                  "unresolvedAttribute": {
+                                    "name": [
+                                      "c"
+                                    ],
+                                    "planId": null
+                                  }
+                                }
+                              ],
+                              "isDistinct": false,
+                              "isUserDefinedFunction": false
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "d"
+                              ],
+                              "planId": null
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "e"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "f"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a and b or c and d",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "or",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "and",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "b"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "and",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "c"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "d"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a as (b, c)",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: an identifier after AS, found: ( at Line: 1, Column: 6"
+      }
+    },
+    {
+      "input": "a as b",
+      "output": {
+        "success": {
+          "alias": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "name": [
+              "b"
+            ],
+            "metadata": null
+          }
+        }
+      }
+    },
+    {
+      "input": "a b",
+      "output": {
+        "success": {
+          "alias": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "name": [
+              "b"
+            ],
+            "metadata": null
+          }
+        }
+      }
+    },
+    {
+      "input": "a between b and c",
+      "output": {
+        "success": {
+          "between": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "negated": false,
+            "low": {
+              "unresolvedAttribute": {
+                "name": [
+                  "b"
+                ],
+                "planId": null
+              }
+            },
+            "high": {
+              "unresolvedAttribute": {
+                "name": [
+                  "c"
+                ],
+                "planId": null
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "input": "a in (b, c, d)",
+      "output": {
+        "success": {
+          "inList": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "list": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "c"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "d"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "negated": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a in (select b from c)",
+      "output": {
+        "success": {
+          "inSubquery": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "subquery": {
+              "project": {
+                "input": {
+                  "read": {
+                    "namedTable": {
+                      "name": [
+                        "c"
+                      ],
+                      "options": []
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "b"
+                      ],
+                      "planId": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "negated": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a is distinct from b",
+      "output": {
+        "success": {
+          "isDistinctFrom": {
+            "left": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "right": {
+              "unresolvedAttribute": {
+                "name": [
+                  "b"
+                ],
+                "planId": null
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "input": "a is not distinct from b",
+      "output": {
+        "success": {
+          "isNotDistinctFrom": {
+            "left": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "right": {
+              "unresolvedAttribute": {
+                "name": [
+                  "b"
+                ],
+                "planId": null
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "input": "a is not null",
+      "output": {
+        "success": {
+          "isNotNull": {
+            "unresolvedAttribute": {
+              "name": [
+                "a"
+              ],
+              "planId": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "input": "a is null",
+      "output": {
+        "success": {
+          "isNull": {
+            "unresolvedAttribute": {
+              "name": [
+                "a"
+              ],
+              "planId": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "input": "a not between b and c",
+      "output": {
+        "success": {
+          "between": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "negated": true,
+            "low": {
+              "unresolvedAttribute": {
+                "name": [
+                  "b"
+                ],
+                "planId": null
+              }
+            },
+            "high": {
+              "unresolvedAttribute": {
+                "name": [
+                  "c"
+                ],
+                "planId": null
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "input": "a not in (b, c, d)",
+      "output": {
+        "success": {
+          "inList": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "list": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "c"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "d"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "negated": true
+          }
+        }
+      }
+    },
+    {
+      "input": "a not regexp 'pattern%'",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "rlike",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "pattern%"
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a or b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "or",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a or b or c and d",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "or",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "or",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "b"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "and",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "c"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "d"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a or b or c or d or e or f",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "or",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "or",
+                  "arguments": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "or",
+                        "arguments": [
+                          {
+                            "unresolvedFunction": {
+                              "functionName": "or",
+                              "arguments": [
+                                {
+                                  "unresolvedFunction": {
+                                    "functionName": "or",
+                                    "arguments": [
+                                      {
+                                        "unresolvedAttribute": {
+                                          "name": [
+                                            "a"
+                                          ],
+                                          "planId": null
+                                        }
+                                      },
+                                      {
+                                        "unresolvedAttribute": {
+                                          "name": [
+                                            "b"
+                                          ],
+                                          "planId": null
+                                        }
+                                      }
+                                    ],
+                                    "isDistinct": false,
+                                    "isUserDefinedFunction": false
+                                  }
+                                },
+                                {
+                                  "unresolvedAttribute": {
+                                    "name": [
+                                      "c"
+                                    ],
+                                    "planId": null
+                                  }
+                                }
+                              ],
+                              "isDistinct": false,
+                              "isUserDefinedFunction": false
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "d"
+                              ],
+                              "planId": null
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "e"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "f"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a regexp 'pattern%'",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "rlike",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "literal": {
+                  "string": "pattern%"
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a | b",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "|",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "a() (b, c)",
+      "output": {
+        "failure": "not supported: function parameters"
+      }
+    },
+    {
+      "input": "a.* b",
+      "output": {
+        "failure": "invalid argument: extra tokens after wildcard expression: b"
+      }
+    },
+    {
+      "input": "a.123A",
+      "output": {
+        "failure": "invalid argument: extra tokens after wildcard expression: .123A"
+      }
+    },
+    {
+      "input": "a.123BD_column",
+      "output": {
+        "failure": "invalid argument: extra tokens after wildcard expression: .123BD"
+      }
+    },
+    {
+      "input": "a.123D_column",
+      "output": {
+        "failure": "invalid argument: extra tokens after wildcard expression: .123D"
+      }
+    },
+    {
+      "input": "a.123E3_column",
+      "output": {
+        "failure": "invalid argument: extra tokens after wildcard expression: .123E3"
+      }
+    },
+    {
+      "input": "a.b",
+      "output": {
+        "success": {
+          "unresolvedAttribute": {
+            "name": [
+              "a",
+              "b"
+            ],
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "a.b.*",
+      "output": {
+        "success": {
+          "unresolvedStar": {
+            "target": [
+              "a",
+              "b"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "a[1 + 1]",
+      "output": {
+        "success": {
+          "unresolvedExtractValue": {
+            "child": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "extraction": {
+              "unresolvedFunction": {
+                "functionName": "+",
+                "arguments": [
+                  {
+                    "literal": {
+                      "integer": 1
+                    }
+                  },
+                  {
+                    "literal": {
+                      "integer": 1
+                    }
+                  }
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "input": "a[b]",
+      "output": {
+        "success": {
+          "unresolvedExtractValue": {
+            "child": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "extraction": {
+              "unresolvedAttribute": {
+                "name": [
+                  "b"
+                ],
+                "planId": null
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "input": "columns",
+      "output": {
+        "success": {
+          "unresolvedAttribute": {
+            "name": [
+              "columns"
+            ],
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "count(*)",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "count",
+            "arguments": [
+              {
+                "unresolvedStar": {
+                  "target": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "encode('abc', charset => 'utf' || '-8')",
+      "output": {
+        "failure": "not supported: named function argument"
+      }
+    },
+    {
+      "input": "encode('abc', charset => 'utf-8')",
+      "output": {
+        "failure": "not supported: named function argument"
+      }
+    },
+    {
+      "input": "encode(charset => 'utf-8', 'abc')",
+      "output": {
+        "failure": "not supported: named function argument"
+      }
+    },
+    {
+      "input": "encode(value => 'abc', charset => 'utf-8')",
+      "output": {
+        "failure": "not supported: named function argument"
+      }
+    },
+    {
+      "input": "encode(value => ((select '1')), charset => 'utf-8')",
+      "output": {
+        "failure": "not supported: named function argument"
+      }
+    },
+    {
+      "input": "exists (select 1 from b where b.x = a.x)",
+      "output": {
+        "success": {
+          "exists": {
+            "subquery": {
+              "project": {
+                "input": {
+                  "filter": {
+                    "input": {
+                      "read": {
+                        "namedTable": {
+                          "name": [
+                            "b"
+                          ],
+                          "options": []
+                        },
+                        "isStreaming": false
+                      },
+                      "planId": null,
+                      "sourceInfo": null
+                    },
+                    "condition": {
+                      "unresolvedFunction": {
+                        "functionName": "==",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "b",
+                                "x"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a",
+                                "x"
+                              ],
+                              "planId": null
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    }
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "literal": {
+                      "integer": 1
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "negated": false
+          }
+        }
+      }
+    },
+    {
+      "input": "first(a ignore nulls)",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: ignore at Line: 1, Column: 9"
+      }
+    },
+    {
+      "input": "first(a)",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "first",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "foo()",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "foo",
+            "arguments": [],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "foo(*)",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "foo",
+            "arguments": [
+              {
+                "unresolvedStar": {
+                  "target": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "foo(a x)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'x': extra input 'x'.(line 1, pos 6)\n\n== SQL ==\nfoo(a x)\n------^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: x at Line: 1, Column: 7"
+      }
+    },
+    {
+      "input": "foo(a, b)",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "foo",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "foo(all a, b)",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "foo",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "foo(distinct a, b)",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "foo",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": true,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "foo.bar()",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "foo.bar",
+            "arguments": [],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "grouping(distinct a, b)",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "grouping",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": true,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "last(a ignore nulls)",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: ignore at Line: 1, Column: 8"
+      }
+    },
+    {
+      "input": "last(a)",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "last",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "not a",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "not true > true",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": ">",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "boolean": true
+                      }
+                    },
+                    {
+                      "literal": {
+                        "boolean": true
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "null",
+      "output": {
+        "success": {
+          "literal": "null"
+        }
+      }
+    },
+    {
+      "input": "r * (a + b)",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "*",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "r"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "+",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "b"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
+      }
+    },
+    {
+      "input": "struct(a, b).b",
+      "output": {
+        "failure": "invalid argument: extra tokens after wildcard expression: ."
+      }
+    },
+    {
+      "input": "trUe",
+      "output": {
+        "success": {
+          "literal": {
+            "boolean": true
+          }
+        }
+      }
+    },
+    {
+      "input": "x -> x + 1",
+      "output": {
+        "success": {
+          "lambdaFunction": {
+            "function": {
+              "unresolvedFunction": {
+                "functionName": "+",
+                "arguments": [
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "x"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  {
+                    "literal": {
+                      "integer": 1
+                    }
+                  }
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
+              }
+            },
+            "arguments": [
+              {
+                "name": [
+                  "x"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "x'A10C'",
+      "output": {
+        "success": {
+          "literal": {
+            "binary": [
+              161,
+              12
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "x'A1OC'",
+      "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"X\" is invalid: 'A1OC'.(line 1, pos 0)\n\n== SQL ==\nx'A1OC'\n^^^\n",
+      "output": {
+        "failure": "invalid argument: hex string: \"A1OC\""
+      }
+    },
+    {
+      "input": "~a",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: an expression:, found: ~ at Line: 1, Column: 1"
+      }
+    }
+  ]
+}

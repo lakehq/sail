@@ -1,0 +1,56 @@
+name: Docs deploy
+
+# This workflow uses the following variable(s) from the environment:
+# - AWS_REGION
+# - AWS_ROLE_ARN
+# - AWS_S3_BUCKET
+# - AWS_CLOUDFRONT_DISTRIBUTION_ID
+
+on:
+  workflow_call:
+    inputs:
+      stage:
+        description: The stage ("dev" or "prod") for documentation deployment
+        type: string
+        required: true
+      version:
+        description: The documentation version ("main", "latest", or a version number)
+        type: string
+        required: true
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    environment: docs/${{ inputs.stage }}
+    permissions:
+      id-token: write
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docs-dist-${{ inputs.stage }}-${{ inputs.version }}
+          path: docs/.vitepress/dist
+
+      - name: Display artifact directory structure
+        run: find . -type f
+        working-directory: docs/.vitepress/dist
+
+      - name: Sync to S3
+        env:
+          S3_URI: s3://${{ vars.AWS_S3_BUCKET }}/sail/${{ inputs.version }}/
+        run: |
+          aws s3 sync docs/.vitepress/dist "${S3_URI}" --delete
+
+      - name: Invalidate CloudFront cache
+        env:
+          CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.AWS_CLOUDFRONT_DISTRIBUTION_ID }}
+          CLOUDFRONT_PATH: /sail/${{ inputs.version }}/*
+        run: |
+          aws cloudfront create-invalidation --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" --paths "${CLOUDFRONT_PATH}"

@@ -1,0 +1,46 @@
+name: Python build
+
+on:
+  workflow_call:
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Hatch
+        uses: pypa/hatch@install
+
+      - name: Format check
+        run: hatch fmt --check
+
+      - name: Download Python package
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package
+          path: target/wheels
+
+      - name: Set up Hatch environment
+        run: |
+          hatch env create
+          hatch run install-pysail
+
+      - name: Verify package version
+        run: |
+          declared_version="$(hatch version)"
+          actual_version="$(hatch run python -c 'import pysail; print(pysail.__version__)')"
+          echo "Declared version: $declared_version"
+          echo "Actual version: $actual_version"
+          if [ "$declared_version" != "$actual_version" ]; then
+            echo "The declared version does not match the actual version."
+            exit 1
+          fi
+
+      - name: Run tests
+        run: hatch run pytest --pyargs pysail

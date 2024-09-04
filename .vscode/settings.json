@@ -1,0 +1,10 @@
+{
+  "editor.bracketPairColorization.enabled": true,
+  "editor.guides.bracketPairs": true,
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.codeActionsOnSave": { "source.fixAll.eslint": "explicit" },
+  "editor.quickSuggestions": { "strings": "on" },
+  "eslint.validate": ["javascript", "typescript", "vue"],
+  "typescript.tsdk": "node_modules/typescript/lib"
+}

@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "module": "ESNext",
+    "target": "ESNext",
+    "moduleResolution": "Node",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "baseUrl": ".",
+    "paths": {
+      "@theme/*": ["docs/.vitepress/theme/*"]
+    }
+  },
+  "include": [
+    "docs/.vitepress/config.mts",
+    "docs/.vitepress/*.d.ts",
+    "docs/.vitepress/theme/**/*",
+    "docs/**/*.data.ts",
+    "docs/**/*.paths.ts"
+  ]
+}

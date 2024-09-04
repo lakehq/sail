@@ -1,0 +1,1534 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT ! NULL;",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(NOT NULL)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ! false;",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(NOT false)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ! true;",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(NOT true)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT '%SystemDrive%/Users/John' ilike '/%SYSTEMDrive/%//Users%' ESCAPE '/';",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ilike(%SystemDrive%/Users/John, /%SYSTEMDrive/%//Users%)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"%SystemDrive%/Users/John\")), Literal(Utf8(\"/%SYSTEMDrive/%//Users%\")), Literal(Utf8(\"/\"))]"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT '%SystemDrive%/Users/John' like '/%SystemDrive/%//Users%' ESCAPE '/';",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "%SystemDrive%/Users/John LIKE /%SystemDrive/%//Users%",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"%SystemDrive%/Users/John\")), Literal(Utf8(\"/%SystemDrive/%//Users%\")), Literal(Utf8(\"/\"))]"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT '%SystemDrive%\\Users\\John' ilike '\\%SystemDrive\\%\\\\users%';",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ilike(%SystemDrive%\\Users\\John, \\%SystemDrive\\%\\\\users%)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT '%SystemDrive%\\Users\\John' like '\\%SystemDrive\\%\\\\Users%';",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "%SystemDrive%\\Users\\John LIKE \\%SystemDrive\\%\\\\Users%",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT '%SystemDrive%\\\\USERS\\\\John' ilike '\\%SystemDrive\\%\\\\\\\\Users%';",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ilike(%SystemDrive%\\USERS\\John, \\%SystemDrive\\%\\\\Users%)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT '%SystemDrive%\\\\Users\\\\John' like '\\%SystemDrive\\%\\\\\\\\Users%';",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "%SystemDrive%\\Users\\John LIKE \\%SystemDrive\\%\\\\Users%",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 1 < 2;",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(1 < 2)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 1 < NULL;",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(1 < NULL)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 1 <= NULL;",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(1 <= NULL)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 1 <=> '1';",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(1 <=> 1)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 1 = '1';",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(1 = 1)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 1 == '1';",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(1 = 1)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 1 > NULL;",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(1 > NULL)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 1 >= NULL;",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(1 >= NULL)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 1 in(1, 2, 3);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(1 IN (1, 2, 3))",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 1 in(2, 3, 4);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(1 IN (2, 3, 4))",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 1.0 <= '1';",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(1.0 <= 1)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 1.1 < '1';",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(1.1 < 1)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 2 <= 2;",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(2 <= 2)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 2 <=> 2;",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(2 <=> 2)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 2 = 2;",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(2 = 2)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 2 == 2;",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(2 = 2)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 2 > 1.1;",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(2 > 1)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 2 > 1;",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(2 > 1)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 2 >= 1;",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(2 >= 1)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 2.0 >= '2.1';",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(2.0 >= 2.1)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT NULL <=> NULL;",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(NULL <=> NULL)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT NULL = NULL;",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(NULL = NULL)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT NULL == NULL;",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(NULL = NULL)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT false and NULL;",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(false AND NULL)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT false or NULL;",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(false OR NULL)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT false or false;",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(false OR false)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ilike('Spark', '_Park');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ilike(Spark, _Park)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT isnan(cast('NaN' as double));",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "isnan(CAST(NaN AS DOUBLE))",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT isnotnull(1);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(1 IS NOT NULL)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT isnull(1);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(1 IS NULL)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT like('Spark', '_park');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "Spark LIKE _park",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT named_struct('a', 1, 'b', 2) in(named_struct('a', 1, 'b', 1), named_struct('a', 1, 'b', 3));",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(named_struct(a, 1, b, 2) IN (named_struct(a, 1, b, 1), named_struct(a, 1, b, 3)))",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Arrow error: Invalid argument error: Nested comparison: Struct([Field { name: \"a\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) == Struct([Field { name: \"a\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) (hint: use make_comparator instead)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT named_struct('a', 1, 'b', 2) in(named_struct('a', 1, 'b', 2), named_struct('a', 1, 'b', 3));",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(named_struct(a, 1, b, 2) IN (named_struct(a, 1, b, 2), named_struct(a, 1, b, 3)))",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Arrow error: Invalid argument error: Nested comparison: Struct([Field { name: \"a\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) == Struct([Field { name: \"a\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) (hint: use make_comparator instead)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT not NULL;",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(NOT NULL)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT not false;",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(NOT false)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT not true;",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(NOT true)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regexp('%SystemDrive%\\Users\\John', '%SystemDrive%\\\\Users.*');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "REGEXP(%SystemDrive%\\Users\\John, %SystemDrive%\\\\Users.*)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regexp('%SystemDrive%\\\\Users\\\\John', '%SystemDrive%\\\\\\\\Users.*');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "REGEXP(%SystemDrive%\\Users\\John, %SystemDrive%\\\\Users.*)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regexp_like('%SystemDrive%\\Users\\John', '%SystemDrive%\\\\Users.*');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "REGEXP_LIKE(%SystemDrive%\\Users\\John, %SystemDrive%\\\\Users.*)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regexp_like('%SystemDrive%\\\\Users\\\\John', '%SystemDrive%\\\\\\\\Users.*');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "REGEXP_LIKE(%SystemDrive%\\Users\\John, %SystemDrive%\\\\Users.*)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT rlike('%SystemDrive%\\Users\\John', '%SystemDrive%\\\\Users.*');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "RLIKE(%SystemDrive%\\Users\\John, %SystemDrive%\\\\Users.*)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT rlike('%SystemDrive%\\\\Users\\\\John', '%SystemDrive%\\\\\\\\Users.*');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "RLIKE(%SystemDrive%\\Users\\John, %SystemDrive%\\\\Users.*)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_date('2009-07-30 04:17:52') < to_date('2009-07-30 04:17:52');",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(to_date(2009-07-30 04:17:52) < to_date(2009-07-30 04:17:52))",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_date"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_date('2009-07-30 04:17:52') < to_date('2009-08-01 04:17:52');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(to_date(2009-07-30 04:17:52) < to_date(2009-08-01 04:17:52))",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_date"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_date('2009-07-30 04:17:52') <= to_date('2009-07-30 04:17:52');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(to_date(2009-07-30 04:17:52) <= to_date(2009-07-30 04:17:52))",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_date"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_date('2009-07-30 04:17:52') <= to_date('2009-08-01 04:17:52');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(to_date(2009-07-30 04:17:52) <= to_date(2009-08-01 04:17:52))",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_date"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_date('2009-07-30 04:17:52') > to_date('2009-07-30 04:17:52');",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(to_date(2009-07-30 04:17:52) > to_date(2009-07-30 04:17:52))",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_date"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_date('2009-07-30 04:17:52') > to_date('2009-08-01 04:17:52');",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(to_date(2009-07-30 04:17:52) > to_date(2009-08-01 04:17:52))",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_date"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_date('2009-07-30 04:17:52') >= to_date('2009-07-30 04:17:52');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(to_date(2009-07-30 04:17:52) >= to_date(2009-07-30 04:17:52))",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_date"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_date('2009-07-30 04:17:52') >= to_date('2009-08-01 04:17:52');",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(to_date(2009-07-30 04:17:52) >= to_date(2009-08-01 04:17:52))",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_date"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT true <=> NULL;",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(true <=> NULL)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT true = NULL;",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(true = NULL)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT true == NULL;",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(true = NULL)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT true and NULL;",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(true AND NULL)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT true and false;",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(true AND false)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT true and true;",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(true AND true)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT true or NULL;",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(true OR NULL)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT true or false;",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(true OR false)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SET spark.sql.parser.escapedStringLiterals=false;",
+        "result": [
+          "spark.sql.parser.escapedStringLiterals\tfalse"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "key",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "value",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Invalid or Unsupported Configuration: Could not find config namespace \"spark\""
+      }
+    },
+    {
+      "input": {
+        "query": "SET spark.sql.parser.escapedStringLiterals=true;",
+        "result": [
+          "spark.sql.parser.escapedStringLiterals\ttrue"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "key",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "value",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Invalid or Unsupported Configuration: Could not find config namespace \"spark\""
+      }
+    }
+  ]
+}

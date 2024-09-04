@@ -1,0 +1,1061 @@
+{
+  "tests": [
+    {
+      "input": "\nCREATE TABLE IF NOT EXISTS mydb.page_view\nUSING parquet\nCOMMENT 'This is the staging page view table'\nLOCATION '/user/external/page_view'\nTBLPROPERTIES ('p1'='v1', 'p2'='v2')\nAS SELECT * FROM src\n      ",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "mydb",
+                "page_view"
+              ],
+              "schema": {
+                "fields": []
+              },
+              "comment": "This is the staging page view table",
+              "columnDefaults": [],
+              "constraints": [],
+              "location": "/user/external/page_view",
+              "fileFormat": "PARQUET",
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": true,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [
+                [
+                  "p1",
+                  "v1"
+                ],
+                [
+                  "p2",
+                  "v2"
+                ]
+              ],
+              "query": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "src"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "\nCREATE TABLE IF NOT EXISTS mydb.page_view\nUSING parquet\nLOCATION '/user/external/page_view'\nCOMMENT 'This is the staging page view table'\nTBLPROPERTIES ('p1'='v1', 'p2'='v2')\nAS SELECT * FROM src\n      ",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "mydb",
+                "page_view"
+              ],
+              "schema": {
+                "fields": []
+              },
+              "comment": "This is the staging page view table",
+              "columnDefaults": [],
+              "constraints": [],
+              "location": "/user/external/page_view",
+              "fileFormat": "PARQUET",
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": true,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [
+                [
+                  "p1",
+                  "v1"
+                ],
+                [
+                  "p2",
+                  "v2"
+                ]
+              ],
+              "query": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "src"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "\nCREATE TABLE my_tab (a INT, b STRING, ts TIMESTAMP) USING parquet\nPARTITIONED BY (\n    a,\n    bucket(16, b),\n    years(ts),\n    months(ts),\n    days(ts),\n    hours(ts),\n    foo(a, \"bar\", 34))\n      ",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: a data type name, found: , at Line: 4, Column: 6"
+      }
+    },
+    {
+      "input": "\nCREATE TABLE table_name USING json\nOPTIONS (a 1, b 0.1, c TRUE)\n      ",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "table_name"
+              ],
+              "schema": {
+                "fields": []
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": "JSON",
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [
+                [
+                  "a",
+                  "1"
+                ],
+                [
+                  "b",
+                  "0.1"
+                ],
+                [
+                  "c",
+                  "'TRUE'"
+                ]
+              ],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE 1m.2g(a INT)",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: 1m at Line: 1, Column: 14"
+      }
+    },
+    {
+      "input": "CREATE TABLE 1m.2g(a INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: identifier, found: 1m at Line: 1, Column: 14"
+      }
+    },
+    {
+      "input": "CREATE TABLE IF NOT EXISTS my_tab(a INT, b STRING) USING parquet",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "b",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": "PARQUET",
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": true,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS INPUTFORMAT 'inFormat' OUTPUTFORMAT 'outFormat'\n        ",
+      "output": {
+        "failure": "not implemented: STORED AS INPUTFORMAT: 'inFormat' OUTPUTFORMAT: 'outFormat' in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS INPUTFORMAT 'inFormat' OUTPUTFORMAT 'outFormat'\nROW FORMAT SERDE 'customSerde'\n        ",
+      "output": {
+        "failure": "not implemented: STORED AS INPUTFORMAT: 'inFormat' OUTPUTFORMAT: 'outFormat' in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS otherFormat\nROW FORMAT DELIMITED\nFIELDS TERMINATED BY ','",
+      "exception": "\nOperation not allowed: ROW FORMAT DELIMITED is only compatible with 'textfile', not 'otherformat'.(line 2, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\n^^^\nSTORED AS otherFormat\nROW FORMAT DELIMITED\nFIELDS TERMINATED BY ','\n",
+      "output": {
+        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS otherFormat\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')",
+      "exception": "\nOperation not allowed: ROW FORMAT SERDE is incompatible with format 'otherformat', which also specifies a serde.(line 2, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\n^^^\nSTORED AS otherFormat\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n",
+      "output": {
+        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS parquet\n        ",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": "PARQUET",
+              "tablePartitionCols": [
+                "part"
+              ],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS rcfile\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n        ",
+      "output": {
+        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS sequencefile\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n        ",
+      "output": {
+        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS textfile\nROW FORMAT DELIMITED\nFIELDS TERMINATED BY ',' ESCAPED BY '\\\\' -- double escape for Scala and for SQL\nCOLLECTION ITEMS TERMINATED BY '#'\nMAP KEYS TERMINATED BY '='\nLINES TERMINATED BY '\\n'\n      ",
+      "output": {
+        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS textfile\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n        ",
+      "output": {
+        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint) PARTITIONED BY (part string)",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [
+                "part"
+              ],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)",
+      "exception": "\nOperation not allowed: CREATE TABLE ... SKEWED BY.(line 1, pos 32)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)\n--------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: SKEWED"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint) USING parquet PARTITIONED BY (part string)",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": "PARQUET",
+              "tablePartitionCols": [
+                "part"
+              ],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint, p1 string)\nSTORED BY 'handler'",
+      "exception": "\nOperation not allowed: STORED BY.(line 2, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, p1 string)\nSTORED BY 'handler'\n^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: AS, found: BY at Line: 2, Column: 8"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p1, p2 string)",
+      "exception": "\nOperation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns:\nExpressions: p1\nColumns: p2 string.(line 1, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p1, p2 string)\n^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: a data type name, found: , at Line: 1, Column: 62"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))",
+      "exception": "\nOperation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns:\nExpressions: truncate(p1, 16)\nColumns: p2 string.(line 1, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))\n^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: a data type name, found: ( at Line: 1, Column: 79"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint, part string)\nUSING parquet\nROW FORMAT DELIMITED FIELDS TERMINATED BY ','",
+      "exception": "\nOperation not allowed: CREATE TABLE ... USING ... ROW FORMAT DELIMITED.(line 1, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, part string)\n^^^\nUSING parquet\nROW FORMAT DELIMITED FIELDS TERMINATED BY ','\n",
+      "output": {
+        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint, part string)\nUSING parquet\nROW FORMAT SERDE 'customSerde'",
+      "exception": "\nOperation not allowed: CREATE TABLE ... USING ... ROW FORMAT SERDE customSerde.(line 1, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, part string)\n^^^\nUSING parquet\nROW FORMAT SERDE 'customSerde'\n",
+      "output": {
+        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (id bigint, part string)\nUSING parquet\nSTORED AS parquet",
+      "exception": "\nOperation not allowed: CREATE TABLE ... USING ... STORED AS parquet .(line 1, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, part string)\n^^^\nUSING parquet\nSTORED AS parquet\n",
+      "output": {
+        "failure": "invalid argument: Multiple file formats in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab PARTITIONED BY (part string)",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": []
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [
+                "part"
+              ],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT comment 'test', b STRING) USING parquet PARTITIONED BY (a)",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: a data type name, found: ) at Line: 1, Column: 84"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS ()) USING PARQUET",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'.(line 1, pos 54)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS ()) USING PARQUET\n------------------------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: an expression:, found: ) at Line: 1, Column: 55"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS (a + 1) GENERATED ALWAYS AS (a + 2)) USING PARQUET",
+      "exception": "\n[CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] CREATE TABLE column b specifies descriptor \"GENERATED ALWAYS AS\" more than once, which is invalid.(line 1, pos 61)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS (a + 1) GENERATED ALWAYS AS (a + 2)) USING PARQUET\n-------------------------------------------------------------^^^\n",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "b",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": "PARQUET",
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS a + 1) USING PARQUET",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'a': missing '('.(line 1, pos 53)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS a + 1) USING PARQUET\n-----------------------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ',' or ')' after column definition, found: a at Line: 1, Column: 54"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b INT NOT NULL GENERATED ALWAYS AS (a+1)) USING parquet",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "b",
+                    "dataType": "integer",
+                    "nullable": false,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": "PARQUET",
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\")",
+      "exception": "\n[CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] CREATE TABLE column b specifies descriptor \"COMMENT\" more than once, which is invalid.(line 1, pos 59)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\")\n-----------------------------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: string, found: \"abc\" at Line: 1, Column: 45"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\")",
+      "exception": "\n[CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] CREATE TABLE column b specifies descriptor \"DEFAULT\" more than once, which is invalid.(line 1, pos 59)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\")\n-----------------------------------------------------------^^^\n",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "b",
+                    "dataType": "string",
+                    "nullable": false,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [
+                [
+                  "b",
+                  {
+                    "literal": {
+                      "string": "123"
+                    }
+                  }
+                ]
+              ],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING DEFAULT \"abc\" NOT NULL) USING parquet",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "b",
+                    "dataType": "string",
+                    "nullable": false,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [
+                [
+                  "b",
+                  {
+                    "literal": {
+                      "string": "abc"
+                    }
+                  }
+                ]
+              ],
+              "constraints": [],
+              "location": null,
+              "fileFormat": "PARQUET",
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING NOT NULL DEFAULT \"abc\" NOT NULL)",
+      "exception": "\n[CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] CREATE TABLE column b specifies descriptor \"NOT NULL\" more than once, which is invalid.(line 1, pos 59)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING NOT NULL DEFAULT \"abc\" NOT NULL)\n-----------------------------------------------------------^^^\n",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "b",
+                    "dataType": "string",
+                    "nullable": false,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [
+                [
+                  "b",
+                  {
+                    "literal": {
+                      "string": "abc"
+                    }
+                  }
+                ]
+              ],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING NOT NULL DEFAULT \"abc\") USING parquet",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "b",
+                    "dataType": "string",
+                    "nullable": false,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [
+                [
+                  "b",
+                  {
+                    "literal": {
+                      "string": "abc"
+                    }
+                  }
+                ]
+              ],
+              "constraints": [],
+              "location": null,
+              "fileFormat": "PARQUET",
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING) CLUSTERED BY(b) INTO 256 BUCKETS CLUSTERED BY(b) INTO 256 BUCKETS",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: CLUSTERED BY. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) CLUSTERED BY(b) INTO 256 BUCKETS CLUSTERED BY(b) INTO 256 BUCKETS\n-------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: CLUSTERED"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING) COMMENT 'a table' COMMENT 'a table'",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: COMMENT. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) COMMENT 'a table' COMMENT 'a table'\n-------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: Multiple comments in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING) LOCATION '/tmp/file' LOCATION '/tmp/file'",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: LOCATION. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) LOCATION '/tmp/file' LOCATION '/tmp/file'\n-------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: Multiple locations in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING) PARTITIONED BY (b) PARTITIONED BY (b)",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: PARTITIONED BY. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) PARTITIONED BY (b) PARTITIONED BY (b)\n-------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: a data type name, found: ) at Line: 1, Column: 55"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING) PARTITIONED BY (c int) PARTITIONED BY (c int)",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: PARTITIONED BY. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) PARTITIONED BY (c int) PARTITIONED BY (c int)\n-------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: Multiple PARTITIONED BY clauses in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING) ROW FORMAT SERDE 'serde' ROW FORMAT SERDE 'serde'",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: ROW FORMAT. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) ROW FORMAT SERDE 'serde' ROW FORMAT SERDE 'serde'\n-------------------------------------^^^\n",
+      "output": {
+        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING) STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out' STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out'",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: STORED AS/BY. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out' STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out'\n-------------------------------------^^^\n",
+      "output": {
+        "failure": "not implemented: STORED AS INPUTFORMAT: 'in' OUTPUTFORMAT: 'out' in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING) STORED AS parquet STORED AS parquet",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: STORED AS/BY. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) STORED AS parquet STORED AS parquet\n-------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: Multiple file formats in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING) TBLPROPERTIES('test' = 'test2') TBLPROPERTIES('test' = 'test2')",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: TBLPROPERTIES. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) TBLPROPERTIES('test' = 'test2') TBLPROPERTIES('test' = 'test2')\n-------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: Multiple TBLPROPERTIES clauses in CREATE TABLE statement"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING) USING parquet CLUSTERED BY (a) SORTED BY (b) INTO 5 BUCKETS",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: CLUSTERED"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING) USING parquet COMMENT 'abc'",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "b",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": "abc",
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": "PARQUET",
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING) USING parquet LOCATION '/tmp/file'",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "b",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": "/tmp/file",
+              "fileFormat": "PARQUET",
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING) USING parquet TBLPROPERTIES('test' = 'test')",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "b",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": "PARQUET",
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [
+                [
+                  "test",
+                  "test"
+                ]
+              ],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a: INT COMMENT 'test', b: STRING) USING parquet",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ':'.(line 1, pos 21)\n\n== SQL ==\nCREATE TABLE my_tab(a: INT COMMENT 'test', b: STRING) USING parquet\n---------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: a data type name, found: : at Line: 1, Column: 22"
+      }
+    },
+    {
+      "input": "create table test_table using my_data_source options (password)",
+      "exception": "\nOperation not allowed: A value must be specified for the key: password..(line 1, pos 53)\n\n== SQL ==\ncreate table test_table using my_data_source options (password)\n-----------------------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: Expected string or numeric value, found: )"
+      }
+    }
+  ]
+}

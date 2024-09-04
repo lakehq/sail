@@ -1,0 +1,46 @@
+{
+  "tests": [
+    {
+      "input": "EXPLAIN formatted SELECT 1",
+      "exception": "\nUnsupported SQL statement\n== SQL ==\nEXPLAIN formatted SELECT 1",
+      "output": {
+        "success": {
+          "command": {
+            "explain": {
+              "mode": "formatted",
+              "input": {
+                "project": {
+                  "input": {
+                    "empty": {
+                      "produceOneRow": true
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "literal": {
+                        "integer": 1
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              }
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "EXPLAIN logical SELECT 1",
+      "exception": "\nUnsupported SQL statement\n== SQL ==\nEXPLAIN logical SELECT 1",
+      "output": {
+        "failure": "invalid argument: token after EXPLAIN: logical"
+      }
+    }
+  ]
+}

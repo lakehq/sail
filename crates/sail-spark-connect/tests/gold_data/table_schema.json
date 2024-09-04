@@ -1,0 +1,261 @@
+{
+  "tests": [
+    {
+      "input": "",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 0)\n\n== SQL ==\n\n^^^\n",
+      "output": {
+        "success": {
+          "fields": []
+        }
+      }
+    },
+    {
+      "input": "A int",
+      "output": {
+        "success": {
+          "fields": [
+            {
+              "name": "A",
+              "dataType": "integer",
+              "nullable": true,
+              "metadata": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "input": "`!@#$%.^&*()` string",
+      "output": {
+        "success": {
+          "fields": [
+            {
+              "name": "!@#$%.^&*()",
+              "dataType": "string",
+              "nullable": true,
+              "metadata": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "input": "a",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 1)\n\n== SQL ==\na\n-^^^\n",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "a INT",
+      "output": {
+        "success": {
+          "fields": [
+            {
+              "name": "a",
+              "dataType": "integer",
+              "nullable": true,
+              "metadata": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "input": "a INT b long",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'b'.(line 1, pos 6)\n\n== SQL ==\na INT b long\n------^^^\n",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "a INT, b long, c int,",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 21)\n\n== SQL ==\na INT, b long, c int,\n---------------------^^^\n",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "a INT, b long,,",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ','.(line 1, pos 14)\n\n== SQL ==\na INT, b long,,\n--------------^^^\n",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "a INT,, b long",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ','.(line 1, pos 6)\n\n== SQL ==\na INT,, b long\n------^^^\n",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "a STRUCT<intType: int, ts:timestamp>",
+      "output": {
+        "success": {
+          "fields": [
+            {
+              "name": "a",
+              "dataType": {
+                "struct": {
+                  "fields": [
+                    {
+                      "name": "intType",
+                      "dataType": "integer",
+                      "nullable": true,
+                      "metadata": []
+                    },
+                    {
+                      "name": "ts",
+                      "dataType": "timestamp",
+                      "nullable": true,
+                      "metadata": []
+                    }
+                  ]
+                }
+              },
+              "nullable": true,
+              "metadata": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "input": "a int comment 'test'",
+      "output": {
+        "success": {
+          "fields": [
+            {
+              "name": "a",
+              "dataType": "integer",
+              "nullable": true,
+              "metadata": [
+                [
+                  "comment",
+                  "test"
+                ]
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "input": "a int, b long",
+      "output": {
+        "success": {
+          "fields": [
+            {
+              "name": "a",
+              "dataType": "integer",
+              "nullable": true,
+              "metadata": []
+            },
+            {
+              "name": "b",
+              "dataType": "long",
+              "nullable": true,
+              "metadata": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "input": "complexStructCol struct<struct:struct<deciMal:DECimal, anotherDecimal:decimAL(5,2)>,MAP:Map<timestamp, varchar(10)>,arrAy:Array<double>,anotherArray:Array<char(9)>>      ",
+      "output": {
+        "success": {
+          "fields": [
+            {
+              "name": "complexStructCol",
+              "dataType": {
+                "struct": {
+                  "fields": [
+                    {
+                      "name": "struct",
+                      "dataType": {
+                        "struct": {
+                          "fields": [
+                            {
+                              "name": "deciMal",
+                              "dataType": {
+                                "decimal": {
+                                  "precision": 10,
+                                  "scale": 0
+                                }
+                              },
+                              "nullable": true,
+                              "metadata": []
+                            },
+                            {
+                              "name": "anotherDecimal",
+                              "dataType": {
+                                "decimal": {
+                                  "precision": 5,
+                                  "scale": 2
+                                }
+                              },
+                              "nullable": true,
+                              "metadata": []
+                            }
+                          ]
+                        }
+                      },
+                      "nullable": true,
+                      "metadata": []
+                    },
+                    {
+                      "name": "MAP",
+                      "dataType": {
+                        "map": {
+                          "keyType": "timestamp",
+                          "valueType": {
+                            "varChar": {
+                              "length": 10
+                            }
+                          },
+                          "valueContainsNull": true
+                        }
+                      },
+                      "nullable": true,
+                      "metadata": []
+                    },
+                    {
+                      "name": "arrAy",
+                      "dataType": {
+                        "array": {
+                          "elementType": "double",
+                          "containsNull": true
+                        }
+                      },
+                      "nullable": true,
+                      "metadata": []
+                    },
+                    {
+                      "name": "anotherArray",
+                      "dataType": {
+                        "array": {
+                          "elementType": {
+                            "char": {
+                              "length": 9
+                            }
+                          },
+                          "containsNull": true
+                        }
+                      },
+                      "nullable": true,
+                      "metadata": []
+                    }
+                  ]
+                }
+              },
+              "nullable": true,
+              "metadata": []
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

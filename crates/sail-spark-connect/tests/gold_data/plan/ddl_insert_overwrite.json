@@ -1,0 +1,319 @@
+{
+  "tests": [
+    {
+      "input": "\n INSERT OVERWRITE LOCAL DIRECTORY\n USING parquet\n OPTIONS (\n  path 'xxx'\n )\n SELECT i from t1",
+      "exception": "[INTERNAL_ERROR] INSERT OVERWRITE DIRECTORY is not supported.",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: literal string, found: USING at Line: 3, Column: 2"
+      }
+    },
+    {
+      "input": "\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3) IF NOT EXISTS\nSELECT * FROM source\n      ",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: SELECT, VALUES, or a subquery in the query body, found: IF at Line: 3, Column: 20"
+      }
+    },
+    {
+      "input": "\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2)\nSELECT * FROM source\n      ",
+      "output": {
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [],
+              "partitionSpec": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "==",
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "p1"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      {
+                        "literal": {
+                          "integer": 3
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "p2"
+                    ],
+                    "planId": null
+                  }
+                }
+              ],
+              "overwrite": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2) (a, b)\nSELECT * FROM source\n      ",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: SELECT, VALUES, or a subquery in the query body, found: a at Line: 3, Column: 25"
+      }
+    },
+    {
+      "input": "INSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2) IF NOT EXISTS\nSELECT * FROM source",
+      "exception": "\nOperation not allowed: IF NOT EXISTS with dynamic partitions: p2.(line 1, pos 0)\n\n== SQL ==\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\n^^^\nPARTITION (p1 = 3, p2) IF NOT EXISTS\nSELECT * FROM source\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: SELECT, VALUES, or a subquery in the query body, found: IF at Line: 2, Column: 24"
+      }
+    },
+    {
+      "input": "INSERT OVERWRITE TABLE testcat.ns1.ns2.tbl (a, b) SELECT * FROM source",
+      "output": {
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [
+                "a",
+                "b"
+              ],
+              "partitionSpec": [],
+              "overwrite": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "INSERT OVERWRITE TABLE testcat.ns1.ns2.tbl BY NAME SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: SELECT, VALUES, or a subquery in the query body, found: BY at Line: 1, Column: 44"
+      }
+    },
+    {
+      "input": "INSERT OVERWRITE TABLE testcat.ns1.ns2.tbl SELECT * FROM source",
+      "output": {
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [],
+              "partitionSpec": [],
+              "overwrite": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "INSERT OVERWRITE testcat.ns1.ns2.tbl (a, b) SELECT * FROM source",
+      "output": {
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [
+                "a",
+                "b"
+              ],
+              "partitionSpec": [],
+              "overwrite": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "INSERT OVERWRITE testcat.ns1.ns2.tbl BY NAME SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: SELECT, VALUES, or a subquery in the query body, found: BY at Line: 1, Column: 38"
+      }
+    },
+    {
+      "input": "INSERT OVERWRITE testcat.ns1.ns2.tbl SELECT * FROM source",
+      "output": {
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [],
+              "partitionSpec": [],
+              "overwrite": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    }
+  ]
+}

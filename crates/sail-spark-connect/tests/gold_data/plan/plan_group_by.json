@@ -1,0 +1,243 @@
+{
+  "tests": [
+    {
+      "input": "SELECT a, b, count(distinct a, distinct b) as c FROM d GROUP BY a, b",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'b': extra input 'b'.(line 1, pos 40)\n\n== SQL ==\nSELECT a, b, count(distinct a, distinct b) as c FROM d GROUP BY a, b\n----------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: b at Line: 1, Column: 41"
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by a, b",
+      "output": {
+        "success": {
+          "query": {
+            "aggregate": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "d"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "grouping": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                }
+              ],
+              "aggregate": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "alias": {
+                    "expr": {
+                      "unresolvedFunction": {
+                        "functionName": "sum",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "c"
+                              ],
+                              "planId": null
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    },
+                    "name": [
+                      "c"
+                    ],
+                    "metadata": null
+                  }
+                }
+              ],
+              "having": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by a, b grouping sets((a, b), (a), ())",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: grouping"
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by a, b with cube",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: with"
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by a, b with rollup",
+      "output": {
+        "failure": "invalid argument: extra tokens after statement: with"
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by cube (a, b)",
+      "output": {
+        "failure": "not supported: expression: Cube([[Identifier(Ident { value: \"a\", quote_style: None })], [Identifier(Ident { value: \"b\", quote_style: None })]])"
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by cube(a, b)",
+      "output": {
+        "failure": "not supported: expression: Cube([[Identifier(Ident { value: \"a\", quote_style: None })], [Identifier(Ident { value: \"b\", quote_style: None })]])"
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by grouping sets((a, b), (a), ())",
+      "output": {
+        "failure": "not supported: expression: GroupingSets([[Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None })], [Identifier(Ident { value: \"a\", quote_style: None })], []])"
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by rollup (a, b)",
+      "output": {
+        "failure": "not supported: expression: Rollup([[Identifier(Ident { value: \"a\", quote_style: None })], [Identifier(Ident { value: \"b\", quote_style: None })]])"
+      }
+    },
+    {
+      "input": "select a, b, sum(c) as c from d group by rollup(a, b)",
+      "output": {
+        "failure": "not supported: expression: Rollup([[Identifier(Ident { value: \"a\", quote_style: None })], [Identifier(Ident { value: \"b\", quote_style: None })]])"
+      }
+    },
+    {
+      "input": "select g from t group by g having a > (select b from s)",
+      "output": {
+        "success": {
+          "query": {
+            "aggregate": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "grouping": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "g"
+                    ],
+                    "planId": null
+                  }
+                }
+              ],
+              "aggregate": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "g"
+                    ],
+                    "planId": null
+                  }
+                }
+              ],
+              "having": {
+                "unresolvedFunction": {
+                  "functionName": ">",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "scalarSubquery": {
+                        "subquery": {
+                          "project": {
+                            "input": {
+                              "read": {
+                                "namedTable": {
+                                  "name": [
+                                    "s"
+                                  ],
+                                  "options": []
+                                },
+                                "isStreaming": false
+                              },
+                              "planId": null,
+                              "sourceInfo": null
+                            },
+                            "expressions": [
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "b"
+                                  ],
+                                  "planId": null
+                                }
+                              }
+                            ]
+                          },
+                          "planId": null,
+                          "sourceInfo": null
+                        }
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    }
+  ]
+}

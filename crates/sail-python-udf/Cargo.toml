@@ -1,0 +1,21 @@
+[package]
+name = "sail-python-udf"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+sail-common = { path = "../sail-common" }
+
+thiserror = { workspace = true }
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-functions-nested = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_bytes = { workspace = true }
+pyo3 = { workspace = true }
+arrow = { workspace = true }
+arrow-cast = { workspace = true }
+sqlparser = { workspace = true }
+async-trait = { workspace = true }

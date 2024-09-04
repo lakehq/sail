@@ -1,0 +1,140 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT from_csv('1, 0.8', 'a INT, b DOUBLE');",
+        "result": [
+          "{\"a\":1,\"b\":0.8}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "from_csv(1, 0.8)",
+              "nullable": false,
+              "type": {
+                "type": "struct",
+                "fields": [
+                  {
+                    "name": "a",
+                    "nullable": true,
+                    "type": "integer",
+                    "metadata": {}
+                  },
+                  {
+                    "name": "b",
+                    "nullable": true,
+                    "type": "double",
+                    "metadata": {}
+                  }
+                ]
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: from_csv"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT from_csv('26/08/2015', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy'));",
+        "result": [
+          "{\"time\":2015-08-26 00:00:00}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "from_csv(26/08/2015)",
+              "nullable": false,
+              "type": {
+                "type": "struct",
+                "fields": [
+                  {
+                    "name": "time",
+                    "nullable": true,
+                    "type": "timestamp",
+                    "metadata": {}
+                  }
+                ]
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: from_csv"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT schema_of_csv('1,abc');",
+        "result": [
+          "STRUCT<_c0: INT, _c1: STRING>"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "schema_of_csv(1,abc)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: schema_of_csv"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_csv(named_struct('a', 1, 'b', 2));",
+        "result": [
+          "1,2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_csv(named_struct(a, 1, b, 2))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_csv"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy'));",
+        "result": [
+          "26/08/2015"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_csv(named_struct(time, to_timestamp(2015-08-26, yyyy-MM-dd)))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_csv"
+      }
+    }
+  ]
+}

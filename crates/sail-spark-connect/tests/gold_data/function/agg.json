@@ -1,0 +1,3046 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT any(col) FROM VALUES (NULL), (true), (false) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "any(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT any(col) FROM VALUES (false), (false), (NULL) AS tab(col);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "any(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT any(col) FROM VALUES (true), (false), (false) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "any(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT any_value(col) FROM VALUES (10), (5), (20) AS tab(col);",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "any_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: any_value"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT any_value(col) FROM VALUES (NULL), (5), (20) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "any_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: any_value"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT any_value(col, true) FROM VALUES (NULL), (5), (20) AS tab(col);",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "any_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: any_value"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT approx_count_distinct(col1) FROM VALUES (1), (1), (2), (2), (3) tab(col1);",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "approx_count_distinct(col1)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: approx_count_distinct"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT approx_percentile(col, 0.5, 100) FROM VALUES (0), (6), (7), (9), (10) AS tab(col);",
+        "result": [
+          "7"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "approx_percentile(col, 0.5, 100)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: approx_percentile"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT approx_percentile(col, 0.5, 100) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '1' MONTH), (INTERVAL '2' MONTH), (INTERVAL '10' MONTH) AS tab(col);",
+        "result": [
+          "0-1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "approx_percentile(col, 0.5, 100)",
+              "nullable": true,
+              "type": "interval month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: approx_percentile"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT approx_percentile(col, array(0.5, 0.4, 0.1), 100) FROM VALUES (0), (1), (2), (10) AS tab(col);",
+        "result": [
+          "[1,1,0]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "approx_percentile(col, array(0.5, 0.4, 0.1), 100)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: approx_percentile"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT approx_percentile(col, array(0.5, 0.7), 100) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '1' SECOND), (INTERVAL '2' SECOND), (INTERVAL '10' SECOND) AS tab(col);",
+        "result": [
+          "[0 00:00:01.000000000,0 00:00:02.000000000]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "approx_percentile(col, array(0.5, 0.7), 100)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "interval second",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: approx_percentile"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT array_agg(col) FROM VALUES (1), (2), (1) AS tab(col);",
+        "result": [
+          "[1,2,1]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "collect_list(col)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT avg(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "2.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "avg(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT avg(col) FROM VALUES (1), (2), (NULL) AS tab(col);",
+        "result": [
+          "1.5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "avg(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bit_and(col) FROM VALUES (3), (5) AS tab(col);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bit_and(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bit_or(col) FROM VALUES (3), (5) AS tab(col);",
+        "result": [
+          "7"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bit_or(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bit_xor(col) FROM VALUES (3), (5) AS tab(col);",
+        "result": [
+          "6"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bit_xor(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bool_and(col) FROM VALUES (NULL), (true), (true) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bool_and(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bool_and(col) FROM VALUES (true), (false), (true) AS tab(col);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bool_and(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bool_and(col) FROM VALUES (true), (true), (true) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bool_and(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bool_or(col) FROM VALUES (NULL), (true), (false) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bool_or(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bool_or(col) FROM VALUES (false), (false), (NULL) AS tab(col);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bool_or(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT bool_or(col) FROM VALUES (true), (false), (false) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "bool_or(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT collect_list(col) FROM VALUES (1), (2), (1) AS tab(col);",
+        "result": [
+          "[1,2,1]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "collect_list(col)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT collect_set(col) FROM VALUES (1), (2), (1) AS tab(col);",
+        "result": [
+          "[1,2]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "collect_set(col)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: collect_set"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT corr(c1, c2) FROM VALUES (3, 2), (3, 3), (6, 4) as tab(c1, c2);",
+        "result": [
+          "0.8660254037844387"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "corr(c1, c2)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT count(*) FROM VALUES (NULL), (5), (5), (20) AS tab(col);",
+        "result": [
+          "4"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "count(1)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT count(DISTINCT col) FROM VALUES (NULL), (5), (5), (10) AS tab(col);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "count(DISTINCT col)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT count(col) FROM VALUES (NULL), (5), (5), (20) AS tab(col);",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "count(col)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT count_if(col % 2 = 0) FROM VALUES (NULL), (0), (1), (2), (3) AS tab(col);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "count_if(((col % 2) = 0))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: count_if"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT count_if(col IS NULL) FROM VALUES (NULL), (0), (1), (2), (3) AS tab(col);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "count_if((col IS NULL))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: count_if"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT covar_pop(c1, c2) FROM VALUES (1,1), (2,2), (3,3) AS tab(c1, c2);",
+        "result": [
+          "0.6666666666666666"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "covar_pop(c1, c2)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT covar_samp(c1, c2) FROM VALUES (1,1), (2,2), (3,3) AS tab(c1, c2);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "covar_samp(c1, c2)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT every(col) FROM VALUES (NULL), (true), (true) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "every(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT every(col) FROM VALUES (true), (false), (true) AS tab(col);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "every(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT every(col) FROM VALUES (true), (true), (true) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "every(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT first(col) FROM VALUES (10), (5), (20) AS tab(col);",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "first(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT first(col) FROM VALUES (NULL), (5), (20) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "first(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT first(col, true) FROM VALUES (NULL), (5), (20) AS tab(col);",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "first(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Boolean] to the signature OneOf([ArraySignature(Array), Numeric(1), Uniform(1, [Utf8])]) failed. No function matches the given name and argument types 'first_value(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tfirst_value(array)\n\tfirst_value(Numeric(1))\n\tfirst_value(Utf8)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT first_value(col) FROM VALUES (10), (5), (20) AS tab(col);",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "first_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT first_value(col) FROM VALUES (NULL), (5), (20) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "first_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT first_value(col, true) FROM VALUES (NULL), (5), (20) AS tab(col);",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "first_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Boolean] to the signature OneOf([ArraySignature(Array), Numeric(1), Uniform(1, [Utf8])]) failed. No function matches the given name and argument types 'first_value(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tfirst_value(array)\n\tfirst_value(Numeric(1))\n\tfirst_value(Utf8)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hex(count_min_sketch(col, 0.5d, 0.5d, 1)) FROM VALUES (1), (2), (1) AS tab(col);",
+        "result": [
+          "0000000100000000000000030000000100000004000000005D8D6AB90000000000000000000000000000000200000000000000010000000000000000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hex(count_min_sketch(col, 0.5, 0.5, 1))",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: count_min_sketch"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT histogram_numeric(col, 5) FROM VALUES (0), (1), (2), (10) AS tab(col);",
+        "result": [
+          "[{\"x\":0,\"y\":1.0},{\"x\":1,\"y\":1.0},{\"x\":2,\"y\":1.0},{\"x\":10,\"y\":1.0}]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "histogram_numeric(col, 5)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": {
+                  "type": "struct",
+                  "fields": [
+                    {
+                      "name": "x",
+                      "nullable": true,
+                      "type": "integer",
+                      "metadata": {}
+                    },
+                    {
+                      "name": "y",
+                      "nullable": true,
+                      "type": "double",
+                      "metadata": {}
+                    }
+                  ]
+                },
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: histogram_numeric"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hll_sketch_estimate(hll_sketch_agg(col, 12)) FROM VALUES (1), (1), (2), (2), (3) tab(col);",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hll_sketch_estimate(hll_sketch_agg(col, 12))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: hll_sketch_agg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hll_sketch_estimate(hll_union_agg(sketch, true)) FROM (SELECT hll_sketch_agg(col) as sketch FROM VALUES (1) tab(col) UNION ALL SELECT hll_sketch_agg(col, 20) as sketch FROM VALUES (1) tab(col));",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hll_sketch_estimate(hll_union_agg(sketch, true))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: hll_sketch_agg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT kurtosis(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col);",
+        "result": [
+          "-0.7014368047529627"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "kurtosis(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: kurtosis"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT kurtosis(col) FROM VALUES (1), (10), (100), (10), (1) as tab(col);",
+        "result": [
+          "0.19432323191699075"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "kurtosis(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: kurtosis"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT last(col) FROM VALUES (10), (5), (20) AS tab(col);",
+        "result": [
+          "20"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "last(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT last(col) FROM VALUES (10), (5), (NULL) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "last(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT last(col, true) FROM VALUES (10), (5), (NULL) AS tab(col);",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "last(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Boolean] to the signature OneOf([ArraySignature(Array), Numeric(1), Uniform(1, [Utf8])]) failed. No function matches the given name and argument types 'last_value(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tlast_value(array)\n\tlast_value(Numeric(1))\n\tlast_value(Utf8)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT last_value(col) FROM VALUES (10), (5), (20) AS tab(col);",
+        "result": [
+          "20"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "last_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT last_value(col) FROM VALUES (10), (5), (NULL) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "last_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT last_value(col, true) FROM VALUES (10), (5), (NULL) AS tab(col);",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "last_value(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Boolean] to the signature OneOf([ArraySignature(Array), Numeric(1), Uniform(1, [Utf8])]) failed. No function matches the given name and argument types 'last_value(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tlast_value(array)\n\tlast_value(Numeric(1))\n\tlast_value(Utf8)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT max(col) FROM VALUES (10), (50), (20) AS tab(col);",
+        "result": [
+          "50"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "max(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT max_by(x, y) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);",
+        "result": [
+          "b"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "max_by(x, y)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: max_by"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mean(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "2.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mean(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mean(col) FROM VALUES (1), (2), (NULL) AS tab(col);",
+        "result": [
+          "1.5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mean(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT median(col) FROM VALUES (0), (10) AS tab(col);",
+        "result": [
+          "5.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "median(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT median(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);",
+        "result": [
+          "0-5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "median(col)",
+              "nullable": true,
+              "type": "interval year to month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: This feature is not implemented: MedianAccumulator not supported for median(col) with Interval(YearMonth)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT min(col) FROM VALUES (10), (-1), (20) AS tab(col);",
+        "result": [
+          "-1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "min(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT min_by(x, y) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);",
+        "result": [
+          "a"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "min_by(x, y)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: min_by"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mode(col) FROM VALUES (0), (10), (10) AS tab(col);",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mode(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: mode"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mode(col) FROM VALUES (0), (10), (10), (null), (null), (null) AS tab(col);",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mode(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: mode"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mode(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH), (INTERVAL '10' MONTH) AS tab(col);",
+        "result": [
+          "0-10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mode(col)",
+              "nullable": true,
+              "type": "interval month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: mode"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT name, grouping(name), sum(age) FROM VALUES (2, 'Alice'), (5, 'Bob') people(age, name) GROUP BY cube(name);",
+        "result": [
+          "Alice\t0\t2",
+          "Bob\t0\t5",
+          "NULL\t1\t7"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "name",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "grouping(name)",
+              "nullable": false,
+              "type": "byte",
+              "metadata": {}
+            },
+            {
+              "name": "sum(age)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: expression: Cube([[Identifier(Ident { value: \"name\", quote_style: None })]])"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT name, grouping_id(), sum(age), avg(height) FROM VALUES (2, 'Alice', 165), (5, 'Bob', 180) people(age, name, height) GROUP BY cube(name, height);",
+        "result": [
+          "Alice\t0\t2\t165.0",
+          "Alice\t1\t2\t165.0",
+          "NULL\t3\t7\t172.5",
+          "Bob\t0\t5\t180.0",
+          "Bob\t1\t5\t180.0",
+          "NULL\t2\t2\t165.0",
+          "NULL\t2\t5\t180.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "name",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "grouping_id()",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            },
+            {
+              "name": "sum(age)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            },
+            {
+              "name": "avg(height)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: expression: Cube([[Identifier(Ident { value: \"name\", quote_style: None })], [Identifier(Ident { value: \"height\", quote_style: None })]])"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile(col, 0.3) FROM VALUES (0), (10) AS tab(col);",
+        "result": [
+          "3.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile(col, 0.3, 1)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: percentile"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile(col, 0.5) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);",
+        "result": [
+          "0-5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile(col, 0.5, 1)",
+              "nullable": true,
+              "type": "interval year to month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: percentile"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile(col, array(0.2, 0.5)) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '10' SECOND) AS tab(col);",
+        "result": [
+          "[0 00:00:02.000000000,0 00:00:05.000000000]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile(col, array(0.2, 0.5), 1)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "interval day to second",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: percentile"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile(col, array(0.25, 0.75)) FROM VALUES (0), (10) AS tab(col);",
+        "result": [
+          "[2.5,7.5]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile(col, array(0.25, 0.75), 1)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "double",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: percentile"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile_approx(col, 0.5, 100) FROM VALUES (0), (6), (7), (9), (10) AS tab(col);",
+        "result": [
+          "7"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile_approx(col, 0.5, 100)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: percentile_approx"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile_approx(col, 0.5, 100) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '1' MONTH), (INTERVAL '2' MONTH), (INTERVAL '10' MONTH) AS tab(col);",
+        "result": [
+          "0-1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile_approx(col, 0.5, 100)",
+              "nullable": true,
+              "type": "interval month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: percentile_approx"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile_approx(col, array(0.5, 0.4, 0.1), 100) FROM VALUES (0), (1), (2), (10) AS tab(col);",
+        "result": [
+          "[1,1,0]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile_approx(col, array(0.5, 0.4, 0.1), 100)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: percentile_approx"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile_approx(col, array(0.5, 0.7), 100) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '1' SECOND), (INTERVAL '2' SECOND), (INTERVAL '10' SECOND) AS tab(col);",
+        "result": [
+          "[0 00:00:01.000000000,0 00:00:02.000000000]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile_approx(col, array(0.5, 0.7), 100)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "interval second",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: percentile_approx"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgx(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "2.75"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgx(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "3.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgx(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "3.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgx(y, x) FROM VALUES (1, null) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Utf8] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_avgx(Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_avgx(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgx(y, x) FROM VALUES (null, 1) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Int32] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_avgx(Utf8, Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_avgx(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "1.75"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "1.6666666666666667"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "1.5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgy(y, x) FROM VALUES (1, null) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Utf8] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_avgy(Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_avgy(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_avgy(y, x) FROM VALUES (null, 1) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_avgy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Int32] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_avgy(Utf8, Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_avgy(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_count(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "4"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_count(y, x)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_count(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_count(y, x)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_count(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_count(y, x)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_intercept(y, x) FROM VALUES (1, null) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_intercept(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Utf8] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_intercept(Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_intercept(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_intercept(y, x) FROM VALUES (1,1), (2,2), (3,3) AS tab(y, x);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_intercept(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_intercept(y, x) FROM VALUES (null, 1) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_intercept(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Int32] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_intercept(Utf8, Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_intercept(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "0.2727272727272727"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_r2(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "0.7500000000000001"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_r2(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_r2(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_r2(y, x) FROM VALUES (1, null) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_r2(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Utf8] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_r2(Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_r2(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_r2(y, x) FROM VALUES (null, 1) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_r2(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Int32] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_r2(Utf8, Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_r2(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_slope(y, x) FROM VALUES (1, null) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_slope(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Utf8] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_slope(Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_slope(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_slope(y, x) FROM VALUES (1,1), (2,2), (3,3) AS tab(y, x);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_slope(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_slope(y, x) FROM VALUES (null, 1) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_slope(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Int32] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_slope(Utf8, Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_slope(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "2.75"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_sxx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "2.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_sxx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "2.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_sxx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_sxy(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "0.75"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_sxy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_sxy(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_sxy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_sxy(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_sxy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_syy(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "0.75"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_syy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_syy(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "0.6666666666666666"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_syy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_syy(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);",
+        "result": [
+          "0.5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_syy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT skewness(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col);",
+        "result": [
+          "1.1135657469022011"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "skewness(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: skewness"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT skewness(col) FROM VALUES (-1000), (-100), (10), (20) AS tab(col);",
+        "result": [
+          "-1.1135657469022011"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "skewness(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: skewness"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT some(col) FROM VALUES (NULL), (true), (false) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "some(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT some(col) FROM VALUES (false), (false), (NULL) AS tab(col);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "some(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT some(col) FROM VALUES (true), (false), (false) AS tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "some(col)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT std(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "std(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT stddev(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "stddev(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT stddev_pop(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "0.816496580927726"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "stddev_pop(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT stddev_samp(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "stddev_samp(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6) FROM VALUES (1), (1), (1) AS tab(col);",
+        "result": [
+          "010000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: bitmap_bit_position"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "070000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: bitmap_bit_position"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substring(hex(bitmap_or_agg(col)), 0, 6) FROM VALUES (X '10'), (X '10'), (X '10') AS tab(col);",
+        "result": [
+          "100000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(hex(bitmap_or_agg(col)), 0, 6)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: '10' at Line: 1, Column: 64"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substring(hex(bitmap_or_agg(col)), 0, 6) FROM VALUES (X '10'), (X '20'), (X '40') AS tab(col);",
+        "result": [
+          "700000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(hex(bitmap_or_agg(col)), 0, 6)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: '10' at Line: 1, Column: 64"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sum(col) FROM VALUES (5), (10), (15) AS tab(col);",
+        "result": [
+          "30"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sum(col)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sum(col) FROM VALUES (NULL), (10), (15) AS tab(col);",
+        "result": [
+          "25"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sum(col)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sum(col) FROM VALUES (NULL), (NULL) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sum(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Execution error: User-defined coercion failed with Execution(\"Sum not supported for Utf8\") No function matches the given name and argument types 'sum(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tsum(UserDefined)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_avg(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "2.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_avg(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_avg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_avg(col) FROM VALUES (1), (2), (NULL) AS tab(col);",
+        "result": [
+          "1.5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_avg(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_avg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_avg(col) FROM VALUES (interval '2147483647 months'), (interval '1 months') AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_avg(col)",
+              "nullable": true,
+              "type": "interval year to month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_avg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_sum(col) FROM VALUES (5), (10), (15) AS tab(col);",
+        "result": [
+          "30"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_sum(col)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_sum"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_sum(col) FROM VALUES (9223372036854775807L), (1L) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_sum(col)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_sum"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_sum(col) FROM VALUES (NULL), (10), (15) AS tab(col);",
+        "result": [
+          "25"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_sum(col)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_sum"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_sum(col) FROM VALUES (NULL), (NULL) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_sum(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_sum"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT var_pop(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "0.6666666666666666"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "var_pop(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT var_samp(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "var_samp(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT variance(col) FROM VALUES (1), (2), (3) AS tab(col);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "variance(col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    }
+  ]
+}

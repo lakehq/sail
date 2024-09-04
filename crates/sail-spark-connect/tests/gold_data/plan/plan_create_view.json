@@ -1,0 +1,18 @@
+{
+  "tests": [
+    {
+      "input": "CREATE VIEW testView AS FROM jt\nINSERT INTO tbl1 SELECT * WHERE jt.id < 5\nINSERT INTO tbl2 SELECT * WHERE jt.id > 4",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'INSERT'.(line 2, pos 0)\n\n== SQL ==\nCREATE VIEW testView AS FROM jt\nINSERT INTO tbl1 SELECT * WHERE jt.id < 5\n^^^\nINSERT INTO tbl2 SELECT * WHERE jt.id > 4\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: SELECT, VALUES, or a subquery in the query body, found: FROM at Line: 1, Column: 25"
+      }
+    },
+    {
+      "input": "CREATE VIEW testView AS INSERT INTO jt VALUES(1, 1)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'INSERT'.(line 1, pos 24)\n\n== SQL ==\nCREATE VIEW testView AS INSERT INTO jt VALUES(1, 1)\n------------------------^^^\n",
+      "output": {
+        "failure": "not supported: INSERT statement in set expression"
+      }
+    }
+  ]
+}

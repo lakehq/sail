@@ -1,0 +1,46 @@
+name: Gold data script validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/spark-gold-data/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/spark-gold-data/**"
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        name: Checkout Spark
+        with:
+          repository: apache/spark
+          path: opt/spark
+          ref: v3.5.1
+          fetch-depth: 1
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "corretto"
+          java-version: "17"
+
+      - uses: ./.github/actions/setup-rust
+        name: Set up Rust
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bootstrap gold data
+        run: |
+          scripts/spark-gold-data/bootstrap.sh
+
+      - name: Update gold data
+        run: |
+          env SAIL_UPDATE_GOLD_DATA=1 cargo test
+
+      - uses: ./.github/actions/detect-changes

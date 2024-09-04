@@ -2,42 +2,24 @@ name: Build
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
-permissions:
-  contents: read
-  pull-requests: write
+    branches: [main]
 
 jobs:
   build:
+    name: Build
     runs-on: ubuntu-latest
-    outputs:
-      test_marker: ${{ steps.info.outputs.test_marker }}
-      test_head_ref: ${{ steps.info.outputs.test_head_ref }}
-      test_base_ref: ${{ steps.info.outputs.test_base_ref }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          # When the workflow is triggered by a pull request event, the commit being pushed
-          # is a parent of the merge commit. So we need a fetch depth of 2 to get the commit message.
-          fetch-depth: 2
 
-      - name: Get job information
-        id: info
-        run: |
-          commit="${{ github.event.pull_request.head.sha || github.sha }}"
-          commit_message="$(git show --pretty='format:%s' -s "${commit}")"
-          test_marker="$(printf '%s' "${commit_message}" | grep -q -i '\[\(spark tests\?\|tests\?\)\]' && printf 'true' || printf 'false')"
-          test_head_ref="${{ github.event_name == 'pull_request' && github.ref || github.event.after || github.sha }}"
-          test_base_ref="${{ github.event_name == 'pull_request' && github.base_ref || github.event.before || github.sha }}"
-          echo "test_marker=${test_marker}" >> "$GITHUB_OUTPUT"
-          echo "test_head_ref=${test_head_ref}" >> "$GITHUB_OUTPUT"
-          echo "test_base_ref=${test_base_ref}" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - uses: ./.github/actions/setup-rust
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Format check
         run: cargo +nightly fmt -- --check
@@ -45,32 +27,57 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Build
-        run: cargo build
-
       - name: Test
         run: cargo test
 
-  run-spark-tests:
-    uses: ./.github/workflows/run-spark-tests.yml
-    if: |
-      (github.event_name == 'pull_request' && github.event.action == 'opened') ||
-      (github.event_name == 'pull_request' && needs.build.outputs.test_marker == 'true') ||
-      github.event_name == 'push'
-    needs:
-      - build
-    with:
-      head_ref: ${{ needs.build.outputs.test_head_ref }}
-      base_ref: ${{ needs.build.outputs.test_base_ref }}
+      - name: Build Python package
+        uses: PyO3/maturin-action@v1
 
-  analyze-gold-data:
-    uses: ./.github/workflows/analyze-gold-data.yml
-    if: |
-      (github.event_name == 'pull_request' && github.event.action == 'opened') ||
-      (github.event_name == 'pull_request' && needs.build.outputs.test_marker == 'true') ||
-      github.event_name == 'push'
+      - name: Upload Python package
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package
+          path: target/wheels
+          retention-days: 1
+
+  spark-tests:
+    name: Spark tests
+    uses: ./.github/workflows/spark-tests.yml
+    permissions:
+      pull-requests: write
+    needs:
+      - build
+
+  python-build:
+    name: Python build
+    uses: ./.github/workflows/python-build.yml
+    needs:
+      - build
+
+  docs-build:
+    name: Docs build
+    uses: ./.github/workflows/docs-build.yml
+    strategy:
+      matrix:
+        stage: ${{ fromJSON(github.event_name == 'push' && '["dev", "prod"]' || '["test"]') }}
     needs:
       - build
     with:
-      head_ref: ${{ needs.build.outputs.test_head_ref }}
-      base_ref: ${{ needs.build.outputs.test_base_ref }}
+      stage: ${{ matrix.stage }}
+      version: main
+
+  docs-deploy:
+    name: Docs deploy
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/docs-deploy.yml
+    strategy:
+      max-parallel: 1
+      matrix:
+        stage: [dev, prod]
+    permissions:
+      id-token: write
+    needs:
+      - docs-build
+    with:
+      stage: ${{ matrix.stage }}
+      version: main

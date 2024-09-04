@@ -1,0 +1,232 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT CASE WHEN 1 < 0 THEN 1 WHEN 2 < 0 THEN 2.0 END;",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "CASE WHEN (1 < 0) THEN 1 WHEN (2 < 0) THEN 2.0 END",
+              "nullable": true,
+              "type": "decimal(11, 1)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT CASE WHEN 1 < 0 THEN 1 WHEN 2 > 0 THEN 2.0 ELSE 1.2 END;",
+        "result": [
+          "2.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "CASE WHEN (1 < 0) THEN 1 WHEN (2 > 0) THEN 2.0 ELSE 1.2 END",
+              "nullable": false,
+              "type": "decimal(11, 1)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT CASE WHEN 1 > 0 THEN 1 WHEN 2 > 0 THEN 2.0 ELSE 1.2 END;",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "CASE WHEN (1 > 0) THEN 1 WHEN (2 > 0) THEN 2.0 ELSE 1.2 END",
+              "nullable": false,
+              "type": "decimal(11, 1)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT coalesce(NULL, 1, NULL);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "coalesce(NULL, 1, NULL)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT if(1 < 2, 'a', 'b');",
+        "result": [
+          "a"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(IF((1 < 2), a, b))",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT ifnull(NULL, array('2'));",
+        "result": [
+          "[\"2\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "ifnull(NULL, array(2))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT nanvl(cast('NaN' as double), 123);",
+        "result": [
+          "123.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "nanvl(CAST(NaN AS DOUBLE), 123)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT nullif(2, 2);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "nullif(2, 2)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT nvl(NULL, array('2'));",
+        "result": [
+          "[\"2\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "nvl(NULL, array(2))",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT nvl2(NULL, 2, 1);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "nvl2(NULL, 2, 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    }
+  ]
+}

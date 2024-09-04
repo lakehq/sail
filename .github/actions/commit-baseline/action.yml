@@ -1,0 +1,17 @@
+name: Commit baseline
+description: Infer baseline commit for comparison between two commits
+outputs:
+  sha:
+    description: The Git SHA of the baseline commit
+    value: ${{ steps.baseline.outputs.sha }}
+  ref:
+    description: The Git reference of the baseline commit
+    value: ${{ steps.baseline.outputs.ref }}
+runs:
+  using: composite
+  steps:
+    - id: baseline
+      run: |
+        echo "sha=${{ (github.event_name == 'pull_request' && github.event.pull_request.base.sha) || (github.event_name == 'push' && github.event.before) || github.sha }}" >> "$GITHUB_OUTPUT"
+        echo "ref=${{ (github.event_name == 'pull_request' && github.base_ref) || github.ref }}" >> "$GITHUB_OUTPUT"
+      shell: bash

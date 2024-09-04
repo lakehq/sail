@@ -1,0 +1,23 @@
+services:
+  minio:
+    image: quay.io/minio/minio:latest
+    command: ["server", "--address", ":9000", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: sail
+      MINIO_ROOT_PASSWORD: password
+      MINIO_VOLUMES: /mnt/data
+    volumes:
+      - minio-data:/mnt/data
+    ports:
+      - "19000:9000"
+      - "19001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      start_period: 30s
+      interval: 5s
+      timeout: 5s
+      retries: 6
+
+volumes:
+  minio-data:
+    driver: local

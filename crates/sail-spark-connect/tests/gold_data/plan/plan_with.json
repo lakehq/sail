@@ -1,0 +1,241 @@
+{
+  "tests": [
+    {
+      "input": "\nWITH cte1 AS (SELECT * FROM testcat.db.tab)\nSELECT * FROM cte1\n      ",
+      "output": {
+        "success": {
+          "query": {
+            "withCtes": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "cte1"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "recursive": false,
+              "ctes": [
+                [
+                  "cte1",
+                  {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "testcat",
+                              "db",
+                              "tab"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedStar": {
+                            "target": null
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  }
+                ]
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "WITH t(x) AS (SELECT c FROM a) SELECT * FROM t",
+      "output": {
+        "success": {
+          "query": {
+            "withCtes": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "recursive": false,
+              "ctes": [
+                [
+                  "t",
+                  {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "a"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "c"
+                            ],
+                            "planId": null
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  }
+                ]
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "with cte1 (select 1) select * from cte1",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: 1 at Line: 1, Column: 19"
+      }
+    },
+    {
+      "input": "with cte1 (select 1), cte1 as (select 1 from cte1) select * from cte1",
+      "exception": "\nCTE definition can't have duplicate names: 'cte1'.(line 1, pos 0)\n\n== SQL ==\nwith cte1 (select 1), cte1 as (select 1 from cte1) select * from cte1\n^^^\n",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: 1 at Line: 1, Column: 19"
+      }
+    },
+    {
+      "input": "with cte1 (select 1), cte2 as (select * from cte1) select * from cte2",
+      "output": {
+        "failure": "invalid argument: sql parser error: Expected: ), found: 1 at Line: 1, Column: 19"
+      }
+    },
+    {
+      "input": "with cte1 as (select * from a) select * from cte1",
+      "output": {
+        "success": {
+          "query": {
+            "withCtes": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "cte1"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "recursive": false,
+              "ctes": [
+                [
+                  "cte1",
+                  {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "a"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedStar": {
+                            "target": null
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  }
+                ]
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    }
+  ]
+}

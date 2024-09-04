@@ -1,0 +1,627 @@
+{
+  "tests": [
+    {
+      "input": "\nstruct<\n  struct:struct<deciMal:DECimal, anotherDecimal:decimAL(5,2)>,\n  MAP:Map<timestamp, varchar(10)>,\n  arrAy:Array<double>,\n  anotherArray:Array<char(9)>>\n    ",
+      "output": {
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "struct",
+                "dataType": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "name": "deciMal",
+                        "dataType": {
+                          "decimal": {
+                            "precision": 10,
+                            "scale": 0
+                          }
+                        },
+                        "nullable": true,
+                        "metadata": []
+                      },
+                      {
+                        "name": "anotherDecimal",
+                        "dataType": {
+                          "decimal": {
+                            "precision": 5,
+                            "scale": 2
+                          }
+                        },
+                        "nullable": true,
+                        "metadata": []
+                      }
+                    ]
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "MAP",
+                "dataType": {
+                  "map": {
+                    "keyType": "timestamp",
+                    "valueType": {
+                      "varChar": {
+                        "length": 10
+                      }
+                    },
+                    "valueContainsNull": true
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "arrAy",
+                "dataType": {
+                  "array": {
+                    "elementType": "double",
+                    "containsNull": true
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "anotherArray",
+                "dataType": {
+                  "array": {
+                    "elementType": {
+                      "char": {
+                        "length": 9
+                      }
+                    },
+                    "containsNull": true
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "Array<map<int, tinYint>>",
+      "output": {
+        "success": {
+          "array": {
+            "elementType": {
+              "map": {
+                "keyType": "integer",
+                "valueType": "byte",
+                "valueContainsNull": true
+              }
+            },
+            "containsNull": true
+          }
+        }
+      }
+    },
+    {
+      "input": "BINARY",
+      "output": {
+        "success": "binary"
+      }
+    },
+    {
+      "input": "BooLean",
+      "output": {
+        "success": "boolean"
+      }
+    },
+    {
+      "input": "ChaR(5)",
+      "output": {
+        "success": {
+          "char": {
+            "length": 5
+          }
+        }
+      }
+    },
+    {
+      "input": "ChaRacter(5)",
+      "output": {
+        "success": {
+          "char": {
+            "length": 5
+          }
+        }
+      }
+    },
+    {
+      "input": "DATE",
+      "output": {
+        "success": "date"
+      }
+    },
+    {
+      "input": "Dec(10, 5)",
+      "output": {
+        "success": {
+          "decimal": {
+            "precision": 10,
+            "scale": 5
+          }
+        }
+      }
+    },
+    {
+      "input": "INT",
+      "output": {
+        "success": "integer"
+      }
+    },
+    {
+      "input": "INTEGER",
+      "output": {
+        "success": "integer"
+      }
+    },
+    {
+      "input": "INTERVAL YEAR TO MONTH",
+      "output": {
+        "success": {
+          "yearMonthInterval": {
+            "startField": "year",
+            "endField": "month"
+          }
+        }
+      }
+    },
+    {
+      "input": "MAP<int, STRING>",
+      "output": {
+        "success": {
+          "map": {
+            "keyType": "integer",
+            "valueType": "string",
+            "valueContainsNull": true
+          }
+        }
+      }
+    },
+    {
+      "input": "MAP<int, struct<varchar:string>>",
+      "output": {
+        "success": {
+          "map": {
+            "keyType": "integer",
+            "valueType": {
+              "struct": {
+                "fields": [
+                  {
+                    "name": "varchar",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              }
+            },
+            "valueContainsNull": true
+          }
+        }
+      }
+    },
+    {
+      "input": "MAp<int, ARRAY<double>>",
+      "output": {
+        "success": {
+          "map": {
+            "keyType": "integer",
+            "valueType": {
+              "array": {
+                "elementType": "double",
+                "containsNull": true
+              }
+            },
+            "valueContainsNull": true
+          }
+        }
+      }
+    },
+    {
+      "input": "Struct<TABLE: string, DATE:boolean>",
+      "output": {
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "TABLE",
+                "dataType": "string",
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "DATE",
+                "dataType": "boolean",
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "Struct<int: int, timestamp:timestamp>",
+      "output": {
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "int",
+                "dataType": "integer",
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "timestamp",
+                "dataType": "timestamp",
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "Struct<x: INT, y: STRING COMMENT 'test'>",
+      "output": {
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "x",
+                "dataType": "integer",
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "y",
+                "dataType": "string",
+                "nullable": true,
+                "metadata": [
+                  [
+                    "comment",
+                    "test"
+                  ]
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "array<doublE>",
+      "output": {
+        "success": {
+          "array": {
+            "elementType": "double",
+            "containsNull": true
+          }
+        }
+      }
+    },
+    {
+      "input": "array<struct<tinYint:tinyint>>",
+      "output": {
+        "success": {
+          "array": {
+            "elementType": {
+              "struct": {
+                "fields": [
+                  {
+                    "name": "tinYint",
+                    "dataType": "byte",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              }
+            },
+            "containsNull": true
+          }
+        }
+      }
+    },
+    {
+      "input": "bigint",
+      "output": {
+        "success": "long"
+      }
+    },
+    {
+      "input": "cHaR(27)",
+      "output": {
+        "success": {
+          "char": {
+            "length": 27
+          }
+        }
+      }
+    },
+    {
+      "input": "dOUBle",
+      "output": {
+        "success": "double"
+      }
+    },
+    {
+      "input": "deC",
+      "output": {
+        "success": {
+          "decimal": {
+            "precision": 10,
+            "scale": 0
+          }
+        }
+      }
+    },
+    {
+      "input": "decimal",
+      "output": {
+        "success": {
+          "decimal": {
+            "precision": 10,
+            "scale": 0
+          }
+        }
+      }
+    },
+    {
+      "input": "decimal(10, 5)",
+      "output": {
+        "success": {
+          "decimal": {
+            "precision": 10,
+            "scale": 5
+          }
+        }
+      }
+    },
+    {
+      "input": "float",
+      "output": {
+        "success": "float"
+      }
+    },
+    {
+      "input": "integer",
+      "output": {
+        "success": "integer"
+      }
+    },
+    {
+      "input": "interval",
+      "output": {
+        "success": "calendarInterval"
+      }
+    },
+    {
+      "input": "interval day to second",
+      "output": {
+        "success": {
+          "dayTimeInterval": {
+            "startField": "day",
+            "endField": "second"
+          }
+        }
+      }
+    },
+    {
+      "input": "it is not a data type",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'is'.(line 1, pos 3)\n\n== SQL ==\nit is not a data type\n---^^^\n",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "smallINT",
+      "output": {
+        "success": "short"
+      }
+    },
+    {
+      "input": "strUCt<>",
+      "output": {
+        "success": {
+          "struct": {
+            "fields": []
+          }
+        }
+      }
+    },
+    {
+      "input": "string",
+      "output": {
+        "success": "string"
+      }
+    },
+    {
+      "input": "struct<`x+y`:int, `!@#$%^&*()`:string, `1_2.345<>:\"`:varchar(20)>",
+      "output": {
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "x+y",
+                "dataType": "integer",
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "!@#$%^&*()",
+                "dataType": "string",
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "1_2.345<>:\"",
+                "dataType": {
+                  "varChar": {
+                    "length": 20
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "struct<end: long, select: int, from: string>",
+      "output": {
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "end",
+                "dataType": "long",
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "select",
+                "dataType": "integer",
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "from",
+                "dataType": "string",
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "struct<intType: int, ts:timestamp>",
+      "output": {
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "intType",
+                "dataType": "integer",
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "ts",
+                "dataType": "timestamp",
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "struct<x int, y string>",
+      "output": {
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "x",
+                "dataType": "integer",
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "y",
+                "dataType": "string",
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "struct<x+y: int, 1.1:timestamp>",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '+'.(line 1, pos 8)\n\n== SQL ==\nstruct<x+y: int, 1.1:timestamp>\n--------^^^\n",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "struct<x: int",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input: missing '>'.(line 1, pos 13)\n\n== SQL ==\nstruct<x: int\n-------------^^^\n",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "timestamp",
+      "output": {
+        "success": "timestamp"
+      }
+    },
+    {
+      "input": "timestamp_ltz",
+      "output": {
+        "success": "timestamp"
+      }
+    },
+    {
+      "input": "timestamp_ntz",
+      "output": {
+        "success": "timestampNtz"
+      }
+    },
+    {
+      "input": "tinYint",
+      "output": {
+        "success": "byte"
+      }
+    },
+    {
+      "input": "unknown",
+      "exception": "\n[UNSUPPORTED_DATATYPE] Unsupported data type \"UNKNOWN\".(line 1, pos 0)\n\n== SQL ==\nunknown\n^^^\n",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "unknown(1,2,3)",
+      "exception": "\n[UNSUPPORTED_DATATYPE] Unsupported data type \"UNKNOWN(1,2,3)\".(line 1, pos 0)\n\n== SQL ==\nunknown(1,2,3)\n^^^\n",
+      "output": {
+        "failure": "error in JSON serde: expected value at line 1 column 1"
+      }
+    },
+    {
+      "input": "varchAr(20)",
+      "output": {
+        "success": {
+          "varChar": {
+            "length": 20
+          }
+        }
+      }
+    },
+    {
+      "input": "void",
+      "output": {
+        "success": "null"
+      }
+    }
+  ]
+}

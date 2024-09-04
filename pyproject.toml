@@ -1,14 +1,44 @@
 [project]
-name = "framework"
-version = "0.0.1"
-description = "LakeSail framework Python library"
+name = "pysail"
+version = "0.1.1"
+description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
 ]
 readme = "README.md"
-license = "Apache-2.0"
-requires-python = ">=3.8"
+license = {file = "LICENSE"}
+# Spark 3.5 does not support Python 3.12 yet.
+requires-python = ">=3.8,<3.12"
 dependencies = []
+keywords = ["data", "big data", "sql", "spark", "pyspark", "arrow", "datafusion"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.optional-dependencies]
+spark = [
+    "pyspark[connect]>=3.5,<4.0",
+]
+
+[project.urls]
+Homepage = "https://lakesail.com"
+Documentation = "https://docs.lakesail.com/sail/latest/"
+Repository = "https://github.com/lakehq/sail"
+Issues = "https://github.com/lakehq/sail/issues"
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
@@ -30,12 +60,31 @@ path = ".venvs/default"
 python = "3.11"
 installer = "pip"
 dependencies = [
-    "pyspark[connect,sql]==3.5.1",
+    "pyspark[connect]==3.5.1",
     "ibis-framework[pyspark]~=9.1",
     "pytest~=8.2",
 ]
 
 [tool.hatch.envs.default.overrides]
+env.CI.installer = "uv"
+
+[tool.hatch.envs.default.scripts]
+install-pysail = "{env:HATCH_UV} pip install pysail --no-index -f target/wheels --force-reinstall"
+
+[tool.hatch.envs.docs]
+detached = true
+path = ".venvs/docs"
+python = "3.11"
+installer = "pip"
+dependencies = [
+    "sphinx~=8.0",
+]
+
+[tool.hatch.envs.docs.scripts]
+install-pysail = "{env:HATCH_UV} pip install pysail --no-index -f target/wheels --force-reinstall"
+build = "sphinx-build python/pysail/docs python/pysail/docs/_build -b json"
+
+[tool.hatch.envs.docs.overrides]
 env.CI.installer = "uv"
 
 [tool.hatch.envs.test]
@@ -79,21 +128,32 @@ dependencies = [
 
 [tool.hatch.envs.test.scripts]
 install-pyspark = "{env:HATCH_UV} pip install opt/spark/python/dist/pyspark-3.5.1.tar.gz"
+install-pysail = "{env:HATCH_UV} pip install pysail --no-index -f target/wheels --force-reinstall"
 
 [tool.hatch.envs.test.overrides]
 env.CI.installer = "uv"
 
 [tool.hatch.build.targets.sdist]
-packages = ["python/framework"]
+packages = ["python/pysail"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["python/framework"]
+packages = ["python/pysail"]
+
+[tool.ruff.lint.per-file-ignores]
+"python/pysail/docs/conf.py" = ["INP001"]
+"python/pysail/examples/**/*.py" = ["T201"]
+"python/pysail/tests/**/*.py" = ["S101"]
+"scripts/**/*.py" = ["SLF001"]
 
 [tool.pytest.ini_options]
 testpaths = ["python"]
 
 [tool.maturin]
 python-source = "python"
-module-name = "framework._native"
-manifest-path = "crates/framework-python/Cargo.toml"
-features = ["pyo3/extension-module", "pyo3/abi3-py38"]
+module-name = "pysail._native"
+manifest-path = "crates/sail-python/Cargo.toml"
+features = [
+    "pyo3/extension-module",
+    "pyo3/abi3-py38",
+    "pyo3/generate-import-lib",
+]
