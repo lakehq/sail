@@ -10,7 +10,7 @@ use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub fn resolve_literal(&self, literal: spec::Literal) -> PlanResult<ScalarValue> {
-        use spec::{Decimal128, Decimal256, DecimalType, Literal};
+        use spec::{Decimal128, Decimal256, Literal};
 
         match literal {
             Literal::Null => Ok(ScalarValue::Null),
@@ -22,29 +22,21 @@ impl PlanResolver<'_> {
             Literal::Long(x) => Ok(ScalarValue::Int64(Some(x))),
             Literal::Float(x) => Ok(ScalarValue::Float32(Some(x))),
             Literal::Double(x) => Ok(ScalarValue::Float64(Some(x))),
-            Literal::Decimal128(decimal) => {
-                if let DecimalType::Decimal128(Decimal128 {
+            Literal::Decimal128(decimal128) => {
+                let Decimal128 {
                     value,
                     precision,
                     scale,
-                }) = decimal
-                {
-                    Ok(ScalarValue::Decimal128(Some(value), precision, scale))
-                } else {
-                    Err(PlanError::invalid("Expected Decimal128".to_string()))
-                }
+                } = decimal128;
+                Ok(ScalarValue::Decimal128(Some(value), precision, scale))
             }
-            Literal::Decimal256(decimal) => {
-                if let DecimalType::Decimal256(Decimal256 {
+            Literal::Decimal256(decimal256) => {
+                let Decimal256 {
                     value,
                     precision,
                     scale,
-                }) = decimal
-                {
-                    Ok(ScalarValue::Decimal256(Some(value), precision, scale))
-                } else {
-                    Err(PlanError::invalid("Expected Decimal128".to_string()))
-                }
+                } = decimal256;
+                Ok(ScalarValue::Decimal256(Some(value), precision, scale))
             }
             Literal::String(x) => Ok(ScalarValue::Utf8(Some(x))),
             Literal::Date { days } => Ok(ScalarValue::Date32(Some(days))),

@@ -3,7 +3,7 @@ use std::ops::Neg;
 use std::str::FromStr;
 
 use datafusion::arrow::datatypes::{
-    DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION,
+    i256, DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION,
     DECIMAL256_MAX_PRECISION as ARROW_DECIMAL256_MAX_PRECISION,
     DECIMAL256_MAX_SCALE as ARROW_DECIMAL256_MAX_SCALE,
 };
@@ -154,9 +154,7 @@ impl TryFrom<LiteralValue<spec::Decimal128>> for spec::Literal {
     type Error = SqlError;
 
     fn try_from(literal: LiteralValue<spec::Decimal128>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Decimal128(spec::DecimalType::Decimal128(
-            literal.0,
-        )))
+        Ok(spec::Literal::Decimal128(literal.0))
     }
 }
 
@@ -164,9 +162,7 @@ impl TryFrom<LiteralValue<spec::Decimal256>> for spec::Literal {
     type Error = SqlError;
 
     fn try_from(literal: LiteralValue<spec::Decimal256>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Decimal256(spec::DecimalType::Decimal256(
-            literal.0,
-        )))
+        Ok(spec::Literal::Decimal256(literal.0))
     }
 }
 
@@ -449,11 +445,7 @@ impl TryFrom<String> for LiteralValue<spec::Decimal128> {
     type Error = SqlError;
 
     fn try_from(value: String) -> SqlResult<Self> {
-        let decimal_type = parse_decimal_string(value.as_str())?;
-        match decimal_type {
-            spec::DecimalType::Decimal128(decimal) => Ok(LiteralValue(decimal)),
-            _ => Err(SqlError::invalid(format!("Decimal128: {value}"))),
-        }
+        Ok(LiteralValue(parse_decimal_128_string(value.as_str())?))
     }
 }
 
@@ -461,11 +453,7 @@ impl TryFrom<String> for LiteralValue<spec::Decimal256> {
     type Error = SqlError;
 
     fn try_from(value: String) -> SqlResult<Self> {
-        let decimal_type = parse_decimal_string(value.as_str())?;
-        match decimal_type {
-            spec::DecimalType::Decimal256(decimal) => Ok(LiteralValue(decimal)),
-            _ => Err(SqlError::invalid(format!("Decimal256: {value}"))),
-        }
+        Ok(LiteralValue(parse_decimal_256_string(value.as_str())?))
     }
 }
 
@@ -586,6 +574,22 @@ where
         .map_err(|_| error())
 }
 
+pub fn parse_decimal_128_string(s: &str) -> SqlResult<spec::Decimal128> {
+    let decimal_type = parse_decimal_string(s)?;
+    match decimal_type {
+        spec::DecimalType::Decimal128(decimal128) => Ok(decimal128),
+        _ => Err(SqlError::invalid(format!("Decimal128: {s}"))),
+    }
+}
+
+pub fn parse_decimal_256_string(s: &str) -> SqlResult<spec::Decimal256> {
+    let decimal_type = parse_decimal_string(s)?;
+    match decimal_type {
+        spec::DecimalType::Decimal256(decimal256) => Ok(decimal256),
+        _ => Err(SqlError::invalid(format!("Decimal256: {s}"))),
+    }
+}
+
 pub fn parse_decimal_string(s: &str) -> SqlResult<spec::DecimalType> {
     let error = || SqlError::invalid(format!("decimal: {s}"));
     let captures = DECIMAL_REGEX
@@ -628,12 +632,12 @@ pub fn parse_decimal_string(s: &str) -> SqlResult<spec::DecimalType> {
     {
         Err(error())
     } else if precision > ARROW_DECIMAL128_MAX_PRECISION {
-        let value = value.parse().map_err(|_| error())?;
+        let value: i256 = value.parse().map_err(|_| error())?;
         Ok(spec::DecimalType::Decimal256(spec::Decimal256::new(
             value, precision, scale,
         )))
     } else {
-        let value = value.parse().map_err(|_| error())?;
+        let value: i128 = value.parse().map_err(|_| error())?;
         Ok(spec::DecimalType::Decimal128(spec::Decimal128::new(
             value, precision, scale,
         )))

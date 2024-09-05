@@ -196,7 +196,8 @@ impl PlanFormatter for DefaultPlanFormatter {
                 let mut buffer = ryu::Buffer::new();
                 Ok(buffer.format(*x).to_string())
             }
-            Literal::Decimal128(x) | Literal::Decimal256(x) => Ok(DecimalDisplay(x).to_string()),
+            Literal::Decimal128(x) => Ok(Decimal128Display(x).to_string()),
+            Literal::Decimal256(x) => Ok(Decimal256Display(x).to_string()),
             Literal::String(x) => Ok(x.clone()),
             Literal::Date { days } => {
                 let date = chrono::NaiveDateTime::UNIX_EPOCH + chrono::Duration::days(*days as i64);
@@ -386,18 +387,17 @@ impl Display for BinaryDisplay<'_> {
     }
 }
 
-struct DecimalDisplay<'a>(pub &'a spec::DecimalType);
-
-impl Display for DecimalDisplay<'_> {
+struct Decimal128Display<'a>(pub &'a spec::Decimal128);
+impl Display for Decimal128Display<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            spec::DecimalType::Decimal128(decimal) => {
-                format_decimal(&decimal.value, decimal.scale, f)
-            }
-            spec::DecimalType::Decimal256(decimal) => {
-                format_decimal(&decimal.value, decimal.scale, f)
-            }
-        }
+        format_decimal(&self.0.value, self.0.scale, f)
+    }
+}
+
+struct Decimal256Display<'a>(pub &'a spec::Decimal256);
+impl Display for Decimal256Display<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        format_decimal(&self.0.value, self.0.scale, f)
     }
 }
 
@@ -444,53 +444,43 @@ mod tests {
         assert_eq!(to_string(Literal::Float(1.0))?, "1.0");
         assert_eq!(to_string(Literal::Double(-0.1))?, "-0.1");
         assert_eq!(
-            to_string(Literal::Decimal128(spec::DecimalType::Decimal128(
-                spec::Decimal128 {
-                    value: 123,
-                    precision: 3,
-                    scale: 0,
-                }
-            )))?,
+            to_string(Literal::Decimal128(spec::Decimal128 {
+                value: 123,
+                precision: 3,
+                scale: 0,
+            }))?,
             "123",
         );
         assert_eq!(
-            to_string(Literal::Decimal128(spec::DecimalType::Decimal128(
-                spec::Decimal128 {
-                    value: -123,
-                    precision: 3,
-                    scale: 0,
-                }
-            )))?,
+            to_string(Literal::Decimal128(spec::Decimal128 {
+                value: -123,
+                precision: 3,
+                scale: 0,
+            }))?,
             "-123",
         );
         assert_eq!(
-            to_string(Literal::Decimal128(spec::DecimalType::Decimal128(
-                spec::Decimal128 {
-                    value: 123,
-                    precision: 3,
-                    scale: 2,
-                }
-            )))?,
+            to_string(Literal::Decimal128(spec::Decimal128 {
+                value: 123,
+                precision: 3,
+                scale: 2,
+            }))?,
             "1.23",
         );
         assert_eq!(
-            to_string(Literal::Decimal128(spec::DecimalType::Decimal128(
-                spec::Decimal128 {
-                    value: 123,
-                    precision: 3,
-                    scale: 5,
-                }
-            )))?,
+            to_string(Literal::Decimal128(spec::Decimal128 {
+                value: 123,
+                precision: 3,
+                scale: 5,
+            }))?,
             "0.00123",
         );
         assert_eq!(
-            to_string(Literal::Decimal128(spec::DecimalType::Decimal128(
-                spec::Decimal128 {
-                    value: 12300,
-                    precision: 3,
-                    scale: -2,
-                }
-            )))?,
+            to_string(Literal::Decimal128(spec::Decimal128 {
+                value: 12300,
+                precision: 3,
+                scale: -2,
+            }))?,
             "12300",
         );
         assert_eq!(to_string(Literal::String("abc".to_string()))?, "abc");

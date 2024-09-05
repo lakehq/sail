@@ -32,11 +32,9 @@
               {
                 "literal": {
                   "decimal128": {
-                    "decimal128": {
-                      "value": 12300000000,
-                      "precision": 11,
-                      "scale": 0
-                    }
+                    "value": 12300000000,
+                    "precision": 11,
+                    "scale": 0
                   }
                 }
               }
@@ -64,11 +62,9 @@
               {
                 "literal": {
                   "decimal128": {
-                    "decimal128": {
-                      "value": 90,
-                      "precision": 2,
-                      "scale": 0
-                    }
+                    "value": 90,
+                    "precision": 2,
+                    "scale": 0
                   }
                 }
               }
@@ -107,11 +103,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 90,
-                "precision": 2,
-                "scale": 0
-              }
+              "value": 90,
+              "precision": 2,
+              "scale": 0
             }
           }
         }
@@ -130,11 +124,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 90,
-                "precision": 2,
-                "scale": 0
-              }
+              "value": 90,
+              "precision": 2,
+              "scale": 0
             }
           }
         }
@@ -142,19 +134,43 @@
     },
     {
       "input": "1.20E-38BD",
-      "exception": "\n[DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION] Decimal precision 40 exceeds max precision 38..(line 1, pos 0)\n\n== SQL ==\n1.20E-38BD\n^^^\n",
       "output": {
         "success": {
           "literal": {
             "decimal256": {
-              "decimal256": {
-                "value": "120",
-                "precision": 40,
-                "scale": 40
-              }
+              "value": [
+                120,
+                0
+              ],
+              "precision": 40,
+              "scale": 40
             }
           }
         }
+      }
+    },
+    {
+      "input": "1200000000000000000000000000000000000.00000",
+      "output": {
+        "success": {
+          "literal": {
+            "decimal256": {
+              "value": [
+                220606843829660860892138184017589567488,
+                352
+              ],
+              "precision": 42,
+              "scale": 5
+            }
+          }
+        }
+      }
+    },
+    {
+      "input": "1.20E-76BD",
+      "exception": "\n[DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION] Decimal precision 78 exceeds max precision 76..(line 1, pos 0)\n\n== SQL ==\n1.20E-76BD\n^^^\n",
+      "output": {
+        "failure": "invalid argument: decimal: 1.20E-76"
       }
     },
     {
@@ -163,11 +179,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 12300000000,
-                "precision": 11,
-                "scale": 0
-              }
+              "value": 12300000000,
+              "precision": 11,
+              "scale": 0
             }
           }
         }
@@ -233,11 +247,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 12308,
-                "precision": 5,
-                "scale": 2
-              }
+              "value": 12308,
+              "precision": 5,
+              "scale": 2
             }
           }
         }
@@ -249,11 +261,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 1230,
-                "precision": 4,
-                "scale": 1
-              }
+              "value": 1230,
+              "precision": 4,
+              "scale": 1
             }
           }
         }
@@ -265,11 +275,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 1230,
-                "precision": 29,
-                "scale": 29
-              }
+              "value": 1230,
+              "precision": 29,
+              "scale": 29
             }
           }
         }
@@ -281,11 +289,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 123,
-                "precision": 3,
-                "scale": 0
-              }
+              "value": 123,
+              "precision": 3,
+              "scale": 0
             }
           }
         }
@@ -297,11 +303,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 1230000000000,
-                "precision": 13,
-                "scale": 0
-              }
+              "value": 1230000000000,
+              "precision": 13,
+              "scale": 0
             }
           }
         }
@@ -313,11 +317,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 123,
-                "precision": 10,
-                "scale": 10
-              }
+              "value": 123,
+              "precision": 10,
+              "scale": 10
             }
           }
         }
@@ -329,11 +331,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 1230000000000,
-                "precision": 13,
-                "scale": 0
-              }
+              "value": 1230000000000,
+              "precision": 13,
+              "scale": 0
             }
           }
         }
@@ -384,11 +384,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 78732472347982492793712334,
-                "precision": 26,
-                "scale": 4
-              }
+              "value": 78732472347982492793712334,
+              "precision": 26,
+              "scale": 4
             }
           }
         }
@@ -400,11 +398,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 78732472347982492793712334,
-                "precision": 26,
-                "scale": 0
-              }
+              "value": 78732472347982492793712334,
+              "precision": 26,
+              "scale": 0
             }
           }
         }
@@ -423,11 +419,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 90,
-                "precision": 2,
-                "scale": 0
-              }
+              "value": 90,
+              "precision": 2,
+              "scale": 0
             }
           }
         }
@@ -439,11 +433,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 90,
-                "precision": 2,
-                "scale": 0
-              }
+              "value": 90,
+              "precision": 2,
+              "scale": 0
             }
           }
         }
@@ -455,11 +447,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 9000,
-                "precision": 4,
-                "scale": 2
-              }
+              "value": 9000,
+              "precision": 4,
+              "scale": 2
             }
           }
         }
@@ -471,11 +461,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 900,
-                "precision": 3,
-                "scale": 1
-              }
+              "value": 900,
+              "precision": 3,
+              "scale": 1
             }
           }
         }
@@ -487,11 +475,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 90912830918230182310293801923652346786,
-                "precision": 38,
-                "scale": 0
-              }
+              "value": 90912830918230182310293801923652346786,
+              "precision": 38,
+              "scale": 0
             }
           }
         }
@@ -503,11 +489,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 9,
-                "precision": 1,
-                "scale": 1
-              }
+              "value": 9,
+              "precision": 1,
+              "scale": 1
             }
           }
         }
@@ -519,11 +503,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "decimal128": {
-                "value": 90,
-                "precision": 2,
-                "scale": 0
-              }
+              "value": 90,
+              "precision": 2,
+              "scale": 0
             }
           }
         }

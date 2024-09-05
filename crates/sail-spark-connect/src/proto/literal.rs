@@ -31,11 +31,11 @@ impl TryFrom<Literal> for spec::Literal {
                 }
                 let decimal_type = parse_decimal_string(value.as_str())?;
                 match decimal_type {
-                    spec::DecimalType::Decimal128(decimal) => {
-                        spec::Literal::Decimal128(spec::DecimalType::Decimal128(decimal))
+                    spec::DecimalType::Decimal128(decimal128) => {
+                        spec::Literal::Decimal128(decimal128)
                     }
-                    spec::DecimalType::Decimal256(decimal) => {
-                        spec::Literal::Decimal256(spec::DecimalType::Decimal256(decimal))
+                    spec::DecimalType::Decimal256(decimal256) => {
+                        spec::Literal::Decimal256(decimal256)
                     }
                 }
             }
