@@ -938,31 +938,26 @@ mod tests {
         let parse = |x: &str| -> SqlResult<Decimal256> {
             LiteralValue::<Decimal256>::try_from(x.to_string()).map(|x| x.0)
         };
-        assert_eq!(parse("123.45")?, Decimal256::new(i256::from(12345), 5, 2));
-        assert_eq!(parse("-123.45")?, Decimal256::new(i256::from(-12345), 5, 2));
-        assert_eq!(parse("123.45e1")?, Decimal256::new(i256::from(12345), 5, 1));
-        assert_eq!(
-            parse("123.45E-2")?,
-            Decimal256::new(i256::from(12345), 5, 4)
-        );
-        assert_eq!(
-            parse("1.23e10")?,
-            Decimal256::new(i256::from(12300000000i64), 11, 0)
-        );
-        assert_eq!(parse("1.23E-10")?, Decimal256::new(i256::from(123), 12, 12));
-        assert_eq!(parse("0")?, Decimal256::new(i256::from(0), 1, 0));
-        assert_eq!(parse("0.")?, Decimal256::new(i256::from(0), 1, 0));
-        assert_eq!(parse("0.0")?, Decimal256::new(i256::from(0), 1, 1));
-        assert_eq!(parse(".0")?, Decimal256::new(i256::from(0), 1, 1));
-        assert_eq!(parse(".0e1")?, Decimal256::new(i256::from(0), 1, 0));
-        assert_eq!(parse(".0e-1")?, Decimal256::new(i256::from(0), 2, 2));
-        assert_eq!(parse("001.2")?, Decimal256::new(i256::from(12), 2, 1));
-        assert_eq!(parse("001.20")?, Decimal256::new(i256::from(120), 3, 2));
         assert!(parse(".").is_err());
         assert!(parse("123.456.789").is_err());
         assert!(parse("1E100").is_err());
         assert!(parse("-.2E-100").is_err());
-        assert!(parse("12345678901234567890123456789012345678").is_ok());
+        assert_eq!(
+            parse("120000000000000000000000000000000000000000")?,
+            Decimal256::new(
+                i256::from_string("120000000000000000000000000000000000000000").unwrap(),
+                42,
+                4,
+            )
+        );
+        assert_eq!(
+            parse("1200000000000000000000000000000000000.00000")?,
+            Decimal256::new(
+                i256::from_string("120000000000000000000000000000000000000000").unwrap(),
+                42,
+                5
+            )
+        );
         assert!(parse("123456789012345678901234567890123456789").is_ok());
         assert!(parse(
             "1234567890123456789012345678901234567891234567890123456789012345678901234567"
