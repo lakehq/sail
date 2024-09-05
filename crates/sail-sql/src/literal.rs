@@ -575,22 +575,22 @@ where
 }
 
 pub fn parse_decimal_128_string(s: &str) -> SqlResult<spec::Decimal128> {
-    let decimal_type = parse_decimal_string(s)?;
-    match decimal_type {
-        spec::DecimalType::Decimal128(decimal128) => Ok(decimal128),
+    let decimal_literal = parse_decimal_string(s)?;
+    match decimal_literal {
+        spec::DecimalLiteral::Decimal128(decimal128) => Ok(decimal128),
         _ => Err(SqlError::invalid(format!("Decimal128: {s}"))),
     }
 }
 
 pub fn parse_decimal_256_string(s: &str) -> SqlResult<spec::Decimal256> {
-    let decimal_type = parse_decimal_string(s)?;
-    match decimal_type {
-        spec::DecimalType::Decimal256(decimal256) => Ok(decimal256),
+    let decimal_literal = parse_decimal_string(s)?;
+    match decimal_literal {
+        spec::DecimalLiteral::Decimal256(decimal256) => Ok(decimal256),
         _ => Err(SqlError::invalid(format!("Decimal256: {s}"))),
     }
 }
 
-pub fn parse_decimal_string(s: &str) -> SqlResult<spec::DecimalType> {
+pub fn parse_decimal_string(s: &str) -> SqlResult<spec::DecimalLiteral> {
     let error = || SqlError::invalid(format!("decimal: {s}"));
     let captures = DECIMAL_REGEX
         .captures(s)
@@ -633,12 +633,12 @@ pub fn parse_decimal_string(s: &str) -> SqlResult<spec::DecimalType> {
         Err(error())
     } else if precision > ARROW_DECIMAL128_MAX_PRECISION {
         let value: i256 = value.parse().map_err(|_| error())?;
-        Ok(spec::DecimalType::Decimal256(spec::Decimal256::new(
+        Ok(spec::DecimalLiteral::Decimal256(spec::Decimal256::new(
             value, precision, scale,
         )))
     } else {
         let value: i128 = value.parse().map_err(|_| error())?;
-        Ok(spec::DecimalType::Decimal128(spec::Decimal128::new(
+        Ok(spec::DecimalLiteral::Decimal128(spec::Decimal128::new(
             value, precision, scale,
         )))
     }
@@ -929,6 +929,49 @@ mod tests {
         assert!(parse("-.2E-100").is_err());
         assert!(parse("12345678901234567890123456789012345678").is_ok());
         assert!(parse("123456789012345678901234567890123456789").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_decimal256() -> SqlResult<()> {
+        use sail_common::spec::Decimal256;
+        let parse = |x: &str| -> SqlResult<Decimal256> {
+            LiteralValue::<Decimal256>::try_from(x.to_string()).map(|x| x.0)
+        };
+        assert_eq!(parse("123.45")?, Decimal256::new(i256::from(12345), 5, 2));
+        assert_eq!(parse("-123.45")?, Decimal256::new(i256::from(-12345), 5, 2));
+        assert_eq!(parse("123.45e1")?, Decimal256::new(i256::from(12345), 5, 1));
+        assert_eq!(
+            parse("123.45E-2")?,
+            Decimal256::new(i256::from(12345), 5, 4)
+        );
+        assert_eq!(
+            parse("1.23e10")?,
+            Decimal256::new(i256::from(12300000000i64), 11, 0)
+        );
+        assert_eq!(parse("1.23E-10")?, Decimal256::new(i256::from(123), 12, 12));
+        assert_eq!(parse("0")?, Decimal256::new(i256::from(0), 1, 0));
+        assert_eq!(parse("0.")?, Decimal256::new(i256::from(0), 1, 0));
+        assert_eq!(parse("0.0")?, Decimal256::new(i256::from(0), 1, 1));
+        assert_eq!(parse(".0")?, Decimal256::new(i256::from(0), 1, 1));
+        assert_eq!(parse(".0e1")?, Decimal256::new(i256::from(0), 1, 0));
+        assert_eq!(parse(".0e-1")?, Decimal256::new(i256::from(0), 2, 2));
+        assert_eq!(parse("001.2")?, Decimal256::new(i256::from(12), 2, 1));
+        assert_eq!(parse("001.20")?, Decimal256::new(i256::from(120), 3, 2));
+        assert!(parse(".").is_err());
+        assert!(parse("123.456.789").is_err());
+        assert!(parse("1E100").is_err());
+        assert!(parse("-.2E-100").is_err());
+        assert!(parse("12345678901234567890123456789012345678").is_ok());
+        assert!(parse("123456789012345678901234567890123456789").is_ok());
+        assert!(parse(
+            "1234567890123456789012345678901234567891234567890123456789012345678901234567"
+        )
+        .is_ok());
+        assert!(parse(
+            "12345678901234567890123456789012345678912345678901234567890123456789012345677"
+        )
+        .is_err());
         Ok(())
     }
 

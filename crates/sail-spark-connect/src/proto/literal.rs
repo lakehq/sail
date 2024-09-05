@@ -29,12 +29,12 @@ impl TryFrom<Literal> for spec::Literal {
                 if precision.is_some() || scale.is_some() {
                     return Err(SparkError::todo("decimal literal with precision or scale"));
                 }
-                let decimal_type = parse_decimal_string(value.as_str())?;
-                match decimal_type {
-                    spec::DecimalType::Decimal128(decimal128) => {
+                let decimal_literal = parse_decimal_string(value.as_str())?;
+                match decimal_literal {
+                    spec::DecimalLiteral::Decimal128(decimal128) => {
                         spec::Literal::Decimal128(decimal128)
                     }
-                    spec::DecimalType::Decimal256(decimal256) => {
+                    spec::DecimalLiteral::Decimal256(decimal256) => {
                         spec::Literal::Decimal256(decimal256)
                     }
                 }

@@ -10,6 +10,7 @@
                 "db",
                 "view"
               ],
+              "kind": null,
               "ifExists": true
             },
             "planId": null,
@@ -27,6 +28,7 @@
               "view": [
                 "view"
               ],
+              "kind": null,
               "ifExists": true
             },
             "planId": null,
@@ -45,6 +47,7 @@
                 "db",
                 "view"
               ],
+              "kind": null,
               "ifExists": false
             },
             "planId": null,
@@ -64,6 +67,7 @@
                 "db",
                 "view"
               ],
+              "kind": null,
               "ifExists": false
             },
             "planId": null,
@@ -81,6 +85,7 @@
               "view": [
                 "view"
               ],
+              "kind": null,
               "ifExists": false
             },
             "planId": null,

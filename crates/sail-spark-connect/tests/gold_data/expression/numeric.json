@@ -134,54 +134,17 @@
     },
     {
       "input": "1.20E-38BD",
+      "exception": "\n[DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION] Decimal precision 40 exceeds max precision 38..(line 1, pos 0)\n\n== SQL ==\n1.20E-38BD\n^^^\n",
       "output": {
         "success": {
           "literal": {
             "decimal256": {
-              "value": [
-                120,
-                0
-              ],
+              "value": {
+                "low": 120,
+                "high": 0
+              },
               "precision": 40,
               "scale": 40
-            }
-          }
-        }
-      }
-    },
-    {
-      "input": "1200000000000000000000000000000000000.00000",
-      "output": {
-        "success": {
-          "literal": {
-            "decimal256": {
-              "value": [
-                220606843829660860892138184017589567488,
-                352
-              ],
-              "precision": 42,
-              "scale": 5
-            }
-          }
-        }
-      }
-    },
-    {
-      "input": "1.20E-76BD",
-      "exception": "\n[DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION] Decimal precision 78 exceeds max precision 76..(line 1, pos 0)\n\n== SQL ==\n1.20E-76BD\n^^^\n",
-      "output": {
-        "failure": "invalid argument: decimal: 1.20E-76"
-      }
-    },
-    {
-      "input": "1.23E10BD",
-      "output": {
-        "success": {
-          "literal": {
-            "decimal128": {
-              "value": 12300000000,
-              "precision": 11,
-              "scale": 0
             }
           }
         }

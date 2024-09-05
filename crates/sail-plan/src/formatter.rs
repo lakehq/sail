@@ -422,6 +422,7 @@ fn format_decimal<T: Display>(value: &T, scale: i8, f: &mut Formatter<'_>) -> st
 
 #[cfg(test)]
 mod tests {
+    use arrow::datatypes::i256;
     use sail_common::spec::Literal;
 
     use super::*;
@@ -482,6 +483,54 @@ mod tests {
                 scale: -2,
             }))?,
             "12300",
+        );
+        assert_eq!(
+            to_string(Literal::Decimal256(spec::Decimal256 {
+                value: i256::from(123),
+                precision: 3,
+                scale: 0,
+            }))?,
+            "123",
+        );
+        assert_eq!(
+            to_string(Literal::Decimal256(spec::Decimal256 {
+                value: i256::from(-123),
+                precision: 3,
+                scale: 0,
+            }))?,
+            "-123",
+        );
+        assert_eq!(
+            to_string(Literal::Decimal256(spec::Decimal256 {
+                value: i256::from(123),
+                precision: 3,
+                scale: 2,
+            }))?,
+            "1.23",
+        );
+        assert_eq!(
+            to_string(Literal::Decimal256(spec::Decimal256 {
+                value: i256::from(123),
+                precision: 3,
+                scale: 5,
+            }))?,
+            "0.00123",
+        );
+        assert_eq!(
+            to_string(Literal::Decimal256(spec::Decimal256 {
+                value: i256::from(12300),
+                precision: 3,
+                scale: -2,
+            }))?,
+            "12300",
+        );
+        assert_eq!(
+            to_string(Literal::Decimal256(spec::Decimal256 {
+                value: i256::from_string("120000000000000000000000000000000000000000").unwrap(),
+                precision: 42,
+                scale: 5,
+            }))?,
+            "1200000000000000000000000000000000000.00000",
         );
         assert_eq!(to_string(Literal::String("abc".to_string()))?, "abc");
         assert_eq!(to_string(Literal::Date { days: 10 })?, "DATE '1970-01-11'");

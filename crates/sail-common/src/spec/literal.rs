@@ -54,9 +54,8 @@ pub enum Literal {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum DecimalType {
+#[derive(Debug)]
+pub enum DecimalLiteral {
     Decimal128(Decimal128),
     Decimal256(Decimal256),
 }
@@ -101,18 +100,24 @@ impl Decimal256 {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+struct Int256 {
+    low: u128,
+    high: i128,
+}
+
 fn serialize_i256<S>(value: &i256, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
     let (low, high) = value.to_parts();
-    (low, high).serialize(serializer)
+    Int256 { low, high }.serialize(serializer)
 }
 
 fn deserialize_i256<'de, D>(deserializer: D) -> Result<i256, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let (low, high) = <(u128, i128)>::deserialize(deserializer)?;
-    Ok(i256::from_parts(low, high))
+    let parts = Int256::deserialize(deserializer)?;
+    Ok(i256::from_parts(parts.low, parts.high))
 }
