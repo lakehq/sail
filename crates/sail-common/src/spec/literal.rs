@@ -1,4 +1,3 @@
-use arrow::datatypes::i256;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::DataType;
@@ -79,10 +78,16 @@ impl Decimal128 {
     }
 }
 
+#[allow(non_camel_case_types)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct i256 {
+    low: u128,
+    high: i128,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Decimal256 {
-    #[serde(serialize_with = "i256_to_string", deserialize_with = "string_to_i256")]
     pub value: i256,
     pub precision: u8,
     pub scale: i8,
@@ -96,19 +101,4 @@ impl Decimal256 {
             scale,
         }
     }
-}
-
-fn i256_to_string<S>(value: &i256, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    serializer.serialize_str(&value.to_string())
-}
-
-fn string_to_i256<'de, D>(deserializer: D) -> Result<i256, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let s = String::deserialize(deserializer)?;
-    s.parse::<i256>().map_err(serde::de::Error::custom)
 }
