@@ -223,9 +223,19 @@ impl Session {
         let kv: Vec<ConfigKeyValue> = kv.into();
         for ConfigKeyValue { key, value } in kv {
             if let Some(value) = value {
+                if key == SPARK_SQL_SESSION_TIME_ZONE {
+                    let state = self.context.state_ref();
+                    let mut state = state.write();
+                    state.config_mut().options_mut().execution.time_zone = Some(value.clone());
+                }
                 state.config.set(key, value)?;
             } else {
                 state.config.unset(&key)?;
+                if key == SPARK_SQL_SESSION_TIME_ZONE {
+                    let state = self.context.state_ref();
+                    let mut state = state.write();
+                    state.config_mut().options_mut().execution.time_zone = Some(Default::default());
+                }
             }
         }
         Ok(())
