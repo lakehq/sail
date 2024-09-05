@@ -2,6 +2,11 @@ use std::fmt::Debug;
 use std::ops::Neg;
 use std::str::FromStr;
 
+use datafusion::arrow::datatypes::{
+    i256, DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION,
+    DECIMAL256_MAX_PRECISION as ARROW_DECIMAL256_MAX_PRECISION,
+    DECIMAL256_MAX_SCALE as ARROW_DECIMAL256_MAX_SCALE,
+};
 use lazy_static::lazy_static;
 use sail_common::spec;
 use sqlparser::ast;
@@ -9,7 +14,6 @@ use sqlparser::keywords::Keyword;
 use sqlparser::parser::Parser;
 use {chrono, chrono_tz};
 
-use crate::data_type::{SQL_DECIMAL_MAX_PRECISION, SQL_DECIMAL_MAX_SCALE};
 use crate::error::{SqlError, SqlResult};
 use crate::parser::{fail_on_extra_token, SparkDialect};
 
@@ -146,11 +150,19 @@ impl TryFrom<LiteralValue<f64>> for spec::Literal {
     }
 }
 
-impl TryFrom<LiteralValue<spec::Decimal>> for spec::Literal {
+impl TryFrom<LiteralValue<spec::Decimal128>> for spec::Literal {
     type Error = SqlError;
 
-    fn try_from(literal: LiteralValue<spec::Decimal>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Decimal(literal.0))
+    fn try_from(literal: LiteralValue<spec::Decimal128>) -> SqlResult<spec::Literal> {
+        Ok(spec::Literal::Decimal128(literal.0))
+    }
+}
+
+impl TryFrom<LiteralValue<spec::Decimal256>> for spec::Literal {
+    type Error = SqlError;
+
+    fn try_from(literal: LiteralValue<spec::Decimal256>) -> SqlResult<spec::Literal> {
+        Ok(spec::Literal::Decimal256(literal.0))
     }
 }
 
@@ -429,12 +441,19 @@ impl TryFrom<String> for LiteralValue<f64> {
     }
 }
 
-impl TryFrom<String> for LiteralValue<spec::Decimal> {
+impl TryFrom<String> for LiteralValue<spec::Decimal128> {
     type Error = SqlError;
 
     fn try_from(value: String) -> SqlResult<Self> {
-        let decimal = parse_decimal_string(value.as_str())?;
-        Ok(LiteralValue(decimal))
+        Ok(LiteralValue(parse_decimal_128_string(value.as_str())?))
+    }
+}
+
+impl TryFrom<String> for LiteralValue<spec::Decimal256> {
+    type Error = SqlError;
+
+    fn try_from(value: String) -> SqlResult<Self> {
+        Ok(LiteralValue(parse_decimal_256_string(value.as_str())?))
     }
 }
 
@@ -555,7 +574,23 @@ where
         .map_err(|_| error())
 }
 
-pub fn parse_decimal_string(s: &str) -> SqlResult<spec::Decimal> {
+pub fn parse_decimal_128_string(s: &str) -> SqlResult<spec::Decimal128> {
+    let decimal_literal = parse_decimal_string(s)?;
+    match decimal_literal {
+        spec::DecimalLiteral::Decimal128(decimal128) => Ok(decimal128),
+        _ => Err(SqlError::invalid(format!("Decimal128: {s}"))),
+    }
+}
+
+pub fn parse_decimal_256_string(s: &str) -> SqlResult<spec::Decimal256> {
+    let decimal_literal = parse_decimal_string(s)?;
+    match decimal_literal {
+        spec::DecimalLiteral::Decimal256(decimal256) => Ok(decimal256),
+        _ => Err(SqlError::invalid(format!("Decimal256: {s}"))),
+    }
+}
+
+pub fn parse_decimal_string(s: &str) -> SqlResult<spec::DecimalLiteral> {
     let error = || SqlError::invalid(format!("decimal: {s}"));
     let captures = DECIMAL_REGEX
         .captures(s)
@@ -575,7 +610,7 @@ pub fn parse_decimal_string(s: &str) -> SqlResult<spec::Decimal> {
     };
     let (scale, padding) = {
         let scale = f.checked_sub(e).ok_or_else(error)?;
-        if !(-SQL_DECIMAL_MAX_SCALE..=SQL_DECIMAL_MAX_SCALE).contains(&scale) {
+        if !(-ARROW_DECIMAL256_MAX_SCALE..=ARROW_DECIMAL256_MAX_SCALE).contains(&scale) {
             return Err(error());
         }
         if scale < 0 {
@@ -588,19 +623,25 @@ pub fn parse_decimal_string(s: &str) -> SqlResult<spec::Decimal> {
     };
     let width = w + f + padding;
     let precision = std::cmp::max(width, scale) as u8;
-    if precision > SQL_DECIMAL_MAX_PRECISION {
-        return Err(error());
-    }
     let num = format!("{whole}{fraction}");
     let width = width as usize;
-    let value = format!("{sign}{num:0<width$}")
-        .parse()
-        .map_err(|_| error())?;
-    Ok(spec::Decimal {
-        value,
-        precision,
-        scale,
-    })
+    let value = format!("{sign}{num:0<width$}");
+    if precision == 0
+        || precision > ARROW_DECIMAL256_MAX_PRECISION
+        || scale.unsigned_abs() > precision
+    {
+        Err(error())
+    } else if precision > ARROW_DECIMAL128_MAX_PRECISION {
+        let value: i256 = value.parse().map_err(|_| error())?;
+        Ok(spec::DecimalLiteral::Decimal256(spec::Decimal256::new(
+            value, precision, scale,
+        )))
+    } else {
+        let value: i128 = value.parse().map_err(|_| error())?;
+        Ok(spec::DecimalLiteral::Decimal128(spec::Decimal128::new(
+            value, precision, scale,
+        )))
+    }
 }
 
 pub fn parse_date_string(s: &str) -> SqlResult<spec::Literal> {
@@ -863,31 +904,69 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_decimal() -> SqlResult<()> {
-        use sail_common::spec::Decimal;
-        let parse = |x: &str| -> SqlResult<Decimal> {
-            LiteralValue::<Decimal>::try_from(x.to_string()).map(|x| x.0)
+    fn test_parse_decimal128() -> SqlResult<()> {
+        use sail_common::spec::Decimal128;
+        let parse = |x: &str| -> SqlResult<Decimal128> {
+            LiteralValue::<Decimal128>::try_from(x.to_string()).map(|x| x.0)
         };
-        assert_eq!(parse("123.45")?, Decimal::new(12345, 5, 2));
-        assert_eq!(parse("-123.45")?, Decimal::new(-12345, 5, 2));
-        assert_eq!(parse("123.45e1")?, Decimal::new(12345, 5, 1));
-        assert_eq!(parse("123.45E-2")?, Decimal::new(12345, 5, 4));
-        assert_eq!(parse("1.23e10")?, Decimal::new(12300000000, 11, 0));
-        assert_eq!(parse("1.23E-10")?, Decimal::new(123, 12, 12));
-        assert_eq!(parse("0")?, Decimal::new(0, 1, 0));
-        assert_eq!(parse("0.")?, Decimal::new(0, 1, 0));
-        assert_eq!(parse("0.0")?, Decimal::new(0, 1, 1));
-        assert_eq!(parse(".0")?, Decimal::new(0, 1, 1));
-        assert_eq!(parse(".0e1")?, Decimal::new(0, 1, 0));
-        assert_eq!(parse(".0e-1")?, Decimal::new(0, 2, 2));
-        assert_eq!(parse("001.2")?, Decimal::new(12, 2, 1));
-        assert_eq!(parse("001.20")?, Decimal::new(120, 3, 2));
+        assert_eq!(parse("123.45")?, Decimal128::new(12345, 5, 2));
+        assert_eq!(parse("-123.45")?, Decimal128::new(-12345, 5, 2));
+        assert_eq!(parse("123.45e1")?, Decimal128::new(12345, 5, 1));
+        assert_eq!(parse("123.45E-2")?, Decimal128::new(12345, 5, 4));
+        assert_eq!(parse("1.23e10")?, Decimal128::new(12300000000, 11, 0));
+        assert_eq!(parse("1.23E-10")?, Decimal128::new(123, 12, 12));
+        assert_eq!(parse("0")?, Decimal128::new(0, 1, 0));
+        assert_eq!(parse("0.")?, Decimal128::new(0, 1, 0));
+        assert_eq!(parse("0.0")?, Decimal128::new(0, 1, 1));
+        assert_eq!(parse(".0")?, Decimal128::new(0, 1, 1));
+        assert_eq!(parse(".0e1")?, Decimal128::new(0, 1, 0));
+        assert_eq!(parse(".0e-1")?, Decimal128::new(0, 2, 2));
+        assert_eq!(parse("001.2")?, Decimal128::new(12, 2, 1));
+        assert_eq!(parse("001.20")?, Decimal128::new(120, 3, 2));
         assert!(parse(".").is_err());
         assert!(parse("123.456.789").is_err());
         assert!(parse("1E100").is_err());
         assert!(parse("-.2E-100").is_err());
         assert!(parse("12345678901234567890123456789012345678").is_ok());
         assert!(parse("123456789012345678901234567890123456789").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_decimal256() -> SqlResult<()> {
+        use sail_common::spec::Decimal256;
+        let parse = |x: &str| -> SqlResult<Decimal256> {
+            LiteralValue::<Decimal256>::try_from(x.to_string()).map(|x| x.0)
+        };
+        assert!(parse(".").is_err());
+        assert!(parse("123.456.789").is_err());
+        assert!(parse("1E100").is_err());
+        assert!(parse("-.2E-100").is_err());
+        assert_eq!(
+            parse("120000000000000000000000000000000000000000")?,
+            Decimal256::new(
+                i256::from_string("120000000000000000000000000000000000000000").unwrap(),
+                42,
+                4,
+            )
+        );
+        assert_eq!(
+            parse("1200000000000000000000000000000000000.00000")?,
+            Decimal256::new(
+                i256::from_string("120000000000000000000000000000000000000000").unwrap(),
+                42,
+                5
+            )
+        );
+        assert!(parse("123456789012345678901234567890123456789").is_ok());
+        assert!(parse(
+            "1234567890123456789012345678901234567891234567890123456789012345678901234567"
+        )
+        .is_ok());
+        assert!(parse(
+            "12345678901234567890123456789012345678912345678901234567890123456789012345677"
+        )
+        .is_err());
         Ok(())
     }
 

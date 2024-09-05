@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use arrow::datatypes::i256;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::spec::DataType;
 
@@ -14,7 +15,8 @@ pub enum Literal {
     Long(i64),
     Float(f32),
     Double(f64),
-    Decimal(Decimal),
+    Decimal128(Decimal128),
+    Decimal256(Decimal256),
     String(String),
     Date {
         days: i32,
@@ -52,15 +54,21 @@ pub enum Literal {
     },
 }
 
+#[derive(Debug)]
+pub enum DecimalLiteral {
+    Decimal128(Decimal128),
+    Decimal256(Decimal256),
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Decimal {
+pub struct Decimal128 {
     pub value: i128,
     pub precision: u8,
     pub scale: i8,
 }
 
-impl Decimal {
+impl Decimal128 {
     pub fn new(value: i128, precision: u8, scale: i8) -> Self {
         Self {
             value,
@@ -68,4 +76,48 @@ impl Decimal {
             scale,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Decimal256 {
+    #[serde(
+        serialize_with = "serialize_i256",
+        deserialize_with = "deserialize_i256"
+    )]
+    pub value: i256,
+    pub precision: u8,
+    pub scale: i8,
+}
+
+impl Decimal256 {
+    pub fn new(value: i256, precision: u8, scale: i8) -> Self {
+        Self {
+            value,
+            precision,
+            scale,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct Int256 {
+    low: u128,
+    high: i128,
+}
+
+fn serialize_i256<S>(value: &i256, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let (low, high) = value.to_parts();
+    Int256 { low, high }.serialize(serializer)
+}
+
+fn deserialize_i256<'de, D>(deserializer: D) -> Result<i256, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let parts = Int256::deserialize(deserializer)?;
+    Ok(i256::from_parts(parts.low, parts.high))
 }

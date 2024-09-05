@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 
 use sail_common::object::DynObject;
@@ -59,7 +59,8 @@ impl PlanFormatter for DefaultPlanFormatter {
             DataType::Long => Ok("bigint".to_string()),
             DataType::Float => Ok("float".to_string()),
             DataType::Double => Ok("double".to_string()),
-            DataType::Decimal { precision, scale } => {
+            DataType::Decimal128 { precision, scale }
+            | DataType::Decimal256 { precision, scale } => {
                 Ok(format!("decimal({},{})", precision, scale))
             }
             DataType::String => Ok("string".to_string()),
@@ -195,7 +196,8 @@ impl PlanFormatter for DefaultPlanFormatter {
                 let mut buffer = ryu::Buffer::new();
                 Ok(buffer.format(*x).to_string())
             }
-            Literal::Decimal(x) => Ok(DecimalDisplay(x).to_string()),
+            Literal::Decimal128(x) => Ok(Decimal128Display(x).to_string()),
+            Literal::Decimal256(x) => Ok(Decimal256Display(x).to_string()),
             Literal::String(x) => Ok(x.clone()),
             Literal::Date { days } => {
                 let date = chrono::NaiveDateTime::UNIX_EPOCH + chrono::Duration::days(*days as i64);
@@ -385,35 +387,42 @@ impl Display for BinaryDisplay<'_> {
     }
 }
 
-struct DecimalDisplay<'a>(pub &'a spec::Decimal);
+struct Decimal128Display<'a>(pub &'a spec::Decimal128);
+impl Display for Decimal128Display<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        format_decimal(&self.0.value, self.0.scale, f)
+    }
+}
 
-impl Display for DecimalDisplay<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = format!("{}", self.0.value);
-        let start = if s.starts_with('-') {
-            write!(f, "-")?;
-            1
-        } else {
-            0
-        };
-        let scale = if self.0.scale > 0 {
-            self.0.scale as usize
-        } else {
-            0
-        };
-        if scale == 0 {
-            write!(f, "{}", &s[start..])
-        } else if start + scale < s.len() {
-            let d = s.len() - scale;
-            write!(f, "{}.{}", &s[start..d], &s[d..])
-        } else {
-            write!(f, "0.{:0>width$}", &s[start..], width = scale)
-        }
+struct Decimal256Display<'a>(pub &'a spec::Decimal256);
+impl Display for Decimal256Display<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        format_decimal(&self.0.value, self.0.scale, f)
+    }
+}
+
+fn format_decimal<T: Display>(value: &T, scale: i8, f: &mut Formatter<'_>) -> std::fmt::Result {
+    let s = format!("{}", value);
+    let start = if s.starts_with('-') {
+        write!(f, "-")?;
+        1
+    } else {
+        0
+    };
+    let scale = if scale > 0 { scale as usize } else { 0 };
+    if scale == 0 {
+        write!(f, "{}", &s[start..])
+    } else if start + scale < s.len() {
+        let d = s.len() - scale;
+        write!(f, "{}.{}", &s[start..d], &s[d..])
+    } else {
+        write!(f, "0.{:0>width$}", &s[start..], width = scale)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use arrow::datatypes::i256;
     use sail_common::spec::Literal;
 
     use super::*;
@@ -436,7 +445,7 @@ mod tests {
         assert_eq!(to_string(Literal::Float(1.0))?, "1.0");
         assert_eq!(to_string(Literal::Double(-0.1))?, "-0.1");
         assert_eq!(
-            to_string(Literal::Decimal(spec::Decimal {
+            to_string(Literal::Decimal128(spec::Decimal128 {
                 value: 123,
                 precision: 3,
                 scale: 0,
@@ -444,7 +453,7 @@ mod tests {
             "123",
         );
         assert_eq!(
-            to_string(Literal::Decimal(spec::Decimal {
+            to_string(Literal::Decimal128(spec::Decimal128 {
                 value: -123,
                 precision: 3,
                 scale: 0,
@@ -452,7 +461,7 @@ mod tests {
             "-123",
         );
         assert_eq!(
-            to_string(Literal::Decimal(spec::Decimal {
+            to_string(Literal::Decimal128(spec::Decimal128 {
                 value: 123,
                 precision: 3,
                 scale: 2,
@@ -460,7 +469,7 @@ mod tests {
             "1.23",
         );
         assert_eq!(
-            to_string(Literal::Decimal(spec::Decimal {
+            to_string(Literal::Decimal128(spec::Decimal128 {
                 value: 123,
                 precision: 3,
                 scale: 5,
@@ -468,12 +477,60 @@ mod tests {
             "0.00123",
         );
         assert_eq!(
-            to_string(Literal::Decimal(spec::Decimal {
+            to_string(Literal::Decimal128(spec::Decimal128 {
                 value: 12300,
                 precision: 3,
                 scale: -2,
             }))?,
             "12300",
+        );
+        assert_eq!(
+            to_string(Literal::Decimal256(spec::Decimal256 {
+                value: i256::from(123),
+                precision: 3,
+                scale: 0,
+            }))?,
+            "123",
+        );
+        assert_eq!(
+            to_string(Literal::Decimal256(spec::Decimal256 {
+                value: i256::from(-123),
+                precision: 3,
+                scale: 0,
+            }))?,
+            "-123",
+        );
+        assert_eq!(
+            to_string(Literal::Decimal256(spec::Decimal256 {
+                value: i256::from(123),
+                precision: 3,
+                scale: 2,
+            }))?,
+            "1.23",
+        );
+        assert_eq!(
+            to_string(Literal::Decimal256(spec::Decimal256 {
+                value: i256::from(123),
+                precision: 3,
+                scale: 5,
+            }))?,
+            "0.00123",
+        );
+        assert_eq!(
+            to_string(Literal::Decimal256(spec::Decimal256 {
+                value: i256::from(12300),
+                precision: 3,
+                scale: -2,
+            }))?,
+            "12300",
+        );
+        assert_eq!(
+            to_string(Literal::Decimal256(spec::Decimal256 {
+                value: i256::from_string("120000000000000000000000000000000000000000").unwrap(),
+                precision: 42,
+                scale: 5,
+            }))?,
+            "1200000000000000000000000000000000000.00000",
         );
         assert_eq!(to_string(Literal::String("abc".to_string()))?, "abc");
         assert_eq!(to_string(Literal::Date { days: 10 })?, "DATE '1970-01-11'");

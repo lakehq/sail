@@ -14,7 +14,7 @@
                       {
                         "name": "deciMal",
                         "dataType": {
-                          "decimal": {
+                          "decimal128": {
                             "precision": 10,
                             "scale": 0
                           }
@@ -25,7 +25,7 @@
                       {
                         "name": "anotherDecimal",
                         "dataType": {
-                          "decimal": {
+                          "decimal128": {
                             "precision": 5,
                             "scale": 2
                           }
@@ -145,7 +145,7 @@
       "input": "Dec(10, 5)",
       "output": {
         "success": {
-          "decimal": {
+          "decimal128": {
             "precision": 10,
             "scale": 5
           }
@@ -360,7 +360,7 @@
       "input": "deC",
       "output": {
         "success": {
-          "decimal": {
+          "decimal128": {
             "precision": 10,
             "scale": 0
           }
@@ -371,7 +371,7 @@
       "input": "decimal",
       "output": {
         "success": {
-          "decimal": {
+          "decimal128": {
             "precision": 10,
             "scale": 0
           }
@@ -382,7 +382,7 @@
       "input": "decimal(10, 5)",
       "output": {
         "success": {
-          "decimal": {
+          "decimal128": {
             "precision": 10,
             "scale": 5
           }

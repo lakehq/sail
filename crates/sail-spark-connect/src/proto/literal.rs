@@ -29,8 +29,15 @@ impl TryFrom<Literal> for spec::Literal {
                 if precision.is_some() || scale.is_some() {
                     return Err(SparkError::todo("decimal literal with precision or scale"));
                 }
-                let decimal = parse_decimal_string(value.as_str())?;
-                spec::Literal::Decimal(decimal)
+                let decimal_literal = parse_decimal_string(value.as_str())?;
+                match decimal_literal {
+                    spec::DecimalLiteral::Decimal128(decimal128) => {
+                        spec::Literal::Decimal128(decimal128)
+                    }
+                    spec::DecimalLiteral::Decimal256(decimal256) => {
+                        spec::Literal::Decimal256(decimal256)
+                    }
+                }
             }
             LiteralType::String(x) => spec::Literal::String(x),
             LiteralType::Date(x) => spec::Literal::Date { days: x },

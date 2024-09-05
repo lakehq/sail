@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use arrow::datatypes::DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION;
 use sail_common::spec;
 use sail_sql::data_type::parse_data_type;
 
@@ -94,7 +95,11 @@ impl TryFrom<DataType> for spec::DataType {
                     .transpose()
                     .map_err(|_| SparkError::invalid("decimal precision"))?
                     .unwrap_or(SPARK_DECIMAL_USER_DEFAULT_PRECISION);
-                Ok(spec::DataType::Decimal { scale, precision })
+                if precision > ARROW_DECIMAL128_MAX_PRECISION {
+                    Ok(spec::DataType::Decimal256 { precision, scale })
+                } else {
+                    Ok(spec::DataType::Decimal128 { precision, scale })
+                }
             }
             Kind::String(_) => Ok(spec::DataType::String),
             Kind::Char(sdt::Char {
@@ -251,7 +256,8 @@ impl TryFrom<spec::DataType> for DataType {
             spec::DataType::Long => Kind::Long(sdt::Long::default()),
             spec::DataType::Float => Kind::Float(sdt::Float::default()),
             spec::DataType::Double => Kind::Double(sdt::Double::default()),
-            spec::DataType::Decimal { scale, precision } => Kind::Decimal(sdt::Decimal {
+            spec::DataType::Decimal128 { scale, precision }
+            | spec::DataType::Decimal256 { scale, precision } => Kind::Decimal(sdt::Decimal {
                 scale: Some(scale as i32),
                 precision: Some(precision as i32),
                 type_variation_reference: 0,

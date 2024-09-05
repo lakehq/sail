@@ -1,3 +1,4 @@
+use datafusion::arrow::datatypes::DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION;
 use sail_common::spec;
 use sqlparser::ast;
 use sqlparser::ast::DateTimeField;
@@ -6,7 +7,6 @@ use sqlparser::tokenizer::Token;
 
 use crate::error::{SqlError, SqlResult};
 use crate::parser::{fail_on_extra_token, SparkDialect};
-
 pub const SQL_DECIMAL_DEFAULT_PRECISION: u8 = 10;
 pub const SQL_DECIMAL_DEFAULT_SCALE: i8 = 0;
 pub const SQL_DECIMAL_MAX_PRECISION: u8 = 38;
@@ -90,7 +90,11 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
                     (precision, scale)
                 }
             };
-            Ok(spec::DataType::Decimal { precision, scale })
+            if precision > ARROW_DECIMAL128_MAX_PRECISION {
+                Ok(spec::DataType::Decimal256 { precision, scale })
+            } else {
+                Ok(spec::DataType::Decimal128 { precision, scale })
+            }
         }
         ast::DataType::Char(n) | ast::DataType::Character(n) => Ok(spec::DataType::Char {
             length: from_ast_char_length(n)?,

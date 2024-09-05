@@ -14,7 +14,11 @@ pub enum DataType {
     Long,
     Float,
     Double,
-    Decimal {
+    Decimal128 {
+        precision: u8,
+        scale: i8,
+    },
+    Decimal256 {
         precision: u8,
         scale: i8,
     },
