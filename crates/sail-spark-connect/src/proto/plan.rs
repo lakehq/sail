@@ -1274,17 +1274,17 @@ impl TryFrom<Catalog> for spec::CommandNode {
             }
             CatType::DropTempView(x) => {
                 let sc::DropTempView { view_name } = x;
-                Ok(spec::CommandNode::DropTemporaryView {
+                Ok(spec::CommandNode::DropView {
                     view: parse_object_name(view_name.as_str())?,
-                    is_global: false,
+                    kind: Some(spec::ViewKind::Temporary),
                     if_exists: false,
                 })
             }
             CatType::DropGlobalTempView(x) => {
                 let sc::DropGlobalTempView { view_name } = x;
-                Ok(spec::CommandNode::DropTemporaryView {
+                Ok(spec::CommandNode::DropView {
                     view: parse_object_name(view_name.as_str())?,
-                    is_global: true,
+                    kind: Some(spec::ViewKind::GlobalTemporary),
                     if_exists: false,
                 })
             }
@@ -1507,14 +1507,18 @@ impl TryFrom<CreateDataFrameViewCommand> for spec::CommandNode {
         } = command;
         let input = input.required("input relation")?.try_into()?;
         let view = parse_object_name(name.as_str())?;
-        Ok(spec::CommandNode::CreateTemporaryView {
+        let kind = if is_global {
+            spec::ViewKind::GlobalTemporary
+        } else {
+            spec::ViewKind::Temporary
+        };
+        Ok(spec::CommandNode::CreateView {
             view,
-            definition: spec::TemporaryViewDefinition {
+            definition: spec::ViewDefinition {
                 input: Box::new(input),
                 columns: None,
-                is_global,
+                kind,
                 replace,
-                temporary: true,
                 definition: None,
             },
         })

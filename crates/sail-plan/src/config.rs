@@ -31,6 +31,8 @@ pub struct PlanConfig<F: ?Sized = dyn PlanFormatter> {
     pub default_unbounded_table_file_format: String,
     /// The default location for managed databases and tables.
     pub default_warehouse_directory: String,
+    /// The database name for the global temporary views.
+    pub global_temp_database: String,
 }
 
 impl Default for PlanConfig {
@@ -65,6 +67,7 @@ impl Default for PlanConfig {
             default_bounded_table_file_format: "PARQUET".to_string(),
             default_unbounded_table_file_format: "ARROW".to_string(),
             default_warehouse_directory: "sail-warehouse".to_string(),
+            global_temp_database: "global_temp".to_string(),
         }
     }
 }
