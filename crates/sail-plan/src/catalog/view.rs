@@ -4,16 +4,19 @@ use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
 use datafusion_expr::{CreateView, DdlStatement, DropView, LogicalPlan};
 
 use crate::catalog::CatalogManager;
-use crate::extension::source::temporary_table::TemporaryTableProvider;
+use crate::temp_view::manage_temporary_views;
 
 impl<'a> CatalogManager<'a> {
     pub(crate) async fn drop_temporary_view(
         &self,
-        view: TableReference,
-        _if_exists: bool,
+        view_name: &str,
+        is_global: bool,
+        if_exists: bool,
     ) -> Result<()> {
-        self.ctx.deregister_table(view)?;
-        Ok(())
+        manage_temporary_views(self.ctx, is_global, |views| {
+            views.remove_view(view_name, if_exists)?;
+            Ok(())
+        })
     }
 
     pub(crate) async fn drop_view(&self, view: TableReference, if_exists: bool) -> Result<()> {
@@ -26,33 +29,33 @@ impl<'a> CatalogManager<'a> {
         Ok(())
     }
 
+    pub(crate) async fn create_temporary_view(
+        &self,
+        input: Arc<LogicalPlan>,
+        view_name: &str,
+        is_global: bool,
+        replace: bool,
+    ) -> Result<()> {
+        manage_temporary_views(self.ctx, is_global, |views| {
+            views.add_view(view_name.to_string(), input, replace)?;
+            Ok(())
+        })
+    }
+
     pub(crate) async fn create_view(
         &self,
         input: Arc<LogicalPlan>,
         view: TableReference,
-        is_global: bool,
         replace: bool,
-        temporary: bool,
         definition: Option<String>,
     ) -> Result<()> {
-        // TODO: Support global views
-        let _ = is_global;
-        // TODO: Consolidate the logic and remove the "temporary" flag
-        if temporary {
-            if replace {
-                self.ctx.deregister_table(view.clone())?;
-            }
-            self.ctx
-                .register_table(view, Arc::new(TemporaryTableProvider::new(input)))?;
-        } else {
-            let ddl = LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
-                name: view,
-                input,
-                or_replace: replace,
-                definition,
-            }));
-            self.ctx.execute_logical_plan(ddl).await?;
-        }
+        let ddl = LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
+            name: view,
+            input,
+            or_replace: replace,
+            definition,
+        }));
+        self.ctx.execute_logical_plan(ddl).await?;
         Ok(())
     }
 }

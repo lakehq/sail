@@ -145,7 +145,7 @@ pub(crate) enum CatalogCommand {
         udtf: CatalogTableFunction,
     },
     DropTemporaryView {
-        view: TableReference,
+        view_name: String,
         is_global: bool,
         if_exists: bool,
     },
@@ -155,10 +155,15 @@ pub(crate) enum CatalogCommand {
     },
     CreateTemporaryView {
         input: Arc<LogicalPlan>,
-        view: TableReference,
+        view_name: String,
         is_global: bool,
         replace: bool,
-        temporary: bool,
+        definition: Option<String>,
+    },
+    CreateView {
+        input: Arc<LogicalPlan>,
+        view: TableReference,
+        replace: bool,
         definition: Option<String>,
     },
 }
@@ -204,6 +209,7 @@ impl CatalogCommand {
             CatalogCommand::DropTemporaryView { .. } => "DropTemporaryView",
             CatalogCommand::DropView { .. } => "DropView",
             CatalogCommand::CreateTemporaryView { .. } => "CreateTemporaryView",
+            CatalogCommand::CreateView { .. } => "CreateView",
         }
     }
 
@@ -240,6 +246,7 @@ impl CatalogCommand {
             | CatalogCommand::CreateDatabase { .. }
             | CatalogCommand::CreateTable { .. }
             | CatalogCommand::CreateTemporaryView { .. }
+            | CatalogCommand::CreateView { .. }
             | CatalogCommand::DropDatabase { .. }
             | CatalogCommand::DropTable { .. }
             | CatalogCommand::DropFunction { .. }
@@ -418,12 +425,13 @@ impl CatalogCommand {
                 build_record_batch(command_schema, &rows)?
             }
             CatalogCommand::DropTemporaryView {
-                view,
-                is_global: _,
+                view_name,
+                is_global,
                 if_exists,
             } => {
-                // TODO: use the correct catalog and database for global temporary views
-                manager.drop_temporary_view(view, if_exists).await?;
+                manager
+                    .drop_temporary_view(&view_name, is_global, if_exists)
+                    .await?;
                 let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
             }
@@ -434,14 +442,25 @@ impl CatalogCommand {
             }
             CatalogCommand::CreateTemporaryView {
                 input,
-                view,
+                view_name,
                 is_global,
                 replace,
-                temporary,
+                definition: _,
+            } => {
+                manager
+                    .create_temporary_view(input, &view_name, is_global, replace)
+                    .await?;
+                let rows = vec![SingleValueMetadata { value: true }];
+                build_record_batch(command_schema, &rows)?
+            }
+            CatalogCommand::CreateView {
+                input,
+                view,
+                replace,
                 definition,
             } => {
                 manager
-                    .create_view(input, view, is_global, replace, temporary, definition)
+                    .create_view(input, view, replace, definition)
                     .await?;
                 let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?

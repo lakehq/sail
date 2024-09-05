@@ -50,6 +50,7 @@ use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::tree::PlanRewriter;
 use crate::resolver::PlanResolver;
+use crate::temp_view::manage_temporary_views;
 use crate::utils::ItemTaker;
 
 pub(crate) fn build_schema_reference(name: spec::ObjectName) -> PlanResult<SchemaReference> {
@@ -457,15 +458,11 @@ impl PlanResolver<'_> {
                 self.resolve_catalog_create_table(table, definition, state)
                     .await
             }
-            CommandNode::DropTemporaryView {
+            CommandNode::DropView {
                 view,
-                is_global,
+                kind,
                 if_exists,
-            } => self.resolve_catalog_command(CatalogCommand::DropTemporaryView {
-                view: build_table_reference(view)?,
-                is_global,
-                if_exists,
-            }),
+            } => self.resolve_catalog_drop_view(view, kind, if_exists).await,
             CommandNode::DropDatabase {
                 database,
                 if_exists,
@@ -493,12 +490,6 @@ impl PlanResolver<'_> {
                 if_exists,
                 purge,
             }),
-            CommandNode::DropView { view, if_exists } => {
-                self.resolve_catalog_command(CatalogCommand::DropView {
-                    view: build_table_reference(view)?,
-                    if_exists,
-                })
-            }
             CommandNode::RecoverPartitions { .. } => {
                 Err(PlanError::todo("PlanNode::RecoverPartitions"))
             }
@@ -530,8 +521,8 @@ impl PlanResolver<'_> {
             CommandNode::RegisterTableFunction(function) => {
                 self.resolve_catalog_register_table_function(function)
             }
-            CommandNode::CreateTemporaryView { view, definition } => {
-                self.resolve_catalog_create_temp_view(view, definition, state)
+            CommandNode::CreateView { view, definition } => {
+                self.resolve_catalog_create_view(view, definition, state)
                     .await
             }
             CommandNode::Write(write) => self.resolve_command_write(write, state).await,
@@ -571,6 +562,33 @@ impl PlanResolver<'_> {
         let table_reference = build_table_reference(name)?;
         if let Some(cte) = state.get_cte(&table_reference) {
             return Ok(cte.clone());
+        }
+
+        let view = match &table_reference {
+            TableReference::Bare { table } => {
+                let view = manage_temporary_views(self.ctx, false, |views| {
+                    views.get_view(table.as_ref())
+                })?;
+                view.map(|x| x.as_ref().clone())
+            }
+            TableReference::Partial { schema, table } => {
+                if schema.as_ref() == self.config.global_temp_database.as_str() {
+                    let view = manage_temporary_views(self.ctx, true, |views| {
+                        views.get_view(table.as_ref())
+                    })?;
+                    let view = view.ok_or_else(|| {
+                        PlanError::invalid(format!("global temporary view not found: {table}"))
+                    })?;
+                    Some(view.as_ref().clone())
+                } else {
+                    None
+                }
+            }
+            TableReference::Full { .. } => None,
+        };
+        if let Some(view) = view {
+            let names = state.register_fields(view.schema().inner());
+            return Ok(rename_logical_plan(view, &names)?);
         }
 
         if !options.is_empty() {
@@ -1897,33 +1915,108 @@ impl PlanResolver<'_> {
         self.resolve_catalog_command(command)
     }
 
-    async fn resolve_catalog_create_temp_view(
+    fn resolve_view_name(view: spec::ObjectName) -> PlanResult<String> {
+        let names: Vec<String> = view.into();
+        names
+            .one()
+            .map_err(|_| PlanError::invalid("multi-part view name"))
+    }
+
+    async fn resolve_catalog_drop_view(
         &self,
         view: spec::ObjectName,
-        view_definition: spec::TemporaryViewDefinition,
+        kind: Option<spec::ViewKind>,
+        if_exists: bool,
+    ) -> PlanResult<LogicalPlan> {
+        use spec::ViewKind;
+
+        let kind = match kind {
+            None => {
+                let view = build_table_reference(view.clone())?;
+                match view {
+                    TableReference::Bare { table } => {
+                        let temporary = manage_temporary_views(self.ctx, false, |views| {
+                            Ok(views.get_view(&table)?.is_some())
+                        })?;
+                        if temporary {
+                            ViewKind::Temporary
+                        } else {
+                            ViewKind::Default
+                        }
+                    }
+                    TableReference::Partial { schema, .. } => {
+                        if schema.as_ref() == self.config.global_temp_database.as_str() {
+                            ViewKind::GlobalTemporary
+                        } else {
+                            ViewKind::Default
+                        }
+                    }
+                    TableReference::Full { .. } => ViewKind::Default,
+                }
+            }
+            Some(x) => x,
+        };
+        let command = match kind {
+            ViewKind::Default => CatalogCommand::DropView {
+                view: build_table_reference(view)?,
+                if_exists,
+            },
+            ViewKind::Temporary => CatalogCommand::DropTemporaryView {
+                view_name: Self::resolve_view_name(view)?,
+                is_global: false,
+                if_exists,
+            },
+            ViewKind::GlobalTemporary => CatalogCommand::DropTemporaryView {
+                view_name: Self::resolve_view_name(view)?,
+                is_global: true,
+                if_exists,
+            },
+        };
+        self.resolve_catalog_command(command)
+    }
+
+    async fn resolve_catalog_create_view(
+        &self,
+        view: spec::ObjectName,
+        definition: spec::ViewDefinition,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let spec::TemporaryViewDefinition {
+        use spec::ViewKind;
+
+        let spec::ViewDefinition {
             input,
             columns,
-            is_global,
+            kind,
             replace,
-            temporary,
             definition,
-        } = view_definition;
+        } = definition;
         let input = self.resolve_query_plan(*input, state).await?;
         let fields = match columns {
             Some(columns) => columns.into_iter().map(String::from).collect(),
             None => state.get_field_names(input.schema().inner())?,
         };
         let input = rename_logical_plan(input, &fields)?;
-        let command = CatalogCommand::CreateTemporaryView {
-            input: Arc::new(input),
-            view: build_table_reference(view)?,
-            is_global,
-            replace,
-            temporary,
-            definition,
+        let command = match kind {
+            ViewKind::Default => CatalogCommand::CreateView {
+                input: Arc::new(input),
+                view: build_table_reference(view)?,
+                replace,
+                definition,
+            },
+            ViewKind::Temporary => CatalogCommand::CreateTemporaryView {
+                input: Arc::new(input),
+                view_name: Self::resolve_view_name(view)?,
+                is_global: false,
+                replace,
+                definition,
+            },
+            ViewKind::GlobalTemporary => CatalogCommand::CreateTemporaryView {
+                input: Arc::new(input),
+                view_name: Self::resolve_view_name(view)?,
+                is_global: true,
+                replace,
+                definition,
+            },
         };
         self.resolve_catalog_command(command)
     }

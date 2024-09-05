@@ -5,10 +5,12 @@ rank: 10
 
 # Spark Setup
 
-Run the following command to clone the Spark project.
+Run the following command to clone the projects required for the Spark tests.
+All the projects are stored in the `opt` directory and ignored by Git.
 
 ```bash
 git clone git@github.com:apache/spark.git opt/spark
+git clone git@github.com:ibis-project/testing-data.git opt/ibis-testing-data
 ```
 
 Run the following command to build the Spark project.

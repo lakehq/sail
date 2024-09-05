@@ -281,8 +281,8 @@ impl<'a> CatalogManager<'a> {
                     table_provider,
                 ));
             }
-            // TODO: Spark temporary views are session-scoped and are not associated with a catalog or database.
-            //   We should create a "hidden" catalog provider and include the temporary views in the result.
+            // TODO: Spark temporary views are session-scoped and are not associated with a catalog.
+            //   We should include the temporary views in the result.
             //   Spark *global* temporary views should be put in the `global_temp` database, and they will be
             //   included in the result if the database pattern matches `global_temp`.
             //   The `global_temp` database name can be configured via `spark.sql.globalTempDatabase`.

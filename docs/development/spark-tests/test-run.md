@@ -8,18 +8,15 @@ rank: 20
 ## Preparing the Test Environment
 
 Before running Spark tests, please create the `test` Hatch environment using the following commands.
-Note that you do _not_ need to run `maturin develop` in the `test` environment again after you make code changes.
-We only use the pytest plugins (pure Python code) from the project, which do not need to be rebuilt by Maturin.
 
 ```bash
 hatch env create test
 hatch run test:install-pyspark
-hatch run test:maturin develop
 ```
 
 ::: info
 The Spark test environment depends on the [patched PySpark package](./spark-setup).
-The patched PySpark package will be installed automatically during the environment creation.
+The commands above install the patched PySpark package after environment creation.
 :::
 
 ## Running the Spark Connect Server
@@ -40,9 +37,11 @@ the `TEST_RUN_NAME` environment variable whose default value is `latest`.
 scripts/spark-tests/run-tests.sh
 ```
 
-The above command runs a default set of test suites for Spark Connect.
+The command runs a default set of test suites for Spark Connect.
 Each test suite will write its `<suite>.jsonl` and `<suite>.log` files to the log directory,
 where `<suite>` is the test suite name.
+
+### Running Selected Tests
 
 You can pass arguments to the script, which will be forwarded to `pytest`.
 You can also use `PYTEST_` environment variables to customize the test execution.
@@ -50,10 +49,20 @@ For example, `PYTEST_ADDOPTS="-k <expression>"` can be used to run specific test
 
 ```bash
 # Write the test logs to a different directory (`tmp/spark-tests/selected`).
-export TEST_RUN_NAME=selected
-
-scripts/spark-tests/run-tests.sh --pyargs pyspark.sql.tests.connect -v -k test_sql
+env TEST_RUN_NAME=selected \
+  scripts/spark-tests/run-tests.sh --pyargs pyspark.sql.tests.connect -v -k test_sql
 ```
 
 When you customize the test execution using the above command, a single test suite will be run,
 and the test log files are always `test.jsonl` and `test.log` in the log directory.
+
+### Running Tests against the Original Spark Implementation
+
+As a comparison, you can run the tests against the original Spark implementation,
+by setting the `SPARK_TESTING_REMOTE_PORT` environment variable to an empty string.
+
+```bash
+env SPARK_TESTING_REMOTE_PORT= scripts/spark-tests/run-tests.sh
+```
+
+This can be useful for discovering issues in the test setup.
