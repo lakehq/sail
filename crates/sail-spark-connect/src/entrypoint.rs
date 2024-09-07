@@ -43,10 +43,14 @@ where
     }
 
     fn call(&mut self, request: Request<Body>) -> Self::Future {
-        debug!("{request:?}");
-        let root_ctx = SpanContext::random();
-        let root_span = Span::root("Root", root_ctx);
-        let future = self.inner.call(request).in_span(root_span);
+        let parent = SpanContext::random();
+        let root = Span::root("Root", parent);
+        let _span_guard = root.set_local_parent();
+        debug!("MEOW: {:?}", request);
+        let future = self
+            .inner
+            .call(request)
+            .in_span(Span::enter_with_parent("Task", &root));
         Box::pin(future)
     }
 }

@@ -38,8 +38,7 @@ pub fn init_telemetry() -> Result<(), log::SetLoggerError> {
             Dispatch::new()
                 .filter(EnvFilter::from_default_env_or("info"))
                 .layout(TextLayout::default())
-                .append(append::FastraceEvent)
-                .append(append::Stdout),
+                .append(append::FastraceEvent), // .append(append::Stdout),
         )
         .apply()?;
     Ok(())
