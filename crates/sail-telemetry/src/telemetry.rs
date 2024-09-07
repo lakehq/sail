@@ -37,11 +37,11 @@ fn resource() -> Resource {
 
 pub fn init_telemetry() -> Result<(), TelemetryError> {
     let tracer = init_tracer()?;
-    let subscriber = Registry::default()
+    Registry::default()
         .with(EnvFilter::from_default_env())
         .with(OpenTelemetryLayer::new(tracer))
-        .with(fmt::layer());
-    tracing::subscriber::set_global_default(subscriber)?;
+        .with(fmt::layer())
+        .init();
     Ok(())
 }
 
