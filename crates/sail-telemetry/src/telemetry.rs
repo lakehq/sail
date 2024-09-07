@@ -1,18 +1,18 @@
 use std::env;
-use std::time::Duration;
 
-use opentelemetry::global;
 use opentelemetry::trace::{TraceError, TracerProvider};
+use opentelemetry::{global, KeyValue};
 use opentelemetry_otlp::{self, WithExportConfig};
 use opentelemetry_sdk::propagation::TraceContextPropagator;
-use opentelemetry_sdk::resource::{
-    EnvResourceDetector, ResourceDetector, SdkProvidedResourceDetector, TelemetryResourceDetector,
-};
-use opentelemetry_sdk::{runtime, trace as sdktrace};
+use opentelemetry_sdk::{runtime, trace as sdktrace, Resource};
+use opentelemetry_semantic_conventions::resource::{SERVICE_NAME, SERVICE_VERSION};
+use opentelemetry_semantic_conventions::SCHEMA_URL;
 use thiserror::Error;
 use tracing::subscriber::SetGlobalDefaultError;
+use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::{fmt, Registry};
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{fmt, EnvFilter, Registry};
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Error)]
@@ -25,24 +25,28 @@ pub enum TelemetryError {
     EnvError(#[from] env::VarError),
 }
 
+fn resource() -> Resource {
+    Resource::from_schema_url(
+        [
+            KeyValue::new(SERVICE_NAME, env!("CARGO_PKG_NAME")),
+            KeyValue::new(SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
+        ],
+        SCHEMA_URL,
+    )
+}
+
 pub fn init_telemetry() -> Result<(), TelemetryError> {
     let tracer = init_tracer()?;
-    let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
     let subscriber = Registry::default()
-        .with(telemetry)
-        .with(tracing_subscriber::EnvFilter::from_default_env())
+        .with(EnvFilter::from_default_env())
+        .with(OpenTelemetryLayer::new(tracer))
         .with(fmt::layer());
     tracing::subscriber::set_global_default(subscriber)?;
-
     Ok(())
 }
 
 pub fn init_tracer() -> Result<sdktrace::Tracer, TelemetryError> {
     global::set_text_map_propagator(TraceContextPropagator::new());
-
-    let sdk_resource = SdkProvidedResourceDetector.detect(Duration::from_secs(0));
-    let env_resource = EnvResourceDetector::new().detect(Duration::from_secs(0));
-    let telemetry_resource = TelemetryResourceDetector.detect(Duration::from_secs(0));
 
     let use_collector = match env::var("LAKESAIL_OPENTELEMETRY_COLLECTOR") {
         Ok(val) => !val.is_empty(),
@@ -56,17 +60,17 @@ pub fn init_tracer() -> Result<sdktrace::Tracer, TelemetryError> {
         let url = format!("http://{}:{}", host, port);
         exporter = exporter.with_endpoint(url);
     }
-    exporter = exporter
-        .with_protocol(opentelemetry_otlp::Protocol::Grpc)
-        .with_timeout(Duration::from_secs(3));
 
     let tracer_provider = opentelemetry_otlp::new_pipeline()
         .tracing()
         .with_exporter(exporter)
         .with_trace_config(
             sdktrace::Config::default()
-                .with_resource(sdk_resource.merge(&env_resource).merge(&telemetry_resource)),
+                // If export trace to AWS X-Ray, you can use XrayIdGenerator
+                .with_id_generator(sdktrace::RandomIdGenerator::default())
+                .with_resource(resource()),
         )
+        .with_batch_config(sdktrace::BatchConfig::default())
         .install_batch(runtime::TokioCurrentThread)?;
 
     global::set_tracer_provider(tracer_provider.clone());
