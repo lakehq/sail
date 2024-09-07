@@ -14,7 +14,7 @@ pip install 'pysail[spark]'
 ```
 
 ::: info
-Please read the [installation guide](/guide/installation) for more information about installing Sail.
+Please read the [installation guide](/guide/installation/) for more information about installing Sail.
 :::
 
 ## Using the Sail PySpark Shell
