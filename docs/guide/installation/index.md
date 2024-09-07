@@ -36,4 +36,5 @@ for more information about the compiler options that can be specified via the `R
 :::
 
 ## Standalone Server
+
 Please refer to the [Standalone Spark Connect Server](/development/recipes/spark-connect-server) guide for more information about running the Spark Connect Server as a standalone binary.
