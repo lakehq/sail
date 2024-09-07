@@ -1,6 +1,5 @@
 pub mod pyspark_udf;
 pub mod pyspark_udtf;
-pub mod python_udf;
 pub mod unresolved_pyspark_udf;
 
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
@@ -9,35 +8,6 @@ use datafusion::common::Result;
 use datafusion_common::DataFusionError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-
-use crate::cereal::partial_pyspark_udf::PartialPySparkUDF;
-use crate::cereal::partial_python_udf::PartialPythonUDF;
-use crate::cereal::pyspark_udtf::PySparkUDTF;
-
-#[derive(Debug, Clone)]
-pub enum PythonFunctionType {
-    PartialPythonUDF(PartialPythonUDF),
-    PartialPySparkUDF(PartialPySparkUDF),
-    PySparkUDTF(PySparkUDTF),
-}
-
-impl PythonFunctionType {
-    fn get_inner<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny> {
-        match self {
-            PythonFunctionType::PartialPythonUDF(udf) => udf.0.clone_ref(py).into_bound(py),
-            PythonFunctionType::PartialPySparkUDF(udf) => udf.0.clone_ref(py).into_bound(py),
-            PythonFunctionType::PySparkUDTF(udf) => udf.0.clone_ref(py).into_bound(py),
-        }
-    }
-
-    pub fn get_python_function<'py>(&self, py: Python<'py>) -> Result<Bound<'py, PyAny>> {
-        let python_function: Bound<PyAny> = self
-            .get_inner(py)
-            .get_item(0)
-            .map_err(|err| DataFusionError::External(err.into()))?;
-        Ok(python_function)
-    }
-}
 
 /// Generates a unique function name with the memory address of the Python function.
 /// Without this, lambda functions with the name `<lambda>` will be treated as the same function

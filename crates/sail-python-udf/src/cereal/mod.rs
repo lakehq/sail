@@ -1,6 +1,13 @@
-pub mod partial_pyspark_udf;
-pub mod partial_python_udf;
+use datafusion_common::Result;
+use pyo3::{Bound, PyAny, Python};
+
+pub mod pyspark_udf;
 pub mod pyspark_udtf;
+
+pub trait PythonFunction: Sized {
+    fn load(v: &[u8]) -> Result<Self>;
+    fn function<'py>(&self, py: Python<'py>) -> Result<Bound<'py, PyAny>>;
+}
 
 pub const PY_SPARK_NON_UDF: i32 = 0;
 pub const PY_SPARK_SQL_BATCHED_UDF: i32 = 100;
