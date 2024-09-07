@@ -4,10 +4,13 @@ use std::task::{Context, Poll};
 
 use fastrace::future::FutureExt;
 use fastrace::prelude::*;
+use log::debug;
 use sail_plan::object_store::{load_aws_config, ObjectStoreConfig};
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
+use tonic::codegen::http::Request;
 use tonic::transport::server::TcpIncoming;
+use tonic::transport::Body;
 use tower::{Layer, Service, ServiceBuilder};
 
 use crate::server::SparkConnectServer;
@@ -23,10 +26,9 @@ pub struct TraceMiddleware<S> {
     inner: S,
 }
 
-impl<S, Request> Service<Request> for TraceMiddleware<S>
+impl<S> Service<Request<Body>> for TraceMiddleware<S>
 where
-    S: Service<Request> + Clone + Send + 'static,
-    Request: std::fmt::Debug,
+    S: Service<Request<Body>> + Clone + Send + 'static,
     S::Future: Send + 'static,
 {
     type Response = S::Response;
@@ -40,9 +42,10 @@ where
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, request: Request) -> Self::Future {
+    fn call(&mut self, request: Request<Body>) -> Self::Future {
+        debug!("{request:?}");
         let root_ctx = SpanContext::random();
-        let root_span = Span::root("trace_id", root_ctx);
+        let root_span = Span::root("Root", root_ctx);
         let future = self.inner.call(request).in_span(root_span);
         Box::pin(future)
     }
