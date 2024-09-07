@@ -2,9 +2,11 @@ use std::future::Future;
 
 use sail_plan::object_store::{load_aws_config, ObjectStoreConfig};
 use tokio::net::TcpListener;
+use tonic::codec::CompressionEncoding;
 use tonic::codegen::http;
 use tonic::transport::server::TcpIncoming;
 use tower::ServiceBuilder;
+use tower_http::compression::CompressionLayer;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::{debug, Span};
 
@@ -41,6 +43,7 @@ where
     let server = SparkConnectServer::new(session_manager);
 
     let layer = ServiceBuilder::new()
+        .layer(CompressionLayer::new().zstd(true))
         .layer(
             TraceLayer::new_for_grpc()
                 .make_span_with(DefaultMakeSpan::new().include_headers(true))
@@ -65,7 +68,9 @@ where
         .add_service(health_server)
         .add_service(
             SparkConnectServiceServer::new(server)
-                .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT),
+                .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
+                .send_compressed(CompressionEncoding::Zstd)
+                .accept_compressed(CompressionEncoding::Zstd),
         );
 
     match signal {
