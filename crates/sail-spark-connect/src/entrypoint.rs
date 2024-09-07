@@ -3,9 +3,11 @@ use std::future::Future;
 use sail_plan::object_store::{load_aws_config, ObjectStoreConfig};
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
+use tonic::codegen::http;
 use tonic::transport::server::TcpIncoming;
 use tower::ServiceBuilder;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
+use tracing::{debug, Span};
 
 use crate::server::SparkConnectServer;
 use crate::session::SessionManager;
@@ -46,7 +48,14 @@ where
         //     CompressionLayer::new().gzip(true).zstd(true),
         // )
         .layer(
-            TraceLayer::new_for_grpc().make_span_with(DefaultMakeSpan::new().include_headers(true)),
+            TraceLayer::new_for_grpc()
+                .make_span_with(DefaultMakeSpan::new().include_headers(true))
+                .on_request(|request: &http::Request<_>, _: &Span| {
+                    debug!("{:?}", request);
+                })
+                .on_response(|response: &http::response::Response<_>, _, _: &Span| {
+                    debug!("{:?}", response);
+                }),
         )
         .into_inner();
 

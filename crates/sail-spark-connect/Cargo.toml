@@ -11,8 +11,6 @@ sail-sql = { path = "../sail-sql" }
 sail-telemetry = { path = "../sail-telemetry" }
 
 tracing = { workspace = true }
-tracing-opentelemetry = { workspace = true }
-tracing-subscriber = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
