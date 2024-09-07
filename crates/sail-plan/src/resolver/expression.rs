@@ -10,9 +10,7 @@ use datafusion_common::{plan_err, Column, DFSchemaRef, DataFusionError};
 use datafusion_expr::{expr, expr_fn, window_frame, ExprSchemable, Operator, ScalarUDF};
 use num_traits::Float;
 use sail_common::spec;
-use sail_python_udf::cereal::partial_pyspark_udf::{
-    deserialize_partial_pyspark_udf, PartialPySparkUDF,
-};
+use sail_python_udf::cereal::pyspark_udf::{deserialize_partial_pyspark_udf, PySparkUdfObject};
 use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 use sail_python_udf::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
@@ -684,7 +682,7 @@ impl PlanResolver<'_> {
                 };
                 let output_type: DataType = self.resolve_data_type(output_type.clone())?;
 
-                let python_function: PartialPySparkUDF = deserialize_partial_pyspark_udf(
+                let python_function: PySparkUdfObject = deserialize_partial_pyspark_udf(
                     python_version,
                     command,
                     eval_type,
@@ -935,8 +933,8 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         // TODO: Function arg for if pyspark_udf or not.
-        use sail_python_udf::cereal::partial_pyspark_udf::{
-            deserialize_partial_pyspark_udf, PartialPySparkUDF,
+        use sail_python_udf::cereal::pyspark_udf::{
+            deserialize_partial_pyspark_udf, PySparkUdfObject,
         };
         use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
@@ -969,7 +967,7 @@ impl PlanResolver<'_> {
         };
         let output_type = self.resolve_data_type(output_type)?;
 
-        let python_function: PartialPySparkUDF = deserialize_partial_pyspark_udf(
+        let python_function: PySparkUdfObject = deserialize_partial_pyspark_udf(
             &python_version,
             &command,
             &eval_type,
