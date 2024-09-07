@@ -51,6 +51,7 @@ async fn run(ip: &IpAddr, port: u16) -> Result<(), Box<dyn std::error::Error>> {
     );
     serve(listener, Some(shutdown())).await?;
     info!("The Spark Connect server has stopped.");
+
     Ok(())
 }
 
