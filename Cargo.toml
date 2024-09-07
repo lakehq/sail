@@ -10,15 +10,14 @@ edition = "2021"
 
 [workspace.dependencies]
 tracing = { version = "0.1.40", features = ["attributes", "std", "log"] }
-tracing-opentelemetry = { version = "0.24.0" }
+tracing-opentelemetry = { version = "0.25.0" }
 tracing-subscriber = { version = "0.3.18", features = ["registry", "std", "smallvec", "fmt", "ansi", "tracing-log", "std", "env-filter", "json"] }
-opentelemetry = { version = "0.23.0", features = ["trace", "metrics"] }
-opentelemetry_sdk = { version = "0.23.0", features = ["trace", "metrics", "rt-tokio", "rt-tokio-current-thread"] }
-opentelemetry-semantic-conventions = "0.15.0"
-opentelemetry-otlp = { version = "0.16.0", features = ["trace", "metrics", "grpc-tonic", "tls", "tls-roots"] }
-opentelemetry-proto = { version = "0.6.0" }
-opentelemetry-stdout = { version = "0.4.0", features = ["trace"] }
-opentelemetry-resource-detectors = "0.2.0"
+opentelemetry = { version = "0.24.0", features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.24.1", features = ["trace", "metrics", "rt-tokio", "rt-tokio-current-thread"] }
+opentelemetry-semantic-conventions = "0.16.0"
+opentelemetry-otlp = { version = "0.17.0", features = ["trace", "metrics", "grpc-tonic", "tls", "tls-roots"] }
+opentelemetry-proto = { version = "0.7.0" }
+opentelemetry-resource-detectors = "0.3.0"
 thiserror = { version = "1.0.63" }
 tokio = { version = "1.40.0", features = ["full"] }
 tokio-stream = "0.1.15"

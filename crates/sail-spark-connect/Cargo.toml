@@ -18,7 +18,6 @@ opentelemetry_sdk = { workspace = true }
 opentelemetry-semantic-conventions = { workspace = true }
 opentelemetry-otlp = { workspace = true }
 opentelemetry-proto = { workspace = true }
-opentelemetry-stdout = { workspace = true }
 opentelemetry-resource-detectors = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

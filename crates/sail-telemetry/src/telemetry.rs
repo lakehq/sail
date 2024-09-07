@@ -48,38 +48,29 @@ pub fn init_tracer() -> Result<sdktrace::Tracer, TelemetryError> {
         Ok(val) => !val.is_empty(),
         Err(_) => false,
     };
+
+    let mut exporter = opentelemetry_otlp::new_exporter().tonic();
     if use_collector {
         let host = env::var("LAKESAIL_OPENTELEMETRY_COLLECTOR_SERVICE_HOST")?;
         let port = env::var("LAKESAIL_OPENTELEMETRY_COLLECTOR_SERVICE_PORT_OTLP_GRPC")?;
         let url = format!("http://{}:{}", host, port);
-
-        Ok(opentelemetry_otlp::new_pipeline()
-            .tracing()
-            .with_exporter(
-                opentelemetry_otlp::new_exporter()
-                    .tonic()
-                    .with_endpoint(url)
-                    .with_protocol(opentelemetry_otlp::Protocol::Grpc)
-                    .with_timeout(Duration::from_secs(3)),
-            )
-            .with_trace_config(
-                sdktrace::config()
-                    .with_resource(sdk_resource.merge(&env_resource).merge(&telemetry_resource)),
-            )
-            .install_batch(runtime::TokioCurrentThread)?)
-    } else {
-        let exporter = opentelemetry_stdout::SpanExporter::default();
-        let processor = sdktrace::BatchSpanProcessor::builder(exporter, runtime::Tokio).build();
-        let provider = sdktrace::TracerProvider::builder()
-            .with_span_processor(processor)
-            .with_config(
-                sdktrace::config()
-                    .with_resource(sdk_resource.merge(&env_resource).merge(&telemetry_resource)),
-            )
-            .build();
-
-        Ok(provider.tracer("Test")) // TODO: should be service.name
+        exporter = exporter.with_endpoint(url);
     }
+    exporter = exporter
+        .with_protocol(opentelemetry_otlp::Protocol::Grpc)
+        .with_timeout(Duration::from_secs(3));
+
+    let tracer_provider = opentelemetry_otlp::new_pipeline()
+        .tracing()
+        .with_exporter(exporter)
+        .with_trace_config(
+            sdktrace::Config::default()
+                .with_resource(sdk_resource.merge(&env_resource).merge(&telemetry_resource)),
+        )
+        .install_batch(runtime::TokioCurrentThread)?;
+
+    global::set_tracer_provider(tracer_provider.clone());
+    Ok(tracer_provider.tracer("lakesail"))
 }
 
 // TODO: init_metrics
