@@ -1,7 +1,7 @@
 use async_stream;
+use log::debug;
 use tonic::codegen::tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::debug;
 use uuid::Uuid;
 
 use crate::error::ProtoFieldExt;

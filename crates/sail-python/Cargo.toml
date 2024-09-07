@@ -7,7 +7,10 @@ edition = { workspace = true }
 pyo3 = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true }
-tracing = { workspace = true }
+log = { workspace = true }
+logforth = { workspace = true }
+fastrace = { workspace = true }
+fastrace-opentelemetry = { workspace = true }
 sail-common = { path = "../sail-common" }
 sail-telemetry = { path = "../sail-telemetry" }
 sail-spark-connect = { path = "../sail-spark-connect" }

@@ -10,15 +10,15 @@ edition = "2021"
 
 [workspace.dependencies]
 tracing = { version = "0.1.40", features = ["attributes", "std", "log"] }
-tracing-opentelemetry = { version = "0.25.0" }
+tracing-opentelemetry = "0.25.0"
 tracing-subscriber = { version = "0.3.18", features = ["registry", "std", "smallvec", "fmt", "ansi", "tracing-log", "std", "env-filter", "json"] }
 opentelemetry = { version = "0.24.0", features = ["trace", "metrics"] }
 opentelemetry_sdk = { version = "0.24.1", features = ["trace", "metrics", "rt-tokio", "rt-tokio-current-thread"] }
 opentelemetry-semantic-conventions = "0.16.0"
 opentelemetry-otlp = { version = "0.17.0", features = ["trace", "metrics", "grpc-tonic", "tls", "tls-roots"] }
 opentelemetry-proto = { version = "0.7.0" }
-opentelemetry-resource-detectors = "0.3.0"
 opentelemetry-stdout = { version = "0.5.0", features = ["trace"] }
+opentelemetry-resource-detectors = "0.3.0"
 thiserror = { version = "1.0.63" }
 tokio = { version = "1.40.0", features = ["full"] }
 tokio-stream = "0.1.15"
@@ -69,8 +69,10 @@ aws-config = "1.5.5"
 aws-credential-types = "1.2.1"
 clap = { version = "4.5.16", features = ["derive"] }
 # TODO: Integrate fastrace and remove opentelemetry-stdout
-#fastrace = { version = "0.7.2", features = ["enable"] }
-#fastrace-opentelemetry = "0.7.2"
+log = "0.4.22"
+logforth = { version = "0.11.2", features = ["fastrace", "opentelemetry", "env-filter"] }
+fastrace = { version = "0.7.2", features = ["enable"] }
+fastrace-opentelemetry = "0.7.2"
 
 ######
 # The versions of the following dependencies are managed manually.

@@ -1,13 +1,14 @@
 use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
+use fastrace::future::FutureExt;
+use fastrace::prelude::*;
 use sail_plan::object_store::{load_aws_config, ObjectStoreConfig};
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
-use tonic::codegen::http;
 use tonic::transport::server::TcpIncoming;
-use tower::ServiceBuilder;
-use tower_http::trace::{DefaultMakeSpan, TraceLayer};
-use tracing::{debug, Span};
+use tower::{Layer, Service, ServiceBuilder};
 
 use crate::server::SparkConnectServer;
 use crate::session::SessionManager;
@@ -16,6 +17,47 @@ use crate::spark::connect::spark_connect_service_server::SparkConnectServiceServ
 // Same default as Spark
 // https://github.com/apache/spark/blob/9cec3c4f7c1b467023f0eefff69e8b7c5105417d/python/pyspark/sql/connect/client/core.py#L126
 pub const GRPC_MAX_MESSAGE_LENGTH_DEFAULT: usize = 128 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy)]
+pub struct TraceMiddleware<S> {
+    inner: S,
+}
+
+impl<S, Request> Service<Request> for TraceMiddleware<S>
+where
+    S: Service<Request> + Clone + Send + 'static,
+    Request: std::fmt::Debug,
+    S::Future: Send + 'static,
+{
+    type Response = S::Response;
+
+    type Error = S::Error;
+
+    type Future =
+        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: Request) -> Self::Future {
+        let root_ctx = SpanContext::random();
+        let root_span = Span::root("trace_id", root_ctx);
+        let future = self.inner.call(request).in_span(root_span);
+        Box::pin(future)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TraceLayer;
+
+impl<S> Layer<S> for TraceLayer {
+    type Service = TraceMiddleware<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Self::Service { inner }
+    }
+}
 
 pub async fn serve<F>(
     // We must use the TCP listener from tokio.
@@ -47,16 +89,7 @@ where
         // .layer(
         //     CompressionLayer::new().gzip(true).zstd(true),
         // )
-        .layer(
-            TraceLayer::new_for_grpc()
-                .make_span_with(DefaultMakeSpan::new().include_headers(true))
-                .on_request(|request: &http::Request<_>, _: &Span| {
-                    debug!("{:?}", request);
-                })
-                .on_response(|response: &http::response::Response<_>, _, _: &Span| {
-                    debug!("{:?}", response);
-                }),
-        )
+        .layer(TraceLayer)
         .into_inner();
 
     let nodelay = true;

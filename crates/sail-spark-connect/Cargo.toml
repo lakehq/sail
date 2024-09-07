@@ -10,7 +10,6 @@ sail-python-udf = { path = "../sail-python-udf" }
 sail-sql = { path = "../sail-sql" }
 sail-telemetry = { path = "../sail-telemetry" }
 
-tracing = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
@@ -46,6 +45,10 @@ serde_arrow = { workspace = true }
 phf = { workspace = true }
 mimalloc = { workspace = true }
 clap = { workspace = true }
+log = { workspace = true }
+logforth = { workspace = true }
+fastrace = { workspace = true }
+fastrace-opentelemetry = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }
