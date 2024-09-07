@@ -3,13 +3,9 @@ use std::future::Future;
 use sail_plan::object_store::{load_aws_config, ObjectStoreConfig};
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
-use tonic::codegen::http;
 use tonic::transport::server::TcpIncoming;
 use tower::ServiceBuilder;
-use tower_http::compression::predicate::NotForContentType;
-use tower_http::compression::{CompressionLayer, DefaultPredicate, Predicate};
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
-use tracing::{debug, Span};
 
 use crate::server::SparkConnectServer;
 use crate::session::SessionManager;
@@ -44,24 +40,13 @@ where
     let server = SparkConnectServer::new(session_manager);
 
     let layer = ServiceBuilder::new()
+        // FIXME: Unsure why this doesn't work. Might be fixed when we upgrade to tower-http 0.5.2
+        //  Might be related: https://github.com/tower-rs/tower-http/issues/420
+        // .layer(
+        //     CompressionLayer::new().gzip(true).zstd(true),
+        // )
         .layer(
-            CompressionLayer::new().zstd(true).compress_when(
-                DefaultPredicate::new()
-                    // Need this until we upgrade tower-http
-                    // https://github.com/tokio-rs/axum/discussions/2034#discussioncomment-6120929
-                    // https://github.com/tower-rs/tower-http/issues/420
-                    .and(NotForContentType::new("text/event-stream")),
-            ),
-        )
-        .layer(
-            TraceLayer::new_for_grpc()
-                .make_span_with(DefaultMakeSpan::new().include_headers(true))
-                .on_request(|request: &http::Request<_>, _: &Span| {
-                    debug!("{:?}", request);
-                })
-                .on_response(|response: &http::response::Response<_>, _, _: &Span| {
-                    debug!("{:?}", response);
-                }),
+            TraceLayer::new_for_grpc().make_span_with(DefaultMakeSpan::new().include_headers(true)),
         )
         .into_inner();
 
@@ -78,8 +63,10 @@ where
         .add_service(
             SparkConnectServiceServer::new(server)
                 .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
-                .send_compressed(CompressionEncoding::Zstd)
-                .accept_compressed(CompressionEncoding::Zstd),
+                .accept_compressed(CompressionEncoding::Gzip)
+                .accept_compressed(CompressionEncoding::Zstd)
+                .send_compressed(CompressionEncoding::Gzip)
+                .send_compressed(CompressionEncoding::Zstd),
         );
 
     match signal {
