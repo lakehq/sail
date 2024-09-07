@@ -6,7 +6,8 @@ use tonic::codec::CompressionEncoding;
 use tonic::codegen::http;
 use tonic::transport::server::TcpIncoming;
 use tower::ServiceBuilder;
-use tower_http::compression::CompressionLayer;
+use tower_http::compression::predicate::NotForContentType;
+use tower_http::compression::{CompressionLayer, DefaultPredicate, Predicate};
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::{debug, Span};
 
@@ -43,7 +44,15 @@ where
     let server = SparkConnectServer::new(session_manager);
 
     let layer = ServiceBuilder::new()
-        .layer(CompressionLayer::new().zstd(true))
+        .layer(
+            CompressionLayer::new().zstd(true).compress_when(
+                DefaultPredicate::new()
+                    // Need this until we upgrade tower-http
+                    // https://github.com/tokio-rs/axum/discussions/2034#discussioncomment-6120929
+                    // https://github.com/tower-rs/tower-http/issues/420
+                    .and(NotForContentType::new("text/event-stream")),
+            ),
+        )
         .layer(
             TraceLayer::new_for_grpc()
                 .make_span_with(DefaultMakeSpan::new().include_headers(true))
