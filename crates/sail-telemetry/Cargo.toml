@@ -4,6 +4,9 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+sail-common = { path = "../sail-common" }
+
+datafusion = { workspace = true }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }

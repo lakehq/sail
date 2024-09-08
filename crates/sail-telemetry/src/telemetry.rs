@@ -1,39 +1,13 @@
-// use std::env;
-// use std::time::Duration;
-//
-// use opentelemetry::global;
-// use opentelemetry::trace::{TraceError, TracerProvider};
-// use opentelemetry_otlp::{self, WithExportConfig};
-// use opentelemetry_sdk::propagation::TraceContextPropagator;
-// use opentelemetry_sdk::resource::{
-//     EnvResourceDetector, ResourceDetector, SdkProvidedResourceDetector, TelemetryResourceDetector,
-// };
-// use opentelemetry_sdk::{runtime, trace as sdktrace};
-// use opentelemetry_stdout::SpanExporter;
-// use thiserror::Error;
-// use tracing::subscriber::SetGlobalDefaultError;
-// use tracing_subscriber::layer::SubscriberExt;
-// use tracing_subscriber::{fmt, EnvFilter, Registry};
-
 use fastrace::collector::{Config, ConsoleReporter};
 use logforth::filter::EnvFilter;
 use logforth::layout::TextLayout;
 use logforth::{append, Dispatch, Logger};
-
-// #[allow(clippy::enum_variant_names)]
-// #[derive(Debug, Error)]
-// pub enum TelemetryError {
-//     #[error("Trace error: {0}")]
-//     TraceError(#[from] TraceError),
-//     #[error("Set global default error: {0}")]
-//     SetGlobalDefaultError(#[from] SetGlobalDefaultError),
-//     #[error("Env error: {0}")]
-//     EnvError(#[from] env::VarError),
-// }
-
+use log::info;
 pub fn init_telemetry() -> Result<(), log::SetLoggerError> {
     fastrace::set_reporter(ConsoleReporter, Config::default());
-    init_logger()
+    init_logger()?;
+    info!("CHECK HERE: MEOW MEOW MEOW");
+    Ok(())
 }
 
 pub fn init_logger() -> Result<(), log::SetLoggerError> {

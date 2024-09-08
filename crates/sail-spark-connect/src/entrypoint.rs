@@ -1,17 +1,10 @@
 use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
-use fastrace::future::FutureExt;
-use fastrace::prelude::*;
-use log::debug;
 use sail_plan::object_store::{load_aws_config, ObjectStoreConfig};
+use sail_telemetry::trace_layer::TraceLayer;
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
-use tonic::codegen::http::Request;
 use tonic::transport::server::TcpIncoming;
-use tonic::transport::Body;
-use tower::{Layer, Service, ServiceBuilder};
+use tower::ServiceBuilder;
 
 use crate::server::SparkConnectServer;
 use crate::session::SessionManager;
@@ -20,51 +13,6 @@ use crate::spark::connect::spark_connect_service_server::SparkConnectServiceServ
 // Same default as Spark
 // https://github.com/apache/spark/blob/9cec3c4f7c1b467023f0eefff69e8b7c5105417d/python/pyspark/sql/connect/client/core.py#L126
 pub const GRPC_MAX_MESSAGE_LENGTH_DEFAULT: usize = 128 * 1024 * 1024;
-
-#[derive(Debug, Clone, Copy)]
-pub struct TraceMiddleware<S> {
-    inner: S,
-}
-
-impl<S> Service<Request<Body>> for TraceMiddleware<S>
-where
-    S: Service<Request<Body>> + Clone + Send + 'static,
-    S::Future: Send + 'static,
-{
-    type Response = S::Response;
-
-    type Error = S::Error;
-
-    type Future =
-        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
-
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx)
-    }
-
-    fn call(&mut self, request: Request<Body>) -> Self::Future {
-        let parent = SpanContext::random();
-        let root = Span::root("Root", parent);
-        let _span_guard = root.set_local_parent();
-        debug!("MEOW: {:?}", request);
-        let future = self
-            .inner
-            .call(request)
-            .in_span(Span::enter_with_parent("Task", &root));
-        Box::pin(future)
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct TraceLayer;
-
-impl<S> Layer<S> for TraceLayer {
-    type Service = TraceMiddleware<S>;
-
-    fn layer(&self, inner: S) -> Self::Service {
-        Self::Service { inner }
-    }
-}
 
 pub async fn serve<F>(
     // We must use the TCP listener from tokio.
@@ -96,7 +44,7 @@ where
         // .layer(
         //     CompressionLayer::new().gzip(true).zstd(true),
         // )
-        .layer(TraceLayer)
+        .layer(TraceLayer::new("sail-spark-connect"))
         .into_inner();
 
     let nodelay = true;

@@ -3965,6 +3965,7 @@ dependencies = [
 name = "sail-telemetry"
 version = "0.1.1"
 dependencies = [
+ "datafusion",
  "fastrace",
  "fastrace-opentelemetry",
  "log",
@@ -3978,6 +3979,7 @@ dependencies = [
  "opentelemetry_sdk",
  "prost 0.12.6",
  "prost-types",
+ "sail-common",
  "thiserror",
  "tokio",
  "tonic 0.11.0",
