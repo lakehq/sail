@@ -1,4 +1,5 @@
 use std::future::Future;
+
 use sail_plan::object_store::{load_aws_config, ObjectStoreConfig};
 use sail_telemetry::trace_layer::TraceLayer;
 use tokio::net::TcpListener;
@@ -44,7 +45,7 @@ where
         // .layer(
         //     CompressionLayer::new().gzip(true).zstd(true),
         // )
-        .layer(TraceLayer::new("sail-spark-connect"))
+        .layer(TraceLayer)
         .into_inner();
 
     let nodelay = true;
