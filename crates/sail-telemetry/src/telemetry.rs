@@ -33,6 +33,10 @@ use logforth::{append, Dispatch, Logger};
 
 pub fn init_telemetry() -> Result<(), log::SetLoggerError> {
     fastrace::set_reporter(ConsoleReporter, Config::default());
+    init_logger()
+}
+
+pub fn init_logger() -> Result<(), log::SetLoggerError> {
     Logger::new()
         .dispatch(
             Dispatch::new()
