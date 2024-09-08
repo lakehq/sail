@@ -1,10 +1,10 @@
-use fastrace::collector::{Config, ConsoleReporter};
-use log::{info, warn, error};
+// use fastrace::collector::{Config, ConsoleReporter};
+use log::{error, info, warn};
 use logforth::filter::EnvFilter;
 use logforth::layout::TextLayout;
 use logforth::{append, Dispatch, Logger};
 pub fn init_telemetry() -> Result<(), log::SetLoggerError> {
-    fastrace::set_reporter(ConsoleReporter, Config::default());
+    // fastrace::set_reporter(ConsoleReporter, Config::default());
     init_logger()?;
     info!("CHECK HERE: MEOW MEOW MEOW");
     warn!("CHECK HERE: MEOW MEOW MEOW");
@@ -18,7 +18,8 @@ pub fn init_logger() -> Result<(), log::SetLoggerError> {
             Dispatch::new()
                 .filter(EnvFilter::from_default_env_or("info"))
                 .layout(TextLayout::default())
-                .append(append::FastraceEvent), // .append(append::Stdout),
+                // .append(append::FastraceEvent)
+                .append(append::Stdout),
         )
         .apply()?;
     Ok(())

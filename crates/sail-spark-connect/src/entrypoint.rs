@@ -45,7 +45,7 @@ where
         // .layer(
         //     CompressionLayer::new().gzip(true).zstd(true),
         // )
-        .layer(TraceLayer)
+        .layer(TraceLayer::new("sail_spark_connect"))
         .into_inner();
 
     let nodelay = true;
