@@ -18,3 +18,4 @@ arrow-schema = { workspace = true }
 glob = { workspace = true }
 pyo3 = { workspace = true }
 lexical-core = { workspace = true }
+num_enum = { workspace = true }

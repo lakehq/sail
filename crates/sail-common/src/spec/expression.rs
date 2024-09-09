@@ -1,5 +1,7 @@
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 
+use crate::error::CommonError;
 use crate::spec::data_type::DataType;
 use crate::spec::literal::Literal;
 use crate::spec::QueryPlan;
@@ -236,7 +238,7 @@ pub struct CommonInlineUserDefinedFunction {
 pub enum FunctionDefinition {
     PythonUdf {
         output_type: DataType,
-        eval_type: i32,
+        eval_type: PySparkUdfType,
         command: Vec<u8>,
         python_version: String,
     },
@@ -268,10 +270,60 @@ pub struct CommonInlineUserDefinedTableFunction {
 pub enum TableFunctionDefinition {
     PythonUdtf {
         return_type: DataType,
-        eval_type: i32,
+        eval_type: PySparkUdfType,
         command: Vec<u8>,
         python_version: String,
     },
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TryFromPrimitive, IntoPrimitive,
+)]
+#[serde(rename_all = "camelCase")]
+#[num_enum(error_type(name = CommonError, constructor = PySparkUdfType::invalid))]
+#[repr(i32)]
+pub enum PySparkUdfType {
+    None = 0,
+    Batched = 100,
+    ArrowBatched = 101,
+    ScalarPandas = 200,
+    GroupedMapPandas = 201,
+    GroupedAggPandas = 202,
+    WindowAggPandas = 203,
+    ScalarPandasIter = 204,
+    MapPandasIter = 205,
+    CogroupedMapPandas = 206,
+    MapArrowIter = 207,
+    GroupedMapPandasWithState = 208,
+    Table = 300,
+    ArrowTable = 301,
+}
+
+impl PySparkUdfType {
+    fn invalid(v: i32) -> CommonError {
+        CommonError::invalid(format!("invalid PySpark UDF type: {}", v))
+    }
+
+    pub fn is_arrow_udf(&self) -> bool {
+        matches!(
+            self,
+            Self::ArrowBatched | Self::MapArrowIter | Self::ArrowTable
+        )
+    }
+
+    pub fn is_pandas_udf(&self) -> bool {
+        matches!(
+            self,
+            Self::ScalarPandas
+                | Self::GroupedMapPandas
+                | Self::GroupedAggPandas
+                | Self::WindowAggPandas
+                | Self::ScalarPandasIter
+                | Self::MapPandasIter
+                | Self::CogroupedMapPandas
+                | Self::GroupedMapPandasWithState
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

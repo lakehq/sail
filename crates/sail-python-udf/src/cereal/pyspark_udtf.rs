@@ -6,8 +6,9 @@ use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 use sail_common::config::SparkUdfConfig;
+use sail_common::spec;
 
-use crate::cereal::{is_pyspark_arrow_udf, PythonFunction};
+use crate::cereal::PythonFunction;
 
 #[derive(Debug, Clone)]
 pub struct PySparkUdtfObject(pub PyObject);
@@ -68,8 +69,8 @@ impl Eq for PySparkUdtfObject {}
 pub fn deserialize_pyspark_udtf(
     python_version: &str,
     command: &[u8],
-    eval_type: &i32,
-    num_args: &i32,
+    eval_type: spec::PySparkUdfType,
+    num_args: usize,
     return_type: &DataType,
     spark_udf_config: &SparkUdfConfig,
 ) -> Result<PySparkUdtfObject> {
@@ -88,14 +89,14 @@ pub fn deserialize_pyspark_udtf(
 
 pub fn build_pyspark_udtf_payload(
     command: &[u8],
-    eval_type: &i32,
-    num_args: &i32,
+    eval_type: spec::PySparkUdfType,
+    num_args: usize,
     return_type: &DataType,
     spark_udf_config: &SparkUdfConfig,
 ) -> Vec<u8> {
     let mut data: Vec<u8> = Vec::new();
-    data.extend(&eval_type.to_be_bytes()); // Add eval_type for extraction in visit_bytes
-    if is_pyspark_arrow_udf(eval_type) {
+    data.extend(&i32::from(eval_type).to_be_bytes()); // Add eval_type for extraction in visit_bytes
+    if eval_type.is_arrow_udf() {
         let configs = [
             &spark_udf_config.timezone,
             &spark_udf_config.pandas_convert_to_arrow_array_safely,
@@ -115,7 +116,7 @@ pub fn build_pyspark_udtf_payload(
         data.extend(&temp_data);
     }
     data.extend(&num_args.to_be_bytes()); // num_args
-    for index in 0..*num_args {
+    for index in 0..num_args {
         data.extend(&index.to_be_bytes()); // arg_offsets
     }
     data.extend(&(command.len() as i32).to_be_bytes()); // len of the function

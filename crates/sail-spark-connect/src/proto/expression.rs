@@ -329,7 +329,7 @@ impl TryFrom<udf::Function> for spec::FunctionDefinition {
                 let output_type = output_type.required("Python UDF output type")?;
                 Ok(spec::FunctionDefinition::PythonUdf {
                     output_type: output_type.try_into()?,
-                    eval_type,
+                    eval_type: spec::PySparkUdfType::try_from(eval_type)?,
                     command,
                     python_version: python_ver,
                 })
@@ -405,7 +405,7 @@ impl TryFrom<udtf::Function> for spec::TableFunctionDefinition {
                 let return_type = return_type.required("Python UDTF return type")?;
                 Ok(spec::TableFunctionDefinition::PythonUdtf {
                     return_type: return_type.try_into()?,
-                    eval_type,
+                    eval_type: spec::PySparkUdfType::try_from(eval_type)?,
                     command,
                     python_version: python_ver,
                 })
