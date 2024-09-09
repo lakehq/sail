@@ -83,7 +83,7 @@ pub fn deserialize_pyspark_udtf(
         );
     }
     let data: Vec<u8> =
-        build_pyspark_udtf_payload(command, eval_type, num_args, return_type, spark_udf_config);
+        build_pyspark_udtf_payload(command, eval_type, num_args, return_type, spark_udf_config)?;
     PySparkUdtfObject::load(&data)
 }
 
@@ -93,7 +93,7 @@ pub fn build_pyspark_udtf_payload(
     num_args: usize,
     return_type: &DataType,
     spark_udf_config: &SparkUdfConfig,
-) -> Vec<u8> {
+) -> Result<Vec<u8>> {
     let mut data: Vec<u8> = Vec::new();
     data.extend(&i32::from(eval_type).to_be_bytes()); // Add eval_type for extraction in visit_bytes
     if eval_type.is_arrow_udf() {
@@ -115,6 +115,9 @@ pub fn build_pyspark_udtf_payload(
         data.extend(&num_conf.to_be_bytes()); // num_conf
         data.extend(&temp_data);
     }
+    let num_args: i32 = num_args
+        .try_into()
+        .map_err(|e| plan_datafusion_err!("num_args: {e}"))?;
     data.extend(&num_args.to_be_bytes()); // num_args
     for index in 0..num_args {
         data.extend(&index.to_be_bytes()); // arg_offsets
@@ -142,5 +145,5 @@ pub fn build_pyspark_udtf_payload(
         data.extend(json_string.as_bytes());
     });
 
-    data
+    Ok(data)
 }

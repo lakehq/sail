@@ -83,7 +83,7 @@ pub fn deserialize_partial_pyspark_udf(
             pyo3_python_version
         );
     }
-    let data: Vec<u8> = build_pyspark_udf_payload(command, eval_type, num_args, spark_udf_config);
+    let data: Vec<u8> = build_pyspark_udf_payload(command, eval_type, num_args, spark_udf_config)?;
     PySparkUdfObject::load(&data)
 }
 
@@ -92,7 +92,7 @@ pub fn build_pyspark_udf_payload(
     eval_type: spec::PySparkUdfType,
     num_args: usize,
     spark_udf_config: &SparkUdfConfig,
-) -> Vec<u8> {
+) -> Result<Vec<u8>> {
     let mut data: Vec<u8> = Vec::new();
     data.extend(&i32::from(eval_type).to_be_bytes()); // Add eval_type for extraction in visit_bytes
     if eval_type.is_arrow_udf() || eval_type.is_pandas_udf() {
@@ -118,6 +118,9 @@ pub fn build_pyspark_udf_payload(
         data.extend(&temp_data);
     }
     data.extend(&1i32.to_be_bytes()); // num_udfs
+    let num_args: i32 = num_args
+        .try_into()
+        .map_err(|e| plan_datafusion_err!("num_args: {e}"))?;
     data.extend(&num_args.to_be_bytes()); // num_args
     for index in 0..num_args {
         data.extend(&index.to_be_bytes()); // arg_offsets
@@ -126,5 +129,5 @@ pub fn build_pyspark_udf_payload(
     data.extend(&(command.len() as i32).to_be_bytes()); // len of the function
     data.extend_from_slice(command);
 
-    data
+    Ok(data)
 }
