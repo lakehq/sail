@@ -172,6 +172,10 @@ impl ObjectName {
         names.push(name);
         Self(names)
     }
+
+    pub fn parts(&self) -> &[Identifier] {
+        &self.0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

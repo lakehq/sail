@@ -1,7 +1,6 @@
 use std::fmt;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::TableProvider;
 use datafusion_common::{
     exec_err, Constraints, DFSchema, DFSchemaRef, Result, SchemaReference, TableReference,
@@ -206,23 +205,6 @@ impl<'a> CatalogManager<'a> {
         )))
     }
 
-    pub(crate) async fn get_table_schema(
-        &self,
-        table: TableReference,
-    ) -> Result<Option<SchemaRef>> {
-        let (catalog_name, database_name, table_name) = self.resolve_table_reference(table)?;
-        let table_provider = unwrap_or!(
-            self.get_table_provider(
-                catalog_name.as_ref(),
-                database_name.as_ref(),
-                table_name.as_ref()
-            )
-            .await?,
-            return Ok(None)
-        );
-        Ok(Some(table_provider.schema()))
-    }
-
     pub(crate) async fn list_tables(
         &self,
         database: Option<SchemaReference>,
@@ -296,6 +278,7 @@ impl<'a> CatalogManager<'a> {
         if_exists: bool,
         purge: bool,
     ) -> Result<()> {
+        // TODO: delete table data
         if purge {
             return exec_err!("DROP TABLE ... PURGE is not supported");
         }
@@ -309,6 +292,7 @@ impl<'a> CatalogManager<'a> {
             // We don't know what type of table to drop from a SQL query like "DROP TABLE ...".
             // This is because TableSaveMethod::SaveAsTable on a DF saves as View in the Sail code,
             // and Spark expects "DROP TABLE ..." to work on tables created via DF SaveAsTable.
+            // FIXME: saving table as view may be incorrect
             Ok(_) => Ok(()),
             Err(_) => {
                 self.drop_view(table, if_exists).await?;
