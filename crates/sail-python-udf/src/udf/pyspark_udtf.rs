@@ -21,7 +21,7 @@ use sail_common::spec::TableFunctionDefinition;
 use sail_common::utils::cast_record_batch;
 
 use crate::cereal::pyspark_udtf::{deserialize_pyspark_udtf, PySparkUdtfObject};
-use crate::cereal::{is_pyspark_arrow_udf, PythonFunction};
+use crate::cereal::PythonFunction;
 use crate::udf::{
     build_pyarrow_record_batch_kwargs, get_pyarrow_record_batch_from_pandas_function,
     get_pyarrow_record_batch_from_pylist_function, get_pyarrow_schema,
@@ -280,15 +280,15 @@ impl TableFunctionImpl for PySparkUDTF {
         let python_function: PySparkUdtfObject = deserialize_pyspark_udtf(
             python_version,
             command,
-            eval_type,
-            &(exprs.len() as i32),
+            *eval_type,
+            exprs.len(),
             &self.return_type,
             &self.spark_udf_config,
         )
         .map_err(|err| DataFusionError::External(err.into()))?;
 
         if exprs.is_empty() {
-            let batches: RecordBatch = if is_pyspark_arrow_udf(eval_type) {
+            let batches: RecordBatch = if eval_type.is_arrow_udf() {
                 self.apply_pyspark_arrow_function(&[], python_function)?
             } else {
                 self.apply_pyspark_function_no_args(python_function)?
@@ -339,7 +339,7 @@ impl TableFunctionImpl for PySparkUDTF {
             }
         }
 
-        let batches: RecordBatch = if is_pyspark_arrow_udf(eval_type) {
+        let batches: RecordBatch = if eval_type.is_arrow_udf() {
             self.apply_pyspark_arrow_function(&input_arrays, python_function)?
         } else {
             self.apply_pyspark_function(&input_arrays, python_function)?

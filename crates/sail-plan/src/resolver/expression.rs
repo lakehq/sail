@@ -685,8 +685,8 @@ impl PlanResolver<'_> {
                 let python_function: PySparkUdfObject = deserialize_partial_pyspark_udf(
                     python_version,
                     command,
-                    eval_type,
-                    &(arguments.len() as i32),
+                    *eval_type,
+                    arguments.len(),
                     &self.config.spark_udf_config,
                 )
                 .map_err(|e| {
@@ -970,8 +970,8 @@ impl PlanResolver<'_> {
         let python_function: PySparkUdfObject = deserialize_partial_pyspark_udf(
             &python_version,
             &command,
-            &eval_type,
-            &(arguments.len() as i32),
+            eval_type,
+            arguments.len(),
             &self.config.spark_udf_config,
         )
         .map_err(|e| PlanError::invalid(format!("Python UDF deserialization error: {:?}", e)))?;
