@@ -7,16 +7,6 @@ edition = { workspace = true }
 sail-common = { path = "../sail-common" }
 
 datafusion = { workspace = true }
-tracing = { workspace = true }
-tracing-opentelemetry = { workspace = true }
-tracing-subscriber = { workspace = true }
-opentelemetry = { workspace = true }
-opentelemetry_sdk = { workspace = true }
-opentelemetry-semantic-conventions = { workspace = true }
-opentelemetry-otlp = { workspace = true }
-opentelemetry-proto = { workspace = true }
-opentelemetry-stdout = { workspace = true }
-opentelemetry-resource-detectors = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
@@ -28,9 +18,12 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 chrono = { workspace = true }
 log = { workspace = true }
-env_logger = "0.11.5"
+env_logger = { workspace = true }
 fastrace = { workspace = true }
 fastrace-opentelemetry = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
 anyhow = { workspace = true }
 
 [build-dependencies]

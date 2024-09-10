@@ -9,16 +9,6 @@ version = "0.1.2"
 edition = "2021"
 
 [workspace.dependencies]
-tracing = { version = "0.1.40", features = ["attributes", "std", "log"] }
-tracing-opentelemetry = "0.25.0"
-tracing-subscriber = { version = "0.3.18", features = ["registry", "std", "smallvec", "fmt", "ansi", "tracing-log", "std", "env-filter", "json"] }
-opentelemetry = { version = "0.24.0", features = ["trace", "metrics"] }
-opentelemetry_sdk = { version = "0.24.1", features = ["trace", "metrics", "rt-tokio", "rt-tokio-current-thread"] }
-opentelemetry-semantic-conventions = "0.16.0"
-opentelemetry-otlp = { version = "0.17.0", features = ["trace", "metrics", "grpc-tonic", "tls", "tls-roots"] }
-opentelemetry-proto = { version = "0.7.0" }
-opentelemetry-stdout = { version = "0.5.0", features = ["trace"] }
-opentelemetry-resource-detectors = "0.3.0"
 thiserror = { version = "1.0.63" }
 tokio = { version = "1.40.0", features = ["full"] }
 tokio-stream = "0.1.16"
@@ -47,7 +37,7 @@ monostate = "0.1"
 regex = "1.10"
 glob = "0.3"
 chrono = "0.4"
-chrono-tz = "0.9"
+chrono-tz = "0.10.0"
 futures = "0.3"
 comfy-table = "7.1"
 html-escape = "0.2"
@@ -69,11 +59,13 @@ aws-config = "1.5.5"
 aws-credential-types = "1.2.1"
 clap = { version = "4.5.17", features = ["derive"] }
 num_enum = "0.7.3"
-# TODO: Integrate fastrace and remove opentelemetry-stdout
 log = "0.4.22"
 env_logger = "0.11.5"
 fastrace = { version = "0.7.2", features = ["enable"] }
 fastrace-opentelemetry = "0.7.2"
+opentelemetry = "0.24.0"
+opentelemetry_sdk = "0.24.1"
+opentelemetry-otlp = { version = "0.17.0", features = ["tls", "tls-roots"] }
 anyhow = "1.0.87"
 
 ######

@@ -47,7 +47,6 @@ mimalloc = { workspace = true }
 clap = { workspace = true }
 log = { workspace = true }
 fastrace = { workspace = true }
-fastrace-opentelemetry = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }
