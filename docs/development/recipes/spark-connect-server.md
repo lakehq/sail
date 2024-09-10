@@ -12,8 +12,8 @@ You can build the server with the `release` profile in Cargo.
 
 ```bash
 env \
-RUSTFLAGS="-C target-cpu=native" \
-cargo build -r -p sail-spark-connect --bins
+  RUSTFLAGS="-C target-cpu=native" \
+  cargo build -r -p sail-spark-connect --bins
 ```
 
 You can then run the server with the following command.
