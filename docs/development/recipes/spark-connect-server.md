@@ -20,9 +20,8 @@ You can then run the server with the following command.
 
 ```bash
 env \
-RUSTFLAGS="-C target-cpu=native" \
-RUST_LOG="sail_spark_connect=info" \
-target/release/sail-spark-connect
+  RUST_LOG="sail_spark_connect=info" \
+  target/release/sail-spark-connect
 ```
 
 The `--help` option can be used to show all the supported arguments of the server.
