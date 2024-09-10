@@ -68,6 +68,7 @@ lexical-core = { version = "0.8.5", default-features = false, features = ["write
 aws-config = "1.5.5"
 aws-credential-types = "1.2.1"
 clap = { version = "4.5.16", features = ["derive"] }
+num_enum = "0.7.3"
 
 ######
 # The versions of the following dependencies are managed manually.

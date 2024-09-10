@@ -8,11 +8,10 @@ use datafusion::common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyIterator, PyList, PyTuple, PyType};
+use sail_common::spec;
 
 use crate::cereal::pyspark_udf::PySparkUdfObject;
-use crate::cereal::{
-    is_pyspark_arrow_udf, is_pyspark_pandas_udf, PythonFunction, PY_SPARK_SQL_BATCHED_UDF,
-};
+use crate::cereal::PythonFunction;
 use crate::udf::{
     build_pyarrow_array_kwargs, get_pyarrow_array_function, get_pyarrow_output_data_type,
     get_python_builtins_list_function, get_python_builtins_str_function, get_udf_name,
@@ -24,7 +23,10 @@ pub struct PySparkUDF {
     function_name: String,
     deterministic: bool,
     output_type: DataType,
-    eval_type: i32,
+    // TODO: We should not keep spec information in the UDF.
+    //   We should define different UDFs for different eval types
+    //   and let the plan resolver create the correct UDF instance.
+    eval_type: spec::PySparkUdfType,
     python_function: PySparkUdfObject,
 }
 
@@ -33,7 +35,7 @@ impl PySparkUDF {
         function_name: String,
         deterministic: bool,
         input_types: Vec<DataType>,
-        eval_type: i32,
+        eval_type: spec::PySparkUdfType,
         python_function: PySparkUdfObject,
         output_type: DataType,
     ) -> Self {
@@ -76,7 +78,7 @@ impl ScalarUDFImpl for PySparkUDF {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(args)?;
 
-        if is_pyspark_arrow_udf(&self.eval_type) {
+        if self.eval_type.is_arrow_udf() {
             let array_data: Result<ArrayData, DataFusionError> = Python::with_gil(|py| {
                 let pyarrow_module_array: Bound<PyAny> = get_pyarrow_array_function(py)?;
                 let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
@@ -130,7 +132,7 @@ impl ScalarUDFImpl for PySparkUDF {
             return Ok(ColumnarValue::Array(make_array(array_data?)));
         }
 
-        if is_pyspark_pandas_udf(&self.eval_type) {
+        if self.eval_type.is_pandas_udf() {
             let array_data: Result<ArrayData, DataFusionError> = Python::with_gil(|py| {
                 let pyarrow_module_array: Bound<PyAny> = get_pyarrow_array_function(py)?;
                 let builtins_list: Bound<PyAny> = get_python_builtins_list_function(py)?;
@@ -229,7 +231,7 @@ impl ScalarUDFImpl for PySparkUDF {
                         .get_item(0)
                         .map_err(|err| DataFusionError::External(err.into()))?;
 
-                    if self.eval_type == PY_SPARK_SQL_BATCHED_UDF
+                    if matches!(self.eval_type, spec::PySparkUdfType::Batched)
                         && self.deterministic
                         && self.output_type == DataType::Utf8
                     {
@@ -291,7 +293,7 @@ impl ScalarUDFImpl for PySparkUDF {
                 .name()
                 .map_err(|err| DataFusionError::External(err.into()))?;
 
-            let result: Bound<PyAny> = if self.eval_type == PY_SPARK_SQL_BATCHED_UDF
+            let result: Bound<PyAny> = if matches!(self.eval_type, spec::PySparkUdfType::Batched)
                 && self.deterministic
                 && self.output_type == DataType::Utf8
                 && result_data_type_name != "str"

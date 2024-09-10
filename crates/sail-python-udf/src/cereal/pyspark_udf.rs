@@ -4,8 +4,9 @@ use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 use sail_common::config::SparkUdfConfig;
+use sail_common::spec;
 
-use crate::cereal::{is_pyspark_arrow_udf, is_pyspark_pandas_udf, PythonFunction};
+use crate::cereal::PythonFunction;
 
 #[derive(Debug, Clone)]
 pub struct PySparkUdfObject(pub PyObject);
@@ -70,8 +71,8 @@ impl Eq for PySparkUdfObject {}
 pub fn deserialize_partial_pyspark_udf(
     python_version: &str,
     command: &[u8],
-    eval_type: &i32,
-    num_args: &i32,
+    eval_type: spec::PySparkUdfType,
+    num_args: usize,
     spark_udf_config: &SparkUdfConfig,
 ) -> Result<PySparkUdfObject> {
     let pyo3_python_version: String = Python::with_gil(|py| py.version().to_string());
@@ -82,19 +83,19 @@ pub fn deserialize_partial_pyspark_udf(
             pyo3_python_version
         );
     }
-    let data: Vec<u8> = build_pyspark_udf_payload(command, eval_type, num_args, spark_udf_config);
+    let data: Vec<u8> = build_pyspark_udf_payload(command, eval_type, num_args, spark_udf_config)?;
     PySparkUdfObject::load(&data)
 }
 
 pub fn build_pyspark_udf_payload(
     command: &[u8],
-    eval_type: &i32,
-    num_args: &i32,
+    eval_type: spec::PySparkUdfType,
+    num_args: usize,
     spark_udf_config: &SparkUdfConfig,
-) -> Vec<u8> {
+) -> Result<Vec<u8>> {
     let mut data: Vec<u8> = Vec::new();
-    data.extend(&eval_type.to_be_bytes()); // Add eval_type for extraction in visit_bytes
-    if is_pyspark_arrow_udf(eval_type) || is_pyspark_pandas_udf(eval_type) {
+    data.extend(&i32::from(eval_type).to_be_bytes()); // Add eval_type for extraction in visit_bytes
+    if eval_type.is_arrow_udf() || eval_type.is_pandas_udf() {
         let configs = [
             &spark_udf_config.timezone,
             &spark_udf_config.pandas_window_bound_types,
@@ -117,13 +118,16 @@ pub fn build_pyspark_udf_payload(
         data.extend(&temp_data);
     }
     data.extend(&1i32.to_be_bytes()); // num_udfs
+    let num_args: i32 = num_args
+        .try_into()
+        .map_err(|e| plan_datafusion_err!("num_args: {e}"))?;
     data.extend(&num_args.to_be_bytes()); // num_args
-    for index in 0..*num_args {
+    for index in 0..num_args {
         data.extend(&index.to_be_bytes()); // arg_offsets
     }
     data.extend(&1i32.to_be_bytes()); // num functions
     data.extend(&(command.len() as i32).to_be_bytes()); // len of the function
     data.extend_from_slice(command);
 
-    data
+    Ok(data)
 }

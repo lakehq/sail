@@ -1,6 +1,7 @@
+use num_enum::TryFromPrimitive;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{CommonError, CommonResult};
+use crate::error::CommonError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -110,8 +111,22 @@ impl From<Vec<Field>> for Fields {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Hash,
+    TryFromPrimitive,
+)]
 #[serde(rename_all = "camelCase")]
+#[num_enum(error_type(name = CommonError, constructor = DayTimeIntervalField::invalid))]
+#[repr(i32)]
 pub enum DayTimeIntervalField {
     Day = 0,
     Hour = 1,
@@ -119,42 +134,36 @@ pub enum DayTimeIntervalField {
     Second = 3,
 }
 
-impl TryFrom<i32> for DayTimeIntervalField {
-    type Error = CommonError;
-
-    fn try_from(value: i32) -> CommonResult<Self> {
-        match value {
-            0 => Ok(DayTimeIntervalField::Day),
-            1 => Ok(DayTimeIntervalField::Hour),
-            2 => Ok(DayTimeIntervalField::Minute),
-            3 => Ok(DayTimeIntervalField::Second),
-            _ => Err(CommonError::invalid(format!(
-                "day time interval field: {}",
-                value
-            ))),
-        }
+impl DayTimeIntervalField {
+    fn invalid(value: i32) -> CommonError {
+        CommonError::invalid(format!("day time interval field: {}", value))
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Hash,
+    TryFromPrimitive,
+)]
 #[serde(rename_all = "camelCase")]
+#[num_enum(error_type(name = CommonError, constructor = YearMonthIntervalField::invalid))]
+#[repr(i32)]
 pub enum YearMonthIntervalField {
     Year = 0,
     Month = 1,
 }
 
-impl TryFrom<i32> for YearMonthIntervalField {
-    type Error = CommonError;
-
-    fn try_from(value: i32) -> CommonResult<Self> {
-        match value {
-            0 => Ok(YearMonthIntervalField::Year),
-            1 => Ok(YearMonthIntervalField::Month),
-            _ => Err(CommonError::invalid(format!(
-                "year month interval field: {}",
-                value
-            ))),
-        }
+impl YearMonthIntervalField {
+    fn invalid(value: i32) -> CommonError {
+        CommonError::invalid(format!("year month interval field: {}", value))
     }
 }
 
