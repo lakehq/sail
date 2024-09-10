@@ -72,8 +72,7 @@ where
                 match header_value {
                     Ok(header_value) => {
                         headers.insert(HTTP_HEADER_TRACE_PARENT, header_value);
-                        // Some(root_span)
-                        None
+                        Some(root_span)
                     }
                     Err(error) => {
                         error!("Failed to encode span context for {} {error}", self.name);
