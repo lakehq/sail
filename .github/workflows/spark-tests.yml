@@ -50,10 +50,10 @@ jobs:
           chmod +x /usr/local/bin/grpc_health_probe
           grpc_health_probe -version
 
-      # Building PySpark package is slow (~40 minutes on GitHub Linux runners),
-      # so we create a dedicated cache for them to increase the cache hit rate.
+      # Building the patched PySpark package is slow (~40 minutes on GitHub Linux runners),
+      # so we create a dedicated cache entry for it.
       - uses: actions/cache@v4
-        name: Cache PySpark package
+        name: Cache PySpark
         id: cache-pyspark
         with:
           path: |
@@ -72,7 +72,7 @@ jobs:
           fetch-depth: 1
 
       - if: steps.cache-pyspark.outputs.cache-hit != 'true'
-        name: Build PySpark package
+        name: Build PySpark
         run: |
           scripts/spark-tests/build-pyspark.sh
 

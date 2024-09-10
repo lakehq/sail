@@ -45,6 +45,16 @@ git tag -f $TAG
 git push -f origin tag $TAG
 ```
 
+::: info
+
+To fetch remote tags that may have been force updated, use the following command.
+
+```bash
+git fetch -f --tags
+```
+
+:::
+
 ### Deleting Tags
 
 To delete tag `$TAG`, delete it locally and push the deletion to the remote repository.
