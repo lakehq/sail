@@ -1,26 +1,33 @@
+use std::env;
 use std::io::Write;
 
 use fastrace::collector::{Config, Reporter, SpanRecord};
 use fastrace::prelude::*;
 
-use crate::error::TelemetryResult;
 // use log::error;
+use crate::error::TelemetryResult;
 
 pub fn init_telemetry() -> TelemetryResult<()> {
+    let use_collector = match env::var("SAIL_OPENTELEMETRY_COLLECTOR") {
+        Ok(val) => !val.is_empty(),
+        Err(_) => false,
+    };
     fastrace::set_reporter(
-        ConsoleReporter,
+        DummyReporter,
         Config::default().report_before_root_finish(true),
     );
-    init_logger()?;
+    init_logger(use_collector)?;
     Ok(())
 }
 
-pub fn init_logger() -> TelemetryResult<()> {
+pub fn init_logger(use_collector: bool) -> TelemetryResult<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .format(|buf, record| {
-            Event::add_to_local_parent(record.level().as_str(), || {
-                [("message".into(), record.args().to_string().into())]
-            });
+        .format(move |buf, record| {
+            if use_collector {
+                Event::add_to_local_parent(record.level().as_str(), || {
+                    [("message".into(), record.args().to_string().into())]
+                });
+            }
             let level = record.level();
             let target = record.module_path().unwrap();
             let style = buf.default_level_style(level);
@@ -37,9 +44,19 @@ pub fn init_logger() -> TelemetryResult<()> {
         .init();
     Ok(())
 }
-pub struct ConsoleReporter;
-impl Reporter for ConsoleReporter {
+pub struct DummyReporter;
+impl Reporter for DummyReporter {
     fn report(&mut self, _spans: Vec<SpanRecord>) {
+        // for span in spans {
+        //     if !span.events.is_empty() {
+        //         let bytes =  format!("trace_id: {:?}, span_id: {:?}, parent_id: {:?}, begin_time_unix_ns: {}, duration_ns: {}, name: {}, properties: {:?}, events: {:?}\n", span.trace_id, span.span_id, span.parent_id, span.begin_time_unix_ns, span.duration_ns, span.name, span.properties, span.events).into_bytes();
+        //         std::io::stdout()
+        //             .write_all(&bytes)
+        //             .map_err(|e| error!("Failed to write to stdout: {e}"))
+        //             .ok();
+        //         // eprintln!("trace_id: {:?}, span_id: {:?}, parent_id: {:?}, begin_time_unix_ns: {}, duration_ns: {}, name: {}, properties: {:?}, events: {:?}", span.trace_id, span.span_id, span.parent_id, span.begin_time_unix_ns, span.duration_ns, span.name, span.properties, span.events);
+        //     }
+        // }
         //     pub trace_id: TraceId,
         //     pub span_id: SpanId,
         //     pub parent_id: SpanId,
@@ -48,16 +65,6 @@ impl Reporter for ConsoleReporter {
         //     pub name: Cow<'static, str>,
         //     pub properties: Vec<(Cow<'static, str>, Cow<'static, str>)>,
         //     pub events: Vec<EventRecord>,
-        // for span in spans {
-        //     if !span.events.is_empty() {
-        //         // let bytes =  format!("trace_id: {:?}, span_id: {:?}, parent_id: {:?}, begin_time_unix_ns: {}, duration_ns: {}, name: {}, properties: {:?}, events: {:?}\n", span.trace_id, span.span_id, span.parent_id, span.begin_time_unix_ns, span.duration_ns, span.name, span.properties, span.events).into_bytes();
-        //         // std::io::stdout()
-        //         //     .write_all(&bytes)
-        //         //     .map_err(|e| error!("Failed to write to stdout: {e}"))
-        //         //     .ok();
-        //         eprintln!("trace_id: {:?}, span_id: {:?}, parent_id: {:?}, begin_time_unix_ns: {}, duration_ns: {}, name: {}, properties: {:?}, events: {:?}", span.trace_id, span.span_id, span.parent_id, span.begin_time_unix_ns, span.duration_ns, span.name, span.properties, span.events);
-        //     }
-        // }
     }
 }
 
@@ -71,13 +78,13 @@ impl Reporter for ConsoleReporter {
 //     let trace_config = sdktrace::Config::default()
 //         .with_resource(sdk_resource.merge(&env_resource).merge(&telemetry_resource));
 //
-//     let use_collector = match env::var("LAKESAIL_OPENTELEMETRY_COLLECTOR") {
+//     let use_collector = match env::var("SAIL_OPENTELEMETRY_COLLECTOR") {
 //         Ok(val) => !val.is_empty(),
 //         Err(_) => false,
 //     };
 //     let tracer_provider = if use_collector {
-//         let host = env::var("LAKESAIL_OPENTELEMETRY_COLLECTOR_SERVICE_HOST")?;
-//         let port = env::var("LAKESAIL_OPENTELEMETRY_COLLECTOR_SERVICE_PORT_OTLP_GRPC")?;
+//         let host = env::var("SAIL_OPENTELEMETRY_COLLECTOR_SERVICE_HOST")?;
+//         let port = env::var("SAIL_OPENTELEMETRY_COLLECTOR_SERVICE_PORT_OTLP_GRPC")?;
 //         let url = format!("http://{host}:{port}");
 //         opentelemetry_otlp::new_pipeline()
 //             .tracing()
