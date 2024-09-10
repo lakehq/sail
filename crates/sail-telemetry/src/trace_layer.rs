@@ -57,6 +57,7 @@ where
         let root_span = match span_context_from_headers(headers) {
             Ok(Some(span_context)) => {
                 let root_span = Span::root(self.name, span_context);
+                // let _span_guard = root_span.set_local_parent();
                 Some(root_span)
             }
             Err(error) => {
@@ -66,11 +67,13 @@ where
             _ => {
                 let span_context = SpanContext::random();
                 let root_span = Span::root(self.name, span_context);
+                // let _span_guard = root_span.set_local_parent();
                 let header_value = HeaderValue::from_str(&span_context.encode_w3c_traceparent());
                 match header_value {
                     Ok(header_value) => {
                         headers.insert(HTTP_HEADER_TRACE_PARENT, header_value);
-                        Some(root_span)
+                        // Some(root_span)
+                        None
                     }
                     Err(error) => {
                         error!("Failed to encode span context for {} {error}", self.name);
@@ -82,10 +85,10 @@ where
 
         if let Some(root_span) = root_span {
             // let _span_guard = root_span.set_local_parent();
-            debug!("SOME MEOW: {request:?}");
-            debug!("SOME MEOW!");
-            warn!("SOME MEOW!!");
-            error!("SOME MEOW!!!!!!!!!!!!!!");
+            // debug!("SOME MEOW: {request:?}");
+            // debug!("SOME MEOW!");
+            // warn!("SOME MEOW!!");
+            // error!("SOME MEOW!!!!!!!!!!!!!!");
             let future = self.inner.call(request).in_span(root_span);
             Box::pin(future)
         } else {
