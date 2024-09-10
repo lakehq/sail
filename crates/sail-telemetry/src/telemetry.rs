@@ -1,11 +1,22 @@
 use std::env;
 use std::io::Write;
+use std::time::Duration;
 
 use fastrace::collector::{Config, Reporter, SpanRecord};
+use fastrace_opentelemetry::OpenTelemetryReporter;
 use fastrace::prelude::*;
-
 // use log::error;
 use crate::error::TelemetryResult;
+
+
+use opentelemetry::global;
+use opentelemetry::trace::{TraceError, TracerProvider};
+use opentelemetry_otlp::{self, WithExportConfig};
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::resource::{
+    EnvResourceDetector, ResourceDetector, SdkProvidedResourceDetector, TelemetryResourceDetector,
+};
+use opentelemetry_sdk::{runtime, trace as sdktrace};
 
 pub fn init_telemetry() -> TelemetryResult<()> {
     let use_collector = match env::var("SAIL_OPENTELEMETRY_COLLECTOR") {
@@ -16,7 +27,26 @@ pub fn init_telemetry() -> TelemetryResult<()> {
         DummyReporter,
         Config::default().report_before_root_finish(true),
     );
+    init_tracer(use_collector)?;
     init_logger(use_collector)?;
+    Ok(())
+}
+
+pub fn init_tracer(use_collector: bool) -> TelemetryResult<()> {
+    if use_collector {
+        let sdk_resource = SdkProvidedResourceDetector.detect(Duration::from_secs(0));
+        let env_resource = EnvResourceDetector::new().detect(Duration::from_secs(0));
+        let telemetry_resource = TelemetryResourceDetector.detect(Duration::from_secs(0));
+        fastrace::set_reporter(
+            DummyReporter,
+            Config::default().report_before_root_finish(true),
+        )
+    } else {
+        fastrace::set_reporter(
+            DummyReporter,
+            Config::default().report_before_root_finish(true),
+        )
+    };
     Ok(())
 }
 
@@ -44,36 +74,16 @@ pub fn init_logger(use_collector: bool) -> TelemetryResult<()> {
         .init();
     Ok(())
 }
+
 pub struct DummyReporter;
 impl Reporter for DummyReporter {
     fn report(&mut self, _spans: Vec<SpanRecord>) {
-        // for span in spans {
-        //     if !span.events.is_empty() {
-        //         let bytes =  format!("trace_id: {:?}, span_id: {:?}, parent_id: {:?}, begin_time_unix_ns: {}, duration_ns: {}, name: {}, properties: {:?}, events: {:?}\n", span.trace_id, span.span_id, span.parent_id, span.begin_time_unix_ns, span.duration_ns, span.name, span.properties, span.events).into_bytes();
-        //         std::io::stdout()
-        //             .write_all(&bytes)
-        //             .map_err(|e| error!("Failed to write to stdout: {e}"))
-        //             .ok();
-        //         // eprintln!("trace_id: {:?}, span_id: {:?}, parent_id: {:?}, begin_time_unix_ns: {}, duration_ns: {}, name: {}, properties: {:?}, events: {:?}", span.trace_id, span.span_id, span.parent_id, span.begin_time_unix_ns, span.duration_ns, span.name, span.properties, span.events);
-        //     }
-        // }
-        //     pub trace_id: TraceId,
-        //     pub span_id: SpanId,
-        //     pub parent_id: SpanId,
-        //     pub begin_time_unix_ns: u64,
-        //     pub duration_ns: u64,
-        //     pub name: Cow<'static, str>,
-        //     pub properties: Vec<(Cow<'static, str>, Cow<'static, str>)>,
-        //     pub events: Vec<EventRecord>,
     }
 }
 
 // pub fn init_tracer() -> Result<sdktrace::Tracer, TelemetryError> {
 //     global::set_text_map_propagator(TraceContextPropagator::new());
 //
-//     let sdk_resource = SdkProvidedResourceDetector.detect(Duration::from_secs(0));
-//     let env_resource = EnvResourceDetector::new().detect(Duration::from_secs(0));
-//     let telemetry_resource = TelemetryResourceDetector.detect(Duration::from_secs(0));
 //
 //     let trace_config = sdktrace::Config::default()
 //         .with_resource(sdk_resource.merge(&env_resource).merge(&telemetry_resource));
