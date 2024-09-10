@@ -21,7 +21,7 @@ use datafusion_common::{
     Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
     ToDFSchema,
 };
-use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::{GroupingSet, ScalarFunction};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::{
     columnize_expr, conjunction, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
@@ -903,7 +903,9 @@ impl PlanResolver<'_> {
         } = aggregate;
         let input = self.resolve_query_plan(*input, state).await?;
         let schema = input.schema();
-        let grouping = self.resolve_expressions(grouping, schema, state).await?;
+        let grouping = self
+            .resolve_named_expressions(grouping, schema, state)
+            .await?;
         let projections = self
             .resolve_named_expressions(projections, schema, state)
             .await?;
@@ -2353,7 +2355,7 @@ impl PlanResolver<'_> {
         &self,
         input: LogicalPlan,
         projections: Vec<NamedExpr>,
-        grouping: Vec<Expr>,
+        grouping: Vec<NamedExpr>,
         having: Option<Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
@@ -2364,10 +2366,47 @@ impl PlanResolver<'_> {
         if let Some(having) = having.as_ref() {
             aggregate_candidates.push(having.clone());
         }
-        let aggregate = find_aggregate_exprs(&aggregate_candidates);
+        let aggregate_exprs = find_aggregate_exprs(&aggregate_candidates);
+        let group_exprs = grouping.iter().map(|x| x.expr.clone()).collect::<Vec<_>>();
         let plan = LogicalPlanBuilder::from(input)
-            .aggregate(grouping, aggregate.clone())?
+            .aggregate(group_exprs, aggregate_exprs.clone())?
             .build()?;
+        let projections = {
+            let mut results = vec![];
+            for expr in grouping {
+                let NamedExpr {
+                    name,
+                    expr,
+                    metadata,
+                } = expr;
+                let exprs = match expr {
+                    Expr::GroupingSet(GroupingSet::Rollup(exprs)) => exprs,
+                    Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs,
+                    Expr::GroupingSet(GroupingSet::GroupingSets(exprs)) => {
+                        // FIXME: Is this correct?
+                        exprs.into_iter().flatten().collect()
+                    }
+                    expr => vec![expr],
+                };
+                if name.len() != exprs.len() {
+                    return Err(PlanError::internal(format!(
+                        "group-by name count does not match expression count: {name:?} {exprs:?}",
+                    )));
+                }
+                let exprs: Vec<_> = exprs
+                    .into_iter()
+                    .zip(name.into_iter())
+                    .map(|(expr, name)| NamedExpr {
+                        name: vec![name],
+                        expr,
+                        metadata: metadata.clone(),
+                    })
+                    .collect();
+                results.extend(exprs);
+            }
+            results.extend(projections);
+            results
+        };
         let projections = projections
             .into_iter()
             .map(|x| {
@@ -2378,13 +2417,13 @@ impl PlanResolver<'_> {
                 } = x;
                 Ok(NamedExpr {
                     name,
-                    expr: rebase_expression(expr, &aggregate, &plan)?,
+                    expr: rebase_expression(expr, &aggregate_exprs, &plan)?,
                     metadata,
                 })
             })
             .collect::<PlanResult<_>>()?;
         let having = match having {
-            Some(having) => Some(rebase_expression(having.clone(), &aggregate, &plan)?),
+            Some(having) => Some(rebase_expression(having.clone(), &aggregate_exprs, &plan)?),
             None => None,
         };
         let projections = self.rewrite_named_expressions(projections, state)?;

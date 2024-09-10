@@ -11,13 +11,17 @@ In some situations, however, you may want to build and run the server as a stand
 You can build the server with the `release` profile in Cargo.
 
 ```bash
-cargo build -r -p sail-spark-connect --bins
+env \
+  RUSTFLAGS="-C target-cpu=native" \
+  cargo build -r -p sail-spark-connect --bins
 ```
 
 You can then run the server with the following command.
 
 ```bash
-env RUST_LOG="sail_spark_connect=info" target/release/sail-spark-connect
+env \
+  RUST_LOG="sail_spark_connect=info" \
+  target/release/sail-spark-connect
 ```
 
 The `--help` option can be used to show all the supported arguments of the server.

@@ -1064,9 +1064,11 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let expr = self.resolve_expressions(rollup, schema, state).await?;
+        let (names, expr) = self
+            .resolve_alias_expressions_and_names(rollup, schema, state)
+            .await?;
         Ok(NamedExpr::new(
-            vec![],
+            names,
             expr::Expr::GroupingSet(expr::GroupingSet::Rollup(expr)),
         ))
     }
@@ -1077,9 +1079,11 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let expr = self.resolve_expressions(cube, schema, state).await?;
+        let (names, expr) = self
+            .resolve_alias_expressions_and_names(cube, schema, state)
+            .await?;
         Ok(NamedExpr::new(
-            vec![],
+            names,
             expr::Expr::GroupingSet(expr::GroupingSet::Cube(expr)),
         ))
     }
@@ -1098,6 +1102,7 @@ impl PlanResolver<'_> {
             results.push(expr)
         }
         Ok(NamedExpr::new(
+            // FIXME add names for grouping set expressions
             vec![],
             expr::Expr::GroupingSet(expr::GroupingSet::GroupingSets(results)),
         ))
