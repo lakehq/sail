@@ -8,7 +8,6 @@ pyo3 = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }
-logforth = { workspace = true }
 fastrace = { workspace = true }
 fastrace-opentelemetry = { workspace = true }
 sail-common = { path = "../sail-common" }

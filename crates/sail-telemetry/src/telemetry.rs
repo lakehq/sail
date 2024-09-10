@@ -1,28 +1,64 @@
-use fastrace::collector::{Config, ConsoleReporter};
-use log::{error, info, warn};
-use logforth::filter::EnvFilter;
-use logforth::layout::TextLayout;
-use logforth::{append, Dispatch, Logger};
-pub fn init_telemetry() -> Result<(), log::SetLoggerError> {
-    fastrace::set_reporter(ConsoleReporter, Config::default());
+use std::io::Write;
+
+use fastrace::collector::{Config, Reporter, SpanRecord};
+use fastrace::prelude::*;
+
+use crate::error::TelemetryResult;
+// use log::error;
+
+pub fn init_telemetry() -> TelemetryResult<()> {
+    fastrace::set_reporter(
+        ConsoleReporter,
+        Config::default().report_before_root_finish(true),
+    );
     init_logger()?;
-    info!("CHECK HERE: MEOW MEOW MEOW");
-    warn!("CHECK HERE: MEOW MEOW MEOW");
-    error!("CHECK HERE: MEOW MEOW MEOW");
     Ok(())
 }
 
-pub fn init_logger() -> Result<(), log::SetLoggerError> {
-    Logger::new()
-        .dispatch(
-            Dispatch::new()
-                .filter(EnvFilter::from_default_env_or("info"))
-                .layout(TextLayout::default())
-                .append(append::FastraceEvent)
-                .append(append::Stdout),
-        )
-        .apply()?;
+pub fn init_logger() -> TelemetryResult<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format(|buf, record| {
+            Event::add_to_local_parent(record.level().as_str(), || {
+                [("message".into(), record.args().to_string().into())]
+            });
+            let level = record.level();
+            let target = record.module_path().unwrap();
+            let style = buf.default_level_style(level);
+            let timestamp = buf.timestamp();
+            let args = record.args();
+            if let Some(span_context) = SpanContext::current_local_parent() {
+                let trace_id = span_context.trace_id.0;
+                let span_id = span_context.span_id.0;
+                writeln!(buf, "[{timestamp} {style}{level}{style:#} {target} trace: {trace_id} span: {span_id}] {args}")
+            } else {
+                writeln!(buf, "[{timestamp} {style}{level}{style:#} {target}] {args}")
+            }
+        })
+        .init();
     Ok(())
+}
+pub struct ConsoleReporter;
+impl Reporter for ConsoleReporter {
+    fn report(&mut self, _spans: Vec<SpanRecord>) {
+        //     pub trace_id: TraceId,
+        //     pub span_id: SpanId,
+        //     pub parent_id: SpanId,
+        //     pub begin_time_unix_ns: u64,
+        //     pub duration_ns: u64,
+        //     pub name: Cow<'static, str>,
+        //     pub properties: Vec<(Cow<'static, str>, Cow<'static, str>)>,
+        //     pub events: Vec<EventRecord>,
+        // for span in spans {
+        //     if !span.events.is_empty() {
+        //         // let bytes =  format!("trace_id: {:?}, span_id: {:?}, parent_id: {:?}, begin_time_unix_ns: {}, duration_ns: {}, name: {}, properties: {:?}, events: {:?}\n", span.trace_id, span.span_id, span.parent_id, span.begin_time_unix_ns, span.duration_ns, span.name, span.properties, span.events).into_bytes();
+        //         // std::io::stdout()
+        //         //     .write_all(&bytes)
+        //         //     .map_err(|e| error!("Failed to write to stdout: {e}"))
+        //         //     .ok();
+        //         eprintln!("trace_id: {:?}, span_id: {:?}, parent_id: {:?}, begin_time_unix_ns: {}, duration_ns: {}, name: {}, properties: {:?}, events: {:?}", span.trace_id, span.span_id, span.parent_id, span.begin_time_unix_ns, span.duration_ns, span.name, span.properties, span.events);
+        //     }
+        // }
+    }
 }
 
 // pub fn init_tracer() -> Result<sdktrace::Tracer, TelemetryError> {

@@ -71,9 +71,10 @@ clap = { version = "4.5.17", features = ["derive"] }
 num_enum = "0.7.3"
 # TODO: Integrate fastrace and remove opentelemetry-stdout
 log = "0.4.22"
-logforth = { version = "0.11.2", features = ["fastrace", "opentelemetry", "env-filter"] }
+env_logger = "0.11.5"
 fastrace = { version = "0.7.2", features = ["enable"] }
 fastrace-opentelemetry = "0.7.2"
+anyhow = "1.0.87"
 
 ######
 # The versions of the following dependencies are managed manually.

@@ -42,7 +42,7 @@ To point tag `$TAG` to a different commit, force update the tag locally and forc
 
 ```bash
 git tag -f $TAG
-git push origin -f tag $TAG
+git push -f origin tag $TAG
 ```
 
 ::: info
