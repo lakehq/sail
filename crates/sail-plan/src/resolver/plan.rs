@@ -36,7 +36,6 @@ use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
 use sail_python_udf::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
-use crate::catalog::CatalogManager;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
@@ -1740,10 +1739,24 @@ impl PlanResolver<'_> {
                         })
                     }
                     TableSaveMethod::InsertInto => {
-                        let arrow_schema = adt::Schema::from(plan.schema().as_ref());
+                        // TODO: consolidate the logic with `INSERT INTO` command
+                        let table_provider = self.ctx.table_provider(table_ref.clone()).await?;
+                        let fields: Vec<_> = table_provider
+                            .schema()
+                            .fields()
+                            .iter()
+                            .map(|f| f.name().clone())
+                            .collect();
+                        // TODO: convert input in a way similar to `SqlToRel::insert_to_plan()`
+                        let plan = rename_logical_plan(plan, &fields)?;
                         let overwrite = mode == SaveMode::Overwrite;
-                        LogicalPlanBuilder::insert_into(plan, table_ref, &arrow_schema, overwrite)?
-                            .build()?
+                        LogicalPlanBuilder::insert_into(
+                            plan,
+                            table_ref,
+                            &table_provider.schema(),
+                            overwrite,
+                        )?
+                        .build()?
                     }
                 }
             }
@@ -1804,7 +1817,21 @@ impl PlanResolver<'_> {
         let location = if let Some(location) = location {
             location
         } else {
-            self.config.default_warehouse_directory.clone()
+            // FIXME: handle name with special characters in path
+            // TODO: support path with database name
+            let name: String = table
+                .parts()
+                .last()
+                .ok_or_else(|| PlanError::invalid("missing table name"))?
+                .clone()
+                .into();
+            format!(
+                "{}{}{}{}",
+                self.config.default_warehouse_directory,
+                object_store::path::DELIMITER,
+                name,
+                object_store::path::DELIMITER
+            )
         };
         let file_format = if let Some(file_format) = file_format {
             file_format
@@ -2125,32 +2152,35 @@ impl PlanResolver<'_> {
         }
         let input = self.resolve_query_plan(input, state).await?;
         let table_reference = build_table_reference(table)?;
-        let manager = CatalogManager::new(self.ctx, self.config.clone());
-        let table_schema = manager
-            .get_table_schema(table_reference.clone())
-            .await?
-            .ok_or_else(|| PlanError::invalid(format!("Table {} not found", table_reference)))?;
+        let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
         let columns: Vec<String> = columns.into_iter().map(String::from).collect();
-        let arrow_schema = if columns.is_empty() {
-            &table_schema
+        let schema = table_provider.schema();
+        let schema = if columns.is_empty() {
+            schema
         } else {
             let fields = columns
                 .into_iter()
                 .map(|c| {
                     let df_schema = DFSchema::try_from_qualified_schema(
                         table_reference.clone(),
-                        table_schema.as_ref(),
+                        schema.as_ref(),
                     )?;
                     let column_index = df_schema
                         .index_of_column_by_name(None, &c)
                         .ok_or_else(|| PlanError::invalid(format!("Column {} not found", c)))?;
-                    Ok(table_schema.field(column_index).clone())
+                    Ok(schema.field(column_index).clone())
                 })
                 .collect::<PlanResult<Vec<_>>>()?;
-            &adt::Schema::new(adt::Fields::from(fields))
+            Arc::new(adt::Schema::new(adt::Fields::from(fields)))
         };
+        let fields = schema
+            .fields
+            .iter()
+            .map(|f| f.name().clone())
+            .collect::<Vec<_>>();
+        let input = rename_logical_plan(input, &fields)?;
         let plan =
-            LogicalPlanBuilder::insert_into(input, table_reference, arrow_schema, overwrite)?
+            LogicalPlanBuilder::insert_into(input, table_reference, schema.as_ref(), overwrite)?
                 .build()?;
         Ok(plan)
     }

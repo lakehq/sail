@@ -46,7 +46,9 @@ out/
 
 # Spark
 spark-warehouse/
+metastore_db/
 artifacts/
+derby.log
 
 # Kubernetes
 Chart.lock
