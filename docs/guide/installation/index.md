@@ -13,6 +13,10 @@ pip install pysail
 
 ## Installation from Source
 
+::: info
+This installation method is recommended when performance is critical for your application.
+:::
+
 When the pre-built wheels is not available for your platform, the `pip install` command downloads the source distribution
 and builds Sail from source. You need the following build tools for this process.
 
@@ -34,3 +38,7 @@ env RUSTFLAGS="-C target-cpu=native" pip install pysail -v --no-binary pysail
 You can refer to the [Rust documentation](https://doc.rust-lang.org/rustc/codegen-options/index.html)
 for more information about the compiler options that can be specified via the `RUSTFLAGS` environment variable.
 :::
+
+## Standalone Server
+
+Please refer to the [Standalone Spark Connect Server](/development/recipes/spark-connect-server) guide for more information about building and running the Spark Connect Server as a standalone binary.

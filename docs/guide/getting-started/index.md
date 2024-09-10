@@ -13,6 +13,10 @@ Install the required packages in your Python environment.
 pip install 'pysail[spark]'
 ```
 
+::: info
+Please refer to the [Installation Guide](/guide/installation/) for more information about installing Sail.
+:::
+
 ## Using the Sail PySpark Shell
 
 You can start a PySpark shell from Sail, using the following command.

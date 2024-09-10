@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2
+
+_September 10, 2024_
+
+- Fixed issues with aggregation queries.
+- Extended support for SQL functions.
+- Added support for temporary views and global temporary views.
+
 ## 0.1.1
 
 _September 03, 2024_
