@@ -1,10 +1,10 @@
 use std::net::IpAddr;
 
 use clap::Parser;
+use log::info;
 use sail_spark_connect::entrypoint::serve;
 use sail_telemetry::telemetry::init_telemetry;
 use tokio::net::TcpListener;
-use tracing::info;
 
 const SERVER_STACK_SIZE: usize = 1024 * 1024 * 8;
 const SERVER_SHUTDOWN_TIMEOUT_SECONDS: u64 = 5;
@@ -51,6 +51,9 @@ async fn run(ip: &IpAddr, port: u16) -> Result<(), Box<dyn std::error::Error>> {
     );
     serve(listener, Some(shutdown())).await?;
     info!("The Spark Connect server has stopped.");
+
+    fastrace::flush();
+
     Ok(())
 }
 
