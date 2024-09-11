@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::{mem, thread};
 
+use log::info;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use sail_spark_connect::entrypoint::serve;
@@ -10,7 +11,6 @@ use sail_telemetry::telemetry::init_telemetry;
 use tokio::net::TcpListener;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::oneshot::{Receiver, Sender};
-use tracing::info;
 
 const SPARK_CONNECT_STACK_SIZE: usize = 1024 * 1024 * 8;
 
@@ -33,6 +33,7 @@ impl SparkConnectServerState {
             PyErr::new::<PyRuntimeError, _>(format!("failed to join the server thread: {:?}", e))
         })??;
         info!("The Spark Connect server has stopped.");
+        fastrace::flush();
         Ok(())
     }
 }
@@ -129,6 +130,7 @@ impl SparkConnectServer {
             _ = rx => { }
         }
         info!("Shutting down the Spark Connect server...");
+        fastrace::flush();
     }
 
     fn run_blocking(

@@ -1,12 +1,11 @@
 use std::future::Future;
 
 use sail_plan::object_store::{load_aws_config, ObjectStoreConfig};
+use sail_telemetry::trace_layer::TraceLayer;
 use tokio::net::TcpListener;
-use tonic::codegen::http;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::server::TcpIncoming;
 use tower::ServiceBuilder;
-use tower_http::trace::{DefaultMakeSpan, TraceLayer};
-use tracing::{debug, Span};
 
 use crate::server::SparkConnectServer;
 use crate::session::SessionManager;
@@ -41,16 +40,12 @@ where
     let server = SparkConnectServer::new(session_manager);
 
     let layer = ServiceBuilder::new()
-        .layer(
-            TraceLayer::new_for_grpc()
-                .make_span_with(DefaultMakeSpan::new().include_headers(true))
-                .on_request(|request: &http::Request<_>, _: &Span| {
-                    debug!("{:?}", request);
-                })
-                .on_response(|response: &http::response::Response<_>, _, _: &Span| {
-                    debug!("{:?}", response);
-                }),
-        )
+        // FIXME: Unsure why this doesn't work. Might be fixed when we upgrade to tower-http 0.5.2
+        //  Might be related: https://github.com/tower-rs/tower-http/issues/420
+        // .layer(
+        //     CompressionLayer::new().gzip(true).zstd(true),
+        // )
+        .layer(TraceLayer::new("sail_spark_connect"))
         .into_inner();
 
     let nodelay = true;
@@ -65,7 +60,11 @@ where
         .add_service(health_server)
         .add_service(
             SparkConnectServiceServer::new(server)
-                .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT),
+                .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
+                .accept_compressed(CompressionEncoding::Gzip)
+                .accept_compressed(CompressionEncoding::Zstd)
+                .send_compressed(CompressionEncoding::Gzip)
+                .send_compressed(CompressionEncoding::Zstd),
         );
 
     match signal {
