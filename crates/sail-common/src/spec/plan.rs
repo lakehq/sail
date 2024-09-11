@@ -459,6 +459,8 @@ pub struct Aggregate {
     pub grouping: Vec<Expr>,
     pub aggregate: Vec<Expr>,
     pub having: Option<Expr>,
+    /// Whether the grouping expressions should be added to the projection.
+    pub with_grouping_expressions: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

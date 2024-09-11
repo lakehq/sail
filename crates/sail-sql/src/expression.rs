@@ -731,6 +731,47 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                 case_insensitive: false,
             })
         }
+        Expr::Cube(mut cube) => {
+            let exprs = cube.pop().ok_or_else(|| {
+                SqlError::invalid("CUBE expression must have at least one expression list")
+            })?;
+            if !cube.is_empty() {
+                return Err(SqlError::invalid(
+                    "CUBE expression must have exactly one expression list",
+                ));
+            }
+            let exprs = exprs
+                .into_iter()
+                .map(from_ast_expression)
+                .collect::<SqlResult<Vec<_>>>()?;
+            Ok(spec::Expr::Cube(exprs))
+        }
+        Expr::Rollup(mut rollup) => {
+            let exprs = rollup.pop().ok_or_else(|| {
+                SqlError::invalid("ROLLUP expression must have at least one expression list")
+            })?;
+            if !rollup.is_empty() {
+                return Err(SqlError::invalid(
+                    "ROLLUP expression must have exactly one expression list",
+                ));
+            }
+            let exprs = exprs
+                .into_iter()
+                .map(from_ast_expression)
+                .collect::<SqlResult<Vec<_>>>()?;
+            Ok(spec::Expr::Rollup(exprs))
+        }
+        Expr::GroupingSets(sets) => {
+            let sets = sets
+                .into_iter()
+                .map(|set| {
+                    set.into_iter()
+                        .map(from_ast_expression)
+                        .collect::<SqlResult<Vec<_>>>()
+                })
+                .collect::<SqlResult<Vec<_>>>()?;
+            Ok(spec::Expr::GroupingSets(sets))
+        }
         Expr::JsonAccess { .. }
         | Expr::InUnnest { .. }
         | Expr::AnyOp { .. }
@@ -742,9 +783,6 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         | Expr::Position { .. }
         | Expr::Collate { .. }
         | Expr::IntroducedString { .. }
-        | Expr::GroupingSets(_)
-        | Expr::Cube(_)
-        | Expr::Rollup(_)
         | Expr::Tuple(_)
         | Expr::Array(_)
         | Expr::MatchAgainst { .. }

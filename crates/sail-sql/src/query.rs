@@ -217,6 +217,7 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
             grouping: group_by,
             aggregate: projection,
             having,
+            with_grouping_expressions: false,
         }))
     };
 

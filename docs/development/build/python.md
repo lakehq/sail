@@ -51,3 +51,10 @@ For example, to run tests from the _installed package_, use the following comman
 ```bash
 hatch run pytest --pyargs pysail
 ```
+
+By default, a Sail Spark Connect server is launched in the same process as a pytest fixture.
+To run the tests against a server launched externally, set the `SPARK_REMOTE` environment variable.
+
+```bash
+env SPARK_REMOTE="sc://localhost:50051" hatch run pytest
+```
