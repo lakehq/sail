@@ -80,6 +80,11 @@ pub fn init_logger(use_collector: bool) -> TelemetryResult<()> {
     Ok(())
 }
 
+// We use DummyReporter instead of ConsoleReporter to avoid duplicate span output to the console.
+// Although using ConsoleReporter and suppressing span output in the logger is possible, it would
+// result in a different format.
+// Disabling fastrace when logging only to the console is another option, but retaining trace and
+// span IDs in the logs is useful.
 pub struct DummyReporter;
 impl Reporter for DummyReporter {
     fn report(&mut self, _spans: Vec<SpanRecord>) {}
