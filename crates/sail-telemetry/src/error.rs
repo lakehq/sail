@@ -1,6 +1,7 @@
 use std::env;
 
 use datafusion::common::DataFusionError;
+use opentelemetry::trace::TraceError;
 use sail_common::error::CommonError;
 use thiserror::Error;
 use tonic::codegen::http::header;
@@ -36,6 +37,8 @@ pub enum TelemetryError {
     TonicInvalidMetadataKey(#[from] InvalidMetadataKey),
     #[error("tonic metadata error: {0}")]
     TonicMetadataToStrError(#[from] ToStrError),
+    #[error("trace error: {0}")]
+    TraceError(#[from] TraceError),
 }
 
 impl TelemetryError {

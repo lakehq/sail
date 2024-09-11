@@ -15,6 +15,7 @@ impl TraceLayer {
         Self { name }
     }
 }
+
 impl<S> Layer<S> for TraceLayer {
     type Service = TraceService<S>;
 

@@ -66,7 +66,6 @@ fastrace-opentelemetry = "0.7.2"
 opentelemetry = "0.24.0"
 opentelemetry_sdk = "0.24.1"
 opentelemetry-otlp = { version = "0.17.0", features = ["tls", "tls-roots"] }
-anyhow = "1.0.87"
 
 ######
 # The versions of the following dependencies are managed manually.

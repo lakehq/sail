@@ -3854,7 +3854,6 @@ dependencies = [
 name = "sail-telemetry"
 version = "0.1.2"
 dependencies = [
- "anyhow",
  "chrono",
  "datafusion",
  "env_logger",

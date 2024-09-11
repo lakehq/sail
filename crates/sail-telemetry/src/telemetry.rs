@@ -37,8 +37,7 @@ pub fn init_tracer(use_collector: bool) -> TelemetryResult<()> {
                 .with_timeout(Duration::from_secs(
                     opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
                 ))
-                .build_span_exporter()
-                .expect("initialize oltp exporter"),
+                .build_span_exporter()?,
             SpanKind::Server,
             Cow::Owned(Resource::new([KeyValue::new(
                 "service.name",
@@ -64,7 +63,7 @@ pub fn init_logger(use_collector: bool) -> TelemetryResult<()> {
                 });
             }
             let level = record.level();
-            let target = record.module_path().unwrap();
+            let target = record.target();
             let style = buf.default_level_style(level);
             let timestamp = buf.timestamp();
             let args = record.args();
@@ -86,6 +85,7 @@ pub fn init_logger(use_collector: bool) -> TelemetryResult<()> {
 // Disabling fastrace when logging only to the console is another option, but retaining trace and
 // span IDs in the logs is useful.
 pub struct DummyReporter;
+
 impl Reporter for DummyReporter {
     fn report(&mut self, _spans: Vec<SpanRecord>) {}
 }
