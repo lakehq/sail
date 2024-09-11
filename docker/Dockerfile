@@ -41,7 +41,7 @@ FROM debian:bookworm-slim
 
 ENV RUST_LOG=debug
 
-ENV LAKESAIL_OPENTELEMETRY_COLLECTOR="1"
+ENV SAIL_OPENTELEMETRY_COLLECTOR="1"
 
 # TODO: See if ca-certificates needed in the final image for opentelemetry
 RUN apt-get update && \

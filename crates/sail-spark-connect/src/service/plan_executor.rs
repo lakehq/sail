@@ -3,11 +3,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::compute::concat_batches;
+use log::debug;
 use sail_common::spec;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
-use tracing::debug;
 
 use crate::error::{SparkError, SparkResult};
 use crate::executor::{
