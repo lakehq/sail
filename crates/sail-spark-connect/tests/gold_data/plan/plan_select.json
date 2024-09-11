@@ -1976,7 +1976,8 @@
                   "isDistinct": false,
                   "isUserDefinedFunction": false
                 }
-              }
+              },
+              "withGroupingExpressions": false
             },
             "planId": null,
             "sourceInfo": null

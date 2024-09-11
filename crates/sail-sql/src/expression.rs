@@ -731,6 +731,51 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                 case_insensitive: false,
             })
         }
+        Expr::Cube(cube) => {
+            let cube = cube
+                .into_iter()
+                .map(|mut expr| {
+                    let e = expr
+                        .pop()
+                        .ok_or_else(|| SqlError::invalid("missing CUBE expression"))?;
+                    if !expr.is_empty() {
+                        return Err(SqlError::invalid(
+                            "tuple expression is not supported for CUBE",
+                        ));
+                    }
+                    from_ast_expression(e)
+                })
+                .collect::<SqlResult<Vec<_>>>()?;
+            Ok(spec::Expr::Cube(cube))
+        }
+        Expr::Rollup(rollup) => {
+            let rollup = rollup
+                .into_iter()
+                .map(|mut expr| {
+                    let e = expr
+                        .pop()
+                        .ok_or_else(|| SqlError::invalid("missing ROLLUP expression"))?;
+                    if !expr.is_empty() {
+                        return Err(SqlError::unsupported(
+                            "tuple expression is not supported for ROLLUP",
+                        ));
+                    }
+                    from_ast_expression(e)
+                })
+                .collect::<SqlResult<Vec<_>>>()?;
+            Ok(spec::Expr::Rollup(rollup))
+        }
+        Expr::GroupingSets(sets) => {
+            let sets = sets
+                .into_iter()
+                .map(|set| {
+                    set.into_iter()
+                        .map(from_ast_expression)
+                        .collect::<SqlResult<Vec<_>>>()
+                })
+                .collect::<SqlResult<Vec<_>>>()?;
+            Ok(spec::Expr::GroupingSets(sets))
+        }
         Expr::JsonAccess { .. }
         | Expr::InUnnest { .. }
         | Expr::AnyOp { .. }
@@ -742,9 +787,6 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         | Expr::Position { .. }
         | Expr::Collate { .. }
         | Expr::IntroducedString { .. }
-        | Expr::GroupingSets(_)
-        | Expr::Cube(_)
-        | Expr::Rollup(_)
         | Expr::Tuple(_)
         | Expr::Array(_)
         | Expr::MatchAgainst { .. }
