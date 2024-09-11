@@ -2419,9 +2419,7 @@ impl PlanResolver<'_> {
                     metadata,
                 } = expr;
                 let exprs = match expr {
-                    Expr::GroupingSet(g) => {
-                        g.distinct_expr().into_iter().map(|x| x.clone()).collect()
-                    }
+                    Expr::GroupingSet(g) => g.distinct_expr().into_iter().cloned().collect(),
                     expr => vec![expr],
                 };
                 if name.len() != exprs.len() {

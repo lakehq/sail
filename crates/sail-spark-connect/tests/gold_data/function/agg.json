@@ -1503,7 +1503,7 @@
         }
       },
       "output": {
-        "failure": "not supported: expression: Cube([[Identifier(Ident { value: \"name\", quote_style: None })]])"
+        "failure": "error in DataFusion: External error: External error: This feature is not implemented: physical plan is not yet implemented for GROUPING aggregate function"
       }
     },
     {
@@ -1549,7 +1549,7 @@
         }
       },
       "output": {
-        "failure": "not supported: expression: Cube([[Identifier(Ident { value: \"name\", quote_style: None })], [Identifier(Ident { value: \"height\", quote_style: None })]])"
+        "failure": "not supported: unknown function: grouping_id"
       }
     },
     {

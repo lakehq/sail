@@ -731,35 +731,39 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                 case_insensitive: false,
             })
         }
-        Expr::Cube(mut cube) => {
-            let exprs = cube.pop().ok_or_else(|| {
-                SqlError::invalid("CUBE expression must have at least one expression list")
-            })?;
-            if !cube.is_empty() {
-                return Err(SqlError::invalid(
-                    "CUBE expression must have exactly one expression list",
-                ));
-            }
-            let exprs = exprs
+        Expr::Cube(cube) => {
+            let cube = cube
                 .into_iter()
-                .map(from_ast_expression)
+                .map(|mut expr| {
+                    let e = expr
+                        .pop()
+                        .ok_or_else(|| SqlError::invalid("missing CUBE expression"))?;
+                    if !expr.is_empty() {
+                        return Err(SqlError::invalid(
+                            "tuple expression is not supported for CUBE",
+                        ));
+                    }
+                    from_ast_expression(e)
+                })
                 .collect::<SqlResult<Vec<_>>>()?;
-            Ok(spec::Expr::Cube(exprs))
+            Ok(spec::Expr::Cube(cube))
         }
-        Expr::Rollup(mut rollup) => {
-            let exprs = rollup.pop().ok_or_else(|| {
-                SqlError::invalid("ROLLUP expression must have at least one expression list")
-            })?;
-            if !rollup.is_empty() {
-                return Err(SqlError::invalid(
-                    "ROLLUP expression must have exactly one expression list",
-                ));
-            }
-            let exprs = exprs
+        Expr::Rollup(rollup) => {
+            let rollup = rollup
                 .into_iter()
-                .map(from_ast_expression)
+                .map(|mut expr| {
+                    let e = expr
+                        .pop()
+                        .ok_or_else(|| SqlError::invalid("missing ROLLUP expression"))?;
+                    if !expr.is_empty() {
+                        return Err(SqlError::unsupported(
+                            "tuple expression is not supported for ROLLUP",
+                        ));
+                    }
+                    from_ast_expression(e)
+                })
                 .collect::<SqlResult<Vec<_>>>()?;
-            Ok(spec::Expr::Rollup(exprs))
+            Ok(spec::Expr::Rollup(rollup))
         }
         Expr::GroupingSets(sets) => {
             let sets = sets
