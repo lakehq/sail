@@ -5,7 +5,6 @@ use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Token;
 
 use crate::error::{SqlError, SqlResult};
-use crate::expression::from_ast_object_name;
 use crate::parse::{parse_comment, parse_file_format, parse_object_name, parse_value_options};
 use crate::query::from_ast_query;
 use crate::statement::common::{from_ast_sql_options, from_ast_table_constraint, Statement};
@@ -200,7 +199,7 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
         query.map(|q| from_ast_query(*q)).transpose()?.map(Box::new);
 
     Ok(Statement::CreateExternalTable {
-        table: from_ast_object_name(table_name)?,
+        table: table_name,
         definition: spec::TableDefinition {
             schema,
             comment,

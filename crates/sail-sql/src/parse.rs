@@ -4,7 +4,7 @@ use sqlparser::parser::Parser;
 use sqlparser::tokenizer::{Token, Word};
 
 use crate::error::{SqlError, SqlResult};
-use crate::utils::{ast_idents_to_spec_object_name, normalize_ident};
+use crate::utils::ast_idents_to_spec_object_name;
 
 /// [Credit]: <https://github.com/apache/datafusion/blob/13cb65e44136711befb87dd75fb8b41f814af16f/datafusion/sql/src/parser.rs#L483>
 pub fn parse_option_key(parser: &mut Parser) -> SqlResult<String> {
@@ -103,7 +103,10 @@ pub fn parse_file_format(parser: &mut Parser) -> SqlResult<String> {
     }
 }
 
-pub fn parse_object_name(parser: &mut Parser, in_table_clause: bool) -> SqlResult<spec::ObjectName> {
+pub fn parse_object_name(
+    parser: &mut Parser,
+    in_table_clause: bool,
+) -> SqlResult<spec::ObjectName> {
     let mut idents = vec![];
     loop {
         // TODO: Reminder for this PR to create a custom parse_identifier function
