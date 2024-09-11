@@ -6,7 +6,7 @@ use sqlparser::tokenizer::Token;
 
 use crate::error::{SqlError, SqlResult};
 use crate::expression::from_ast_object_name;
-use crate::parse::{parse_comment, parse_file_format, parse_value_options};
+use crate::parse::{parse_comment, parse_file_format, parse_object_name, parse_value_options};
 use crate::query::from_ast_query;
 use crate::statement::common::{from_ast_sql_options, from_ast_table_constraint, Statement};
 use crate::utils::{build_column_defaults, build_schema_from_columns, normalize_ident};
@@ -18,8 +18,10 @@ pub(crate) fn is_create_table_statement(parser: &mut Parser) -> bool {
     // CREATE OR REPLACE EXTERNAL TABLE
     // CREATE UNBOUNDED EXTERNAL TABLE
     // CREATE OR REPLACE UNBOUNDED EXTERNAL TABLE
+    // REPLACE TABLE
     let tokens = parser.peek_tokens_with_location::<6>();
-    if !matches!(&tokens[0].token, Token::Word(w) if w.keyword == Keyword::CREATE) {
+    if !matches!(&tokens[0].token, Token::Word(w) if w.keyword == Keyword::CREATE || w.keyword == Keyword::REPLACE)
+    {
         return false;
     }
     for token in tokens.iter().skip(1) {
@@ -48,8 +50,12 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
         return Ok(Statement::Standard(parser.parse_create()?));
     }
 
-    parser.expect_keyword(Keyword::CREATE)?;
-    let or_replace: bool = parser.parse_keywords(&[Keyword::OR, Keyword::REPLACE]);
+    let or_replace: bool =
+        match parser.expect_one_of_keywords(&[Keyword::CREATE, Keyword::REPLACE])? {
+            Keyword::CREATE => parser.parse_keywords(&[Keyword::OR, Keyword::REPLACE]),
+            Keyword::REPLACE => true,
+            _ => unreachable!(),
+        };
     let unbounded = if parser.parse_keyword(Keyword::UNBOUNDED) {
         parser.expect_keyword(Keyword::EXTERNAL)?;
         true
@@ -63,7 +69,7 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
     parser.expect_keyword(Keyword::TABLE)?;
 
     let if_not_exists: bool = parser.parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
-    let table_name: ast::ObjectName = parser.parse_object_name(true)?;
+    let table_name: spec::ObjectName = parse_object_name(parser, true)?;
     if parser.parse_keyword(Keyword::LIKE) {
         return Err(SqlError::todo("CREATE TABLE LIKE"));
     }

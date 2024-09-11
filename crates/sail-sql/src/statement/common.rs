@@ -31,7 +31,9 @@ pub fn parse_sql_statement(sql: &str) -> SqlResult<spec::Plan> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
     let statement = match parser.peek_token().token {
         Token::Word(w) if w.keyword == Keyword::EXPLAIN => parse_explain_statement(&mut parser)?,
-        Token::Word(w) if w.keyword == Keyword::CREATE => parse_create_statement(&mut parser)?,
+        Token::Word(w) if w.keyword == Keyword::CREATE || w.keyword == Keyword::REPLACE => {
+            parse_create_statement(&mut parser)?
+        }
         _ => Statement::Standard(parser.parse_statement()?),
     };
     loop {

@@ -1,8 +1,10 @@
+use sail_common::spec;
 use sqlparser::ast;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::{Token, Word};
 
 use crate::error::{SqlError, SqlResult};
+use crate::utils::{ast_idents_to_spec_object_name, normalize_ident};
 
 /// [Credit]: <https://github.com/apache/datafusion/blob/13cb65e44136711befb87dd75fb8b41f814af16f/datafusion/sql/src/parser.rs#L483>
 pub fn parse_option_key(parser: &mut Parser) -> SqlResult<String> {
@@ -98,5 +100,45 @@ pub fn parse_file_format(parser: &mut Parser) -> SqlResult<String> {
         _ => Err(SqlError::invalid(format!(
             "Expected file format as one of ARROW, PARQUET, AVRO, CSV, etc, found: {token}"
         ))),
+    }
+}
+
+pub fn parse_object_name(parser: &mut Parser, in_table_clause: bool) -> SqlResult<spec::ObjectName> {
+    let mut idents = vec![];
+    loop {
+        idents.push(parser.parse_identifier(in_table_clause)?);
+        if !parser.consume_token(&Token::Period) {
+            break;
+        }
+    }
+
+    if idents.iter().any(|ident| ident.value.contains('.')) {
+        idents = idents
+            .into_iter()
+            .flat_map(|ident| {
+                ident
+                    .value
+                    .split('.')
+                    .map(|value| ast::Ident {
+                        value: value.into(),
+                        quote_style: ident.quote_style,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    Ok(ast_idents_to_spec_object_name(idents))
+}
+
+pub fn parse_identifier(parser: &mut Parser, in_table_clause: bool) -> SqlResult<ast::Ident> {
+    let next_token = parser.next_token();
+    match next_token.token {
+        Token::Word(w) => {
+            let mut ident = w.to_ident();
+        }
+        Token::SingleQuotedString(s) => Ok(ast::Ident::with_quote('\'', s)),
+        Token::DoubleQuotedString(s) => Ok(ast::Ident::with_quote('\"', s)),
+        _ => self.expected("identifier", next_token),
     }
 }
