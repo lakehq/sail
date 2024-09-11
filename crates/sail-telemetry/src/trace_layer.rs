@@ -10,6 +10,7 @@ use tower::{Layer, Service};
 pub struct TraceLayer {
     name: &'static str, // TODO: Arc needed?
 }
+
 impl TraceLayer {
     pub fn new(name: &'static str) -> Self {
         Self { name }
@@ -26,11 +27,13 @@ impl<S> Layer<S> for TraceLayer {
         }
     }
 }
+
 #[derive(Clone)]
 pub struct TraceService<S> {
     inner: S,
     name: &'static str, // TODO: Arc needed?
 }
+
 impl<S, R> Service<Request<R>> for TraceService<S>
 where
     S: Service<Request<R>> + Send + 'static,
