@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
@@ -539,6 +540,24 @@ impl PlanResolver<'_> {
         Ok(results)
     }
 
+    pub(super) async fn resolve_expressions_and_names(
+        &self,
+        expressions: Vec<spec::Expr>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(Vec<String>, Vec<expr::Expr>)> {
+        let mut names: Vec<String> = Vec::with_capacity(expressions.len());
+        let mut exprs: Vec<expr::Expr> = Vec::with_capacity(expressions.len());
+        for expression in expressions {
+            let NamedExpr { name, expr, .. } = self
+                .resolve_named_expression(expression, schema, state)
+                .await?;
+            names.push(name.one()?);
+            exprs.push(expr);
+        }
+        Ok((names, exprs))
+    }
+
     pub(super) async fn resolve_alias_expressions_and_names(
         &self,
         expressions: Vec<spec::Expr>,
@@ -1065,7 +1084,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let (names, expr) = self
-            .resolve_alias_expressions_and_names(rollup, schema, state)
+            .resolve_expressions_and_names(rollup, schema, state)
             .await?;
         Ok(NamedExpr::new(
             names,
@@ -1080,7 +1099,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let (names, expr) = self
-            .resolve_alias_expressions_and_names(cube, schema, state)
+            .resolve_expressions_and_names(cube, schema, state)
             .await?;
         Ok(NamedExpr::new(
             names,
@@ -1094,17 +1113,33 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let mut results: Vec<Vec<expr::Expr>> = Vec::with_capacity(grouping_sets.len());
+        let mut name_map: HashMap<expr::Expr, String> = HashMap::new();
+        let mut expr_sets: Vec<Vec<expr::Expr>> = Vec::with_capacity(grouping_sets.len());
         for grouping_set in grouping_sets {
-            let expr = self
-                .resolve_expressions(grouping_set, schema, state)
+            let mut expr_set = vec![];
+            let exprs = self
+                .resolve_named_expressions(grouping_set, schema, state)
                 .await?;
-            results.push(expr)
+            for NamedExpr { name, expr, .. } in exprs {
+                let name = name.one()?;
+                expr_set.push(expr.clone());
+                name_map.insert(expr, name);
+            }
+            expr_sets.push(expr_set)
         }
+        let grouping_sets = expr::GroupingSet::GroupingSets(expr_sets);
+        let names = grouping_sets
+            .distinct_expr()
+            .into_iter()
+            .map(|e| {
+                name_map.get(e).cloned().ok_or_else(|| {
+                    PlanError::invalid(format!("grouping set expression not found: {:?}", e))
+                })
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
         Ok(NamedExpr::new(
-            // FIXME add names for grouping set expressions
-            vec![],
-            expr::Expr::GroupingSet(expr::GroupingSet::GroupingSets(results)),
+            names,
+            expr::Expr::GroupingSet(grouping_sets),
         ))
     }
 

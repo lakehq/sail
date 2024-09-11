@@ -87,7 +87,8 @@
                   }
                 }
               ],
-              "having": null
+              "having": null,
+              "withGroupingExpressions": false
             },
             "planId": null,
             "sourceInfo": null
@@ -116,31 +117,479 @@
     {
       "input": "select a, b, sum(c) as c from d group by cube (a, b)",
       "output": {
-        "failure": "not supported: expression: Cube([[Identifier(Ident { value: \"a\", quote_style: None })], [Identifier(Ident { value: \"b\", quote_style: None })]])"
+        "success": {
+          "query": {
+            "aggregate": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "d"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "grouping": [
+                {
+                  "cube": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "b"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "aggregate": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "alias": {
+                    "expr": {
+                      "unresolvedFunction": {
+                        "functionName": "sum",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "c"
+                              ],
+                              "planId": null
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    },
+                    "name": [
+                      "c"
+                    ],
+                    "metadata": null
+                  }
+                }
+              ],
+              "having": null,
+              "withGroupingExpressions": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select a, b, sum(c) as c from d group by cube(a, b)",
       "output": {
-        "failure": "not supported: expression: Cube([[Identifier(Ident { value: \"a\", quote_style: None })], [Identifier(Ident { value: \"b\", quote_style: None })]])"
+        "success": {
+          "query": {
+            "aggregate": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "d"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "grouping": [
+                {
+                  "cube": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "b"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "aggregate": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "alias": {
+                    "expr": {
+                      "unresolvedFunction": {
+                        "functionName": "sum",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "c"
+                              ],
+                              "planId": null
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    },
+                    "name": [
+                      "c"
+                    ],
+                    "metadata": null
+                  }
+                }
+              ],
+              "having": null,
+              "withGroupingExpressions": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select a, b, sum(c) as c from d group by grouping sets((a, b), (a), ())",
       "output": {
-        "failure": "not supported: expression: GroupingSets([[Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None })], [Identifier(Ident { value: \"a\", quote_style: None })], []])"
+        "success": {
+          "query": {
+            "aggregate": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "d"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "grouping": [
+                {
+                  "groupingSets": [
+                    [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "a"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "b"
+                          ],
+                          "planId": null
+                        }
+                      }
+                    ],
+                    [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "a"
+                          ],
+                          "planId": null
+                        }
+                      }
+                    ],
+                    []
+                  ]
+                }
+              ],
+              "aggregate": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "alias": {
+                    "expr": {
+                      "unresolvedFunction": {
+                        "functionName": "sum",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "c"
+                              ],
+                              "planId": null
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    },
+                    "name": [
+                      "c"
+                    ],
+                    "metadata": null
+                  }
+                }
+              ],
+              "having": null,
+              "withGroupingExpressions": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select a, b, sum(c) as c from d group by rollup (a, b)",
       "output": {
-        "failure": "not supported: expression: Rollup([[Identifier(Ident { value: \"a\", quote_style: None })], [Identifier(Ident { value: \"b\", quote_style: None })]])"
+        "success": {
+          "query": {
+            "aggregate": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "d"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "grouping": [
+                {
+                  "rollup": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "b"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "aggregate": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "alias": {
+                    "expr": {
+                      "unresolvedFunction": {
+                        "functionName": "sum",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "c"
+                              ],
+                              "planId": null
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    },
+                    "name": [
+                      "c"
+                    ],
+                    "metadata": null
+                  }
+                }
+              ],
+              "having": null,
+              "withGroupingExpressions": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select a, b, sum(c) as c from d group by rollup(a, b)",
       "output": {
-        "failure": "not supported: expression: Rollup([[Identifier(Ident { value: \"a\", quote_style: None })], [Identifier(Ident { value: \"b\", quote_style: None })]])"
+        "success": {
+          "query": {
+            "aggregate": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "d"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "grouping": [
+                {
+                  "rollup": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "b"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "aggregate": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "alias": {
+                    "expr": {
+                      "unresolvedFunction": {
+                        "functionName": "sum",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "c"
+                              ],
+                              "planId": null
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    },
+                    "name": [
+                      "c"
+                    ],
+                    "metadata": null
+                  }
+                }
+              ],
+              "having": null,
+              "withGroupingExpressions": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -231,7 +680,8 @@
                   "isDistinct": false,
                   "isUserDefinedFunction": false
                 }
-              }
+              },
+              "withGroupingExpressions": false
             },
             "planId": null,
             "sourceInfo": null

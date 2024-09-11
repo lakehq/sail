@@ -21,7 +21,7 @@ use datafusion_common::{
     Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
     ToDFSchema,
 };
-use datafusion_expr::expr::{GroupingSet, ScalarFunction};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::{
     columnize_expr, conjunction, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
@@ -711,7 +711,7 @@ impl PlanResolver<'_> {
                 .unwrap_or(false)
         });
         if has_aggregate {
-            self.rewrite_aggregate(input, expr, vec![], None, state)
+            self.rewrite_aggregate(input, expr, vec![], None, false, state)
         } else {
             let expr = self.rewrite_named_expressions(expr, state)?;
             Ok(LogicalPlan::Projection(plan::Projection::try_new(
@@ -899,6 +899,7 @@ impl PlanResolver<'_> {
             grouping,
             aggregate: projections,
             having,
+            with_grouping_expressions,
         } = aggregate;
         let input = self.resolve_query_plan(*input, state).await?;
         let schema = input.schema();
@@ -912,7 +913,14 @@ impl PlanResolver<'_> {
             Some(having) => Some(self.resolve_expression(having, schema, state).await?),
             None => None,
         };
-        self.rewrite_aggregate(input, projections, grouping, having, state)
+        self.rewrite_aggregate(
+            input,
+            projections,
+            grouping,
+            having,
+            with_grouping_expressions,
+            state,
+        )
     }
 
     async fn resolve_query_with_parameters(
@@ -2387,6 +2395,7 @@ impl PlanResolver<'_> {
         projections: Vec<NamedExpr>,
         grouping: Vec<NamedExpr>,
         having: Option<Expr>,
+        with_grouping_expressions: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let mut aggregate_candidates = projections
@@ -2401,7 +2410,7 @@ impl PlanResolver<'_> {
         let plan = LogicalPlanBuilder::from(input)
             .aggregate(group_exprs, aggregate_exprs.clone())?
             .build()?;
-        let projections = {
+        let projections = if with_grouping_expressions {
             let mut results = vec![];
             for expr in grouping {
                 let NamedExpr {
@@ -2410,12 +2419,7 @@ impl PlanResolver<'_> {
                     metadata,
                 } = expr;
                 let exprs = match expr {
-                    Expr::GroupingSet(GroupingSet::Rollup(exprs)) => exprs,
-                    Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs,
-                    Expr::GroupingSet(GroupingSet::GroupingSets(exprs)) => {
-                        // FIXME: Is this correct?
-                        exprs.into_iter().flatten().collect()
-                    }
+                    Expr::GroupingSet(g) => g.distinct_expr().into_iter().cloned().collect(),
                     expr => vec![expr],
                 };
                 if name.len() != exprs.len() {
@@ -2436,6 +2440,8 @@ impl PlanResolver<'_> {
             }
             results.extend(projections);
             results
+        } else {
+            projections
         };
         let projections = projections
             .into_iter()

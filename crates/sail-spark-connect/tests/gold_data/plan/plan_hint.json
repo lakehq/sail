@@ -652,7 +652,8 @@
                       }
                     }
                   ],
-                  "having": null
+                  "having": null,
+                  "withGroupingExpressions": false
                 },
                 "planId": null,
                 "sourceInfo": null

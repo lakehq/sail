@@ -339,6 +339,7 @@ impl TryFrom<RelType> for RelationNode {
                             grouping,
                             aggregate,
                             having: None,
+                            with_grouping_expressions: true,
                         })
                     }
                     GroupType::Rollup => {
@@ -350,6 +351,7 @@ impl TryFrom<RelType> for RelationNode {
                             grouping: vec![spec::Expr::Rollup(grouping)],
                             aggregate,
                             having: None,
+                            with_grouping_expressions: true,
                         })
                     }
                     GroupType::Cube => {
@@ -361,6 +363,7 @@ impl TryFrom<RelType> for RelationNode {
                             grouping: vec![spec::Expr::Cube(grouping)],
                             aggregate,
                             having: None,
+                            with_grouping_expressions: true,
                         })
                     }
                     GroupType::Pivot => {
