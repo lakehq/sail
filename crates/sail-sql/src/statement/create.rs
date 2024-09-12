@@ -5,7 +5,9 @@ use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Token;
 
 use crate::error::{SqlError, SqlResult};
-use crate::parse::{parse_comment, parse_file_format, parse_object_name, parse_value_options};
+use crate::parse::{
+    parse_comment, parse_file_format, parse_normalized_object_name, parse_value_options,
+};
 use crate::query::from_ast_query;
 use crate::statement::common::{from_ast_sql_options, from_ast_table_constraint, Statement};
 use crate::utils::{build_column_defaults, build_schema_from_columns, normalize_ident};
@@ -68,7 +70,7 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
     parser.expect_keyword(Keyword::TABLE)?;
 
     let if_not_exists: bool = parser.parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
-    let table_name: spec::ObjectName = parse_object_name(parser, true)?;
+    let table_name: spec::ObjectName = parse_normalized_object_name(parser)?;
     if parser.parse_keyword(Keyword::LIKE) {
         return Err(SqlError::todo("CREATE TABLE LIKE"));
     }

@@ -188,13 +188,81 @@
     {
       "input": "CREATE TABLE 1m.2g(a INT)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: identifier, found: 1m at Line: 1, Column: 14"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "1m",
+                "2g"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE 1m.2g(a INT) USING parquet",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: identifier, found: 1m at Line: 1, Column: 14"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "1m",
+                "2g"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": "PARQUET",
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
