@@ -147,8 +147,8 @@ mod tests {
     fn to_levenshtein() -> Result<()> {
         let string1_array = Arc::new(StringArray::from(vec!["123", "abc", "xyz", "kitten"]));
         let string2_array = Arc::new(StringArray::from(vec!["321", "def", "zyx", "sitting"]));
-        let res = levenshtein::<i32>(&[string1_array.clone(), string2_array.clone()]).unwrap();
-        let result = as_int32_array(&res).expect("failed to initialized function levenshtein");
+        let res = levenshtein::<i32>(&[string1_array.clone(), string2_array.clone()])?;
+        let result = as_int32_array(&res)?;
         let expected = Int32Array::from(vec![2, 3, 2, 3]);
         assert_eq!(&expected, result);
 
@@ -156,9 +156,8 @@ mod tests {
             string1_array.clone(),
             string2_array.clone(),
             Arc::new(Int64Array::from(vec![2])),
-        ])
-        .unwrap();
-        let result = as_int32_array(&res).expect("failed to initialized function levenshtein");
+        ])?;
+        let result = as_int32_array(&res)?;
         let expected = Int32Array::from(vec![2, -1, 2, -1]);
         assert_eq!(&expected, result);
 
@@ -166,9 +165,8 @@ mod tests {
             string1_array.clone(),
             string2_array.clone(),
             Arc::new(Int64Array::from(vec![3])),
-        ])
-        .unwrap();
-        let result = as_int32_array(&res).expect("failed to initialized function levenshtein");
+        ])?;
+        let result = as_int32_array(&res)?;
         let expected = Int32Array::from(vec![2, 3, 2, 3]);
         assert_eq!(&expected, result);
 
@@ -176,9 +174,8 @@ mod tests {
             string1_array.clone(),
             string2_array.clone(),
             Arc::new(Int64Array::from(vec![4])),
-        ])
-        .unwrap();
-        let result = as_int32_array(&res).expect("failed to initialized function levenshtein");
+        ])?;
+        let result = as_int32_array(&res)?;
         let expected = Int32Array::from(vec![2, 3, 2, 3]);
         assert_eq!(&expected, result);
 
