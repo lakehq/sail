@@ -1,51 +1,46 @@
 use std::hash::{Hash, Hasher};
 
-use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
+use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 use sail_common::config::SparkUdfConfig;
 use sail_common::spec;
 
 use crate::cereal::PythonFunction;
+use crate::error::{PyUdfError, PyUdfResult};
 
 #[derive(Debug, Clone)]
 pub struct PySparkUdfObject(pub PyObject);
 
 impl PythonFunction for PySparkUdfObject {
-    fn load(v: &[u8]) -> Result<Self> {
+    fn load(v: &[u8]) -> PyUdfResult<Self> {
         // build_pyspark_udf_payload adds eval_type to the beginning of the payload
         let (eval_type_bytes, v) = v.split_at(std::mem::size_of::<i32>());
         let eval_type = i32::from_be_bytes(
             eval_type_bytes
                 .try_into()
-                .map_err(|e| plan_datafusion_err!("eval_type from_be_bytes: {e}"))?,
+                .map_err(|e| PyUdfError::invalid(format!("eval_type from_be_bytes: {e}")))?,
         );
         Python::with_gil(|py| {
             let infile: Bound<PyAny> = PyModule::import_bound(py, pyo3::intern!(py, "io"))
                 .and_then(|io| io.getattr(pyo3::intern!(py, "BytesIO")))
-                .and_then(|bytes_io| bytes_io.call1((v,)))
-                .map_err(|e| DataFusionError::External(e.into()))?;
+                .and_then(|bytes_io| bytes_io.call1((v,)))?;
             let pickle_ser: Bound<PyAny> =
                 PyModule::import_bound(py, pyo3::intern!(py, "pyspark.serializers"))
                     .and_then(|serializers| {
                         serializers.getattr(pyo3::intern!(py, "CPickleSerializer"))
                     })
-                    .and_then(|serializer| serializer.call0())
-                    .map_err(|e| DataFusionError::External(e.into()))?;
-            PyModule::import_bound(py, pyo3::intern!(py, "pyspark.worker"))
+                    .and_then(|serializer| serializer.call0())?;
+            let obj = PyModule::import_bound(py, pyo3::intern!(py, "pyspark.worker"))
                 .and_then(|worker| worker.getattr(pyo3::intern!(py, "read_udfs")))
                 .and_then(|read_udfs| read_udfs.call1((pickle_ser, infile, eval_type)))
-                .map(|py_tuple| PySparkUdfObject(py_tuple.to_object(py)))
-                .map_err(|e| DataFusionError::External(e.into()))
+                .map(|py_tuple| PySparkUdfObject(py_tuple.to_object(py)))?;
+            Ok(obj)
         })
     }
 
-    fn function<'py>(&self, py: Python<'py>) -> Result<Bound<'py, PyAny>> {
-        self.0
-            .clone_ref(py)
-            .into_bound(py)
-            .get_item(0)
-            .map_err(|err| DataFusionError::External(err.into()))
+    fn function<'py>(&self, py: Python<'py>) -> PyUdfResult<Bound<'py, PyAny>> {
+        Ok(self.0.clone_ref(py).into_bound(py).get_item(0)?)
     }
 }
 
@@ -84,7 +79,7 @@ pub fn deserialize_partial_pyspark_udf(
         );
     }
     let data: Vec<u8> = build_pyspark_udf_payload(command, eval_type, num_args, spark_udf_config)?;
-    PySparkUdfObject::load(&data)
+    Ok(PySparkUdfObject::load(&data)?)
 }
 
 pub fn build_pyspark_udf_payload(
