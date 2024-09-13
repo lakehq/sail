@@ -3,7 +3,6 @@ use sqlparser::parser::Parser;
 use sqlparser::tokenizer::{Token, TokenWithLocation, Word};
 use sqlparser::{ast, keywords};
 
-use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
 use crate::utils::normalize_ident;
 
@@ -188,13 +187,7 @@ where
     Ok(values)
 }
 
-pub fn parse_partition_column_definition(
-    parser: &mut Parser,
-) -> SqlResult<(spec::Identifier, Option<spec::DataType>)> {
+pub fn parse_partition_column_name(parser: &mut Parser) -> SqlResult<spec::Identifier> {
     let name = spec::Identifier::from(normalize_ident(&parser.parse_identifier(false)?));
-    let data_type = match parser.peek_token().token {
-        Token::Comma => None,
-        _ => Some(from_ast_data_type(&parser.parse_data_type()?)?),
-    };
-    Ok((name, data_type))
+    Ok(name)
 }

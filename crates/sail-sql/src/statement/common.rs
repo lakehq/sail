@@ -617,8 +617,11 @@ pub(crate) fn from_ast_table_constraint(
             index_options: _,
             characteristics: _,
         } => Ok(spec::TableConstraint::Unique {
-            name: name.map(|x| x.value.into()),
-            columns: columns.into_iter().map(|x| x.value.into()).collect(),
+            name: name.map(|x| spec::Identifier::from(normalize_ident(&x))),
+            columns: columns
+                .into_iter()
+                .map(|x| spec::Identifier::from(normalize_ident(&x)))
+                .collect(),
         }),
         ast::TableConstraint::PrimaryKey {
             name,
@@ -628,8 +631,11 @@ pub(crate) fn from_ast_table_constraint(
             index_options: _,
             characteristics: _,
         } => Ok(spec::TableConstraint::PrimaryKey {
-            name: name.map(|x| x.value.into()),
-            columns: columns.into_iter().map(|x| x.value.into()).collect(),
+            name: name.map(|x| spec::Identifier::from(normalize_ident(&x))),
+            columns: columns
+                .into_iter()
+                .map(|x| spec::Identifier::from(normalize_ident(&x)))
+                .collect(),
         }),
         ast::TableConstraint::ForeignKey { .. }
         | ast::TableConstraint::Check { .. }
