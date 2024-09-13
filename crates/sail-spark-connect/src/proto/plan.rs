@@ -1233,8 +1233,8 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         location: path,
                         serde_properties: vec![],
                         file_format: source.map(|x| spec::TableFileFormat {
-                            input_format: x.clone(),
-                            output_format: x,
+                            input_format: x,
+                            output_format: None,
                         }),
                         row_format: None,
                         table_partition_cols: vec![],
@@ -1270,8 +1270,8 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         location: path,
                         serde_properties: vec![],
                         file_format: source.map(|x| spec::TableFileFormat {
-                            input_format: x.clone(),
-                            output_format: x,
+                            input_format: x,
+                            output_format: None,
                         }),
                         row_format: None,
                         table_partition_cols: vec![],

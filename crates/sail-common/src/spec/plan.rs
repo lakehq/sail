@@ -792,7 +792,7 @@ pub enum TableConstraint {
 #[serde(rename_all = "camelCase")]
 pub struct TableFileFormat {
     pub input_format: String,
-    pub output_format: String,
+    pub output_format: Option<String>, // if None: INPUTFORMAT AND OUTPUTFORMAT not specified.
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

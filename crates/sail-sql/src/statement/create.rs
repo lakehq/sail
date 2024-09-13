@@ -80,7 +80,7 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
     let (mut columns, mut constraints): (Vec<ast::ColumnDef>, Vec<ast::TableConstraint>) =
         parser.parse_columns()?;
 
-    let mut row_format: Option<spec::TableRowFormat> = None;
+    let mut row_format: Option<ast::HiveRowFormat> = None;
     let mut file_format: Option<spec::TableFileFormat> = None;
     let mut comment: Option<String> = None;
     let mut options: Vec<(String, String)> = vec![];
@@ -92,8 +92,8 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
     if parser.parse_keyword(Keyword::USING) {
         let format = parse_file_format(parser)?;
         file_format = Some(spec::TableFileFormat {
-            input_format: format.clone(),
-            output_format: format,
+            input_format: format,
+            output_format: None,
         });
     }
 
@@ -114,7 +114,7 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
                         "Multiple ROW FORMAT clauses in CREATE TABLE statement",
                     ));
                 }
-                row_format = Some(from_ast_row_format(parser.parse_row_format()?)?);
+                row_format = Some(parser.parse_row_format()?);
             }
             Keyword::STORED => {
                 parser.expect_keyword(Keyword::AS)?;
@@ -129,13 +129,13 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
                     let output_format = parse_file_format(parser)?;
                     file_format = Some(spec::TableFileFormat {
                         input_format,
-                        output_format,
+                        output_format: Some(output_format),
                     });
                 } else {
                     let format = parse_file_format(parser)?;
                     file_format = Some(spec::TableFileFormat {
-                        input_format: format.clone(),
-                        output_format: format,
+                        input_format: format,
+                        output_format: None,
                     });
                 }
             }
@@ -236,6 +236,9 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
     let schema: spec::Schema = build_schema_from_columns(columns)?;
     let query: Option<Box<spec::QueryPlan>> =
         query.map(|q| from_ast_query(*q)).transpose()?.map(Box::new);
+    let row_format = row_format
+        .map(|row_format| from_ast_row_format(row_format, &file_format))
+        .transpose()?;
 
     Ok(Statement::CreateExternalTable {
         table: table_name,

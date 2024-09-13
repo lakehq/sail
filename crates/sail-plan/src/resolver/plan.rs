@@ -1855,7 +1855,7 @@ impl PlanResolver<'_> {
         let file_format = if let Some(file_format) = file_format {
             let input_format = file_format.input_format;
             let output_format = file_format.output_format;
-            if input_format != output_format {
+            if let Some(output_format) = output_format {
                 return Err(PlanError::todo(format!("STORED AS INPUTFORMAT: {input_format} OUTPUTFORMAT: {output_format} in CREATE TABLE statement")));
             }
             input_format

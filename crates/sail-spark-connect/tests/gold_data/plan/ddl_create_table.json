@@ -20,7 +20,7 @@
               "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
-                "outputFormat": "PARQUET"
+                "outputFormat": null
               },
               "rowFormat": null,
               "tablePartitionCols": [],
@@ -92,7 +92,7 @@
               "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
-                "outputFormat": "PARQUET"
+                "outputFormat": null
               },
               "rowFormat": null,
               "tablePartitionCols": [],
@@ -169,7 +169,7 @@
               "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "JSON",
-                "outputFormat": "JSON"
+                "outputFormat": null
               },
               "rowFormat": null,
               "tablePartitionCols": [],
@@ -269,7 +269,7 @@
               "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
-                "outputFormat": "PARQUET"
+                "outputFormat": null
               },
               "rowFormat": null,
               "tablePartitionCols": [],
@@ -319,7 +319,7 @@
               "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
-                "outputFormat": "PARQUET"
+                "outputFormat": null
               },
               "rowFormat": null,
               "tablePartitionCols": [],
@@ -447,120 +447,14 @@
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS otherFormat\nROW FORMAT DELIMITED\nFIELDS TERMINATED BY ','",
       "exception": "\nOperation not allowed: ROW FORMAT DELIMITED is only compatible with 'textfile', not 'otherformat'.(line 2, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\n^^^\nSTORED AS otherFormat\nROW FORMAT DELIMITED\nFIELDS TERMINATED BY ','\n",
       "output": {
-        "success": {
-          "command": {
-            "createTable": {
-              "table": [
-                "my_tab"
-              ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "long",
-                    "nullable": true,
-                    "metadata": []
-                  },
-                  {
-                    "name": "part",
-                    "dataType": "string",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
-              "comment": null,
-              "columnDefaults": [],
-              "constraints": [],
-              "location": null,
-              "serdeProperties": [],
-              "fileFormat": {
-                "inputFormat": "OTHERFORMAT",
-                "outputFormat": "OTHERFORMAT"
-              },
-              "rowFormat": {
-                "delimited": [
-                  {
-                    "delimiter": "FIELDS TERMINATED BY",
-                    "char": ","
-                  }
-                ]
-              },
-              "tablePartitionCols": [
-                "part"
-              ],
-              "fileSortOrder": [],
-              "ifNotExists": false,
-              "orReplace": false,
-              "unbounded": false,
-              "options": [],
-              "query": null,
-              "definition": null
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: Only TEXTFILE can be used with ROW FORMAT DELIMITED, found: TableFileFormat { input_format: \"OTHERFORMAT\", output_format: None }"
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS otherFormat\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')",
       "exception": "\nOperation not allowed: ROW FORMAT SERDE is incompatible with format 'otherformat', which also specifies a serde.(line 2, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\n^^^\nSTORED AS otherFormat\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n",
       "output": {
-        "success": {
-          "command": {
-            "createTable": {
-              "table": [
-                "my_tab"
-              ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "long",
-                    "nullable": true,
-                    "metadata": []
-                  },
-                  {
-                    "name": "part",
-                    "dataType": "string",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
-              "comment": null,
-              "columnDefaults": [],
-              "constraints": [],
-              "location": null,
-              "serdeProperties": [
-                [
-                  "prop",
-                  "value"
-                ]
-              ],
-              "fileFormat": {
-                "inputFormat": "OTHERFORMAT",
-                "outputFormat": "OTHERFORMAT"
-              },
-              "rowFormat": {
-                "serde": "customSerde"
-              },
-              "tablePartitionCols": [
-                "part"
-              ],
-              "fileSortOrder": [],
-              "ifNotExists": false,
-              "orReplace": false,
-              "unbounded": false,
-              "options": [],
-              "query": null,
-              "definition": null
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: Only formats TEXTFILE, SEQUENCEFILE, and RCFILE can be used with ROW FORMAT SERDE, found: TableFileFormat { input_format: \"OTHERFORMAT\", output_format: None }"
       }
     },
     {
@@ -595,7 +489,7 @@
               "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
-                "outputFormat": "PARQUET"
+                "outputFormat": null
               },
               "rowFormat": null,
               "tablePartitionCols": [
@@ -652,7 +546,7 @@
               ],
               "fileFormat": {
                 "inputFormat": "RCFILE",
-                "outputFormat": "RCFILE"
+                "outputFormat": null
               },
               "rowFormat": {
                 "serde": "customSerde"
@@ -711,7 +605,7 @@
               ],
               "fileFormat": {
                 "inputFormat": "SEQUENCEFILE",
-                "outputFormat": "SEQUENCEFILE"
+                "outputFormat": null
               },
               "rowFormat": {
                 "serde": "customSerde"
@@ -765,7 +659,7 @@
               "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "TEXTFILE",
-                "outputFormat": "TEXTFILE"
+                "outputFormat": null
               },
               "rowFormat": {
                 "delimited": [
@@ -845,7 +739,7 @@
               ],
               "fileFormat": {
                 "inputFormat": "TEXTFILE",
-                "outputFormat": "TEXTFILE"
+                "outputFormat": null
               },
               "rowFormat": {
                 "serde": "customSerde"
@@ -955,7 +849,7 @@
               "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
-                "outputFormat": "PARQUET"
+                "outputFormat": null
               },
               "rowFormat": null,
               "tablePartitionCols": [
@@ -1000,111 +894,14 @@
       "input": "CREATE TABLE my_tab (id bigint, part string)\nUSING parquet\nROW FORMAT DELIMITED FIELDS TERMINATED BY ','",
       "exception": "\nOperation not allowed: CREATE TABLE ... USING ... ROW FORMAT DELIMITED.(line 1, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, part string)\n^^^\nUSING parquet\nROW FORMAT DELIMITED FIELDS TERMINATED BY ','\n",
       "output": {
-        "success": {
-          "command": {
-            "createTable": {
-              "table": [
-                "my_tab"
-              ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "long",
-                    "nullable": true,
-                    "metadata": []
-                  },
-                  {
-                    "name": "part",
-                    "dataType": "string",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
-              "comment": null,
-              "columnDefaults": [],
-              "constraints": [],
-              "location": null,
-              "serdeProperties": [],
-              "fileFormat": {
-                "inputFormat": "PARQUET",
-                "outputFormat": "PARQUET"
-              },
-              "rowFormat": {
-                "delimited": [
-                  {
-                    "delimiter": "FIELDS TERMINATED BY",
-                    "char": ","
-                  }
-                ]
-              },
-              "tablePartitionCols": [],
-              "fileSortOrder": [],
-              "ifNotExists": false,
-              "orReplace": false,
-              "unbounded": false,
-              "options": [],
-              "query": null,
-              "definition": null
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: Only TEXTFILE can be used with ROW FORMAT DELIMITED, found: TableFileFormat { input_format: \"PARQUET\", output_format: None }"
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint, part string)\nUSING parquet\nROW FORMAT SERDE 'customSerde'",
       "exception": "\nOperation not allowed: CREATE TABLE ... USING ... ROW FORMAT SERDE customSerde.(line 1, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, part string)\n^^^\nUSING parquet\nROW FORMAT SERDE 'customSerde'\n",
       "output": {
-        "success": {
-          "command": {
-            "createTable": {
-              "table": [
-                "my_tab"
-              ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "long",
-                    "nullable": true,
-                    "metadata": []
-                  },
-                  {
-                    "name": "part",
-                    "dataType": "string",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
-              "comment": null,
-              "columnDefaults": [],
-              "constraints": [],
-              "location": null,
-              "serdeProperties": [],
-              "fileFormat": {
-                "inputFormat": "PARQUET",
-                "outputFormat": "PARQUET"
-              },
-              "rowFormat": {
-                "serde": "customSerde"
-              },
-              "tablePartitionCols": [],
-              "fileSortOrder": [],
-              "ifNotExists": false,
-              "orReplace": false,
-              "unbounded": false,
-              "options": [],
-              "query": null,
-              "definition": null
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: Only formats TEXTFILE, SEQUENCEFILE, and RCFILE can be used with ROW FORMAT SERDE, found: TableFileFormat { input_format: \"PARQUET\", output_format: None }"
       }
     },
     {
@@ -1189,7 +986,7 @@
               "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
-                "outputFormat": "PARQUET"
+                "outputFormat": null
               },
               "rowFormat": null,
               "tablePartitionCols": [
@@ -1249,7 +1046,7 @@
               "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
-                "outputFormat": "PARQUET"
+                "outputFormat": null
               },
               "rowFormat": null,
               "tablePartitionCols": [],
@@ -1306,7 +1103,7 @@
               "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
-                "outputFormat": "PARQUET"
+                "outputFormat": null
               },
               "rowFormat": null,
               "tablePartitionCols": [],
@@ -1429,7 +1226,7 @@
               "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
-                "outputFormat": "PARQUET"
+                "outputFormat": null
               },
               "rowFormat": null,
               "tablePartitionCols": [],
@@ -1545,7 +1342,7 @@
               "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
-                "outputFormat": "PARQUET"
+                "outputFormat": null
               },
               "rowFormat": null,
               "tablePartitionCols": [],
@@ -1664,7 +1461,7 @@
               "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
-                "outputFormat": "PARQUET"
+                "outputFormat": null
               },
               "rowFormat": null,
               "tablePartitionCols": [],
@@ -1714,7 +1511,7 @@
               "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
-                "outputFormat": "PARQUET"
+                "outputFormat": null
               },
               "rowFormat": null,
               "tablePartitionCols": [],
@@ -1764,7 +1561,7 @@
               "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
-                "outputFormat": "PARQUET"
+                "outputFormat": null
               },
               "rowFormat": null,
               "tablePartitionCols": [],

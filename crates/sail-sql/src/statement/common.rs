@@ -15,6 +15,10 @@ use crate::utils::{
     normalize_ident, object_name_to_string, to_datafusion_ast_object_name, value_to_string,
 };
 
+pub const VALID_FILE_FORMATS_FOR_ROW_FORMAT_SERDE: [&str; 3] =
+    ["TEXTFILE", "SEQUENCEFILE", "RCFILE"];
+pub const VALID_FILE_FORMATS_FOR_ROW_FORMAT_DELIMITED: [&str; 1] = ["TEXTFILE"];
+
 pub(crate) enum Statement {
     Standard(ast::Statement),
     Explain {
@@ -648,10 +652,35 @@ pub(crate) fn from_ast_table_constraint(
 
 pub(crate) fn from_ast_row_format(
     row_format: ast::HiveRowFormat,
+    file_format: &Option<spec::TableFileFormat>,
 ) -> SqlResult<spec::TableRowFormat> {
     match row_format {
-        ast::HiveRowFormat::SERDE { class } => Ok(spec::TableRowFormat::Serde(class)),
+        ast::HiveRowFormat::SERDE { class } => {
+            if let Some(file_format) = file_format {
+                let input_format = file_format.input_format.to_uppercase();
+                if file_format.output_format.is_none()
+                    && !VALID_FILE_FORMATS_FOR_ROW_FORMAT_SERDE.contains(&input_format.as_str())
+                {
+                    // Only applies when output_format.is_none()
+                    return Err(SqlError::invalid(format!(
+                        "Only formats TEXTFILE, SEQUENCEFILE, and RCFILE can be used with ROW FORMAT SERDE, found: {file_format:?}",
+                    )));
+                }
+            }
+            Ok(spec::TableRowFormat::Serde(class))
+        }
         ast::HiveRowFormat::DELIMITED { delimiters } => {
+            if let Some(file_format) = file_format {
+                let input_format = file_format.input_format.to_uppercase();
+                if file_format.output_format.is_none()
+                    && !VALID_FILE_FORMATS_FOR_ROW_FORMAT_DELIMITED.contains(&input_format.as_str())
+                {
+                    // Only applies when output_format.is_none()
+                    return Err(SqlError::invalid(format!(
+                        "Only TEXTFILE can be used with ROW FORMAT DELIMITED, found: {file_format:?}",
+                    )));
+                }
+            }
             let delimiters = delimiters
                 .into_iter()
                 .map(|row_delimiter| spec::TableRowDelimiter {
