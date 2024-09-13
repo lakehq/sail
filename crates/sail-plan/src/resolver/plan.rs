@@ -1790,6 +1790,7 @@ impl PlanResolver<'_> {
             column_defaults,
             constraints,
             location,
+            serde_properties,
             file_format,
             row_format,
             table_partition_cols,
@@ -1804,6 +1805,11 @@ impl PlanResolver<'_> {
 
         if row_format.is_some() {
             return Err(PlanError::todo("ROW FORMAT in CREATE TABLE statement"));
+        }
+        if !serde_properties.is_empty() {
+            return Err(PlanError::todo(
+                "SERDE PROPERTIES in CREATE TABLE statement",
+            ));
         }
 
         let (schema, query_logical_plan) = if let Some(query) = query {

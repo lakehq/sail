@@ -1231,6 +1231,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         column_defaults: Default::default(),
                         constraints: vec![],
                         location: path,
+                        serde_properties: vec![],
                         file_format: source.map(|x| spec::TableFileFormat {
                             input_format: x.clone(),
                             output_format: x,
@@ -1267,6 +1268,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         column_defaults: Default::default(),
                         constraints: vec![],
                         location: path,
+                        serde_properties: vec![],
                         file_format: source.map(|x| spec::TableFileFormat {
                             input_format: x.clone(),
                             output_format: x,

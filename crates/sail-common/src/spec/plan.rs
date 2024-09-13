@@ -611,6 +611,7 @@ pub struct TableDefinition {
     pub column_defaults: Vec<(String, Expr)>,
     pub constraints: Vec<TableConstraint>,
     pub location: Option<String>,
+    pub serde_properties: Vec<(String, String)>,
     pub file_format: Option<TableFileFormat>,
     pub row_format: Option<TableRowFormat>,
     pub table_partition_cols: Vec<Identifier>,

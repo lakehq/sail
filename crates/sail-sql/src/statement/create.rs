@@ -87,6 +87,7 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
     let mut table_partition_cols: Vec<spec::Identifier> = vec![];
     let mut location: Option<String> = None;
     let mut table_properties: Vec<ast::SqlOption> = vec![];
+    let mut serde_properties: Vec<(String, String)> = vec![];
 
     if parser.parse_keyword(Keyword::USING) {
         let format = parse_file_format(parser)?;
@@ -150,11 +151,12 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
                 parser.prev_token();
                 let properties: Vec<ast::SqlOption> = parser
                     .parse_options_with_keywords(&[Keyword::WITH, Keyword::SERDEPROPERTIES])?;
-                if !properties.is_empty() {
-                    return Err(SqlError::todo(
-                        "WITH SERDEPROPERTIES in CREATE TABLE statement",
+                if !properties.is_empty() && !serde_properties.is_empty() {
+                    return Err(SqlError::invalid(
+                        "Multiple WITH SERDEPROPERTIES clauses in CREATE TABLE statement",
                     ));
                 }
+                serde_properties = from_ast_sql_options(properties)?;
             }
             Keyword::PARTITIONED => {
                 parser.expect_keyword(Keyword::BY)?;
@@ -243,6 +245,7 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
             column_defaults,
             constraints,
             location,
+            serde_properties,
             file_format,
             row_format,
             table_partition_cols,
