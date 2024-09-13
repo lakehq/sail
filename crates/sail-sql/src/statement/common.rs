@@ -645,3 +645,21 @@ pub(crate) fn from_ast_table_constraint(
         }
     }
 }
+
+pub(crate) fn from_ast_row_format(
+    row_format: ast::HiveRowFormat,
+) -> SqlResult<spec::TableRowFormat> {
+    match row_format {
+        ast::HiveRowFormat::SERDE { class } => Ok(spec::TableRowFormat::Serde(class)),
+        ast::HiveRowFormat::DELIMITED { delimiters } => {
+            let delimiters = delimiters
+                .into_iter()
+                .map(|row_delimiter| spec::TableRowDelimiter {
+                    delimiter: row_delimiter.delimiter.to_string(),
+                    char: normalize_ident(&row_delimiter.char).into(),
+                })
+                .collect();
+            Ok(spec::TableRowFormat::Delimited(delimiters))
+        }
+    }
+}

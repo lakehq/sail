@@ -1791,6 +1791,7 @@ impl PlanResolver<'_> {
             constraints,
             location,
             file_format,
+            row_format,
             table_partition_cols,
             file_sort_order,
             if_not_exists,
@@ -1800,6 +1801,10 @@ impl PlanResolver<'_> {
             query,
             definition,
         } = definition;
+
+        if row_format.is_some() {
+            return Err(PlanError::todo("ROW FORMAT in CREATE TABLE statement"));
+        }
 
         let (schema, query_logical_plan) = if let Some(query) = query {
             // FIXME: Query plan has cols renamed to #1, #2, etc. So I think there's more work here.

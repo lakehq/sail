@@ -10,7 +10,9 @@ use crate::parse::{
     parse_partition_column_name, parse_value_options,
 };
 use crate::query::from_ast_query;
-use crate::statement::common::{from_ast_sql_options, from_ast_table_constraint, Statement};
+use crate::statement::common::{
+    from_ast_row_format, from_ast_sql_options, from_ast_table_constraint, Statement,
+};
 use crate::utils::{build_column_defaults, build_schema_from_columns, normalize_ident};
 
 pub(crate) fn is_create_table_statement(parser: &mut Parser) -> bool {
@@ -78,6 +80,7 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
     let (mut columns, mut constraints): (Vec<ast::ColumnDef>, Vec<ast::TableConstraint>) =
         parser.parse_columns()?;
 
+    let mut row_format: Option<spec::TableRowFormat> = None;
     let mut file_format: Option<spec::TableFileFormat> = None;
     let mut comment: Option<String> = None;
     let mut options: Vec<(String, String)> = vec![];
@@ -105,8 +108,12 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
     ]) {
         match keyword {
             Keyword::ROW => {
-                parser.expect_keyword(Keyword::FORMAT)?;
-                return Err(SqlError::todo("ROW FORMAT in CREATE TABLE statement"));
+                if row_format.is_some() {
+                    return Err(SqlError::invalid(
+                        "Multiple ROW FORMAT clauses in CREATE TABLE statement",
+                    ));
+                }
+                row_format = Some(from_ast_row_format(parser.parse_row_format()?)?);
             }
             Keyword::STORED => {
                 parser.expect_keyword(Keyword::AS)?;
@@ -237,6 +244,7 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
             constraints,
             location,
             file_format,
+            row_format,
             table_partition_cols,
             file_sort_order: vec![], //TODO: file_sort_order
             if_not_exists,

@@ -21,6 +21,7 @@
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
               },
+              "rowFormat": null,
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": true,
@@ -91,6 +92,7 @@
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
               },
+              "rowFormat": null,
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": true,
@@ -166,6 +168,7 @@
                 "inputFormat": "JSON",
                 "outputFormat": "JSON"
               },
+              "rowFormat": null,
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -219,6 +222,7 @@
               "constraints": [],
               "location": null,
               "fileFormat": null,
+              "rowFormat": null,
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -262,6 +266,7 @@
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
               },
+              "rowFormat": null,
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -310,6 +315,7 @@
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
               },
+              "rowFormat": null,
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": true,
@@ -358,6 +364,7 @@
                 "inputFormat": "INFORMAT",
                 "outputFormat": "OUTFORMAT"
               },
+              "rowFormat": null,
               "tablePartitionCols": [
                 "part"
               ],
@@ -378,21 +385,120 @@
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS INPUTFORMAT 'inFormat' OUTPUTFORMAT 'outFormat'\nROW FORMAT SERDE 'customSerde'\n        ",
       "output": {
-        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "part",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "inputFormat": "INFORMAT",
+                "outputFormat": "OUTFORMAT"
+              },
+              "rowFormat": {
+                "serde": "customSerde"
+              },
+              "tablePartitionCols": [
+                "part"
+              ],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS otherFormat\nROW FORMAT DELIMITED\nFIELDS TERMINATED BY ','",
       "exception": "\nOperation not allowed: ROW FORMAT DELIMITED is only compatible with 'textfile', not 'otherformat'.(line 2, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\n^^^\nSTORED AS otherFormat\nROW FORMAT DELIMITED\nFIELDS TERMINATED BY ','\n",
       "output": {
-        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "part",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "inputFormat": "OTHERFORMAT",
+                "outputFormat": "OTHERFORMAT"
+              },
+              "rowFormat": {
+                "delimited": [
+                  {
+                    "delimiter": "FIELDS TERMINATED BY",
+                    "char": ","
+                  }
+                ]
+              },
+              "tablePartitionCols": [
+                "part"
+              ],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS otherFormat\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')",
       "exception": "\nOperation not allowed: ROW FORMAT SERDE is incompatible with format 'otherformat', which also specifies a serde.(line 2, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\n^^^\nSTORED AS otherFormat\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n",
       "output": {
-        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+        "failure": "not implemented: WITH SERDEPROPERTIES in CREATE TABLE statement"
       }
     },
     {
@@ -428,6 +534,7 @@
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
               },
+              "rowFormat": null,
               "tablePartitionCols": [
                 "part"
               ],
@@ -448,25 +555,93 @@
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS rcfile\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n        ",
       "output": {
-        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+        "failure": "not implemented: WITH SERDEPROPERTIES in CREATE TABLE statement"
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS sequencefile\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n        ",
       "output": {
-        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+        "failure": "not implemented: WITH SERDEPROPERTIES in CREATE TABLE statement"
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS textfile\nROW FORMAT DELIMITED\nFIELDS TERMINATED BY ',' ESCAPED BY '\\\\' -- double escape for Scala and for SQL\nCOLLECTION ITEMS TERMINATED BY '#'\nMAP KEYS TERMINATED BY '='\nLINES TERMINATED BY '\\n'\n      ",
       "output": {
-        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "part",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "inputFormat": "TEXTFILE",
+                "outputFormat": "TEXTFILE"
+              },
+              "rowFormat": {
+                "delimited": [
+                  {
+                    "delimiter": "FIELDS TERMINATED BY",
+                    "char": ","
+                  },
+                  {
+                    "delimiter": "ESCAPED BY",
+                    "char": "\\\\"
+                  },
+                  {
+                    "delimiter": "COLLECTION ITEMS TERMINATED BY",
+                    "char": "#"
+                  },
+                  {
+                    "delimiter": "MAP KEYS TERMINATED BY",
+                    "char": "="
+                  },
+                  {
+                    "delimiter": "LINES TERMINATED BY",
+                    "char": "\\n"
+                  }
+                ]
+              },
+              "tablePartitionCols": [
+                "part"
+              ],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS textfile\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n        ",
       "output": {
-        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+        "failure": "not implemented: WITH SERDEPROPERTIES in CREATE TABLE statement"
       }
     },
     {
@@ -499,6 +674,7 @@
               "constraints": [],
               "location": null,
               "fileFormat": null,
+              "rowFormat": null,
               "tablePartitionCols": [
                 "part"
               ],
@@ -556,6 +732,7 @@
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
               },
+              "rowFormat": null,
               "tablePartitionCols": [
                 "part"
               ],
@@ -598,14 +775,109 @@
       "input": "CREATE TABLE my_tab (id bigint, part string)\nUSING parquet\nROW FORMAT DELIMITED FIELDS TERMINATED BY ','",
       "exception": "\nOperation not allowed: CREATE TABLE ... USING ... ROW FORMAT DELIMITED.(line 1, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, part string)\n^^^\nUSING parquet\nROW FORMAT DELIMITED FIELDS TERMINATED BY ','\n",
       "output": {
-        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "part",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "inputFormat": "PARQUET",
+                "outputFormat": "PARQUET"
+              },
+              "rowFormat": {
+                "delimited": [
+                  {
+                    "delimiter": "FIELDS TERMINATED BY",
+                    "char": ","
+                  }
+                ]
+              },
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint, part string)\nUSING parquet\nROW FORMAT SERDE 'customSerde'",
       "exception": "\nOperation not allowed: CREATE TABLE ... USING ... ROW FORMAT SERDE customSerde.(line 1, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, part string)\n^^^\nUSING parquet\nROW FORMAT SERDE 'customSerde'\n",
       "output": {
-        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "part",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "inputFormat": "PARQUET",
+                "outputFormat": "PARQUET"
+              },
+              "rowFormat": {
+                "serde": "customSerde"
+              },
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -639,6 +911,7 @@
               "constraints": [],
               "location": null,
               "fileFormat": null,
+              "rowFormat": null,
               "tablePartitionCols": [
                 "part"
               ],
@@ -689,6 +962,7 @@
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
               },
+              "rowFormat": null,
               "tablePartitionCols": [
                 "a"
               ],
@@ -747,6 +1021,7 @@
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
               },
+              "rowFormat": null,
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -802,6 +1077,7 @@
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
               },
+              "rowFormat": null,
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -864,6 +1140,7 @@
               "constraints": [],
               "location": null,
               "fileFormat": null,
+              "rowFormat": null,
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -921,6 +1198,7 @@
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
               },
+              "rowFormat": null,
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -976,6 +1254,7 @@
               "constraints": [],
               "location": null,
               "fileFormat": null,
+              "rowFormat": null,
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -1033,6 +1312,7 @@
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
               },
+              "rowFormat": null,
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -1087,7 +1367,7 @@
       "input": "CREATE TABLE my_tab(a INT, b STRING) ROW FORMAT SERDE 'serde' ROW FORMAT SERDE 'serde'",
       "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: ROW FORMAT. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) ROW FORMAT SERDE 'serde' ROW FORMAT SERDE 'serde'\n-------------------------------------^^^\n",
       "output": {
-        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
+        "failure": "invalid argument: Multiple ROW FORMAT clauses in CREATE TABLE statement"
       }
     },
     {
@@ -1150,6 +1430,7 @@
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
               },
+              "rowFormat": null,
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -1198,6 +1479,7 @@
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
               },
+              "rowFormat": null,
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -1246,6 +1528,7 @@
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
               },
+              "rowFormat": null,
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
