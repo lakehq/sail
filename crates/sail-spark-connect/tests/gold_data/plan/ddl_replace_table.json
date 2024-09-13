@@ -23,6 +23,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": "/user/external/page_view",
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
@@ -93,6 +94,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "JSON",
                 "outputFormat": "JSON"
@@ -150,6 +152,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
@@ -199,6 +202,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "INFORMAT",
                 "outputFormat": "OUTFORMAT"
@@ -250,6 +254,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "INFORMAT",
                 "outputFormat": "OUTFORMAT"
@@ -304,6 +309,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "OTHERFORMAT",
                 "outputFormat": "OTHERFORMAT"
@@ -337,7 +343,60 @@
       "input": "REPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS otherFormat\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')",
       "exception": "\nOperation not allowed: ROW FORMAT SERDE is incompatible with format 'otherformat', which also specifies a serde.(line 2, pos 0)\n\n== SQL ==\nREPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\n^^^\nSTORED AS otherFormat\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n",
       "output": {
-        "failure": "not implemented: WITH SERDEPROPERTIES in CREATE TABLE statement"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "part",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "serdeProperties": [
+                [
+                  "prop",
+                  "value"
+                ]
+              ],
+              "fileFormat": {
+                "inputFormat": "OTHERFORMAT",
+                "outputFormat": "OTHERFORMAT"
+              },
+              "rowFormat": {
+                "serde": "customSerde"
+              },
+              "tablePartitionCols": [
+                "part"
+              ],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": true,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -369,6 +428,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
@@ -394,13 +454,119 @@
     {
       "input": "REPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS rcfile\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n        ",
       "output": {
-        "failure": "not implemented: WITH SERDEPROPERTIES in CREATE TABLE statement"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "part",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "serdeProperties": [
+                [
+                  "prop",
+                  "value"
+                ]
+              ],
+              "fileFormat": {
+                "inputFormat": "RCFILE",
+                "outputFormat": "RCFILE"
+              },
+              "rowFormat": {
+                "serde": "customSerde"
+              },
+              "tablePartitionCols": [
+                "part"
+              ],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": true,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS sequencefile\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n        ",
       "output": {
-        "failure": "not implemented: WITH SERDEPROPERTIES in CREATE TABLE statement"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "part",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "serdeProperties": [
+                [
+                  "prop",
+                  "value"
+                ]
+              ],
+              "fileFormat": {
+                "inputFormat": "SEQUENCEFILE",
+                "outputFormat": "SEQUENCEFILE"
+              },
+              "rowFormat": {
+                "serde": "customSerde"
+              },
+              "tablePartitionCols": [
+                "part"
+              ],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": true,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -432,6 +598,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "TEXTFILE",
                 "outputFormat": "TEXTFILE"
@@ -480,7 +647,60 @@
     {
       "input": "REPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS textfile\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n        ",
       "output": {
-        "failure": "not implemented: WITH SERDEPROPERTIES in CREATE TABLE statement"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "part",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "serdeProperties": [
+                [
+                  "prop",
+                  "value"
+                ]
+              ],
+              "fileFormat": {
+                "inputFormat": "TEXTFILE",
+                "outputFormat": "TEXTFILE"
+              },
+              "rowFormat": {
+                "serde": "customSerde"
+              },
+              "tablePartitionCols": [
+                "part"
+              ],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": true,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -512,6 +732,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": null,
               "rowFormat": null,
               "tablePartitionCols": [
@@ -567,6 +788,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
@@ -640,6 +862,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
@@ -697,6 +920,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
@@ -749,6 +973,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": null,
               "rowFormat": null,
               "tablePartitionCols": [
@@ -797,6 +1022,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
@@ -846,6 +1072,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
@@ -897,6 +1124,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
@@ -955,6 +1183,7 @@
               ],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
@@ -1073,6 +1302,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
@@ -1122,6 +1352,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": "/tmp/file",
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
@@ -1171,6 +1402,7 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
+              "serdeProperties": [],
               "fileFormat": {
                 "inputFormat": "PARQUET",
                 "outputFormat": "PARQUET"
