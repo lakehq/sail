@@ -1,0 +1,32 @@
+name: Report
+
+on:
+  workflow_run:
+    workflows: ["Build", "Gold data"]
+    types:
+      - completed
+
+permissions:
+  pull-requests: write
+
+jobs:
+  report:
+    name: Report
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/pull-request-report
+        if: github.event.workflow_run.name == 'Build'
+        with:
+          workflow_run_id: ${{ github.event.workflow_run.id }}
+          artifact_name: spark-tests-report
+          report_name: spark-tests
+
+      - uses: ./.github/actions/pull-request-report
+        if: github.event.workflow_run.name == 'Gold data'
+        with:
+          workflow_run_id: ${{ github.event.workflow_run.id }}
+          artifact_name: gold-data-report
+          report_name: gold-data

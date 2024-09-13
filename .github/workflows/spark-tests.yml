@@ -158,37 +158,24 @@ jobs:
         env:
           BASELINE_WORKFLOW_RUN_ID: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
         run: |
-          report="/tmp/report.md"
+          mkdir -p /tmp/report
+          report="/tmp/report/report.md"
           if [[ -z "$BASELINE_WORKFLOW_RUN_ID" ]]; then
             printf "> [!WARNING]\n> The baseline was not found.\n\n" >> "$report"
           fi
           scripts/spark-tests/generate-test-report.sh /tmp/test-after /tmp/test-before >> "$report"
           cat "$report" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Save pull request number
+        if: github.event_name == 'pull_request'
+        env:
+          NUMBER: ${{ github.event.number }}
+        run: |
+          echo "$NUMBER" > /tmp/report/pull-request.txt
+
       - name: Upload test report
         uses: actions/upload-artifact@v4
         with:
-          name: test-report
-          path: /tmp/report.md
+          name: spark-tests-report
+          path: /tmp/report
           retention-days: 1
-
-  report:
-    name: Report
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-    needs:
-      - analyze
-    steps:
-      - name: Download test report
-        uses: actions/download-artifact@v4
-        with:
-          name: test-report
-          path: /tmp
-
-      - name: Publish test report
-        uses: marocchino/sticky-pull-request-comment@v2
-        with:
-          header: spark-test-report
-          path: /tmp/report.md

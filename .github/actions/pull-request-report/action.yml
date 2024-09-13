@@ -1,0 +1,46 @@
+name: Pull request report
+description: Add a report as a comment to the pull request
+inputs:
+  workflow_run_id:
+    description: The ID of the workflow run
+    type: string
+    required: true
+  artifact_name:
+    description: The artifact name for the report
+    type: string
+    required: true
+  report_name:
+    description: The name of the report used to distinguish pull request comments
+    type: string
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Download report
+      id: download
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.artifact_name }}
+        run-id: ${{ inputs.workflow_run_id }}
+        path: /tmp/report/${{ inputs.workflow_run_id }}/${{ inputs.artifact_name }}
+
+    - name: Get pull request number
+      id: number
+      env:
+        DOWNLOAD_PATH: ${{ steps.download.outputs.download-path }}
+      run: |
+        file="$DOWNLOAD_PATH/pull-request.txt"
+        if [[ -f "$file" ]]; then
+          echo "value=$(cat "$file")" >> "$GITHUB_OUTPUT"
+        else
+          echo "value=" >> "$GITHUB_OUTPUT"
+        fi
+      shell: bash
+
+    - name: Publish report
+      if: steps.number.outputs.value != ''
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: ${{ inputs.report_name }}
+        number: ${{ steps.number.outputs.value }}
+        path: ${{ steps.download.outputs.download-path }}/report.md
