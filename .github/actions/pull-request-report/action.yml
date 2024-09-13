@@ -23,6 +23,7 @@ runs:
         name: ${{ inputs.artifact_name }}
         run-id: ${{ inputs.workflow_run_id }}
         path: /tmp/report/${{ inputs.workflow_run_id }}/${{ inputs.artifact_name }}
+        github-token: ${{ github.token }}
 
     - name: Get pull request number
       id: number
