@@ -1,8 +1,9 @@
 use sail_common::spec;
-use sqlparser::ast;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::{Token, TokenWithLocation, Word};
+use sqlparser::{ast, keywords};
 
+use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
 use crate::utils::normalize_ident;
 
@@ -157,4 +158,43 @@ pub fn parse_normalized_identifier(parser: &mut Parser) -> SqlResult<spec::Ident
         ))),
     };
     Ok(normalize_ident(&ast_ident?).into())
+}
+
+/// [Credit]: <https://github.com/sqlparser-rs/sqlparser-rs/blob/v0.48.0/src/parser/mod.rs#L3363-L3390>
+/// Parse a comma-separated list of 1+ items accepted by `F`
+pub fn parse_comma_separated<T, F>(parser: &mut Parser, mut f: F) -> SqlResult<Vec<T>>
+where
+    F: FnMut(&mut Parser) -> SqlResult<T>,
+{
+    let mut values = vec![];
+    loop {
+        values.push(f(parser)?);
+        if !parser.consume_token(&Token::Comma) {
+            break;
+        } else {
+            // We decide to allow trailing commas because we don't have access to
+            // `parser.options.trailing_commas` and it's an easy thing to allow.
+            match parser.peek_token().token {
+                Token::Word(kw) if keywords::RESERVED_FOR_COLUMN_ALIAS.contains(&kw.keyword) => {
+                    break;
+                }
+                Token::RParen | Token::SemiColon | Token::EOF | Token::RBracket | Token::RBrace => {
+                    break
+                }
+                _ => continue,
+            }
+        }
+    }
+    Ok(values)
+}
+
+pub fn parse_partition_column_definition(
+    parser: &mut Parser,
+) -> SqlResult<(spec::Identifier, Option<spec::DataType>)> {
+    let name = spec::Identifier::from(normalize_ident(&parser.parse_identifier(false)?));
+    let data_type = match parser.peek_token().token {
+        Token::Comma => None,
+        _ => Some(from_ast_data_type(&parser.parse_data_type()?)?),
+    };
+    Ok((name, data_type))
 }

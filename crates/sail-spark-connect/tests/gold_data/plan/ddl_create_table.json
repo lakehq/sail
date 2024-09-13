@@ -137,7 +137,7 @@
     {
       "input": "\nCREATE TABLE my_tab (a INT, b STRING, ts TIMESTAMP) USING parquet\nPARTITIONED BY (\n    a,\n    bucket(16, b),\n    years(ts),\n    months(ts),\n    days(ts),\n    hours(ts),\n    foo(a, \"bar\", 34))\n      ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: a data type name, found: , at Line: 4, Column: 6"
+        "failure": "invalid argument: sql parser error: Expected: a data type name, found: ( at Line: 5, Column: 11"
       }
     },
     {
@@ -501,7 +501,7 @@
       "input": "CREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p1, p2 string)",
       "exception": "\nOperation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns:\nExpressions: p1\nColumns: p2 string.(line 1, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p1, p2 string)\n^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: a data type name, found: , at Line: 1, Column: 62"
+        "failure": "invalid argument: Operation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns: [Identifier(\"p1\"), Identifier(\"p2\")]"
       }
     },
     {

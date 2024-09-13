@@ -6,11 +6,12 @@ use sqlparser::tokenizer::Token;
 
 use crate::error::{SqlError, SqlResult};
 use crate::parse::{
-    parse_comment, parse_file_format, parse_normalized_object_name, parse_value_options,
+    parse_comma_separated, parse_comment, parse_file_format, parse_normalized_object_name,
+    parse_partition_column_definition, parse_value_options,
 };
 use crate::query::from_ast_query;
 use crate::statement::common::{from_ast_sql_options, from_ast_table_constraint, Statement};
-use crate::utils::{build_column_defaults, build_schema_from_columns, normalize_ident};
+use crate::utils::{build_column_defaults, build_schema_from_columns};
 
 pub(crate) fn is_create_table_statement(parser: &mut Parser) -> bool {
     // CREATE TABLE
@@ -144,11 +145,11 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
                     ));
                 }
                 parser.expect_token(&Token::LParen)?;
-                table_partition_cols = parser
-                    .parse_comma_separated(Parser::parse_column_def)?
-                    .iter()
-                    .map(|x| spec::Identifier::from(normalize_ident(&x.name).to_string()))
-                    .collect();
+                table_partition_cols =
+                    parse_comma_separated(parser, parse_partition_column_definition)?
+                        .into_iter()
+                        .map(|(identifier, _data_type)| identifier)
+                        .collect();
                 parser.expect_token(&Token::RParen)?;
             }
             Keyword::OPTIONS => {
@@ -199,6 +200,27 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
     let schema: spec::Schema = build_schema_from_columns(columns)?;
     let query: Option<Box<spec::QueryPlan>> =
         query.map(|q| from_ast_query(*q)).transpose()?.map(Box::new);
+
+    if !table_partition_cols.is_empty() {
+        let defined_columns: Vec<bool> = table_partition_cols
+            .iter()
+            .map(|partition_col| {
+                let partition_col: &str = partition_col.into();
+                schema
+                    .fields
+                    .0
+                    .iter()
+                    .any(|field| field.name.as_str() == partition_col)
+            })
+            .collect();
+        let all_defined = defined_columns.iter().all(|&is_defined| is_defined);
+        let none_defined = defined_columns.iter().all(|&is_defined| !is_defined);
+        if !all_defined && !none_defined {
+            return Err(SqlError::invalid(
+                format!("Operation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns: {table_partition_cols:?}"),
+            ));
+        }
+    }
 
     Ok(Statement::CreateExternalTable {
         table: table_name,

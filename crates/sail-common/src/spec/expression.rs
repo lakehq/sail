@@ -140,6 +140,12 @@ impl From<Identifier> for String {
     }
 }
 
+impl<'a> From<&'a Identifier> for &'a str {
+    fn from(id: &'a Identifier) -> Self {
+        &id.0
+    }
+}
+
 /// An object name with potentially multiple parts.
 /// Each part is a raw value without quotes or escape characters.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
