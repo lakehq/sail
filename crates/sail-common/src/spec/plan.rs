@@ -611,7 +611,7 @@ pub struct TableDefinition {
     pub column_defaults: Vec<(String, Expr)>,
     pub constraints: Vec<TableConstraint>,
     pub location: Option<String>,
-    pub file_format: Option<String>,
+    pub file_format: Option<TableFileFormat>,
     pub table_partition_cols: Vec<Identifier>,
     pub file_sort_order: Vec<Vec<Expr>>,
     pub if_not_exists: bool,
@@ -771,6 +771,13 @@ pub struct StorageLevel {
     pub use_off_heap: bool,
     pub deserialized: bool,
     pub replication: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableFileFormat {
+    pub input_format: String,
+    pub output_format: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -78,7 +78,7 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
     let (mut columns, mut constraints): (Vec<ast::ColumnDef>, Vec<ast::TableConstraint>) =
         parser.parse_columns()?;
 
-    let mut file_format: Option<String> = None;
+    let mut file_format: Option<spec::TableFileFormat> = None;
     let mut comment: Option<String> = None;
     let mut options: Vec<(String, String)> = vec![];
     let mut table_partition_cols: Vec<spec::Identifier> = vec![];
@@ -86,7 +86,11 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
     let mut table_properties: Vec<ast::SqlOption> = vec![];
 
     if parser.parse_keyword(Keyword::USING) {
-        file_format = Some(parse_file_format(parser)?);
+        let format = parse_file_format(parser)?;
+        file_format = Some(spec::TableFileFormat {
+            input_format: format.clone(),
+            output_format: format,
+        });
     }
 
     while let Some(keyword) = parser.parse_one_of_keywords(&[
@@ -112,12 +116,20 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
                     ));
                 }
                 if parser.parse_keyword(Keyword::INPUTFORMAT) {
-                    let input_format: ast::Expr = parser.parse_expr()?;
+                    let input_format = parse_file_format(parser)?;
                     parser.expect_keyword(Keyword::OUTPUTFORMAT)?;
-                    let output_format: ast::Expr = parser.parse_expr()?;
-                    return Err(SqlError::todo(format!("STORED AS INPUTFORMAT: {input_format} OUTPUTFORMAT: {output_format} in CREATE TABLE statement")));
+                    let output_format = parse_file_format(parser)?;
+                    file_format = Some(spec::TableFileFormat {
+                        input_format,
+                        output_format,
+                    });
+                } else {
+                    let format = parse_file_format(parser)?;
+                    file_format = Some(spec::TableFileFormat {
+                        input_format: format.clone(),
+                        output_format: format,
+                    });
                 }
-                file_format = Some(parse_file_format(parser)?);
             }
             Keyword::LOCATION => {
                 if location.is_some() {

@@ -1231,7 +1231,10 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         column_defaults: Default::default(),
                         constraints: vec![],
                         location: path,
-                        file_format: source,
+                        file_format: source.map(|x| spec::TableFileFormat {
+                            input_format: x.clone(),
+                            output_format: x,
+                        }),
                         table_partition_cols: vec![],
                         file_sort_order: vec![],
                         if_not_exists: false,
@@ -1263,7 +1266,10 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         column_defaults: Default::default(),
                         constraints: vec![],
                         location: path,
-                        file_format: source,
+                        file_format: source.map(|x| spec::TableFileFormat {
+                            input_format: x.clone(),
+                            output_format: x,
+                        }),
                         table_partition_cols: vec![],
                         file_sort_order: vec![],
                         if_not_exists: false,

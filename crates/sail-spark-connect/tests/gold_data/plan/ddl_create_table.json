@@ -17,7 +17,10 @@
               "columnDefaults": [],
               "constraints": [],
               "location": "/user/external/page_view",
-              "fileFormat": "PARQUET",
+              "fileFormat": {
+                "inputFormat": "PARQUET",
+                "outputFormat": "PARQUET"
+              },
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": true,
@@ -84,7 +87,10 @@
               "columnDefaults": [],
               "constraints": [],
               "location": "/user/external/page_view",
-              "fileFormat": "PARQUET",
+              "fileFormat": {
+                "inputFormat": "PARQUET",
+                "outputFormat": "PARQUET"
+              },
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": true,
@@ -156,7 +162,10 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
-              "fileFormat": "JSON",
+              "fileFormat": {
+                "inputFormat": "JSON",
+                "outputFormat": "JSON"
+              },
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -249,7 +258,10 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
-              "fileFormat": "PARQUET",
+              "fileFormat": {
+                "inputFormat": "PARQUET",
+                "outputFormat": "PARQUET"
+              },
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -294,7 +306,10 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
-              "fileFormat": "PARQUET",
+              "fileFormat": {
+                "inputFormat": "PARQUET",
+                "outputFormat": "PARQUET"
+              },
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": true,
@@ -313,13 +328,57 @@
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS INPUTFORMAT 'inFormat' OUTPUTFORMAT 'outFormat'\n        ",
       "output": {
-        "failure": "not implemented: STORED AS INPUTFORMAT: 'inFormat' OUTPUTFORMAT: 'outFormat' in CREATE TABLE statement"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "id",
+                    "dataType": "long",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "part",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "inputFormat": "INFORMAT",
+                "outputFormat": "OUTFORMAT"
+              },
+              "tablePartitionCols": [
+                "part"
+              ],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS INPUTFORMAT 'inFormat' OUTPUTFORMAT 'outFormat'\nROW FORMAT SERDE 'customSerde'\n        ",
       "output": {
-        "failure": "not implemented: STORED AS INPUTFORMAT: 'inFormat' OUTPUTFORMAT: 'outFormat' in CREATE TABLE statement"
+        "failure": "not implemented: ROW FORMAT in CREATE TABLE statement"
       }
     },
     {
@@ -365,7 +424,10 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
-              "fileFormat": "PARQUET",
+              "fileFormat": {
+                "inputFormat": "PARQUET",
+                "outputFormat": "PARQUET"
+              },
               "tablePartitionCols": [
                 "part"
               ],
@@ -490,7 +552,10 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
-              "fileFormat": "PARQUET",
+              "fileFormat": {
+                "inputFormat": "PARQUET",
+                "outputFormat": "PARQUET"
+              },
               "tablePartitionCols": [
                 "part"
               ],
@@ -620,7 +685,10 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
-              "fileFormat": "PARQUET",
+              "fileFormat": {
+                "inputFormat": "PARQUET",
+                "outputFormat": "PARQUET"
+              },
               "tablePartitionCols": [
                 "a"
               ],
@@ -675,7 +743,10 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
-              "fileFormat": "PARQUET",
+              "fileFormat": {
+                "inputFormat": "PARQUET",
+                "outputFormat": "PARQUET"
+              },
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -727,7 +798,10 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
-              "fileFormat": "PARQUET",
+              "fileFormat": {
+                "inputFormat": "PARQUET",
+                "outputFormat": "PARQUET"
+              },
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -843,7 +917,10 @@
               ],
               "constraints": [],
               "location": null,
-              "fileFormat": "PARQUET",
+              "fileFormat": {
+                "inputFormat": "PARQUET",
+                "outputFormat": "PARQUET"
+              },
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -952,7 +1029,10 @@
               ],
               "constraints": [],
               "location": null,
-              "fileFormat": "PARQUET",
+              "fileFormat": {
+                "inputFormat": "PARQUET",
+                "outputFormat": "PARQUET"
+              },
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -1014,7 +1094,7 @@
       "input": "CREATE TABLE my_tab(a INT, b STRING) STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out' STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out'",
       "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: STORED AS/BY. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out' STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out'\n-------------------------------------^^^\n",
       "output": {
-        "failure": "not implemented: STORED AS INPUTFORMAT: 'in' OUTPUTFORMAT: 'out' in CREATE TABLE statement"
+        "failure": "invalid argument: Multiple file formats in CREATE TABLE statement"
       }
     },
     {
@@ -1066,7 +1146,10 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
-              "fileFormat": "PARQUET",
+              "fileFormat": {
+                "inputFormat": "PARQUET",
+                "outputFormat": "PARQUET"
+              },
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -1111,7 +1194,10 @@
               "columnDefaults": [],
               "constraints": [],
               "location": "/tmp/file",
-              "fileFormat": "PARQUET",
+              "fileFormat": {
+                "inputFormat": "PARQUET",
+                "outputFormat": "PARQUET"
+              },
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
@@ -1156,7 +1242,10 @@
               "columnDefaults": [],
               "constraints": [],
               "location": null,
-              "fileFormat": "PARQUET",
+              "fileFormat": {
+                "inputFormat": "PARQUET",
+                "outputFormat": "PARQUET"
+              },
               "tablePartitionCols": [],
               "fileSortOrder": [],
               "ifNotExists": false,
