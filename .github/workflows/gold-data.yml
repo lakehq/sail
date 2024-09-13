@@ -1,4 +1,4 @@
-name: Gold data report
+name: Gold data
 
 on:
   push:
@@ -28,33 +28,20 @@ jobs:
           REPORT_GIT_REF_BEFORE: ${{ steps.baseline.outputs.ref }}
           REPORT_GIT_REF_AFTER: ${{ github.ref }}
         run: |
-          scripts/common-gold-data/report.sh . tmp/baseline > tmp/report.md
-          cat tmp/report.md >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p tmp/report
+          scripts/common-gold-data/report.sh . tmp/baseline > tmp/report/report.md
+          cat tmp/report/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save pull request number
+        if: github.event_name == 'pull_request'
+        env:
+          NUMBER: ${{ github.event.number }}
+        run: |
+          echo "$NUMBER" > tmp/report/pull-request.txt
 
       - name: Upload report
         uses: actions/upload-artifact@v4
         with:
           name: gold-data-report
-          path: tmp/report.md
+          path: tmp/report
           retention-days: 1
-
-  report:
-    name: Report
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-    needs:
-      - run
-    steps:
-      - name: Download report
-        uses: actions/download-artifact@v4
-        with:
-          name: gold-data-report
-          path: tmp
-
-      - name: Publish report
-        uses: marocchino/sticky-pull-request-comment@v2
-        with:
-          header: gold-data-report
-          path: tmp/report.md
