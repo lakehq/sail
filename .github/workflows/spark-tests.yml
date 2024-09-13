@@ -158,7 +158,8 @@ jobs:
         env:
           BASELINE_WORKFLOW_RUN_ID: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
         run: |
-          report="/tmp/report.md"
+          mkdir -p /tmp/report
+          report="/tmp/report/report.md"
           if [[ -z "$BASELINE_WORKFLOW_RUN_ID" ]]; then
             printf "> [!WARNING]\n> The baseline was not found.\n\n" >> "$report"
           fi
@@ -170,13 +171,11 @@ jobs:
         env:
           NUMBER: ${{ github.event.number }}
         run: |
-          echo "$NUMBER" > /tmp/pull-request.txt
+          echo "$NUMBER" > /tmp/report/pull-request.txt
 
       - name: Upload test report
         uses: actions/upload-artifact@v4
         with:
           name: spark-tests-report
-          path: |
-            /tmp/report.md
-            /tmp/pull-request.txt
+          path: /tmp/report
           retention-days: 1
