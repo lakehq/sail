@@ -4,6 +4,7 @@ pub mod unresolved_pyspark_udf;
 
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::pyarrow::ToPyArrow;
+use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -18,22 +19,19 @@ pub fn get_udf_name(function_name: &str, function: &PyObject) -> String {
 }
 
 pub fn get_python_builtins(py: Python) -> PyUdfResult<Bound<PyModule>> {
-    Ok(PyModule::import_bound(py, pyo3::intern!(py, "builtins"))?)
+    Ok(PyModule::import_bound(py, intern!(py, "builtins"))?)
 }
 
 pub fn get_python_builtins_list_function(py: Python) -> PyUdfResult<Bound<PyAny>> {
-    Ok(get_python_builtins(py)?.getattr(pyo3::intern!(py, "list"))?)
+    Ok(get_python_builtins(py)?.getattr(intern!(py, "list"))?)
 }
 
 pub fn get_python_builtins_str_function(py: Python) -> PyUdfResult<Bound<PyAny>> {
-    Ok(get_python_builtins(py)?.getattr(pyo3::intern!(py, "str"))?)
+    Ok(get_python_builtins(py)?.getattr(intern!(py, "str"))?)
 }
 
 pub fn get_pyarrow_array_function(py: Python) -> PyUdfResult<Bound<PyAny>> {
-    let pyarrow_module_array: Bound<PyAny> =
-        PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))?
-            .getattr(pyo3::intern!(py, "array"))?;
-    Ok(pyarrow_module_array)
+    Ok(PyModule::import_bound(py, intern!(py, "pyarrow"))?.getattr(intern!(py, "array"))?)
 }
 
 pub fn build_pyarrow_array_kwargs<'py>(
@@ -41,12 +39,12 @@ pub fn build_pyarrow_array_kwargs<'py>(
     pyarrow_data_type: Bound<'py, PyAny>,
     from_pandas: bool,
 ) -> PyUdfResult<Bound<'py, PyDict>> {
-    let array_kwargs: Bound<PyDict> = PyDict::new_bound(py);
-    array_kwargs.set_item("type", pyarrow_data_type)?;
+    let kwargs = PyDict::new_bound(py);
+    kwargs.set_item("type", pyarrow_data_type)?;
     if from_pandas {
-        array_kwargs.set_item("from_pandas", from_pandas)?;
+        kwargs.set_item("from_pandas", from_pandas)?;
     }
-    Ok(array_kwargs)
+    Ok(kwargs)
 }
 
 pub fn get_pyarrow_output_data_type<'py>(
@@ -57,40 +55,33 @@ pub fn get_pyarrow_output_data_type<'py>(
 }
 
 pub fn get_pyarrow_record_batch_from_pandas_function(py: Python) -> PyUdfResult<Bound<PyAny>> {
-    let record_batch_from_pandas: Bound<PyAny> =
-        PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))?
-            .getattr(pyo3::intern!(py, "RecordBatch"))?
-            .getattr(pyo3::intern!(py, "from_pandas"))?;
-    Ok(record_batch_from_pandas)
+    Ok(PyModule::import_bound(py, intern!(py, "pyarrow"))?
+        .getattr(intern!(py, "RecordBatch"))?
+        .getattr(intern!(py, "from_pandas"))?)
 }
 
 pub fn get_pyarrow_record_batch_from_pylist_function(py: Python) -> PyUdfResult<Bound<PyAny>> {
-    let record_batch_from_pylist: Bound<PyAny> =
-        PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))?
-            .getattr(pyo3::intern!(py, "RecordBatch"))?
-            .getattr(pyo3::intern!(py, "from_pylist"))?;
-    Ok(record_batch_from_pylist)
+    Ok(PyModule::import_bound(py, intern!(py, "pyarrow"))?
+        .getattr(intern!(py, "RecordBatch"))?
+        .getattr(intern!(py, "from_pylist"))?)
 }
 
 pub fn build_pyarrow_record_batch_kwargs<'py>(
     py: Python<'py>,
     pyarrow_schema: Bound<'py, PyAny>,
 ) -> PyUdfResult<Bound<'py, PyDict>> {
-    let record_batch_kwargs: Bound<PyDict> = PyDict::new_bound(py);
-    record_batch_kwargs.set_item("schema", pyarrow_schema)?;
-    Ok(record_batch_kwargs)
+    let kwargs = PyDict::new_bound(py);
+    kwargs.set_item("schema", pyarrow_schema)?;
+    Ok(kwargs)
 }
 
 pub fn get_pyarrow_schema<'py>(
     schema: &SchemaRef,
     py: Python<'py>,
 ) -> PyUdfResult<Bound<'py, PyAny>> {
-    let pyarrow_schema: Bound<PyAny> = schema.to_pyarrow(py)?.clone_ref(py).into_bound(py);
-    Ok(pyarrow_schema)
+    Ok(schema.to_pyarrow(py)?.clone_ref(py).into_bound(py))
 }
 
 pub fn get_pyarrow_table_function(py: Python) -> PyUdfResult<Bound<PyAny>> {
-    let pyarrow_table: Bound<PyAny> = PyModule::import_bound(py, pyo3::intern!(py, "pyarrow"))?
-        .getattr(pyo3::intern!(py, "table"))?;
-    Ok(pyarrow_table)
+    Ok(PyModule::import_bound(py, intern!(py, "pyarrow"))?.getattr(intern!(py, "table"))?)
 }
