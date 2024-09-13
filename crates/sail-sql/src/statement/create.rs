@@ -78,7 +78,7 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
         return Err(SqlError::todo("CREATE TABLE LIKE"));
     }
     let (mut columns, mut constraints): (Vec<ast::ColumnDef>, Vec<ast::TableConstraint>) =
-        parser.parse_columns()?;
+        parser.parse_columns()?; // TODO: Parse comments in columns
 
     let mut row_format: Option<ast::HiveRowFormat> = None;
     let mut file_format: Option<spec::TableFileFormat> = None;
