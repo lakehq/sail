@@ -144,11 +144,12 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
                         "Multiple PARTITIONED BY clauses in CREATE TABLE statement",
                     ));
                 }
-                parser.expect_token(&Token::LParen)?;
                 let peekaboo = parser.peek_nth_token(2);
                 if peekaboo == Token::Comma || peekaboo == Token::RParen {
+                    parser.expect_token(&Token::LParen)?;
                     table_partition_cols =
                         parse_comma_separated(parser, parse_partition_column_name)?;
+                    parser.expect_token(&Token::RParen)?;
                 } else {
                     let (partition_cols, partition_constraints): (
                         Vec<ast::ColumnDef>,
@@ -165,7 +166,6 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
                         .collect();
                     columns.extend(partition_cols);
                 }
-                parser.expect_token(&Token::RParen)?;
             }
             Keyword::OPTIONS => {
                 if !options.is_empty() {

@@ -137,7 +137,7 @@
     {
       "input": "\nCREATE TABLE my_tab (a INT, b STRING, ts TIMESTAMP) USING parquet\nPARTITIONED BY (\n    a,\n    bucket(16, b),\n    years(ts),\n    months(ts),\n    days(ts),\n    hours(ts),\n    foo(a, \"bar\", 34))\n      ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: a data type name, found: ( at Line: 5, Column: 11"
+        "failure": "invalid argument: sql parser error: Expected: ), found: ( at Line: 5, Column: 11"
       }
     },
     {
@@ -352,6 +352,12 @@
                     "dataType": "long",
                     "nullable": true,
                     "metadata": []
+                  },
+                  {
+                    "name": "part",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
                   }
                 ]
               },
@@ -417,6 +423,12 @@
                     "dataType": "long",
                     "nullable": true,
                     "metadata": []
+                  },
+                  {
+                    "name": "part",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
                   }
                 ]
               },
@@ -465,6 +477,12 @@
                     "dataType": "long",
                     "nullable": true,
                     "metadata": []
+                  },
+                  {
+                    "name": "part",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
                   }
                 ]
               },
@@ -501,7 +519,7 @@
       "input": "CREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p1, p2 string)",
       "exception": "\nOperation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns:\nExpressions: p1\nColumns: p2 string.(line 1, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p1, p2 string)\n^^^\n",
       "output": {
-        "failure": "invalid argument: Operation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns: [Identifier(\"p1\"), Identifier(\"p2\")]"
+        "failure": "invalid argument: sql parser error: Expected: ), found: string at Line: 1, Column: 67"
       }
     },
     {
@@ -542,7 +560,14 @@
                 "my_tab"
               ],
               "schema": {
-                "fields": []
+                "fields": [
+                  {
+                    "name": "part",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
               },
               "comment": null,
               "columnDefaults": [],
@@ -569,7 +594,48 @@
     {
       "input": "CREATE TABLE my_tab(a INT comment 'test', b STRING) USING parquet PARTITIONED BY (a)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: a data type name, found: ) at Line: 1, Column: 84"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "integer",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "b",
+                    "dataType": "string",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": "PARQUET",
+              "tablePartitionCols": [
+                "a"
+              ],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -927,7 +993,7 @@
       "input": "CREATE TABLE my_tab(a INT, b STRING) PARTITIONED BY (b) PARTITIONED BY (b)",
       "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: PARTITIONED BY. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) PARTITIONED BY (b) PARTITIONED BY (b)\n-------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: a data type name, found: ) at Line: 1, Column: 55"
+        "failure": "invalid argument: Multiple PARTITIONED BY clauses in CREATE TABLE statement"
       }
     },
     {
