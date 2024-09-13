@@ -41,8 +41,6 @@ jobs:
   spark-tests:
     name: Spark tests
     uses: ./.github/workflows/spark-tests.yml
-    permissions:
-      pull-requests: write
     needs:
       - build
 
