@@ -1,6 +1,8 @@
 name: Report
 
 on:
+  # When this workflow is triggered, the workflow definition comes from the `main` branch.
+  # If a pull request modifies this file, it will have an effect only after the pull request is merged.
   workflow_run:
     workflows: ["Build", "Gold data"]
     types:
