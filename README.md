@@ -23,7 +23,7 @@ The documentation of the latest Sail version can be found [here](https://docs.la
 
 ## Contributing
 
-Contributions are more than welcome!
+Contributions are very welcome!
 
 Please submit GitHub issues for bug reports and feature requests.
 
