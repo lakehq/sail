@@ -51,8 +51,6 @@ jobs:
           python-version: "3.11"
 
       - uses: ./.github/actions/setup-rust
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Python package
         uses: PyO3/maturin-action@v1
