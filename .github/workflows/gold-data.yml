@@ -5,8 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-#    paths:
-#      - "**/gold_data/**"
+    paths:
+      - "**/gold_data/**"
 
 jobs:
   run:
