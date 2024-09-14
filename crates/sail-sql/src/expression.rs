@@ -52,7 +52,7 @@ pub(crate) fn from_ast_object_name_normalized(
     Ok(name
         .0
         .iter()
-        .map(|i| normalize_ident(i))
+        .map(normalize_ident)
         .collect::<Vec<_>>()
         .into())
 }
