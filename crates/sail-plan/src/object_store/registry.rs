@@ -6,6 +6,10 @@ use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use object_store::aws::AmazonS3Builder;
 use object_store::local::LocalFileSystem;
 use object_store::ObjectStore;
+
+#[cfg(feature = "hdfs")]
+use hdfs_native_object_store::HdfsObjectStore;
+
 use url::Url;
 
 use crate::object_store::s3::S3CredentialProvider;
@@ -76,6 +80,13 @@ impl DynamicObjectStoreRegistry {
                 let credentials = S3CredentialProvider::new(credentials);
                 builder = builder.with_credentials(Arc::new(credentials));
                 Ok(Arc::new(builder.build()?))
+            }
+            #[cfg(feature = "hdfs")]
+            "hdfs" => {
+
+                //TODO: add configuration options for HDFS
+                let store = HdfsObjectStore::with_url(url.as_str())?;
+                Ok(Arc::new(store))
             }
             _ => {
                 plan_err!("unsupported object store URL: {url}")

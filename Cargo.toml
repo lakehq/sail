@@ -66,6 +66,8 @@ fastrace-opentelemetry = "0.7.2"
 opentelemetry = "0.24.0"
 opentelemetry_sdk = "0.24.1"
 opentelemetry-otlp = { version = "0.17.0", features = ["tls", "tls-roots"] }
+hdfs-native-object-store = "0.12.0"
+
 
 ######
 # The versions of the following dependencies are managed manually.
@@ -89,6 +91,8 @@ sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "f631629
 # This is the end of the manually managed dependencies.
 # Do not add more dependencies below.
 ######
+
+
 
 [patch.crates-io]
 # Override dependencies to use our forked versions.
