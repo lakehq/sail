@@ -11,6 +11,7 @@ use crate::parser::{fail_on_extra_token, SparkDialect};
 use crate::query::from_ast_query;
 use crate::statement::create::{from_create_table_statement, parse_create_statement};
 use crate::statement::explain::{from_explain_statement, parse_explain_statement};
+use crate::statement::update::update_statement_to_plan;
 use crate::utils::{
     normalize_ident, object_name_to_string, to_datafusion_ast_object_name, value_to_string,
 };
@@ -529,7 +530,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
                 Err(SqlError::invalid("Function name not provided."))
             }
         }
-        Statement::Update { .. } => Err(SqlError::todo("SQL update")),
+        update @ Statement::Update { .. } => update_statement_to_plan(update),
         Statement::Use { .. } => Err(SqlError::todo("SQL use")),
         Statement::Cache { .. } => Err(SqlError::todo("SQL cache")),
         Statement::UNCache { .. } => Err(SqlError::todo("SQL uncache")),

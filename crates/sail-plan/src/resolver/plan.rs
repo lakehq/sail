@@ -548,6 +548,23 @@ impl PlanResolver<'_> {
             CommandNode::SetVariable { variable, value } => {
                 self.resolve_command_set_variable(variable, value).await
             }
+            CommandNode::Update {
+                input_tables,
+                table,
+                table_alias,
+                assignments,
+                filter,
+            } => {
+                self.resolve_command_update(
+                    input_tables,
+                    table,
+                    table_alias,
+                    assignments,
+                    filter,
+                    state,
+                )
+                .await
+            }
         }
     }
 
@@ -2207,6 +2224,19 @@ impl PlanResolver<'_> {
             LogicalPlanBuilder::insert_into(input, table_reference, schema.as_ref(), overwrite)?
                 .build()?;
         Ok(plan)
+    }
+
+    async fn resolve_command_update(
+        &self,
+        input_tables: Vec<spec::QueryPlan>,
+        table: spec::ObjectName,
+        table_alias: Option<spec::Identifier>,
+        assignments: Vec<(spec::Identifier, spec::Expr)>,
+        filter: Option<spec::Expr>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        println!("CHECK HERE:\ninput_tables: {input_tables:?},\ntable: {table:?},\ntable_alias: {table_alias:?},\nassignments:\n{assignments:?},\nfilter:\n{filter:?},\nstate: {state:?}");
+        Err(PlanError::todo("resolve_command_update"))
     }
 
     async fn resolve_query_fill_na(

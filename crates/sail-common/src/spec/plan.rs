@@ -395,6 +395,13 @@ pub enum CommandNode {
         variable: Identifier,
         value: String,
     },
+    Update {
+        input_tables: Vec<QueryPlan>,
+        table: ObjectName,
+        table_alias: Option<Identifier>,
+        assignments: Vec<(Identifier, Expr)>,
+        filter: Option<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

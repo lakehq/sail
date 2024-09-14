@@ -3,20 +3,152 @@
     {
       "input": "\nUPDATE testcat.ns1.ns2.tbl\nSET a='Robert', b=32\n      ",
       "output": {
-        "failure": "not implemented: SQL update"
+        "success": {
+          "command": {
+            "update": {
+              "inputTables": [
+                {
+                  "read": {
+                    "namedTable": {
+                      "name": [
+                        "testcat",
+                        "ns1",
+                        "ns2",
+                        "tbl"
+                      ],
+                      "options": []
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                }
+              ],
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "tableAlias": null,
+              "assignments": [
+                [
+                  "a",
+                  {
+                    "literal": {
+                      "string": "Robert"
+                    }
+                  }
+                ],
+                [
+                  "b",
+                  {
+                    "literal": {
+                      "integer": 32
+                    }
+                  }
+                ]
+              ],
+              "filter": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "\nUPDATE testcat.ns1.ns2.tbl AS t\nSET t.a='Robert', t.b=32\nWHERE t.c=2\n      ",
       "output": {
-        "failure": "not implemented: SQL update"
+        "success": {
+          "command": {
+            "update": {
+              "inputTables": [
+                {
+                  "tableAlias": {
+                    "input": {
+                      "read": {
+                        "namedTable": {
+                          "name": [
+                            "testcat",
+                            "ns1",
+                            "ns2",
+                            "tbl"
+                          ],
+                          "options": []
+                        },
+                        "isStreaming": false
+                      },
+                      "planId": null,
+                      "sourceInfo": null
+                    },
+                    "name": "t",
+                    "columns": []
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                }
+              ],
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "tableAlias": "t",
+              "assignments": [
+                [
+                  "a",
+                  {
+                    "literal": {
+                      "string": "Robert"
+                    }
+                  }
+                ],
+                [
+                  "b",
+                  {
+                    "literal": {
+                      "integer": 32
+                    }
+                  }
+                ]
+              ],
+              "filter": {
+                "unresolvedFunction": {
+                  "functionName": "==",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "t",
+                          "c"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "literal": {
+                        "integer": 2
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "UPDATE testcat.ns1.ns2.tbl AS t(a,b,c,d)\nSET b='Robert', c=32\nWHERE d=2",
       "exception": "\n[COLUMN_ALIASES_IS_NOT_ALLOWED] Columns aliases are not allowed in UPDATE.(line 1, pos 31)\n\n== SQL ==\nUPDATE testcat.ns1.ns2.tbl AS t(a,b,c,d)\n-------------------------------^^^\nSET b='Robert', c=32\nWHERE d=2\n",
       "output": {
-        "failure": "not implemented: SQL update"
+        "failure": "invalid argument: Columns aliases are not allowed in UPDATE"
       }
     }
   ]

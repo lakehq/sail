@@ -332,7 +332,7 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::QueryPlan> {
     }
 }
 
-fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::QueryPlan> {
+pub fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::QueryPlan> {
     use sqlparser::ast::{JoinConstraint, JoinOperator};
 
     let ast::TableWithJoins { relation, joins } = table;
