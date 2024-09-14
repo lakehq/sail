@@ -85,17 +85,38 @@ impl SparkRuntimeConfig {
                 return Some(value.as_str());
             }
         }
-        entry.and_then(|x| x.default_value)
+        None
     }
 
     pub(crate) fn get(&self, key: &str) -> SparkResult<Option<&str>> {
         if let Some(value) = self.get_by_key(key) {
             return Ok(Some(value));
         }
-        if let Some(fallback) = SPARK_CONFIG.get(key).and_then(|x| x.fallback) {
-            return Ok(self.get_by_key(fallback));
+        let entry = SPARK_CONFIG.get(key);
+        if let Some(fallback) = entry.and_then(|x| x.fallback) {
+            return self.get(fallback);
         }
-        Ok(None)
+        if let Some(entry) = entry {
+            return Ok(entry.default_value);
+        }
+        Err(SparkError::invalid(format!(
+            "configuration not found: {key}"
+        )))
+    }
+
+    pub(crate) fn get_with_default<'a>(
+        &'a self,
+        key: &'a str,
+        default: Option<&'a str>,
+    ) -> SparkResult<Option<&'a str>> {
+        if let Some(value) = self.get_by_key(key) {
+            return Ok(Some(value));
+        }
+        let entry = SPARK_CONFIG.get(key);
+        if let Some(fallback) = entry.and_then(|x| x.fallback) {
+            return self.get_with_default(fallback, default);
+        }
+        Ok(default)
     }
 
     pub(crate) fn set(&mut self, key: String, value: String) -> SparkResult<()> {
@@ -134,7 +155,7 @@ impl SparkRuntimeConfig {
             .unwrap_or(false)
     }
 
-    pub(crate) fn get_warning(key: &str) -> Option<&str> {
+    fn get_warning(key: &str) -> Option<&str> {
         SPARK_CONFIG
             .get(key)
             .and_then(|entry| entry.deprecated.as_ref())

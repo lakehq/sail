@@ -23,7 +23,7 @@ use sail_plan::temp_view::TemporaryViewManager;
 use sail_plan::{execute_logical_plan, new_query_planner};
 
 use crate::config::{ConfigKeyValueList, SparkRuntimeConfig};
-use crate::error::SparkResult;
+use crate::error::{SparkError, SparkResult};
 #[cfg(test)]
 use crate::executor::read_stream;
 use crate::executor::Executor;
@@ -142,10 +142,7 @@ impl Session {
             // FIXME: pandas_window_bound_types is not a proper Spark configuration.
             pandas_window_bound_types: ConfigKeyValue {
                 key: "pandas_window_bound_types".to_string(),
-                value: state
-                    .config
-                    .get("pandas_window_bound_types")?
-                    .map(|s| s.to_string()),
+                value: None,
             },
             pandas_grouped_map_assign_columns_by_name: ConfigKeyValue {
                 key: SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME
@@ -219,7 +216,10 @@ impl Session {
         Ok(kv
             .into_iter()
             .map(|ConfigKeyValue { key, value }| {
-                let value = state.config.get(&key)?.map(|v| v.to_string()).or(value);
+                let value = state
+                    .config
+                    .get_with_default(&key, value.as_deref())?
+                    .map(|x| x.to_string());
                 Ok(ConfigKeyValue { key, value })
             })
             .collect::<SparkResult<Vec<_>>>()?
@@ -239,12 +239,9 @@ impl Session {
                 // }
                 state.config.set(key, value)?;
             } else {
-                state.config.unset(&key)?;
-                // if key == SPARK_SQL_SESSION_TIME_ZONE {
-                //     let state = self.context.state_ref();
-                //     let mut state = state.write();
-                //     state.config_mut().options_mut().execution.time_zone = Some(Default::default());
-                // }
+                return Err(SparkError::invalid(format!(
+                    "value is required for configuration: {key}"
+                )));
             }
         }
         Ok(())
