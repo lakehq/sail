@@ -611,7 +611,9 @@ pub struct TableDefinition {
     pub column_defaults: Vec<(String, Expr)>,
     pub constraints: Vec<TableConstraint>,
     pub location: Option<String>,
-    pub file_format: Option<String>,
+    pub serde_properties: Vec<(String, String)>,
+    pub file_format: Option<TableFileFormat>,
+    pub row_format: Option<TableRowFormat>,
     pub table_partition_cols: Vec<Identifier>,
     pub file_sort_order: Vec<Vec<Expr>>,
     pub if_not_exists: bool,
@@ -784,6 +786,27 @@ pub enum TableConstraint {
         name: Option<Identifier>,
         columns: Vec<Identifier>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableFileFormat {
+    pub input_format: String,
+    pub output_format: Option<String>, // if None: INPUTFORMAT AND OUTPUTFORMAT not specified.
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TableRowFormat {
+    Serde(String),
+    Delimited(Vec<TableRowDelimiter>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableRowDelimiter {
+    pub delimiter: String,
+    pub char: Identifier,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

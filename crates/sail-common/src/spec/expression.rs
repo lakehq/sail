@@ -128,6 +128,12 @@ impl From<String> for Identifier {
     }
 }
 
+impl<'a> From<&'a str> for Identifier {
+    fn from(s: &'a str) -> Self {
+        Self(s.to_string())
+    }
+}
+
 impl From<Identifier> for String {
     fn from(id: Identifier) -> Self {
         id.0
@@ -136,7 +142,7 @@ impl From<Identifier> for String {
 
 impl<'a> From<&'a Identifier> for &'a str {
     fn from(id: &'a Identifier) -> Self {
-        id.0.as_str()
+        &id.0
     }
 }
 

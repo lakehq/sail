@@ -1790,7 +1790,9 @@ impl PlanResolver<'_> {
             column_defaults,
             constraints,
             location,
+            serde_properties,
             file_format,
+            row_format,
             table_partition_cols,
             file_sort_order,
             if_not_exists,
@@ -1800,6 +1802,15 @@ impl PlanResolver<'_> {
             query,
             definition,
         } = definition;
+
+        if row_format.is_some() {
+            return Err(PlanError::todo("ROW FORMAT in CREATE TABLE statement"));
+        }
+        if !serde_properties.is_empty() {
+            return Err(PlanError::todo(
+                "SERDE PROPERTIES in CREATE TABLE statement",
+            ));
+        }
 
         let (schema, query_logical_plan) = if let Some(query) = query {
             // FIXME: Query plan has cols renamed to #1, #2, etc. So I think there's more work here.
@@ -1842,7 +1853,12 @@ impl PlanResolver<'_> {
             )
         };
         let file_format = if let Some(file_format) = file_format {
-            file_format
+            let input_format = file_format.input_format;
+            let output_format = file_format.output_format;
+            if let Some(output_format) = output_format {
+                return Err(PlanError::todo(format!("STORED AS INPUTFORMAT: {input_format} OUTPUTFORMAT: {output_format} in CREATE TABLE statement")));
+            }
+            input_format
         } else if unbounded {
             self.config.default_unbounded_table_file_format.clone()
         } else {

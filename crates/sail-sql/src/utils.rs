@@ -32,6 +32,10 @@ pub fn object_name_to_string(object_name: &ast::ObjectName) -> String {
         .join(".")
 }
 
+pub fn ast_idents_to_spec_object_name(idents: Vec<ast::Ident>) -> spec::ObjectName {
+    spec::ObjectName::from(idents.iter().map(normalize_ident).collect::<Vec<String>>())
+}
+
 pub fn build_column_defaults(
     columns: &Vec<ast::ColumnDef>,
 ) -> SqlResult<Vec<(String, spec::Expr)>> {

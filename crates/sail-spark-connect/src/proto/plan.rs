@@ -1,6 +1,6 @@
 use sail_common::spec;
 use sail_sql::expression::{parse_expression, parse_object_name};
-use sail_sql::statement::parse_sql_statement;
+use sail_sql::statement::common::parse_sql_statement;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::{parse_spark_data_type, DEFAULT_FIELD_NAME};
@@ -1231,7 +1231,12 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         column_defaults: Default::default(),
                         constraints: vec![],
                         location: path,
-                        file_format: source,
+                        serde_properties: vec![],
+                        file_format: source.map(|x| spec::TableFileFormat {
+                            input_format: x,
+                            output_format: None,
+                        }),
+                        row_format: None,
                         table_partition_cols: vec![],
                         file_sort_order: vec![],
                         if_not_exists: false,
@@ -1263,7 +1268,12 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         column_defaults: Default::default(),
                         constraints: vec![],
                         location: path,
-                        file_format: source,
+                        serde_properties: vec![],
+                        file_format: source.map(|x| spec::TableFileFormat {
+                            input_format: x,
+                            output_format: None,
+                        }),
+                        row_format: None,
                         table_partition_cols: vec![],
                         file_sort_order: vec![],
                         if_not_exists: false,
@@ -1531,7 +1541,7 @@ impl TryFrom<CreateDataFrameViewCommand> for spec::CommandNode {
 #[cfg(test)]
 mod tests {
     use sail_common::tests::test_gold_set;
-    use sail_sql::statement::parse_sql_statement;
+    use sail_sql::statement::common::parse_sql_statement;
 
     use crate::error::{SparkError, SparkResult};
 
