@@ -328,3 +328,91 @@ pub(crate) fn calc_inline_constraints_from_columns(
     }
     constraints
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::SparkDialect;
+
+    #[test]
+    fn test_parse_create_statement() -> SqlResult<()> {
+        // Gold tests thoroughly test the parser. Adding a test for coverage of number identifiers
+        let parse = |sql: &str| -> SqlResult<Statement> {
+            let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
+            parse_create_statement(&mut parser)
+        };
+
+        let sql = "CREATE TABLE foo.1m(a INT)";
+        let statement = parse(sql)?;
+        assert_eq!(
+            statement,
+            Statement::CreateExternalTable {
+                table: spec::ObjectName::from(vec!["foo".to_string(), "1m".to_string()]),
+                definition: spec::TableDefinition {
+                    schema: spec::Schema {
+                        fields: spec::Fields(vec![spec::Field {
+                            name: "a".to_string(),
+                            data_type: spec::DataType::Integer,
+                            nullable: true,
+                            metadata: vec![],
+                        }]),
+                    },
+                    comment: None,
+                    column_defaults: vec![],
+                    constraints: vec![],
+                    location: None,
+                    serde_properties: vec![],
+                    file_format: None,
+                    row_format: None,
+                    table_partition_cols: vec![],
+                    file_sort_order: vec![],
+                    if_not_exists: false,
+                    or_replace: false,
+                    unbounded: false,
+                    options: vec![],
+                    query: None,
+                    definition: None,
+                }
+            }
+        );
+
+        let sql = "CREATE TABLE foo.1m(a INT) USING parquet";
+        let statement = parse(sql)?;
+        assert_eq!(
+            statement,
+            Statement::CreateExternalTable {
+                table: spec::ObjectName::from(vec!["foo".to_string(), "1m".to_string()]),
+                definition: spec::TableDefinition {
+                    schema: spec::Schema {
+                        fields: spec::Fields(vec![spec::Field {
+                            name: "a".to_string(),
+                            data_type: spec::DataType::Integer,
+                            nullable: true,
+                            metadata: vec![],
+                        }]),
+                    },
+                    comment: None,
+                    column_defaults: vec![],
+                    constraints: vec![],
+                    location: None,
+                    serde_properties: vec![],
+                    file_format: Some(spec::TableFileFormat {
+                        input_format: "PARQUET".to_string(),
+                        output_format: None,
+                    }),
+                    row_format: None,
+                    table_partition_cols: vec![],
+                    file_sort_order: vec![],
+                    if_not_exists: false,
+                    or_replace: false,
+                    unbounded: false,
+                    options: vec![],
+                    query: None,
+                    definition: None,
+                }
+            }
+        );
+
+        Ok(())
+    }
+}

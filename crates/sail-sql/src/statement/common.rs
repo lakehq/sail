@@ -19,6 +19,7 @@ pub const VALID_FILE_FORMATS_FOR_ROW_FORMAT_SERDE: [&str; 3] =
     ["TEXTFILE", "SEQUENCEFILE", "RCFILE"];
 pub const VALID_FILE_FORMATS_FOR_ROW_FORMAT_DELIMITED: [&str; 1] = ["TEXTFILE"];
 
+#[derive(Debug, PartialEq)]
 pub(crate) enum Statement {
     Standard(ast::Statement),
     Explain {
