@@ -125,40 +125,53 @@ pub fn parse_normalized_object_name(parser: &mut Parser) -> SqlResult<spec::Obje
 pub fn parse_normalized_identifier(parser: &mut Parser) -> SqlResult<spec::Identifier> {
     let next_token = parser.next_token();
     let ast_ident = match next_token.token {
-        Token::Word(word) => Ok(word.to_ident()),
+        Token::Word(word) => {
+            let mut ident = word.to_ident();
+            maybe_append_number_identifier(parser, &mut ident);
+            Ok(ident)
+        }
         Token::Number(number, Some(postfix)) => {
             let mut ident = ast::Ident::with_quote('\"', number);
             ident.value.push_str(&postfix);
-            while let Token::Number(ref peek_number, Some(_)) = parser.peek_token_no_skip().token {
-                // This logic handles identifiers like "1m.2g", which are parsed as two tokens:
-                // Token::Number("1", Some("m")) and Token::Number(".2", Some("g")).
-                if !peek_number.starts_with('.') {
-                    break;
-                }
-                let token = parser
-                    .next_token_no_skip()
-                    .cloned()
-                    .unwrap_or(TokenWithLocation::wrap(Token::EOF));
-                match token.token {
-                    Token::Number(next_number, Some(next_postfix)) => {
-                        ident.value.push_str(&next_number);
-                        ident.value.push_str(&next_postfix);
-                    }
-                    _ => unreachable!("parsing identifier expected number with postfix"),
-                }
-            }
+            maybe_append_number_identifier(parser, &mut ident);
             Ok(ident)
         }
-        Token::Number(number, None) => Err(SqlError::invalid(format!(
-            "Expected a word after the number, found: {number}"
-        ))),
-        Token::SingleQuotedString(s) => Ok(ast::Ident::with_quote('\'', s)),
-        Token::DoubleQuotedString(s) => Ok(ast::Ident::with_quote('\"', s)),
+        Token::SingleQuotedString(s) => {
+            let mut ident = ast::Ident::with_quote('\'', s);
+            maybe_append_number_identifier(parser, &mut ident);
+            Ok(ident)
+        }
+        Token::DoubleQuotedString(s) => {
+            let mut ident = ast::Ident::with_quote('\"', s);
+            maybe_append_number_identifier(parser, &mut ident);
+            Ok(ident)
+        }
         _ => Err(SqlError::invalid(format!(
             "Expected identifier, found: {next_token}"
         ))),
     };
     Ok(normalize_ident(&ast_ident?).into())
+}
+
+fn maybe_append_number_identifier(parser: &mut Parser, ident: &mut ast::Ident) {
+    while let Token::Number(ref peek_number, Some(_)) = parser.peek_token_no_skip().token {
+        // This logic handles identifiers like "1m.2g", which are parsed as two tokens:
+        // Token::Number("1", Some("m")) and Token::Number(".2", Some("g")).
+        if !peek_number.starts_with('.') {
+            break;
+        }
+        let token = parser
+            .next_token_no_skip()
+            .cloned()
+            .unwrap_or(TokenWithLocation::wrap(Token::EOF));
+        match token.token {
+            Token::Number(next_number, Some(next_postfix)) => {
+                ident.value.push_str(&next_number);
+                ident.value.push_str(&next_postfix);
+            }
+            _ => unreachable!("parsing identifier expected number with postfix"),
+        }
+    }
 }
 
 /// [Credit]: <https://github.com/sqlparser-rs/sqlparser-rs/blob/v0.48.0/src/parser/mod.rs#L3363-L3390>
