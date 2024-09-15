@@ -20,6 +20,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, Tre
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference, ToDFSchema,
 };
+use datafusion_expr::builder::project;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::{
@@ -27,8 +28,8 @@ use datafusion_expr::utils::{
     find_aggregate_exprs,
 };
 use datafusion_expr::{
-    build_join_schema, col, lit, when, BinaryExpr, ExprSchemable, LogicalPlanBuilder, Operator,
-    ScalarUDF, TryCast,
+    build_join_schema, col, lit, when, BinaryExpr, DmlStatement, ExprSchemable, LogicalPlanBuilder,
+    Operator, ScalarUDF, TryCast, WriteOp,
 };
 use sail_common::spec;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
@@ -2180,20 +2181,59 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         println!("CHECK HERE:\ninput: {input:?},\ntable: {table:?},\ntable_alias: {table_alias:?},\nassignments:\n{assignments:?},\nstate: {state:?}");
 
-        let _input = self.resolve_query_plan(input, state).await?;
-        let assignments: HashMap<spec::Identifier, spec::Expr> = assignments.into_iter().collect();
-        let (_table_reference, _schema) = self
-            .resolve_table_schema(&table, assignments.keys().collect())
+        let input = self.resolve_query_plan(input, state).await?;
+        let (table_reference, table_schema) = self
+            .resolve_table_schema(&table, assignments.iter().map(|(col, _)| col).collect())
             .await?;
+        let fields = table_schema
+            .fields
+            .iter()
+            .map(|f| f.name().clone())
+            .collect::<Vec<_>>();
+        let input = rename_logical_plan(input, &fields)?; // TODO: check if this is correct
+        let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
+            table_reference.clone(),
+            &table_schema,
+        )?);
 
-        // let mut assignments_map: HashMap<String, Expr> = HashMap::new();
-        // for (column, expr) in assignments {
-        //     let column = column.into();
-        //     let expr = self.resolve_expression(expr, &table_schema, state).await?;
-        //     assignments_map.insert(column, expr);
-        // }
+        let mut assignments_map: HashMap<String, Expr> = HashMap::with_capacity(assignments.len());
+        for (column, expr) in assignments {
+            let expr = self.resolve_expression(expr, &table_schema, state).await?;
+            assignments_map.insert(column.into(), expr);
+        }
 
-        Err(PlanError::todo("resolve_command_update"))
+        let exprs: Vec<Expr> = table_schema
+            .iter()
+            .map(|(qualifier, field)| {
+                let expr = match assignments_map.remove(field.name()) {
+                    Some(mut expr) => {
+                        if let Expr::Placeholder(placeholder) = &mut expr {
+                            placeholder.data_type = placeholder
+                                .data_type
+                                .take()
+                                .or_else(|| Some(field.data_type().clone()));
+                        }
+                        expr.cast_to(field.data_type(), &input.schema())?
+                    }
+                    None => {
+                        if let Some(alias) = &table_alias {
+                            let alias: &str = alias.into();
+                            Expr::Column(Column::new(Some(alias), field.name()))
+                        } else {
+                            Expr::Column(Column::from((qualifier, field)))
+                        }
+                    }
+                };
+                Ok(expr.alias(field.name()))
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+
+        Ok(LogicalPlan::Dml(DmlStatement::new(
+            table_reference,
+            table_schema,
+            WriteOp::Update,
+            Arc::new(project(input, exprs)?),
+        )))
     }
 
     async fn resolve_query_fill_na(
