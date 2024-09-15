@@ -3,10 +3,11 @@ use sqlparser::ast;
 
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{from_ast_expression, from_ast_ident, from_ast_object_name_normalized};
-use crate::query::from_ast_table_with_joins;
+use crate::operation::filter::query_plan_with_filter;
+use crate::operation::join::join_plan_from_tables;
 
 pub(crate) fn update_statement_to_plan(update: ast::Statement) -> SqlResult<spec::Plan> {
-    let (table, assignments, from, filter, returning) = match update {
+    let (table, assignments, from, selection, returning) = match update {
         ast::Statement::Update {
             table,
             assignments,
@@ -57,18 +58,17 @@ pub(crate) fn update_statement_to_plan(update: ast::Statement) -> SqlResult<spec
         })
         .collect::<SqlResult<_>>()?;
 
-    let mut input_tables = vec![from_ast_table_with_joins(table)?];
-    let from = from.map(from_ast_table_with_joins).transpose()?;
+    let mut input_tables = vec![table];
     input_tables.extend(from);
 
-    let filter = filter.map(from_ast_expression).transpose()?;
+    let plan = join_plan_from_tables(input_tables)?;
+    let plan = query_plan_with_filter(plan, selection)?;
 
     let node = spec::CommandNode::Update {
-        input_tables,
+        input: Box::new(plan),
         table: table_name,
         table_alias,
         assignments,
-        filter,
     };
     Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
 }

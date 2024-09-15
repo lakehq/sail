@@ -396,11 +396,10 @@ pub enum CommandNode {
         value: String,
     },
     Update {
-        input_tables: Vec<QueryPlan>,
+        input: Box<QueryPlan>,
         table: ObjectName,
         table_alias: Option<Identifier>,
         assignments: Vec<(Identifier, Expr)>,
-        filter: Option<Expr>,
     },
 }
 

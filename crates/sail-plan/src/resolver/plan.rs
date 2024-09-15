@@ -18,8 +18,7 @@ use datafusion_common::config::{ConfigFileType, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, SchemaReference, TableReference,
-    ToDFSchema,
+    Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference, ToDFSchema,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::normalize_col;
@@ -51,39 +50,6 @@ use crate::resolver::tree::PlanRewriter;
 use crate::resolver::PlanResolver;
 use crate::temp_view::manage_temporary_views;
 use crate::utils::ItemTaker;
-
-pub(crate) fn build_schema_reference(name: spec::ObjectName) -> PlanResult<SchemaReference> {
-    let names: Vec<String> = name.into();
-    match names.as_slice() {
-        [a] => Ok(SchemaReference::Bare {
-            schema: Arc::from(a.as_str()),
-        }),
-        [a, b] => Ok(SchemaReference::Full {
-            catalog: Arc::from(a.as_str()),
-            schema: Arc::from(b.as_str()),
-        }),
-        _ => Err(PlanError::invalid(format!("schema reference: {:?}", names))),
-    }
-}
-
-fn build_table_reference(name: spec::ObjectName) -> PlanResult<TableReference> {
-    let names: Vec<String> = name.into();
-    match names.as_slice() {
-        [a] => Ok(TableReference::Bare {
-            table: Arc::from(a.as_str()),
-        }),
-        [a, b] => Ok(TableReference::Partial {
-            schema: Arc::from(a.as_str()),
-            table: Arc::from(b.as_str()),
-        }),
-        [a, b, c] => Ok(TableReference::Full {
-            catalog: Arc::from(a.as_str()),
-            schema: Arc::from(b.as_str()),
-            table: Arc::from(c.as_str()),
-        }),
-        _ => Err(PlanError::invalid(format!("table reference: {:?}", names))),
-    }
-}
 
 #[derive(Debug)]
 pub struct NamedPlan {
@@ -408,49 +374,53 @@ impl PlanResolver<'_> {
                 database,
                 table_pattern,
             } => self.resolve_catalog_command(CatalogCommand::ListTables {
-                database: database.map(build_schema_reference).transpose()?,
+                database: database
+                    .map(|db| self.resolve_schema_reference(&db))
+                    .transpose()?,
                 table_pattern,
             }),
             CommandNode::ListFunctions {
                 database,
                 function_pattern,
             } => self.resolve_catalog_command(CatalogCommand::ListFunctions {
-                database: database.map(build_schema_reference).transpose()?,
+                database: database
+                    .map(|db| self.resolve_schema_reference(&db))
+                    .transpose()?,
                 function_pattern,
             }),
             CommandNode::ListColumns { table } => {
                 self.resolve_catalog_command(CatalogCommand::ListColumns {
-                    table: build_table_reference(table)?,
+                    table: self.resolve_table_reference(&table)?,
                 })
             }
             CommandNode::GetDatabase { database } => {
                 self.resolve_catalog_command(CatalogCommand::GetDatabase {
-                    database: build_schema_reference(database)?,
+                    database: self.resolve_schema_reference(&database)?,
                 })
             }
             CommandNode::GetTable { table } => {
                 self.resolve_catalog_command(CatalogCommand::GetTable {
-                    table: build_table_reference(table)?,
+                    table: self.resolve_table_reference(&table)?,
                 })
             }
             CommandNode::GetFunction { function } => {
                 self.resolve_catalog_command(CatalogCommand::GetFunction {
-                    function: build_table_reference(function)?,
+                    function: self.resolve_table_reference(&function)?,
                 })
             }
             CommandNode::DatabaseExists { database } => {
                 self.resolve_catalog_command(CatalogCommand::DatabaseExists {
-                    database: build_schema_reference(database)?,
+                    database: self.resolve_schema_reference(&database)?,
                 })
             }
             CommandNode::TableExists { table } => {
                 self.resolve_catalog_command(CatalogCommand::TableExists {
-                    table: build_table_reference(table)?,
+                    table: self.resolve_table_reference(&table)?,
                 })
             }
             CommandNode::FunctionExists { function } => {
                 self.resolve_catalog_command(CatalogCommand::FunctionExists {
-                    function: build_table_reference(function)?,
+                    function: self.resolve_table_reference(&function)?,
                 })
             }
             CommandNode::CreateTable { table, definition } => {
@@ -467,7 +437,7 @@ impl PlanResolver<'_> {
                 if_exists,
                 cascade,
             } => self.resolve_catalog_command(CatalogCommand::DropDatabase {
-                database: build_schema_reference(database)?,
+                database: self.resolve_schema_reference(&database)?,
                 if_exists,
                 cascade,
             }),
@@ -476,7 +446,7 @@ impl PlanResolver<'_> {
                 if_exists,
                 is_temporary,
             } => self.resolve_catalog_command(CatalogCommand::DropFunction {
-                function: build_table_reference(function)?,
+                function: self.resolve_table_reference(&function)?,
                 if_exists,
                 is_temporary,
             }),
@@ -485,7 +455,7 @@ impl PlanResolver<'_> {
                 if_exists,
                 purge,
             } => self.resolve_catalog_command(CatalogCommand::DropTable {
-                table: build_table_reference(table)?,
+                table: self.resolve_table_reference(&table)?,
                 if_exists,
                 purge,
             }),
@@ -549,21 +519,13 @@ impl PlanResolver<'_> {
                 self.resolve_command_set_variable(variable, value).await
             }
             CommandNode::Update {
-                input_tables,
+                input,
                 table,
                 table_alias,
                 assignments,
-                filter,
             } => {
-                self.resolve_command_update(
-                    input_tables,
-                    table,
-                    table_alias,
-                    assignments,
-                    filter,
-                    state,
-                )
-                .await
+                self.resolve_command_update(*input, table, table_alias, assignments, state)
+                    .await
             }
         }
     }
@@ -575,7 +537,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let spec::ReadNamedTable { name, options } = table;
 
-        let table_reference = build_table_reference(name)?;
+        let table_reference = self.resolve_table_reference(&name)?;
         if let Some(cte) = state.get_cte(&table_reference) {
             return Ok(cte.clone());
         }
@@ -636,7 +598,7 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("ReadType::UDTF options"));
         }
         // TODO: Handle qualified table reference.
-        let function_name = build_table_reference(name)?;
+        let function_name = self.resolve_table_reference(&name)?;
         let function_name = function_name.table();
         let schema = Arc::new(DFSchema::empty());
         let (_, arguments) = self
@@ -1111,7 +1073,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         Ok(LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
             Arc::new(self.resolve_query_plan(input, state).await?),
-            build_table_reference(spec::ObjectName::new_qualified(alias, qualifier))?,
+            self.resolve_table_reference(&spec::ObjectName::new_qualified(alias, qualifier))?,
         )?))
     }
 
@@ -1516,7 +1478,8 @@ impl PlanResolver<'_> {
         let mut scope = state.enter_cte_scope();
         let state = scope.state();
         for (name, query) in ctes.into_iter() {
-            let reference = build_table_reference(spec::ObjectName::new_unqualified(name.clone()))?;
+            let reference =
+                self.resolve_table_reference(&spec::ObjectName::new_unqualified(name.clone()))?;
             let plan = if recursive {
                 self.resolve_recursive_query_plan(query, state).await?
             } else {
@@ -1751,7 +1714,7 @@ impl PlanResolver<'_> {
                 .build()?
             }
             SaveType::Table { table, save_method } => {
-                let table_ref = build_table_reference(table)?;
+                let table_ref = self.resolve_table_reference(&table)?;
                 match save_method {
                     TableSaveMethod::SaveAsTable => {
                         // FIXME: It is incorrect to have side-effect in the resolver.
@@ -1944,7 +1907,7 @@ impl PlanResolver<'_> {
         };
 
         let command = CatalogCommand::CreateTable {
-            table: build_table_reference(table)?,
+            table: self.resolve_table_reference(&table)?,
             schema,
             comment,
             column_defaults,
@@ -1976,7 +1939,7 @@ impl PlanResolver<'_> {
         } = definition;
         let properties = properties.into_iter().collect::<Vec<_>>();
         let command = CatalogCommand::CreateDatabase {
-            database: build_schema_reference(database)?,
+            database: self.resolve_schema_reference(&database)?,
             if_not_exists,
             comment,
             location,
@@ -2002,7 +1965,7 @@ impl PlanResolver<'_> {
 
         let kind = match kind {
             None => {
-                let view = build_table_reference(view.clone())?;
+                let view = self.resolve_table_reference(&view)?;
                 match view {
                     TableReference::Bare { table } => {
                         let temporary = manage_temporary_views(self.ctx, false, |views| {
@@ -2028,7 +1991,7 @@ impl PlanResolver<'_> {
         };
         let command = match kind {
             ViewKind::Default => CatalogCommand::DropView {
-                view: build_table_reference(view)?,
+                view: self.resolve_table_reference(&view)?,
                 if_exists,
             },
             ViewKind::Temporary => CatalogCommand::DropTemporaryView {
@@ -2069,7 +2032,7 @@ impl PlanResolver<'_> {
         let command = match kind {
             ViewKind::Default => CatalogCommand::CreateView {
                 input: Arc::new(input),
-                view: build_table_reference(view)?,
+                view: self.resolve_table_reference(&view)?,
                 replace,
                 definition,
             },
@@ -2192,28 +2155,9 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("partitioned insert"));
         }
         let input = self.resolve_query_plan(input, state).await?;
-        let table_reference = build_table_reference(table)?;
-        let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
-        let columns: Vec<String> = columns.into_iter().map(String::from).collect();
-        let schema = table_provider.schema();
-        let schema = if columns.is_empty() {
-            schema
-        } else {
-            let fields = columns
-                .into_iter()
-                .map(|c| {
-                    let df_schema = DFSchema::try_from_qualified_schema(
-                        table_reference.clone(),
-                        schema.as_ref(),
-                    )?;
-                    let column_index = df_schema
-                        .index_of_column_by_name(None, &c)
-                        .ok_or_else(|| PlanError::invalid(format!("Column {} not found", c)))?;
-                    Ok(schema.field(column_index).clone())
-                })
-                .collect::<PlanResult<Vec<_>>>()?;
-            Arc::new(adt::Schema::new(adt::Fields::from(fields)))
-        };
+        let (table_reference, schema) = self
+            .resolve_table_schema(&table, columns.iter().collect())
+            .await?;
         let fields = schema
             .fields
             .iter()
@@ -2228,14 +2172,27 @@ impl PlanResolver<'_> {
 
     async fn resolve_command_update(
         &self,
-        input_tables: Vec<spec::QueryPlan>,
+        input: spec::QueryPlan,
         table: spec::ObjectName,
         table_alias: Option<spec::Identifier>,
         assignments: Vec<(spec::Identifier, spec::Expr)>,
-        filter: Option<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        println!("CHECK HERE:\ninput_tables: {input_tables:?},\ntable: {table:?},\ntable_alias: {table_alias:?},\nassignments:\n{assignments:?},\nfilter:\n{filter:?},\nstate: {state:?}");
+        println!("CHECK HERE:\ninput: {input:?},\ntable: {table:?},\ntable_alias: {table_alias:?},\nassignments:\n{assignments:?},\nstate: {state:?}");
+
+        let _input = self.resolve_query_plan(input, state).await?;
+        let assignments: HashMap<spec::Identifier, spec::Expr> = assignments.into_iter().collect();
+        let (_table_reference, _schema) = self
+            .resolve_table_schema(&table, assignments.keys().collect())
+            .await?;
+
+        // let mut assignments_map: HashMap<String, Expr> = HashMap::new();
+        // for (column, expr) in assignments {
+        //     let column = column.into();
+        //     let expr = self.resolve_expression(expr, &table_schema, state).await?;
+        //     assignments_map.insert(column, expr);
+        // }
+
         Err(PlanError::todo("resolve_command_update"))
     }
 

@@ -6,24 +6,22 @@
         "success": {
           "command": {
             "update": {
-              "inputTables": [
-                {
-                  "read": {
-                    "namedTable": {
-                      "name": [
-                        "testcat",
-                        "ns1",
-                        "ns2",
-                        "tbl"
-                      ],
-                      "options": []
-                    },
-                    "isStreaming": false
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "testcat",
+                      "ns1",
+                      "ns2",
+                      "tbl"
+                    ],
+                    "options": []
                   },
-                  "planId": null,
-                  "sourceInfo": null
-                }
-              ],
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
               "table": [
                 "testcat",
                 "ns1",
@@ -48,8 +46,7 @@
                     }
                   }
                 ]
-              ],
-              "filter": null
+              ]
             },
             "planId": null,
             "sourceInfo": null
@@ -63,32 +60,59 @@
         "success": {
           "command": {
             "update": {
-              "inputTables": [
-                {
-                  "tableAlias": {
-                    "input": {
-                      "read": {
-                        "namedTable": {
-                          "name": [
-                            "testcat",
-                            "ns1",
-                            "ns2",
-                            "tbl"
-                          ],
-                          "options": []
+              "input": {
+                "filter": {
+                  "input": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "testcat",
+                              "ns1",
+                              "ns2",
+                              "tbl"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
                         },
-                        "isStreaming": false
+                        "planId": null,
+                        "sourceInfo": null
                       },
-                      "planId": null,
-                      "sourceInfo": null
+                      "name": "t",
+                      "columns": []
                     },
-                    "name": "t",
-                    "columns": []
+                    "planId": null,
+                    "sourceInfo": null
                   },
-                  "planId": null,
-                  "sourceInfo": null
-                }
-              ],
+                  "condition": {
+                    "unresolvedFunction": {
+                      "functionName": "==",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "t",
+                              "c"
+                            ],
+                            "planId": null
+                          }
+                        },
+                        {
+                          "literal": {
+                            "integer": 2
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
               "table": [
                 "testcat",
                 "ns1",
@@ -113,30 +137,7 @@
                     }
                   }
                 ]
-              ],
-              "filter": {
-                "unresolvedFunction": {
-                  "functionName": "==",
-                  "arguments": [
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "t",
-                          "c"
-                        ],
-                        "planId": null
-                      }
-                    },
-                    {
-                      "literal": {
-                        "integer": 2
-                      }
-                    }
-                  ],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false
-                }
-              }
+              ]
             },
             "planId": null,
             "sourceInfo": null
