@@ -40,19 +40,19 @@ pub(crate) fn update_statement_to_plan(update: ast::Statement) -> SqlResult<spec
         })
         .transpose()?;
 
-    let assignments: Vec<(spec::Identifier, spec::Expr)> = assignments
+    let assignments: Vec<(spec::ObjectName, spec::Expr)> = assignments
         .into_iter()
         .map(|assignment| {
             let columns = match &assignment.target {
                 ast::AssignmentTarget::ColumnName(columns) => columns,
                 _ => return Err(SqlError::invalid("Tuples are not supported")),
             };
-            let column_name = columns
-                .0
-                .last()
-                .ok_or_else(|| SqlError::invalid("Expected at least one column in assignment"))?;
+            // let column_name = columns
+            //     .0
+            //     .last()
+            //     .ok_or_else(|| SqlError::invalid("Expected at least one column in assignment"))?;
             Ok((
-                from_ast_ident(column_name, true)?,
+                from_ast_object_name_normalized(columns)?,
                 from_ast_expression(assignment.value)?,
             ))
         })

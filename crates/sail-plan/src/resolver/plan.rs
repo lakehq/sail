@@ -2176,64 +2176,75 @@ impl PlanResolver<'_> {
         input: spec::QueryPlan,
         table: spec::ObjectName,
         table_alias: Option<spec::Identifier>,
-        assignments: Vec<(spec::Identifier, spec::Expr)>,
+        assignments: Vec<(spec::ObjectName, spec::Expr)>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         println!("CHECK HERE:\ninput: {input:?},\ntable: {table:?},\ntable_alias: {table_alias:?},\nassignments:\n{assignments:?},\nstate: {state:?}");
 
         let input = self.resolve_query_plan(input, state).await?;
+        let assignment_columns: Vec<&spec::ObjectName> = assignments.iter().map(|(col, _)| col).collect();
+        let input_schema_columns: Vec<spec::Identifier> = input.schema().fields().iter().map(|f| f.name().clone().into()).collect();
         let (table_reference, table_schema) = self
-            .resolve_table_schema(&table, assignments.iter().map(|(col, _)| col).collect())
+            .resolve_table_schema(&table, vec![])
             .await?;
         let fields = table_schema
             .fields
             .iter()
             .map(|f| f.name().clone())
             .collect::<Vec<_>>();
-        let input = rename_logical_plan(input, &fields)?; // TODO: check if this is correct
+        println!("CHECK HERE:\ntable_reference: {table_reference:?}\ntable_schema: {table_schema:?}\nfields: {fields:?}\nassignment_columns: {assignment_columns:?}\ninput_schema_columns: {input_schema_columns:?}");
+        // let fields = input.schema().fields().iter().map(|f| f.name().clone()).collect::<Vec<_>>();
+        // let input = rename_logical_plan(input, &fields)?; // TODO: check if this is correct
         let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
             table_reference.clone(),
             &table_schema,
         )?);
 
-        let mut assignments_map: HashMap<String, Expr> = HashMap::with_capacity(assignments.len());
+        let mut assignments_map: HashMap<spec::ObjectName, Expr> = HashMap::with_capacity(assignments.len());
         for (column, expr) in assignments {
             let expr = self.resolve_expression(expr, &table_schema, state).await?;
-            assignments_map.insert(column.into(), expr);
+            assignments_map.insert(column, expr);
         }
 
-        let exprs: Vec<Expr> = table_schema
-            .iter()
-            .map(|(qualifier, field)| {
-                let expr = match assignments_map.remove(field.name()) {
-                    Some(mut expr) => {
-                        if let Expr::Placeholder(placeholder) = &mut expr {
-                            placeholder.data_type = placeholder
-                                .data_type
-                                .take()
-                                .or_else(|| Some(field.data_type().clone()));
-                        }
-                        expr.cast_to(field.data_type(), &input.schema())?
-                    }
-                    None => {
-                        if let Some(alias) = &table_alias {
-                            let alias: &str = alias.into();
-                            Expr::Column(Column::new(Some(alias), field.name()))
-                        } else {
-                            Expr::Column(Column::from((qualifier, field)))
-                        }
-                    }
-                };
-                Ok(expr.alias(field.name()))
-            })
-            .collect::<PlanResult<Vec<_>>>()?;
+        // let exprs: Vec<Expr> = input.schema()
+        //     .iter()
+        //     .map(|(qualifier, field)| {
+        //         let expr = match assignments_map.remove(field.name()) {
+        //             Some(mut expr) => {
+        //                 if let Expr::Placeholder(placeholder) = &mut expr {
+        //                     placeholder.data_type = placeholder
+        //                         .data_type
+        //                         .take()
+        //                         .or_else(|| Some(field.data_type().clone()));
+        //                 }
+        //                 expr.cast_to(field.data_type(), &input.schema())?
+        //             }
+        //             None => {
+        //                 if let Some(alias) = &table_alias {
+        //                     let alias: &str = alias.into();
+        //                     Expr::Column(Column::new(Some(alias), field.name()))
+        //                 } else {
+        //                     Expr::Column(Column::from((qualifier, field)))
+        //                 }
+        //             }
+        //         };
+        //         Ok(expr.alias(field.name()))
+        //     })
+        //     .collect::<PlanResult<Vec<_>>>()?;
 
-        Ok(LogicalPlan::Dml(DmlStatement::new(
+        let exprs: Vec<Expr> = assignments_map.values().cloned().collect();
+        let input = rename_logical_plan(input, &fields)?;
+        let input = project(input, exprs)?;
+        // let input = rename_logical_plan(input, &fields)?;
+
+        let result = LogicalPlan::Dml(DmlStatement::new(
             table_reference,
             table_schema,
-            WriteOp::Update,
-            Arc::new(project(input, exprs)?),
-        )))
+            WriteOp::InsertOverwrite, // DataFusion doesn't support UPDATE yet, testing with insert.
+            Arc::new(input),
+        ));
+        println!("RESULT: {result:?}");
+        Ok(result)
     }
 
     async fn resolve_query_fill_na(

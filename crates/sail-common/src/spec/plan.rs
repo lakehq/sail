@@ -399,7 +399,7 @@ pub enum CommandNode {
         input: Box<QueryPlan>,
         table: ObjectName,
         table_alias: Option<Identifier>,
-        assignments: Vec<(Identifier, Expr)>,
+        assignments: Vec<(ObjectName, Expr)>,
     },
 }
 
