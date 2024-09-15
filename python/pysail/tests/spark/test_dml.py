@@ -36,10 +36,11 @@ def test_insert_multiple_values(spark):
 
 def test_update_single_value(spark):
     p_id = random.randint(0, 100000)  # noqa: S311
+    p_id1 = p_id + 1
     spark.sql(f"INSERT INTO person VALUES ({p_id}, 'Shehab', 99)")  # noqa: S608
-    spark.sql(f"UPDATE person SET id = {p_id}, name = 'Shehab', age = 100 WHERE id = {p_id}")  # noqa: S608
-    actual = spark.sql(f"SELECT * FROM person WHERE id = {p_id}").toPandas()  # noqa: S608
+    spark.sql(f"UPDATE person SET id = {p_id1}, name = 'Shehab', age = 100 WHERE id = {p_id}")  # noqa: S608
+    actual = spark.sql(f"SELECT * FROM person WHERE id = {p_id1}").toPandas()  # noqa: S608
     expected = pd.DataFrame(
-        {"id": [p_id], "name": ["Shehab"], "age": [100]},
+        {"id": [p_id1], "name": ["Shehab"], "age": [100]},
     ).astype({"id": "int32", "name": "str", "age": "int32"})
     assert_frame_equal(actual, expected)

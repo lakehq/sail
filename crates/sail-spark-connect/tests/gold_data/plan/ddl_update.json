@@ -31,7 +31,9 @@
               "tableAlias": null,
               "assignments": [
                 [
-                  "a",
+                  [
+                    "a"
+                  ],
                   {
                     "literal": {
                       "string": "Robert"
@@ -39,7 +41,9 @@
                   }
                 ],
                 [
-                  "b",
+                  [
+                    "b"
+                  ],
                   {
                     "literal": {
                       "integer": 32
@@ -122,7 +126,10 @@
               "tableAlias": "t",
               "assignments": [
                 [
-                  "a",
+                  [
+                    "t",
+                    "a"
+                  ],
                   {
                     "literal": {
                       "string": "Robert"
@@ -130,7 +137,10 @@
                   }
                 ],
                 [
-                  "b",
+                  [
+                    "t",
+                    "b"
+                  ],
                   {
                     "literal": {
                       "integer": 32
