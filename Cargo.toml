@@ -12,13 +12,13 @@ edition = "2021"
 thiserror = { version = "1.0.63" }
 tokio = { version = "1.40.0", features = ["full"] }
 tokio-stream = "0.1.16"
-tonic = { version = "0.11", features = ["tls", "tls-roots", "gzip", "zstd"] }
+tonic = { version = "0.12", features = ["tls", "tls-roots", "gzip", "zstd"] }
 tonic-build = "0.11"
 tonic-reflection = "0.11"
 tonic-health = "0.11"
 tonic-types = "0.11"
 prost-build = "0.12"
-prost = "0.12"
+prost = "0.13"
 prost-types = "0.12"
 pbjson = "0.6"
 pbjson-types = "0.6"
@@ -55,7 +55,7 @@ rand_chacha = "0.3.1"
 rand_distr = "0.4.3"
 url = "2.5.2"
 lexical-core = { version = "0.8.5", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
-aws-config = "1.5.5"
+aws-config = "1.5.6"
 aws-credential-types = "1.2.1"
 clap = { version = "4.5.17", features = ["derive"] }
 num_enum = "0.7.3"
