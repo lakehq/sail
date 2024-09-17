@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3
+
+_September 18, 2024_
+
 ## 0.1.2
 
 _September 10, 2024_
