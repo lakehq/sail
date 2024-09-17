@@ -9,7 +9,7 @@ _September 18, 2024_
 - Expanded Support for `CREATE` and `REPLACE` statement syntax [#183](https://github.com/lakehq/sail/pull/183)/
 - Support `Grouping SETS` Aggregation [#184](https://github.com/lakehq/sail/pull/184/files).
 - Fastrace integration for improved and more performant logging and tracing [#166](https://github.com/lakehq/sail/pull/166).
-- Enable GZIP and ZSTD in Tonic [#166](https://github.com/lakehq/sail/pull/166).
+- Enable `GZIP` and `ZSTD` in Tonic [#166](https://github.com/lakehq/sail/pull/166).
 
 ## 0.1.2
 
