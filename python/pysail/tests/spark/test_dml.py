@@ -51,11 +51,11 @@ def test_insert_using_column_list(spark):
     p_id2 = random.randint(0, 1000000)  # noqa: S311
     p_id3 = random.randint(0, 1000000)  # noqa: S311
     spark.sql(
-        f"INSERT INTO person (name, age, id) VALUES ('Shehab', 99, {p_id1}), ('Heran', 2, {p_id2}), ('Chen', 9000, {p_id3})"  # noqa: S608
+        f"INSERT INTO person (name, age, id) VALUES ('Shehabz', 99, {p_id1}), ('Heranz', 2, {p_id2}), ('Chenz', 9000, {p_id3})"  # noqa: S608
     )
     actual = spark.sql(f"SELECT * FROM person WHERE id IN ({p_id1}, {p_id2}, {p_id3})").toPandas()  # noqa: S608
     expected = pd.DataFrame(
-        {"id": [p_id1, p_id2, p_id3], "name": ["Shehab", "Heran", "Chen"], "age": [99, 2, 9000]},
+        {"id": [p_id1, p_id2, p_id3], "name": ["Shehabz", "Heranz", "Chenz"], "age": [99, 2, 9000]},
     ).astype({"id": "int32", "name": "str", "age": "int32"})
     assert_frame_equal(actual, expected)
 
@@ -74,10 +74,10 @@ def test_insert_using_implicit_default(spark):
     p_id1 = random.randint(0, 1000000)  # noqa: S311
     p_id2 = random.randint(0, 1000000)  # noqa: S311
     p_id3 = random.randint(0, 1000000)  # noqa: S311
-    spark.sql(f"INSERT INTO person (age, id) VALUES (99, {p_id1}), (2, {p_id2}), (9000, {p_id3})")  # noqa: S608
+    spark.sql(f"INSERT INTO person (age, id) VALUES (100, {p_id1}), (3, {p_id2}), (9001, {p_id3})")  # noqa: S608
     actual = spark.sql(f"SELECT * FROM person WHERE id IN ({p_id1}, {p_id2}, {p_id3})").toPandas()  # noqa: S608
     expected = pd.DataFrame(
-        {"id": [p_id1, p_id2, p_id3], "name": ["Sail", "Sail", "Sail"], "age": [99, 2, 9000]},
+        {"id": [p_id1, p_id2, p_id3], "name": ["Sail", "Sail", "Sail"], "age": [100, 3, 9001]},
     ).astype({"id": "int32", "name": "str", "age": "int32"})
     assert_frame_equal(actual, expected)
 
