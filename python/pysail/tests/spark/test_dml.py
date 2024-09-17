@@ -7,7 +7,7 @@ from pandas.testing import assert_frame_equal
 
 @pytest.fixture(scope="module", autouse=True)
 def person_table(spark):
-    spark.sql("CREATE TABLE person (id INT, name STRING, age INT)")
+    spark.sql("CREATE TABLE person (id INT, name STRING DEFAULT 'Sail', age INT)")
     yield
     spark.sql("DROP TABLE person")
 
@@ -15,7 +15,7 @@ def person_table(spark):
 def test_insert_single_value(spark):
     p_id = random.randint(0, 1000000)  # noqa: S311
     spark.sql(f"INSERT INTO person VALUES ({p_id}, 'Shehab', 99)")  # noqa: S608
-    actual = spark.sql(f"SELECT * FROM person WHERE id = {p_id}").toPandas()  # noqa: S608
+    actual = spark.sql(f"SELECT * FROM person where id = {p_id}").toPandas()  # noqa: S608
     expected = pd.DataFrame(
         {"id": [p_id], "name": ["Shehab"], "age": [99]},
     ).astype({"id": "int32", "name": "str", "age": "int32"})
@@ -34,6 +34,54 @@ def test_insert_multiple_values(spark):
     assert_frame_equal(actual, expected)
 
 
+def test_insert_using_column_list(spark):
+    p_id1 = random.randint(0, 1000000)  # noqa: S311
+    p_id2 = random.randint(0, 1000000)  # noqa: S311
+    p_id3 = random.randint(0, 1000000)  # noqa: S311
+    spark.sql(
+        f"INSERT INTO person (id, name, age) VALUES ({p_id1}, 'Shehab', 99), ({p_id2}, 'Heran', 2), ({p_id3}, 'Chen', 9000)"  # noqa: S608
+    )
+    actual = spark.sql(f"SELECT * FROM person WHERE id IN ({p_id1}, {p_id2}, {p_id3})").toPandas()  # noqa: S608
+    expected = pd.DataFrame(
+        {"id": [p_id1, p_id2, p_id3], "name": ["Shehab", "Heran", "Chen"], "age": [99, 2, 9000]},
+    ).astype({"id": "int32", "name": "str", "age": "int32"})
+    assert_frame_equal(actual, expected)
+
+    p_id1 = random.randint(0, 1000000)  # noqa: S311
+    p_id2 = random.randint(0, 1000000)  # noqa: S311
+    p_id3 = random.randint(0, 1000000)  # noqa: S311
+    spark.sql(
+        f"INSERT INTO person (name, age, id) VALUES ('Shehab', 99, {p_id1}), ('Heran', 2, {p_id2}), ('Chen', 9000, {p_id3})"  # noqa: S608
+    )
+    actual = spark.sql(f"SELECT * FROM person WHERE id IN ({p_id1}, {p_id2}, {p_id3})").toPandas()  # noqa: S608
+    expected = pd.DataFrame(
+        {"id": [p_id1, p_id2, p_id3], "name": ["Shehab", "Heran", "Chen"], "age": [99, 2, 9000]},
+    ).astype({"id": "int32", "name": "str", "age": "int32"})
+    assert_frame_equal(actual, expected)
+
+
+def test_insert_using_implicit_default(spark):
+    p_id1 = random.randint(0, 1000000)  # noqa: S311
+    p_id2 = random.randint(0, 1000000)  # noqa: S311
+    p_id3 = random.randint(0, 1000000)  # noqa: S311
+    spark.sql(f"INSERT INTO person (id, age) VALUES ({p_id1}, 99), ({p_id2}, 2), ({p_id3}, 9000)")  # noqa: S608
+    actual = spark.sql(f"SELECT * FROM person WHERE id IN ({p_id1}, {p_id2}, {p_id3})").toPandas()  # noqa: S608
+    expected = pd.DataFrame(
+        {"id": [p_id1, p_id2, p_id3], "name": ["Sail", "Sail", "Sail"], "age": [99, 2, 9000]},
+    ).astype({"id": "int32", "name": "str", "age": "int32"})
+    assert_frame_equal(actual, expected)
+
+    p_id1 = random.randint(0, 1000000)  # noqa: S311
+    p_id2 = random.randint(0, 1000000)  # noqa: S311
+    p_id3 = random.randint(0, 1000000)  # noqa: S311
+    spark.sql(f"INSERT INTO person (age, id) VALUES (99, {p_id1}), (2, {p_id2}), (9000, {p_id3})")  # noqa: S608
+    actual = spark.sql(f"SELECT * FROM person WHERE id IN ({p_id1}, {p_id2}, {p_id3})").toPandas()  # noqa: S608
+    expected = pd.DataFrame(
+        {"id": [p_id1, p_id2, p_id3], "name": ["Sail", "Sail", "Sail"], "age": [99, 2, 9000]},
+    ).astype({"id": "int32", "name": "str", "age": "int32"})
+    assert_frame_equal(actual, expected)
+
+
 def test_insert_with_full_table_name(spark):
     p_id = random.randint(0, 1000000)  # noqa: S311
     spark.sql(f"INSERT INTO spark_catalog.default.person VALUES ({p_id}, 'Shehab', 99)")  # noqa: S608
@@ -44,6 +92,7 @@ def test_insert_with_full_table_name(spark):
     assert_frame_equal(actual, expected)
 
 
+@pytest.mark.skip(reason="UPDATE ExecutionPlan not implemented")
 def test_update_single_value(spark):
     p_id = random.randint(0, 1000000)  # noqa: S311
     p_id1 = p_id + 1
@@ -56,6 +105,7 @@ def test_update_single_value(spark):
     assert_frame_equal(actual, expected)
 
 
+@pytest.mark.skip(reason="UPDATE ExecutionPlan not implemented")
 def test_update_multiple_values(spark):
     p_id1 = random.randint(0, 1000000)  # noqa: S311
     p_id2 = random.randint(0, 1000000)  # noqa: S311
@@ -69,6 +119,7 @@ def test_update_multiple_values(spark):
     assert_frame_equal(actual, expected)
 
 
+@pytest.mark.skip(reason="UPDATE ExecutionPlan not implemented")
 def test_update_with_full_table_name(spark):
     p_id = random.randint(0, 1000000)  # noqa: S311
     spark.sql(f"INSERT INTO person VALUES ({p_id}, 'Shehab', 99)")  # noqa: S608
@@ -80,6 +131,7 @@ def test_update_with_full_table_name(spark):
     assert_frame_equal(actual, expected)
 
 
+@pytest.mark.skip(reason="UPDATE ExecutionPlan not implemented")
 def test_update_with_alias(spark):
     p_id = random.randint(0, 1000000)  # noqa: S311
     spark.sql(f"INSERT INTO person VALUES ({p_id}, 'Shehab', 99)")  # noqa: S608
@@ -91,6 +143,7 @@ def test_update_with_alias(spark):
     assert_frame_equal(actual, expected)
 
 
+@pytest.mark.skip(reason="UPDATE ExecutionPlan not implemented")
 def test_update_with_full_table_name_and_alias(spark):
     p_id = random.randint(0, 1000000)  # noqa: S311
     spark.sql(f"INSERT INTO person VALUES ({p_id}, 'Shehab', 99)")  # noqa: S608
@@ -102,7 +155,8 @@ def test_update_with_full_table_name_and_alias(spark):
     assert_frame_equal(actual, expected)
 
 
-def test_update_using_column_name(spark):
+@pytest.mark.skip(reason="UPDATE ExecutionPlan not implemented")
+def test_update_using_column_value(spark):
     p_id = random.randint(0, 1000000)  # noqa: S311
     p_id1 = p_id + 1
     spark.sql(f"INSERT INTO person VALUES ({p_id}, 'Shehab', 99)")  # noqa: S608

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Fields, Schema, SchemaRef};
+use datafusion::datasource::TableProvider;
 use datafusion_common::{DFSchema, SchemaReference, TableReference};
 use sail_common::spec;
 
@@ -49,15 +50,14 @@ impl PlanResolver<'_> {
 
     pub(super) async fn resolve_table_schema(
         &self,
-        table: &spec::ObjectName,
+        table_reference: &TableReference,
+        table_provider: &Arc<dyn TableProvider>,
         columns: Vec<&spec::Identifier>,
-    ) -> PlanResult<(TableReference, SchemaRef)> {
-        let table_reference = self.resolve_table_reference(table)?;
-        let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
+    ) -> PlanResult<SchemaRef> {
         let columns: Vec<&str> = columns.into_iter().map(|c| c.into()).collect();
         let schema = table_provider.schema();
         if columns.is_empty() {
-            Ok((table_reference, schema))
+            Ok(schema)
         } else {
             let fields = columns
                 .into_iter()
@@ -72,10 +72,7 @@ impl PlanResolver<'_> {
                     Ok(schema.field(column_index).clone())
                 })
                 .collect::<PlanResult<Vec<_>>>()?;
-            Ok((
-                table_reference,
-                SchemaRef::new(Schema::new(Fields::from(fields))),
-            ))
+            Ok(SchemaRef::new(Schema::new(Fields::from(fields))))
         }
     }
 }

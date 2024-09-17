@@ -2155,16 +2155,43 @@ impl PlanResolver<'_> {
         if !partition_spec.is_empty() {
             return Err(PlanError::todo("partitioned insert"));
         }
+
         let input = self.resolve_query_plan(input, state).await?;
-        let (table_reference, schema) = self
-            .resolve_table_schema(&table, columns.iter().collect())
+        let table_reference = self.resolve_table_reference(&table)?;
+        let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
+        let schema = self
+            .resolve_table_schema(&table_reference, &table_provider, columns.iter().collect())
             .await?;
+        let df_schema = Arc::new(DFSchema::try_from_qualified_schema(
+            table_reference.clone(),
+            &schema,
+        )?);
+        let table_source = provider_as_source(table_provider);
         let fields = schema
             .fields
             .iter()
             .map(|f| f.name().clone())
             .collect::<Vec<_>>();
-        let input = rename_logical_plan(input, &fields)?;
+
+        let exprs = table_source
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| {
+                let expr = match fields.iter().find(|f| f == &field.name()) {
+                    Some(matched_field) => Expr::Column(Column::from(matched_field))
+                        .cast_to(field.data_type(), &df_schema)?,
+                    None => table_source
+                        .get_column_default(field.name())
+                        .cloned()
+                        .unwrap_or_else(|| Expr::Literal(ScalarValue::Null))
+                        .cast_to(field.data_type(), &DFSchema::empty())?,
+                };
+                Ok(expr.alias(field.name()))
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+
+        let input = project(rename_logical_plan(input, &fields)?, exprs)?;
         let plan =
             LogicalPlanBuilder::insert_into(input, table_reference, schema.as_ref(), overwrite)?
                 .build()?;
@@ -2179,10 +2206,15 @@ impl PlanResolver<'_> {
         assignments: Vec<(spec::ObjectName, spec::Expr)>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        println!("CHECK HERE:\ninput: {input:?},\ntable: {table:?},\nassignments:\n{assignments:?},\nstate: {state:?}");
-
+        // TODO:
+        //  1. Implement `ExecutionPlan` for `WriteOp::Update`.
+        //  2. Support UPDATE using Column values.
         let input = self.resolve_query_plan(input, state).await?;
-        let (table_reference, table_schema) = self.resolve_table_schema(&table, vec![]).await?;
+        let table_reference = self.resolve_table_reference(&table)?;
+        let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
+        let table_schema = self
+            .resolve_table_schema(&table_reference, &table_provider, vec![])
+            .await?;
         let fields = table_schema
             .fields
             .iter()
@@ -2204,8 +2236,6 @@ impl PlanResolver<'_> {
             assignments_map.insert(column.into(), expr);
         }
 
-        println!("CHECK HERE:\nassignments_map: {assignments_map:?}");
-
         let exprs: Vec<Expr> = table_schema
             .iter()
             .map(|(_qualifier, field)| {
@@ -2225,16 +2255,12 @@ impl PlanResolver<'_> {
             })
             .collect::<PlanResult<Vec<_>>>()?;
 
-        println!("CHECK HERE:\ntable_reference: {table_reference:?}\ntable_schema: {table_schema:?}\nfields: {fields:?}\nassignments_map: {assignments_map:?}\nexprs: {exprs:?}");
-
-        let result = LogicalPlan::Dml(DmlStatement::new(
+        Ok(LogicalPlan::Dml(DmlStatement::new(
             table_reference,
             table_schema,
-            WriteOp::InsertInto, // TODO: Change back!! DataFusion doesn't support UPDATE yet, so testing with insert.
+            WriteOp::Update,
             Arc::new(project(rename_logical_plan(input, &fields)?, exprs)?),
-        ));
-        println!("RESULT: {result:?}");
-        Ok(result)
+        )))
     }
 
     async fn resolve_query_fill_na(
