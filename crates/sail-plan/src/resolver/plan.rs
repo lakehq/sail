@@ -2175,30 +2175,20 @@ impl PlanResolver<'_> {
         &self,
         input: spec::QueryPlan,
         table: spec::ObjectName,
-        table_alias: Option<spec::Identifier>,
+        _table_alias: Option<spec::Identifier>, // We don't need table alias, leaving it here in case we need it in the future.
         assignments: Vec<(spec::ObjectName, spec::Expr)>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        println!("CHECK HERE:\ninput: {input:?},\ntable: {table:?},\ntable_alias: {table_alias:?},\nassignments:\n{assignments:?},\nstate: {state:?}");
+        println!("CHECK HERE:\ninput: {input:?},\ntable: {table:?},\nassignments:\n{assignments:?},\nstate: {state:?}");
 
         let input = self.resolve_query_plan(input, state).await?;
-        let assignment_columns: Vec<&spec::ObjectName> =
-            assignments.iter().map(|(col, _)| col).collect();
-        let input_schema_columns: Vec<spec::Identifier> = input
-            .schema()
-            .fields()
-            .iter()
-            .map(|f| f.name().clone().into())
-            .collect();
         let (table_reference, table_schema) = self.resolve_table_schema(&table, vec![]).await?;
         let fields = table_schema
             .fields
             .iter()
             .map(|f| f.name().clone())
             .collect::<Vec<_>>();
-        println!("CHECK HERE:\ntable_reference: {table_reference:?}\ntable_schema: {table_schema:?}\nfields: {fields:?}\nassignment_columns: {assignment_columns:?}\ninput_schema_columns: {input_schema_columns:?}");
-        // let fields = input.schema().fields().iter().map(|f| f.name().clone()).collect::<Vec<_>>();
-        // let input = rename_logical_plan(input, &fields)?; // TODO: check if this is correct
+
         let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
             table_reference.clone(),
             &table_schema,
@@ -2214,9 +2204,11 @@ impl PlanResolver<'_> {
             assignments_map.insert(column.into(), expr);
         }
 
+        println!("CHECK HERE:\nassignments_map: {assignments_map:?}");
+
         let exprs: Vec<Expr> = table_schema
             .iter()
-            .map(|(qualifier, field)| {
+            .map(|(_qualifier, field)| {
                 let expr = match assignments_map.remove(field.name()) {
                     Some(mut expr) => {
                         if let Expr::Placeholder(placeholder) = &mut expr {
@@ -2227,28 +2219,19 @@ impl PlanResolver<'_> {
                         }
                         expr.cast_to(field.data_type(), &input.schema())?
                     }
-                    None => {
-                        if let Some(alias) = &table_alias {
-                            let alias: &str = alias.into();
-                            Expr::Column(Column::new(Some(alias), field.name()))
-                        } else {
-                            Expr::Column(Column::from((qualifier, field)))
-                        }
-                    }
+                    None => Expr::Column(Column::from_name(field.name())),
                 };
                 Ok(expr.alias(field.name()))
             })
             .collect::<PlanResult<Vec<_>>>()?;
 
-        let input = rename_logical_plan(input, &fields)?;
-        let input = project(input, exprs)?;
-        // let input = rename_logical_plan(input, &fields)?;
+        println!("CHECK HERE:\ntable_reference: {table_reference:?}\ntable_schema: {table_schema:?}\nfields: {fields:?}\nassignments_map: {assignments_map:?}\nexprs: {exprs:?}");
 
         let result = LogicalPlan::Dml(DmlStatement::new(
             table_reference,
             table_schema,
             WriteOp::InsertInto, // TODO: Change back!! DataFusion doesn't support UPDATE yet, so testing with insert.
-            Arc::new(input),
+            Arc::new(project(rename_logical_plan(input, &fields)?, exprs)?),
         ));
         println!("RESULT: {result:?}");
         Ok(result)
