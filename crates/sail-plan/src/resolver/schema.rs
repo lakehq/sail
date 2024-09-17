@@ -59,13 +59,11 @@ impl PlanResolver<'_> {
         if columns.is_empty() {
             Ok(schema)
         } else {
+            let df_schema =
+                DFSchema::try_from_qualified_schema(table_reference.clone(), schema.as_ref())?;
             let fields = columns
                 .into_iter()
                 .map(|c| {
-                    let df_schema = DFSchema::try_from_qualified_schema(
-                        table_reference.clone(),
-                        schema.as_ref(),
-                    )?;
                     let column_index = df_schema
                         .index_of_column_by_name(None, c)
                         .ok_or_else(|| PlanError::invalid(format!("Column {c} not found")))?;
