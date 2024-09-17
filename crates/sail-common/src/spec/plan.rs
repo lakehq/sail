@@ -401,6 +401,10 @@ pub enum CommandNode {
         table_alias: Option<Identifier>,
         assignments: Vec<(ObjectName, Expr)>,
     },
+    Delete {
+        table: ObjectName,
+        condition: Option<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
