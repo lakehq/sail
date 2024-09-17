@@ -281,7 +281,7 @@
                 "arguments": [
                   {
                     "literal": {
-                      "integer": 1
+                      "long": 1
                     }
                   },
                   {
@@ -315,7 +315,7 @@
             "arguments": [
               {
                 "literal": {
-                  "integer": 1
+                  "long": 1
                 }
               },
               {
@@ -370,7 +370,7 @@
           "alias": {
             "expr": {
               "literal": {
-                "integer": 123
+                "long": 123
               }
             },
             "name": [
@@ -2270,12 +2270,12 @@
                 "arguments": [
                   {
                     "literal": {
-                      "integer": 1
+                      "long": 1
                     }
                   },
                   {
                     "literal": {
-                      "integer": 1
+                      "long": 1
                     }
                   }
                 ],
@@ -2430,7 +2430,7 @@
                 "expressions": [
                   {
                     "literal": {
-                      "integer": 1
+                      "long": 1
                     }
                   }
                 ]
@@ -2816,7 +2816,7 @@
                   },
                   {
                     "literal": {
-                      "integer": 1
+                      "long": 1
                     }
                   }
                 ],

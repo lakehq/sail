@@ -68,7 +68,7 @@
                             },
                             {
                               "literal": {
-                                "integer": 10
+                                "long": 10
                               }
                             }
                           ],

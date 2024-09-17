@@ -47,7 +47,7 @@
                     },
                     {
                       "literal": {
-                        "integer": 2
+                        "long": 2
                       }
                     }
                   ],

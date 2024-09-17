@@ -67,7 +67,7 @@
                       },
                       {
                         "literal": {
-                          "integer": 3
+                          "long": 3
                         }
                       }
                     ],

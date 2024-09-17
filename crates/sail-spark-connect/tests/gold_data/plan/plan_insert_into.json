@@ -163,7 +163,7 @@
                       },
                       {
                         "literal": {
-                          "integer": 1
+                          "long": 1
                         }
                       }
                     ],

@@ -46,7 +46,7 @@
                   ],
                   {
                     "literal": {
-                      "integer": 32
+                      "long": 32
                     }
                   }
                 ]
@@ -105,7 +105,7 @@
                         },
                         {
                           "literal": {
-                            "integer": 2
+                            "long": 2
                           }
                         }
                       ],
@@ -143,7 +143,7 @@
                   ],
                   {
                     "literal": {
-                      "integer": 32
+                      "long": 32
                     }
                   }
                 ]

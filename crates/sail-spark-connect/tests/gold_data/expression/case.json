@@ -42,7 +42,7 @@
               },
               {
                 "literal": {
-                  "integer": 1
+                  "long": 1
                 }
               }
             ],
@@ -189,7 +189,7 @@
                     },
                     {
                       "literal": {
-                        "integer": 1
+                        "long": 1
                       }
                     }
                   ],
@@ -219,7 +219,7 @@
                     },
                     {
                       "literal": {
-                        "integer": 2
+                        "long": 2
                       }
                     }
                   ],
@@ -263,7 +263,7 @@
                   "arguments": [
                     {
                       "literal": {
-                        "integer": 1
+                        "long": 1
                       }
                     },
                     {
@@ -365,7 +365,7 @@
                     },
                     {
                       "literal": {
-                        "integer": 1
+                        "long": 1
                       }
                     }
                   ],
@@ -395,7 +395,7 @@
                     },
                     {
                       "literal": {
-                        "integer": 2
+                        "long": 2
                       }
                     }
                   ],

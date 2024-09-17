@@ -1167,7 +1167,7 @@
                   "expressions": [
                     {
                       "literal": {
-                        "integer": 1
+                        "long": 1
                       }
                     }
                   ]
@@ -1187,7 +1187,7 @@
                   "expressions": [
                     {
                       "literal": {
-                        "integer": 1
+                        "long": 1
                       }
                     }
                   ]

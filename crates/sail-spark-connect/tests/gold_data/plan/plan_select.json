@@ -358,7 +358,7 @@
                         "arguments": [
                           {
                             "literal": {
-                              "integer": 10
+                              "long": 10
                             }
                           }
                         ],
@@ -406,7 +406,7 @@
                         "arguments": [
                           {
                             "literal": {
-                              "integer": 7
+                              "long": 7
                             }
                           }
                         ],
@@ -612,12 +612,12 @@
                       },
                       {
                         "literal": {
-                          "integer": 7
+                          "long": 7
                         }
                       },
                       {
                         "literal": {
-                          "integer": 0
+                          "long": 0
                         }
                       }
                     ],
@@ -663,7 +663,7 @@
                       },
                       {
                         "literal": {
-                          "integer": 7
+                          "long": 7
                         }
                       }
                     ],
@@ -709,7 +709,7 @@
                       },
                       {
                         "literal": {
-                          "integer": 6
+                          "long": 6
                         }
                       }
                     ],
@@ -755,12 +755,12 @@
                       },
                       {
                         "literal": {
-                          "integer": 2
+                          "long": 2
                         }
                       },
                       {
                         "literal": {
-                          "integer": 4
+                          "long": 4
                         }
                       }
                     ],
@@ -1308,7 +1308,7 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 2
+                          "long": 2
                         }
                       }
                     ],
@@ -1403,7 +1403,7 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 2
+                          "long": 2
                         }
                       }
                     ],
@@ -1446,7 +1446,7 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 2
+                          "long": 2
                         }
                       }
                     ],
@@ -1789,7 +1789,7 @@
               "expressions": [
                 {
                   "literal": {
-                    "integer": 1
+                    "long": 1
                   }
                 }
               ]
@@ -1816,7 +1816,7 @@
               "expressions": [
                 {
                   "literal": {
-                    "integer": 1
+                    "long": 1
                   }
                 }
               ]
@@ -1969,7 +1969,7 @@
                     },
                     {
                       "literal": {
-                        "integer": 1
+                        "long": 1
                       }
                     }
                   ],
@@ -2033,7 +2033,7 @@
                         },
                         {
                           "literal": {
-                            "integer": 1
+                            "long": 1
                           }
                         }
                       ],

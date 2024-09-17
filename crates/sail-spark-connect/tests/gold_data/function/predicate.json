@@ -899,7 +899,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Arrow error: Invalid argument error: Nested comparison: Struct([Field { name: \"a\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) == Struct([Field { name: \"a\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) (hint: use make_comparator instead)"
+        "failure": "error in DataFusion: Arrow error: Invalid argument error: Nested comparison: Struct([Field { name: \"a\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) == Struct([Field { name: \"a\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) (hint: use make_comparator instead)"
       }
     },
     {
@@ -921,7 +921,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Arrow error: Invalid argument error: Nested comparison: Struct([Field { name: \"a\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) == Struct([Field { name: \"a\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) (hint: use make_comparator instead)"
+        "failure": "error in DataFusion: Arrow error: Invalid argument error: Nested comparison: Struct([Field { name: \"a\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) == Struct([Field { name: \"a\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) (hint: use make_comparator instead)"
       }
     },
     {

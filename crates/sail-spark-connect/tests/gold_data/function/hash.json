@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "invalid argument: The second argument of sha2 must be a literal integer."
       }
     },
     {

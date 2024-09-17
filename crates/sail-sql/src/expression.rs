@@ -179,9 +179,9 @@ fn from_ast_value(value: ast::Value) -> SqlResult<spec::Expr> {
                 }
             }
             None | Some("") => {
-                if let Ok(value) = LiteralValue::<i32>::try_from(value.clone()) {
+                if let Ok(value) = LiteralValue::<i64>::try_from(value.clone()) {
                     spec::Expr::try_from(value)
-                } else if let Ok(value) = LiteralValue::<i64>::try_from(value.clone()) {
+                } else if let Ok(value) = LiteralValue::<i32>::try_from(value.clone()) {
                     spec::Expr::try_from(value)
                 } else if let Ok(value) = LiteralValue::<spec::Decimal128>::try_from(value.clone())
                 {
