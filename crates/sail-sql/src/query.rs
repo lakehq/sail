@@ -5,6 +5,8 @@ use sqlparser::ast::PivotValueSource;
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{from_ast_expression, from_ast_object_name, from_ast_order_by};
 use crate::literal::LiteralValue;
+use crate::operation::filter::query_plan_with_filter;
+use crate::operation::join::join_plan_from_tables;
 use crate::utils::normalize_ident;
 
 pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
@@ -134,42 +136,8 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
         return Err(SqlError::unsupported("CONNECT BY clause in SELECT"));
     }
 
-    let plan = from
-        .into_iter()
-        .try_fold(
-            None,
-            |r: Option<spec::QueryPlan>, table| -> SqlResult<Option<spec::QueryPlan>> {
-                let right = from_ast_table_with_joins(table)?;
-                match r {
-                    Some(left) => Ok(Some(spec::QueryPlan::new(spec::QueryNode::Join(
-                        spec::Join {
-                            left: Box::new(left),
-                            right: Box::new(right),
-                            join_condition: None,
-                            join_type: spec::JoinType::Cross,
-                            using_columns: vec![],
-                            join_data_type: None,
-                        },
-                    )))),
-                    None => Ok(Some(right)),
-                }
-            },
-        )?
-        .unwrap_or_else(|| {
-            spec::QueryPlan::new(spec::QueryNode::Empty {
-                produce_one_row: true,
-            })
-        });
-
-    let plan = if let Some(selection) = selection {
-        let selection = from_ast_expression(selection)?;
-        spec::QueryPlan::new(spec::QueryNode::Filter {
-            input: Box::new(plan),
-            condition: selection,
-        })
-    } else {
-        plan
-    };
+    let plan = join_plan_from_tables(from)?;
+    let plan = query_plan_with_filter(plan, selection)?;
 
     let projection = projection
         .into_iter()
@@ -332,7 +300,7 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::QueryPlan> {
     }
 }
 
-fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::QueryPlan> {
+pub fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::QueryPlan> {
     use sqlparser::ast::{JoinConstraint, JoinOperator};
 
     let ast::TableWithJoins { relation, joins } = table;

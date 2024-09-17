@@ -2,6 +2,7 @@ pub mod data_type;
 pub mod error;
 pub mod expression;
 pub mod literal;
+pub mod operation;
 pub mod parse;
 pub mod parser;
 pub mod query;

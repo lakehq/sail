@@ -8,6 +8,7 @@ use crate::error::{SqlError, SqlResult};
 use crate::literal::{parse_date_string, parse_timestamp_string, LiteralValue, Signed};
 use crate::parser::{fail_on_extra_token, SparkDialect};
 use crate::query::from_ast_query;
+use crate::utils::normalize_ident;
 
 struct Function {
     name: String,
@@ -43,6 +44,27 @@ pub(crate) fn from_ast_object_name(name: ast::ObjectName) -> SqlResult<spec::Obj
         .map(|i| i.value)
         .collect::<Vec<_>>()
         .into())
+}
+
+pub(crate) fn from_ast_object_name_normalized(
+    name: &ast::ObjectName,
+) -> SqlResult<spec::ObjectName> {
+    Ok(name
+        .0
+        .iter()
+        .map(normalize_ident)
+        .collect::<Vec<_>>()
+        .into())
+}
+
+#[allow(unused_doc_comments)]
+pub(crate) fn from_ast_ident(ident: &ast::Ident, normalize: bool) -> SqlResult<spec::Identifier> {
+    Ok(if normalize {
+        normalize_ident(ident).into()
+    } else {
+        /// Uses logic in [`ast::Ident::fmt`] to convert `Ident` to `String`.
+        ident.to_string().into()
+    })
 }
 
 fn from_ast_unary_operator(op: ast::UnaryOperator) -> SqlResult<String> {

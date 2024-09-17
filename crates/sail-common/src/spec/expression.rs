@@ -163,6 +163,18 @@ impl From<ObjectName> for Vec<String> {
     }
 }
 
+impl<'a> From<&'a ObjectName> for Vec<&'a str> {
+    fn from(name: &'a ObjectName) -> Self {
+        name.0
+            .iter()
+            .map(|part| {
+                let part: &str = part.into();
+                part
+            })
+            .collect()
+    }
+}
+
 impl ObjectName {
     pub fn new_qualified(name: Identifier, mut qualifier: Vec<Identifier>) -> Self {
         qualifier.push(name);
