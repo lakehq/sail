@@ -2223,7 +2223,6 @@ impl PlanResolver<'_> {
             .iter()
             .map(|f| f.name().clone())
             .collect::<Vec<_>>();
-
         let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
             table_reference.clone(),
             &table_schema,
@@ -2272,6 +2271,9 @@ impl PlanResolver<'_> {
         condition: Option<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        // TODO:
+        //  1. Implement `ExecutionPlan` for `WriteOp::Delete`.
+        //  2. Filter condition not working (unable to resolve column name).
         let table_reference = self.resolve_table_reference(&table)?;
         let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
         let table_schema = self
@@ -2288,7 +2290,7 @@ impl PlanResolver<'_> {
         let input = match condition {
             Some(condition) => {
                 let condition = self
-                    .resolve_expression(condition, &table_schema, state)
+                    .resolve_expression(condition, input.schema(), state)
                     .await?;
                 LogicalPlan::Filter(plan::Filter::try_new(condition, Arc::new(input))?)
             }

@@ -92,6 +92,30 @@ def test_insert_with_full_table_name(spark):
     assert_frame_equal(actual, expected)
 
 
+@pytest.mark.skip(reason="DELETE ExecutionPlan not implemented")
+def test_delete_entire_table(spark):
+    spark.sql("CREATE TABLE meow (id INT, name STRING DEFAULT 'Sail', age INT)")
+    p_id1 = random.randint(0, 1000000)  # noqa: S311
+    p_id2 = random.randint(0, 1000000)  # noqa: S311
+    p_id3 = random.randint(0, 1000000)  # noqa: S311
+    spark.sql(f"INSERT INTO meow VALUES ({p_id1}, 'Shehab', 99), ({p_id2}, 'Heran', 2), ({p_id3}, 'Chen', 9000)")  # noqa: S608
+    spark.sql("DELETE FROM meow")
+    actual = spark.sql("SELECT * FROM meow").toPandas()
+    expected = pd.DataFrame(columns=["id", "name", "age"]).astype({"id": "int32", "name": "str", "age": "int32"})
+    assert_frame_equal(actual, expected)
+
+
+@pytest.mark.skip(reason="DELETE ExecutionPlan not implemented")
+def test_delete_with_filter(spark):
+    # TODO: Add test for DELETE with table alias and filter
+    p_id = random.randint(0, 1000000)  # noqa: S311
+    spark.sql(f"INSERT INTO person VALUES ({p_id}, 'Shehab', 99)")  # noqa: S608
+    spark.sql(f"DELETE FROM person WHERE id = {p_id}")  # noqa: S608
+    actual = spark.sql(f"SELECT * FROM person WHERE id = {p_id}").toPandas()  # noqa: S608
+    expected = pd.DataFrame(columns=["id", "name", "age"]).astype({"id": "int32", "name": "str", "age": "int32"})
+    assert_frame_equal(actual, expected)
+
+
 @pytest.mark.skip(reason="UPDATE ExecutionPlan not implemented")
 def test_update_single_value(spark):
     p_id = random.randint(0, 1000000)  # noqa: S311
