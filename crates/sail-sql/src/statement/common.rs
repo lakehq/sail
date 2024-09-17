@@ -10,6 +10,7 @@ use crate::expression::{from_ast_expression, from_ast_object_name};
 use crate::parser::{fail_on_extra_token, SparkDialect};
 use crate::query::from_ast_query;
 use crate::statement::create::{from_create_table_statement, parse_create_statement};
+use crate::statement::delete::delete_statement_to_plan;
 use crate::statement::explain::{from_explain_statement, parse_explain_statement};
 use crate::statement::update::update_statement_to_plan;
 use crate::utils::{
@@ -336,15 +337,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::Delete(ast::Delete {
-            tables: _,
-            from: _,
-            using: _,
-            selection: _,
-            returning: _,
-            order_by: _,
-            limit: _,
-        }) => Err(SqlError::todo("SQL delete")),
+        Statement::Delete(delete) => delete_statement_to_plan(delete),
         Statement::Drop {
             object_type,
             if_exists,

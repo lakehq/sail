@@ -528,6 +528,9 @@ impl PlanResolver<'_> {
                 self.resolve_command_update(*input, table, table_alias, assignments, state)
                     .await
             }
+            CommandNode::Delete { table, condition } => {
+                self.resolve_command_delete(table, condition, state).await
+            }
         }
     }
 
@@ -2220,7 +2223,6 @@ impl PlanResolver<'_> {
             .iter()
             .map(|f| f.name().clone())
             .collect::<Vec<_>>();
-
         let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
             table_reference.clone(),
             &table_schema,
@@ -2260,6 +2262,46 @@ impl PlanResolver<'_> {
             table_schema,
             WriteOp::Update,
             Arc::new(project(rename_logical_plan(input, &fields)?, exprs)?),
+        )))
+    }
+
+    async fn resolve_command_delete(
+        &self,
+        table: spec::ObjectName,
+        condition: Option<spec::Expr>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        // TODO:
+        //  1. Implement `ExecutionPlan` for `WriteOp::Delete`.
+        //  2. Filter condition not working (unable to resolve column name).
+        let table_reference = self.resolve_table_reference(&table)?;
+        let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
+        let table_schema = self
+            .resolve_table_schema(&table_reference, &table_provider, vec![])
+            .await?;
+        let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
+            table_reference.clone(),
+            &table_schema,
+        )?);
+        let table_source = provider_as_source(table_provider);
+
+        let input =
+            LogicalPlanBuilder::scan(table_reference.clone(), table_source, None)?.build()?;
+        let input = match condition {
+            Some(condition) => {
+                let condition = self
+                    .resolve_expression(condition, input.schema(), state)
+                    .await?;
+                LogicalPlan::Filter(plan::Filter::try_new(condition, Arc::new(input))?)
+            }
+            None => input,
+        };
+
+        Ok(LogicalPlan::Dml(DmlStatement::new(
+            table_reference,
+            table_schema,
+            WriteOp::Delete,
+            Arc::new(input),
         )))
     }
 

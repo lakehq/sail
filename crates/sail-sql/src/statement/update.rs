@@ -19,7 +19,7 @@ pub(crate) fn update_statement_to_plan(update: ast::Statement) -> SqlResult<spec
     };
 
     if returning.is_some() {
-        return Err(SqlError::todo("UPDATE-RETURNING not yet supported"));
+        return Err(SqlError::todo("UPDATE RETURNING not yet supported"));
     }
 
     let (table_name, table_alias) = match &table.relation {
