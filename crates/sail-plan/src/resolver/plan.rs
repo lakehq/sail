@@ -843,7 +843,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
-        let expr = self.resolve_sort_orders(order, schema, state).await?;
+        let expr = self.resolve_sort_orders(order, true, schema, state).await?;
         if is_global {
             Ok(LogicalPlan::Sort(plan::Sort {
                 expr,
@@ -884,18 +884,20 @@ impl PlanResolver<'_> {
             having,
             with_grouping_expressions,
         } = aggregate;
+
         let input = self.resolve_query_plan(*input, state).await?;
         let schema = input.schema();
-        let grouping = self
-            .resolve_named_expressions(grouping, schema, state)
-            .await?;
         let projections = self
             .resolve_named_expressions(projections, schema, state)
+            .await?;
+        let grouping = self
+            .resolve_named_expressions(grouping, schema, state)
             .await?;
         let having = match having {
             Some(having) => Some(self.resolve_expression(having, schema, state).await?),
             None => None,
         };
+
         self.rewrite_aggregate(
             input,
             projections,
@@ -2163,7 +2165,7 @@ impl PlanResolver<'_> {
         let table_reference = self.resolve_table_reference(&table)?;
         let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
         let schema = self
-            .resolve_table_schema(&table_reference, &table_provider, columns.iter().collect())
+            .resolve_table_schema(&table_reference, &table_provider, &columns)
             .await?;
         let df_schema = Arc::new(DFSchema::try_from_qualified_schema(
             table_reference.clone(),
@@ -2216,7 +2218,7 @@ impl PlanResolver<'_> {
         let table_reference = self.resolve_table_reference(&table)?;
         let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
         let table_schema = self
-            .resolve_table_schema(&table_reference, &table_provider, vec![])
+            .resolve_table_schema(&table_reference, &table_provider, &[])
             .await?;
         let fields = table_schema
             .fields
@@ -2277,7 +2279,7 @@ impl PlanResolver<'_> {
         let table_reference = self.resolve_table_reference(&table)?;
         let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
         let table_schema = self
-            .resolve_table_schema(&table_reference, &table_provider, vec![])
+            .resolve_table_schema(&table_reference, &table_provider, &[])
             .await?;
         let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
             table_reference.clone(),
@@ -2501,6 +2503,37 @@ impl PlanResolver<'_> {
         Ok(())
     }
 
+    fn resolve_expressions_positions(
+        &self,
+        exprs: Vec<NamedExpr>,
+        projections: &[NamedExpr],
+    ) -> PlanResult<Vec<NamedExpr>> {
+        let num_projections = projections.len() as i64;
+        exprs
+            .into_iter()
+            .map(|named_expr| {
+                let NamedExpr { expr, .. } = &named_expr;
+                match expr {
+                    Expr::Literal(scalar_value) => {
+                        let position = match scalar_value {
+                            ScalarValue::Int32(Some(position)) => *position as i64,
+                            ScalarValue::Int64(Some(position)) => *position,
+                            _ => return Ok(named_expr),
+                        };
+                        if position > 0_i64 && position <= num_projections {
+                            Ok(projections[(position - 1) as usize].clone())
+                        } else {
+                            Err(PlanError::invalid(format!(
+                                "Cannot resolve column position {position}. Valid positions are 1 to {num_projections}."
+                            )))
+                        }
+                    }
+                    _ => Ok(named_expr),
+                }
+            })
+            .collect()
+    }
+
     fn rewrite_aggregate(
         &self,
         input: LogicalPlan,
@@ -2510,6 +2543,7 @@ impl PlanResolver<'_> {
         with_grouping_expressions: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        let grouping = self.resolve_expressions_positions(grouping, &projections)?;
         let mut aggregate_candidates = projections
             .iter()
             .map(|x| x.expr.clone())

@@ -108,6 +108,7 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_sort_order(
         &self,
         sort: spec::SortOrder,
+        resolve_literals: bool,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<expr::Expr> {
@@ -128,22 +129,55 @@ impl PlanResolver<'_> {
             NullOrdering::NullsLast => false,
             NullOrdering::Unspecified => asc,
         };
-        Ok(expr::Expr::Sort(expr::Sort {
-            expr: Box::new(self.resolve_expression(*child, schema, state).await?),
-            asc,
-            nulls_first,
-        }))
+
+        match child.as_ref() {
+            spec::Expr::Literal(literal) if resolve_literals => {
+                let num_fields = schema.fields().len();
+                let position = match literal {
+                    spec::Literal::Integer(value) => *value as usize,
+                    spec::Literal::Long(value) => *value as usize,
+                    _ => {
+                        return Ok(expr::Expr::Sort(expr::Sort {
+                            expr: Box::new(self.resolve_expression(*child, schema, state).await?),
+                            asc,
+                            nulls_first,
+                        }))
+                    }
+                };
+                if position > 0 && position <= num_fields {
+                    Ok(expr::Expr::Sort(expr::Sort {
+                        expr: Box::new(expr::Expr::Column(Column::from(
+                            schema.qualified_field(position - 1),
+                        ))),
+                        asc,
+                        nulls_first,
+                    }))
+                } else {
+                    Err(PlanError::invalid(format!(
+                        "Cannot resolve column position {position}. Valid positions are 1 to {num_fields}."
+                    )))
+                }
+            }
+            _ => Ok(expr::Expr::Sort(expr::Sort {
+                expr: Box::new(self.resolve_expression(*child, schema, state).await?),
+                asc,
+                nulls_first,
+            })),
+        }
     }
 
     pub(super) async fn resolve_sort_orders(
         &self,
         sort: Vec<spec::SortOrder>,
+        resolve_literals: bool,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<Vec<expr::Expr>> {
         let mut results: Vec<expr::Expr> = Vec::with_capacity(sort.len());
         for s in sort {
-            let expr = self.resolve_sort_order(s, schema, state).await?;
+            let expr = self
+                .resolve_sort_order(s, resolve_literals, schema, state)
+                .await?;
             results.push(expr);
         }
         Ok(results)
@@ -800,7 +834,7 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let sort = self.resolve_sort_order(sort, schema, state).await?;
+        let sort = self.resolve_sort_order(sort, true, schema, state).await?;
         Ok(NamedExpr::new(vec![], sort))
     }
 
@@ -866,7 +900,10 @@ impl PlanResolver<'_> {
         let partition_by = self
             .resolve_expressions(partition_spec, schema, state)
             .await?;
-        let order_by = self.resolve_sort_orders(order_spec, schema, state).await?;
+        // Spark treats literals as constants in ORDER BY window definition
+        let order_by = self
+            .resolve_sort_orders(order_spec, false, schema, state)
+            .await?;
         let window_frame = if let Some(frame) = frame_spec {
             self.resolve_window_frame(frame, &order_by, schema)?
         } else {
