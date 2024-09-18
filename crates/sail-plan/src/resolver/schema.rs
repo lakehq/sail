@@ -52,9 +52,9 @@ impl PlanResolver<'_> {
         &self,
         table_reference: &TableReference,
         table_provider: &Arc<dyn TableProvider>,
-        columns: Vec<&spec::Identifier>,
+        columns: &[spec::Identifier],
     ) -> PlanResult<SchemaRef> {
-        let columns: Vec<&str> = columns.into_iter().map(|c| c.into()).collect();
+        let columns: Vec<&str> = columns.iter().map(|c| c.into()).collect();
         let schema = table_provider.schema();
         if columns.is_empty() {
             Ok(schema)

@@ -39,7 +39,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: session_window"
+        "failure": "error in DataFusion: Error during planning: cannot resolve attribute: ObjectName([Identifier(\"session_window\"), Identifier(\"start\")])"
       }
     },
     {
@@ -82,7 +82,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: session_window"
+        "failure": "error in DataFusion: Error during planning: cannot resolve attribute: ObjectName([Identifier(\"session_window\"), Identifier(\"start\")])"
       }
     },
     {
@@ -130,7 +130,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: window"
+        "failure": "error in DataFusion: Error during planning: cannot resolve attribute: ObjectName([Identifier(\"window\")])"
       }
     },
     {
@@ -174,7 +174,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: window"
+        "failure": "error in DataFusion: Error during planning: cannot resolve attribute: ObjectName([Identifier(\"window\"), Identifier(\"start\")])"
       }
     },
     {
@@ -216,7 +216,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: window"
+        "failure": "error in DataFusion: Error during planning: cannot resolve attribute: ObjectName([Identifier(\"window\"), Identifier(\"start\")])"
       }
     },
     {
