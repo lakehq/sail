@@ -33,8 +33,8 @@ pub(crate) fn delete_statement_to_plan(delete: ast::Delete) -> SqlResult<spec::P
     }
 
     let mut from = match from {
-        ast::FromTable::WithFromKeyword(v) => v,
-        ast::FromTable::WithoutKeyword(v) => v,
+        ast::FromTable::WithFromKeyword(tables) => tables,
+        ast::FromTable::WithoutKeyword(tables) => tables,
     };
     if from.len() != 1 {
         return Err(SqlError::invalid(format!(
