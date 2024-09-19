@@ -1,4 +1,5 @@
 use datafusion::arrow::datatypes::DataType;
+use datafusion::functions::expr_fn::nvl;
 use datafusion::functions_nested::expr_fn;
 use datafusion::functions_nested::position::array_position_udf;
 use datafusion_common::ScalarValue;
@@ -81,6 +82,13 @@ fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     expr_fn::array_element(array, element)
 }
 
+fn array_contains(array: expr::Expr, element: expr::Expr) -> expr::Expr {
+    nvl(
+        expr_fn::array_has(array, element),
+        lit(ScalarValue::Boolean(Some(false))),
+    )
+}
+
 pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -88,7 +96,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
         ("array", F::var_arg(expr_fn::make_array)),
         ("array_append", F::binary(expr_fn::array_append)),
         ("array_compact", F::unary(array_compact)),
-        ("array_contains", F::binary(expr_fn::array_has)),
+        ("array_contains", F::binary(array_contains)),
         ("array_distinct", F::unary(expr_fn::array_distinct)),
         ("array_except", F::binary(expr_fn::array_except)),
         ("array_insert", F::unknown("array_insert")),
