@@ -10,7 +10,7 @@ use sail_common::spec;
 use crate::cereal::{check_python_udf_version, PythonFunction};
 use crate::error::{PyUdfError, PyUdfResult};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PySparkUdfObject(pub PyObject);
 
 impl PythonFunction for PySparkUdfObject {

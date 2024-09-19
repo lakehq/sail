@@ -1,5 +1,4 @@
 use std::any::Any;
-use std::borrow::Cow;
 
 use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
 use datafusion::arrow::datatypes::DataType;
@@ -19,7 +18,7 @@ use crate::udf::{
     get_python_builtins_list_function, get_python_builtins_str_function, get_udf_name,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PySparkUDF {
     signature: Signature,
     function_name: String,
@@ -197,7 +196,7 @@ impl ScalarUDFImpl for PySparkUDF {
                             return Ok(result);
                         }
                         let result_type = result.get_type();
-                        let result_data_type_name: Cow<str> = result_type.name()?;
+                        let result_data_type_name = result_type.name()?;
                         if result_data_type_name != "str" {
                             let result = builtins_str.call1((result,))?;
                             return Ok(result);
@@ -232,7 +231,7 @@ impl ScalarUDFImpl for PySparkUDF {
             let result = builtins_list.call1((result,))?.get_item(0)?;
 
             let result_type = result.get_type();
-            let result_data_type_name: Cow<str> = result_type.name()?;
+            let result_data_type_name = result_type.name()?;
 
             let result = if matches!(self.eval_type, spec::PySparkUdfType::Batched)
                 && self.deterministic
