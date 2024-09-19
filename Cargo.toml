@@ -54,7 +54,7 @@ rand = "0.8.5"
 rand_chacha = "0.3.1"
 rand_distr = "0.4.3"
 url = "2.5.2"
-lexical-core = { version = "0.8.5", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
+lexical-core = { version = "1.0.1", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 aws-config = "1.5.5"
 aws-credential-types = "1.2.1"
 clap = { version = "4.5.17", features = ["derive"] }
@@ -70,19 +70,18 @@ opentelemetry-otlp = { version = "0.17.0", features = ["tls", "tls-roots"] }
 ######
 # The versions of the following dependencies are managed manually.
 ######
-datafusion = { version = "41.0.0", features = ["serde", "pyarrow"] }
-datafusion-common = { version = "41.0.0", features = ["object_store", "pyarrow"] }
-datafusion-expr = "41.0.0"
-datafusion-functions-nested = "41.0.0"
+datafusion = { version = "42.0.0", features = ["serde", "pyarrow"] }
+datafusion-common = { version = "42.0.0", features = ["object_store", "pyarrow"] }
+datafusion-expr = "42.0.0"
+datafusion-functions-nested = "42.0.0"
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
-# 0.21 breaks when datafusion has pyarrow enabled
-pyo3 = { version = "0.21.2", features = ["auto-initialize", "serde"] }
+pyo3 = { version = "0.22.0", features = ["auto-initialize", "serde"] }
 # Should be the equivalent of enabling the pyarrow feature in datafusion since we already have pyo3 in the workspace
-arrow = { version = "52.2.0", features = ["ffi", "pyarrow"] }
-arrow-cast = { version = "52.2.0" }
-arrow-schema = { version = "52.2.0" }
+arrow = { version = "53.0.0", features = ["ffi", "pyarrow"] }
+arrow-cast = { version = "53.0.0" }
+arrow-schema = { version = "53.0.0" }
 # The `object_store` version must match the one used in DataFusion.
-object_store = { version = "0.10.2", features = ["aws", "gcp", "http"] }
+object_store = { version = "0.11.0", features = ["aws", "gcp", "http", "azure"] }
 # We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.
 sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "f631629", features = ["serde", "visitor"] }
 ######
