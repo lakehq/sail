@@ -22,6 +22,7 @@ pub enum Expr {
     },
     UnresolvedStar {
         target: Option<ObjectName>,
+        // TODO: Parse Wildcard options
     },
     Alias {
         expr: Box<Expr>,

@@ -21,7 +21,7 @@ use datafusion_common::{
     Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference, ToDFSchema,
 };
 use datafusion_expr::builder::project;
-use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::{ScalarFunction, Sort};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::{
     columnize_expr, conjunction, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
@@ -1852,10 +1852,12 @@ impl PlanResolver<'_> {
         };
         let table_partition_cols: Vec<String> =
             table_partition_cols.into_iter().map(String::from).collect();
-        let file_sort_order: Vec<Vec<Expr>> = async {
-            let mut results: Vec<Vec<Expr>> = Vec::with_capacity(file_sort_order.len());
+        let file_sort_order: Vec<Vec<Sort>> = async {
+            let mut results: Vec<Vec<Sort>> = Vec::with_capacity(file_sort_order.len());
             for order in file_sort_order {
-                let order = self.resolve_expressions(order, &schema, state).await?;
+                let order = self
+                    .resolve_sort_orders(order, true, &schema, state)
+                    .await?;
                 results.push(order);
             }
             Ok(results) as PlanResult<_>
@@ -2633,15 +2635,19 @@ impl PlanResolver<'_> {
                 metadata,
             } = e;
             match expr {
-                Expr::Wildcard { qualifier: None } => {
-                    for e in expand_wildcard(schema, &input, None)? {
+                Expr::Wildcard {
+                    qualifier: None,
+                    options,
+                } => {
+                    for e in expand_wildcard(schema, &input, Some(&options))? {
                         projected.push(NamedExpr::try_from_column_expr(e, state)?)
                     }
                 }
                 Expr::Wildcard {
                     qualifier: Some(qualifier),
+                    options,
                 } => {
-                    for e in expand_qualified_wildcard(&qualifier, schema, None)? {
+                    for e in expand_qualified_wildcard(&qualifier, schema, Some(&options))? {
                         projected.push(NamedExpr::try_from_column_expr(e, state)?)
                     }
                 }

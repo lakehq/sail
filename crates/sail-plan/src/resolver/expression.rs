@@ -111,7 +111,7 @@ impl PlanResolver<'_> {
         resolve_literals: bool,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
-    ) -> PlanResult<expr::Expr> {
+    ) -> PlanResult<expr::Sort> {
         use spec::{NullOrdering, SortDirection};
 
         let spec::SortOrder {
@@ -137,32 +137,32 @@ impl PlanResolver<'_> {
                     spec::Literal::Integer(value) => *value as usize,
                     spec::Literal::Long(value) => *value as usize,
                     _ => {
-                        return Ok(expr::Expr::Sort(expr::Sort {
-                            expr: Box::new(self.resolve_expression(*child, schema, state).await?),
+                        return Ok(expr::Sort {
+                            expr: self.resolve_expression(*child, schema, state).await?,
                             asc,
                             nulls_first,
-                        }))
+                        })
                     }
                 };
                 if position > 0 && position <= num_fields {
-                    Ok(expr::Expr::Sort(expr::Sort {
-                        expr: Box::new(expr::Expr::Column(Column::from(
+                    Ok(expr::Sort {
+                        expr: expr::Expr::Column(Column::from(
                             schema.qualified_field(position - 1),
-                        ))),
+                        )),
                         asc,
                         nulls_first,
-                    }))
+                    })
                 } else {
                     Err(PlanError::invalid(format!(
                         "Cannot resolve column position {position}. Valid positions are 1 to {num_fields}."
                     )))
                 }
             }
-            _ => Ok(expr::Expr::Sort(expr::Sort {
-                expr: Box::new(self.resolve_expression(*child, schema, state).await?),
+            _ => Ok(expr::Sort {
+                expr: self.resolve_expression(*child, schema, state).await?,
                 asc,
                 nulls_first,
-            })),
+            }),
         }
     }
 
@@ -172,8 +172,8 @@ impl PlanResolver<'_> {
         resolve_literals: bool,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
-    ) -> PlanResult<Vec<expr::Expr>> {
-        let mut results: Vec<expr::Expr> = Vec::with_capacity(sort.len());
+    ) -> PlanResult<Vec<expr::Sort>> {
+        let mut results: Vec<expr::Sort> = Vec::with_capacity(sort.len());
         for s in sort {
             let expr = self
                 .resolve_sort_order(s, resolve_literals, schema, state)
@@ -186,7 +186,7 @@ impl PlanResolver<'_> {
     fn resolve_window_frame(
         &self,
         frame: spec::WindowFrame,
-        order_by: &[expr::Expr],
+        order_by: &[expr::Sort],
         schema: &DFSchemaRef,
     ) -> PlanResult<window_frame::WindowFrame> {
         use spec::WindowFrameType;
@@ -287,7 +287,7 @@ impl PlanResolver<'_> {
         &self,
         value: spec::WindowFrameBoundary,
         kind: WindowBoundaryKind,
-        order_by: &[expr::Expr],
+        order_by: &[expr::Sort],
         schema: &DFSchemaRef,
     ) -> PlanResult<window_frame::WindowFrameBound> {
         let unbounded = || match kind {
@@ -320,7 +320,7 @@ impl PlanResolver<'_> {
                             "range window frame requires exactly one order by expression",
                         ));
                     }
-                    let (data_type, _) = order_by[0].data_type_and_nullable(schema)?;
+                    let (data_type, _) = order_by[0].expr.data_type_and_nullable(schema)?;
                     let value = value.cast_to(&data_type)?;
                     // We always return the "following" bound since the value can be signed.
                     Ok(window_frame::WindowFrameBound::Following(value))
@@ -835,7 +835,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let sort = self.resolve_sort_order(sort, true, schema, state).await?;
-        Ok(NamedExpr::new(vec![], sort))
+        Ok(NamedExpr::new(vec![], sort.expr))
     }
 
     async fn resolve_expression_regex(
@@ -936,13 +936,18 @@ impl PlanResolver<'_> {
         _state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         // FIXME: column reference is parsed as qualifier
+        // TODO: Wildcard options
         let expr = if let Some(target) = target {
             let target: Vec<String> = target.into();
             expr::Expr::Wildcard {
                 qualifier: Some(target.join(".").into()),
+                options: Default::default(),
             }
         } else {
-            expr::Expr::Wildcard { qualifier: None }
+            expr::Expr::Wildcard {
+                qualifier: None,
+                options: Default::default(),
+            }
         };
         Ok(NamedExpr::new(vec!["*".to_string()], expr))
     }

@@ -154,10 +154,11 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
                     metadata: None,
                 })
             }
-            SelectItem::QualifiedWildcard(name, _) => Ok(spec::Expr::UnresolvedStar {
+            // TODO: Parse Wildcard options
+            SelectItem::QualifiedWildcard(name, _options) => Ok(spec::Expr::UnresolvedStar {
                 target: Some(from_ast_object_name(name)?),
             }),
-            SelectItem::Wildcard(_) => Ok(spec::Expr::UnresolvedStar { target: None }),
+            SelectItem::Wildcard(_options) => Ok(spec::Expr::UnresolvedStar { target: None }),
         })
         .collect::<SqlResult<_>>()?;
 
