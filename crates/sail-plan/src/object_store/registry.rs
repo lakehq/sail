@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+use chrono::format;
 use datafusion::execution::object_store::ObjectStoreRegistry;
 use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use object_store::aws::AmazonS3Builder;
@@ -19,13 +20,16 @@ use crate::object_store::ObjectStoreConfig;
 struct ObjectStoreKey {
     scheme: String,
     authority: String,
+    host: String,
 }
 
 impl ObjectStoreKey {
     fn new(url: &Url) -> Self {
+        let host = url.host_str().unwrap_or("").to_string();
         Self {
             scheme: url.scheme().to_string(),
             authority: url.authority().to_string(),
+            host
         }
     }
 }
@@ -49,6 +53,7 @@ impl DynamicObjectStoreRegistry {
             ObjectStoreKey {
                 scheme: "file".to_string(),
                 authority: "".to_string(),
+                host: "".to_string(),
             },
             Arc::new(LocalFileSystem::new()),
         );
@@ -84,8 +89,14 @@ impl DynamicObjectStoreRegistry {
             #[cfg(feature = "hdfs")]
             "hdfs" => {
 
-                //TODO: add configuration options for HDFS
-                let store = HdfsObjectStore::with_url(url.as_str())?;
+                let hdfs_url = format!(
+                    "hdfs://{}:{}",
+                    key.host,
+                    url.port().unwrap_or(9000)
+                );
+
+                let store = HdfsObjectStore::with_url(url.as_str()).unwrap();
+                println!("HDFS object store created {:#?}", store);
                 Ok(Arc::new(store))
             }
             _ => {

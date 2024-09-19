@@ -18,6 +18,16 @@ services:
       timeout: 5s
       retries: 6
 
+  hdfs:
+    build:
+      context: ./scripts/hadoop
+      dockerfile: Dockerfile
+    command: ["./hdfs-init.sh"]
+    ports:
+      - "9870:9870"
+      - "1900:9000"
+
+
 volumes:
   minio-data:
     driver: local
