@@ -1,4 +1,5 @@
 use datafusion::functions_aggregate::{average, count, min_max, sum};
+use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion_expr::{expr, BuiltInWindowFunction};
 
 use crate::error::{PlanError, PlanResult};
@@ -48,9 +49,7 @@ pub(crate) fn get_built_in_window_function(
         "rank" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
             BuiltInWindowFunction::Rank,
         )),
-        "row_number" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::RowNumber,
-        )),
+        "row_number" => Ok(expr::WindowFunctionDefinition::WindowUDF(row_number_udwf())),
         "percent_rank" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
             BuiltInWindowFunction::PercentRank,
         )),
