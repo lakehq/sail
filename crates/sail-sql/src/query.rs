@@ -3,7 +3,9 @@ use sqlparser::ast;
 use sqlparser::ast::PivotValueSource;
 
 use crate::error::{SqlError, SqlResult};
-use crate::expression::{from_ast_expression, from_ast_object_name, from_ast_order_by};
+use crate::expression::{
+    from_ast_expression, from_ast_ident, from_ast_object_name, from_ast_order_by,
+};
 use crate::literal::LiteralValue;
 use crate::operation::filter::query_plan_with_filter;
 use crate::operation::join::join_plan_from_tables;
@@ -154,11 +156,20 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
                     metadata: None,
                 })
             }
-            // TODO: Parse Wildcard options
-            SelectItem::QualifiedWildcard(name, _options) => Ok(spec::Expr::UnresolvedStar {
-                target: Some(from_ast_object_name(name)?),
-            }),
-            SelectItem::Wildcard(_options) => Ok(spec::Expr::UnresolvedStar { target: None }),
+            SelectItem::QualifiedWildcard(name, options) => {
+                let wildcard_options = from_ast_wildcard_options(options)?;
+                Ok(spec::Expr::UnresolvedStar {
+                    target: Some(from_ast_object_name(name)?),
+                    wildcard_options,
+                })
+            }
+            SelectItem::Wildcard(options) => {
+                let wildcard_options = from_ast_wildcard_options(options)?;
+                Ok(spec::Expr::UnresolvedStar {
+                    target: None,
+                    wildcard_options,
+                })
+            }
         })
         .collect::<SqlResult<_>>()?;
 
@@ -553,4 +564,81 @@ pub fn from_ast_with(with: ast::With) -> SqlResult<Vec<(spec::Identifier, spec::
         ctes.push((cte_name, plan));
     }
     Ok(ctes)
+}
+
+pub fn from_ast_wildcard_options(
+    wildcard_options: ast::WildcardAdditionalOptions,
+) -> SqlResult<spec::WildcardOptions> {
+    let exclude_columns = wildcard_options
+        .opt_exclude
+        .map(|x| -> SqlResult<Vec<spec::Identifier>> {
+            match x {
+                ast::ExcludeSelectItem::Single(ident) => Ok(vec![from_ast_ident(&ident, true)?]),
+                ast::ExcludeSelectItem::Multiple(idents) => Ok(idents
+                    .into_iter()
+                    .map(|x| from_ast_ident(&x, true))
+                    .collect::<SqlResult<Vec<spec::Identifier>>>()?),
+            }
+        })
+        .transpose()?;
+    let except_columns = wildcard_options
+        .opt_except
+        .map(|x| -> SqlResult<Vec<spec::Identifier>> {
+            let mut elements = vec![from_ast_ident(&x.first_element, true)?];
+            let additional_elements = x
+                .additional_elements
+                .into_iter()
+                .map(|x| from_ast_ident(&x, true))
+                .collect::<SqlResult<Vec<spec::Identifier>>>()?;
+            elements.extend(additional_elements);
+            Ok(elements)
+        })
+        .transpose()?;
+    let replace_columns = wildcard_options
+        .opt_replace
+        .map(|x| -> SqlResult<Vec<spec::WildcardReplaceColumn>> {
+            let replace_columns = x
+                .items
+                .iter()
+                .map(|item| {
+                    Ok(spec::WildcardReplaceColumn {
+                        expression: Box::new(from_ast_expression(item.expr.clone())?),
+                        column_name: from_ast_ident(&item.column_name, true)?,
+                        as_keyword: item.as_keyword,
+                    })
+                })
+                .collect::<SqlResult<Vec<spec::WildcardReplaceColumn>>>()?;
+            Ok(replace_columns)
+        })
+        .transpose()?;
+    let rename_columns = wildcard_options
+        .opt_rename
+        .map(|x| -> SqlResult<Vec<spec::IdentifierWithAlias>> {
+            match x {
+                ast::RenameSelectItem::Single(ident_with_alias) => {
+                    Ok(vec![spec::IdentifierWithAlias {
+                        identifier: from_ast_ident(&ident_with_alias.ident, true)?,
+                        alias: from_ast_ident(&ident_with_alias.alias, true)?,
+                    }])
+                }
+                ast::RenameSelectItem::Multiple(ident_with_aliases) => Ok(ident_with_aliases
+                    .into_iter()
+                    .map(|x| {
+                        Ok(spec::IdentifierWithAlias {
+                            identifier: from_ast_ident(&x.ident, true)?,
+                            alias: from_ast_ident(&x.alias, true)?,
+                        })
+                    })
+                    .collect::<SqlResult<Vec<spec::IdentifierWithAlias>>>()?),
+            }
+        })
+        .transpose()?;
+    let wildcard_options = spec::WildcardOptions {
+        ilike_pattern: wildcard_options.opt_ilike.map(|x| x.pattern),
+        exclude_columns,
+        except_columns,
+        replace_columns,
+        rename_columns,
+    };
+    Ok(wildcard_options)
 }

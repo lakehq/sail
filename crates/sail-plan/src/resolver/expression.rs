@@ -7,7 +7,9 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
+use datafusion::sql::unparser::expr_to_sql;
 use datafusion_common::{plan_err, Column, DFSchemaRef, DataFusionError};
+use datafusion_expr::expr::PlannedReplaceSelectItem;
 use datafusion_expr::{expr, expr_fn, window_frame, ExprSchemable, Operator, ScalarUDF};
 use num_traits::Float;
 use sail_common::spec;
@@ -358,8 +360,11 @@ impl PlanResolver<'_> {
                 )
                 .await
             }
-            Expr::UnresolvedStar { target } => {
-                self.resolve_expression_wildcard(target, schema, state)
+            Expr::UnresolvedStar {
+                target,
+                wildcard_options,
+            } => {
+                self.resolve_expression_wildcard(target, wildcard_options, schema, state)
                     .await
             }
             Expr::Alias {
@@ -932,24 +937,137 @@ impl PlanResolver<'_> {
     async fn resolve_expression_wildcard(
         &self,
         target: Option<spec::ObjectName>,
-        _schema: &DFSchemaRef,
-        _state: &mut PlanResolverState,
+        wildcard_options: spec::WildcardOptions,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        let wildcard_options = self
+            .resolve_wildcard_options(wildcard_options, schema, state)
+            .await?;
         // FIXME: column reference is parsed as qualifier
-        // TODO: Wildcard options
         let expr = if let Some(target) = target {
             let target: Vec<String> = target.into();
             expr::Expr::Wildcard {
                 qualifier: Some(target.join(".").into()),
-                options: Default::default(),
+                options: wildcard_options,
             }
         } else {
             expr::Expr::Wildcard {
                 qualifier: None,
-                options: Default::default(),
+                options: wildcard_options,
             }
         };
         Ok(NamedExpr::new(vec!["*".to_string()], expr))
+    }
+
+    async fn resolve_wildcard_options(
+        &self,
+        wildcard_options: spec::WildcardOptions,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<expr::WildcardOptions> {
+        use datafusion::sql::sqlparser::ast as df_ast;
+
+        let ilike = wildcard_options
+            .ilike_pattern
+            .map(|x| df_ast::IlikeSelectItem { pattern: x });
+        let exclude = wildcard_options
+            .exclude_columns
+            .map(|x| {
+                let exclude = if x.len() > 1 {
+                    df_ast::ExcludeSelectItem::Multiple(
+                        x.into_iter().map(df_ast::Ident::new).collect(),
+                    )
+                } else if let Some(x) = x.into_iter().next() {
+                    df_ast::ExcludeSelectItem::Single(df_ast::Ident::new(x))
+                } else {
+                    return Err(PlanError::invalid(
+                        "exclude columns must have at least one column",
+                    ));
+                };
+                Ok(exclude)
+            })
+            .transpose()?;
+        let except = wildcard_options
+            .except_columns
+            .map(|mut x| {
+                let except = if x.len() > 1 {
+                    let first_element = x.pop().ok_or_else(|| {
+                        PlanError::invalid("except columns must have at least one column")
+                    })?;
+                    let additional_elements = x.into_iter().map(df_ast::Ident::new).collect();
+                    df_ast::ExceptSelectItem {
+                        first_element: df_ast::Ident::new(first_element),
+                        additional_elements,
+                    }
+                } else if let Some(x) = x.into_iter().next() {
+                    df_ast::ExceptSelectItem {
+                        first_element: df_ast::Ident::new(x),
+                        additional_elements: vec![],
+                    }
+                } else {
+                    return Err(PlanError::invalid(
+                        "except columns must have at least one column",
+                    ));
+                };
+                Ok(except)
+            })
+            .transpose()?;
+        let replace = match wildcard_options.replace_columns {
+            Some(x) => {
+                let mut items = Vec::with_capacity(x.len());
+                let mut planned_expressions = Vec::with_capacity(x.len());
+                for elem in x.into_iter() {
+                    let expression = self
+                        .resolve_expression(*elem.expression, schema, state)
+                        .await?;
+                    let item = df_ast::ReplaceSelectElement {
+                        expr: expr_to_sql(&expression)?,
+                        column_name: df_ast::Ident::new(elem.column_name),
+                        as_keyword: elem.as_keyword,
+                    };
+                    items.push(item);
+                    planned_expressions.push(expression);
+                }
+                Some(PlannedReplaceSelectItem {
+                    items,
+                    planned_expressions,
+                })
+            }
+            None => None,
+        };
+        let rename = wildcard_options
+            .rename_columns
+            .map(|x| {
+                let exclude = if x.len() > 1 {
+                    df_ast::RenameSelectItem::Multiple(
+                        x.into_iter()
+                            .map(|x| df_ast::IdentWithAlias {
+                                ident: df_ast::Ident::new(x.identifier),
+                                alias: df_ast::Ident::new(x.alias),
+                            })
+                            .collect(),
+                    )
+                } else if let Some(x) = x.into_iter().next() {
+                    df_ast::RenameSelectItem::Single(df_ast::IdentWithAlias {
+                        ident: df_ast::Ident::new(x.identifier),
+                        alias: df_ast::Ident::new(x.alias),
+                    })
+                } else {
+                    return Err(PlanError::invalid(
+                        "exclude columns must have at least one column",
+                    ));
+                };
+                Ok(exclude)
+            })
+            .transpose()?;
+        Ok(expr::WildcardOptions {
+            ilike,
+            exclude,
+            except,
+            replace,
+            rename,
+        })
     }
 
     async fn resolve_expression_extract_value(
