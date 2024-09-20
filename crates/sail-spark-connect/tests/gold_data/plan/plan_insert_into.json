@@ -24,7 +24,14 @@
                   "expressions": [
                     {
                       "unresolvedStar": {
-                        "target": null
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
                       }
                     }
                   ]
@@ -69,7 +76,14 @@
                   "expressions": [
                     {
                       "unresolvedStar": {
-                        "target": null
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
                       }
                     }
                   ]
@@ -114,7 +128,14 @@
                   "expressions": [
                     {
                       "unresolvedStar": {
-                        "target": null
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
                       }
                     }
                   ]
