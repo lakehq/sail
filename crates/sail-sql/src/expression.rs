@@ -806,6 +806,13 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                 .collect::<SqlResult<Vec<_>>>()?;
             Ok(spec::Expr::GroupingSets(sets))
         }
+        Expr::Struct { values, fields } => from_ast_struct(values, fields),
+        Expr::Tuple(values) => match values.first() {
+            Some(Expr::Identifier(_)) | Some(Expr::Value(_)) => from_ast_struct(values, vec![]),
+            other => Err(SqlError::unsupported(format!(
+                "Only tuple of identifiers or values are supported, found: {other:?}"
+            ))),
+        },
         Expr::JsonAccess { .. }
         | Expr::InUnnest { .. }
         | Expr::AnyOp { .. }
@@ -817,14 +824,36 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         | Expr::Position { .. }
         | Expr::Collate { .. }
         | Expr::IntroducedString { .. }
-        | Expr::Tuple(_)
         | Expr::Array(_)
         | Expr::MatchAgainst { .. }
-        | Expr::Struct { .. }
         | Expr::Dictionary(_)
         | Expr::OuterJoin(_)
         | Expr::Prior(_) => Err(SqlError::unsupported(format!("expression: {:?}", expr))),
     }
+}
+
+pub fn from_ast_struct(
+    values: Vec<ast::Expr>,
+    fields: Vec<ast::StructField>,
+) -> SqlResult<spec::Expr> {
+    if !fields.is_empty() {
+        return Err(SqlError::unsupported("struct fields"));
+    }
+    let is_named_struct = values
+        .iter()
+        .any(|value| matches!(value, ast::Expr::Named { .. }));
+    let args = values
+        .into_iter()
+        .map(from_ast_expression)
+        .collect::<SqlResult<Vec<_>>>()?;
+    Ok(spec::Expr::from(Function {
+        name: if is_named_struct {
+            "named_struct".to_string()
+        } else {
+            "struct".to_string()
+        },
+        args,
+    }))
 }
 
 pub fn parse_object_name(s: &str) -> SqlResult<spec::ObjectName> {

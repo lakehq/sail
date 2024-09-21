@@ -133,25 +133,221 @@
     {
       "input": "(a, b)",
       "output": {
-        "failure": "not supported: expression: Tuple([Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None })])"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "struct",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
       "input": "(a, b) in (select c from d)",
       "output": {
-        "failure": "not supported: expression: Tuple([Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None })])"
+        "success": {
+          "inSubquery": {
+            "expr": {
+              "unresolvedFunction": {
+                "functionName": "struct",
+                "arguments": [
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "a"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "b"
+                      ],
+                      "planId": null
+                    }
+                  }
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
+              }
+            },
+            "subquery": {
+              "project": {
+                "input": {
+                  "read": {
+                    "namedTable": {
+                      "name": [
+                        "d"
+                      ],
+                      "options": []
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "c"
+                      ],
+                      "planId": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "negated": false
+          }
+        }
       }
     },
     {
       "input": "(a, b, c)",
       "output": {
-        "failure": "not supported: expression: Tuple([Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None }), Identifier(Ident { value: \"c\", quote_style: None })])"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "struct",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "c"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
       "input": "(a, b, c) in (select d, e, f from g)",
       "output": {
-        "failure": "not supported: expression: Tuple([Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None }), Identifier(Ident { value: \"c\", quote_style: None })])"
+        "success": {
+          "inSubquery": {
+            "expr": {
+              "unresolvedFunction": {
+                "functionName": "struct",
+                "arguments": [
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "a"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "b"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "c"
+                      ],
+                      "planId": null
+                    }
+                  }
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
+              }
+            },
+            "subquery": {
+              "project": {
+                "input": {
+                  "read": {
+                    "namedTable": {
+                      "name": [
+                        "g"
+                      ],
+                      "options": []
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "d"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "e"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "f"
+                      ],
+                      "planId": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "negated": false
+          }
+        }
       }
     },
     {
