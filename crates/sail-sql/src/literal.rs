@@ -856,9 +856,36 @@ fn parse_multi_unit_interval(
             };
             Ok(spec::Literal::YearMonthInterval { months: n })
         }
-        (true, true) => Err(SqlError::invalid(
-            "cannot mix year-month and day-time fields in interval",
-        )),
+        (true, true) => {
+            let days = delta.num_days();
+            let remainder = delta - chrono::Duration::days(days);
+            let microseconds = remainder.num_microseconds().ok_or_else(error)?;
+
+            let months = if negated {
+                months.checked_mul(-1).ok_or_else(error)?
+            } else {
+                months
+            };
+            let days = if negated {
+                days.checked_mul(-1).ok_or_else(error)?
+            } else {
+                days
+            };
+            let days = i32::try_from(days).map_err(|_| {
+                SqlError::invalid(format!("Days value out of range for i32: {days}"))
+            })?;
+            let microseconds = if negated {
+                microseconds.checked_mul(-1).ok_or_else(error)?
+            } else {
+                microseconds
+            };
+
+            Ok(spec::Literal::CalendarInterval {
+                months,
+                days,
+                microseconds,
+            })
+        }
         (false, _) => {
             let microseconds = delta.num_microseconds().ok_or_else(error)?;
             let n = if negated {
