@@ -14,7 +14,7 @@ pub const SQL_DECIMAL_MAX_SCALE: i8 = 38;
 
 pub fn parse_data_type(sql: &str) -> SqlResult<spec::DataType> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
-    if parser.peek_token() == Token::EOF {
+    if parser.peek_token().token == Token::EOF {
         return Err(SqlError::invalid("empty data type"));
     }
     let data_type = parser.parse_data_type()?;
