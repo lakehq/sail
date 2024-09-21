@@ -434,6 +434,7 @@ impl TryFrom<UnresolvedNamedLambdaVariable> for spec::UnresolvedNamedLambdaVaria
 mod tests {
     use std::thread;
 
+    use sail_common::spec;
     use sail_common::tests::test_gold_set;
     use sail_sql::expression::parse_wildcard_expression;
 
@@ -450,7 +451,9 @@ mod tests {
                 |sql: String| {
                     let expr = parse_wildcard_expression(&sql)?;
                     if sql.len() > 128 {
-                        Err(SparkError::internal("result omitted for long expression"))
+                        Ok(spec::Expr::Literal(spec::Literal::String(
+                            "Result omitted for long expression.".to_string(),
+                        )))
                     } else {
                         Ok(expr)
                     }
