@@ -147,7 +147,7 @@
         }
       },
       "output": {
-        "failure": "not supported: named function argument"
+        "success": "ok"
       }
     },
     {
@@ -193,7 +193,7 @@
         }
       },
       "output": {
-        "failure": "not supported: named function argument"
+        "success": "ok"
       }
     },
     {

@@ -2557,31 +2557,154 @@
     {
       "input": "encode('abc', charset => 'utf' || '-8')",
       "output": {
-        "failure": "not supported: named function argument"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "encode",
+            "arguments": [
+              {
+                "literal": {
+                  "string": "abc"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "concat",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "utf"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "-8"
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
       "input": "encode('abc', charset => 'utf-8')",
       "output": {
-        "failure": "not supported: named function argument"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "encode",
+            "arguments": [
+              {
+                "literal": {
+                  "string": "abc"
+                }
+              },
+              {
+                "literal": {
+                  "string": "utf-8"
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
       "input": "encode(charset => 'utf-8', 'abc')",
       "output": {
-        "failure": "not supported: named function argument"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "encode",
+            "arguments": [
+              {
+                "literal": {
+                  "string": "utf-8"
+                }
+              },
+              {
+                "literal": {
+                  "string": "abc"
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
       "input": "encode(value => 'abc', charset => 'utf-8')",
       "output": {
-        "failure": "not supported: named function argument"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "encode",
+            "arguments": [
+              {
+                "literal": {
+                  "string": "abc"
+                }
+              },
+              {
+                "literal": {
+                  "string": "utf-8"
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
       "input": "encode(value => ((select '1')), charset => 'utf-8')",
       "output": {
-        "failure": "not supported: named function argument"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "encode",
+            "arguments": [
+              {
+                "scalarSubquery": {
+                  "subquery": {
+                    "project": {
+                      "input": {
+                        "empty": {
+                          "produceOneRow": true
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expressions": [
+                        {
+                          "literal": {
+                            "string": "1"
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  }
+                }
+              },
+              {
+                "literal": {
+                  "string": "utf-8"
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {

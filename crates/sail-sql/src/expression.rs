@@ -233,8 +233,7 @@ fn from_ast_function_arg(arg: ast::FunctionArg) -> SqlResult<spec::Expr> {
     use ast::{FunctionArg, FunctionArgExpr};
 
     match arg {
-        FunctionArg::Named { .. } => Err(SqlError::unsupported("named function argument")),
-        FunctionArg::Unnamed(arg) => {
+        FunctionArg::Unnamed(arg) | FunctionArg::Named { arg, .. } => {
             let arg = match arg {
                 FunctionArgExpr::Expr(e) => from_ast_expression(e)?,
                 FunctionArgExpr::QualifiedWildcard(name) => spec::Expr::UnresolvedStar {
