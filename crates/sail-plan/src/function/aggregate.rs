@@ -112,7 +112,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("regr_sxy", F::default_agg(regr::regr_sxy_udaf)),
         ("regr_syy", F::default_agg(regr::regr_syy_udaf)),
         ("skewness", F::unknown_agg("skewness")),
-        ("F::default_agg", F::default_agg(bool_and_or::bool_or_udaf)),
+        ("some", F::default_agg(bool_and_or::bool_or_udaf)),
         ("std", F::default_agg(stddev::stddev_udaf)),
         ("stddev", F::default_agg(stddev::stddev_udaf)),
         ("stddev_pop", F::default_agg(stddev::stddev_pop_udaf)),
