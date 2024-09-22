@@ -70,6 +70,7 @@ echo "initializing dfs content"
 
 echo '{ "name": "Bob" }' > /tmp/test.json
 /opt/hadoop/bin/hdfs dfs -put /tmp/test.json /user/${HADOOP_USER_NAME}/test.json
+tail -f /dev/null
 EOF
 chmod +x /usr/bin/hdfs-init.sh
 RUNEND
