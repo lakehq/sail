@@ -81,34 +81,3 @@ pub(crate) fn from_ast_value(value: ast::Value) -> SqlResult<spec::Expr> {
         }
     }
 }
-
-/// [Credit]: <https://github.com/apache/datafusion/blob/64a38963cb10b629ddfbd97e08208cc1c717ef2e/datafusion/sql/src/expr/value.rs#L288-L306>
-pub(crate) fn try_decode_hex_literal(s: &str) -> Option<Vec<u8>> {
-    let hex_bytes = s.as_bytes();
-
-    let mut decoded_bytes = Vec::with_capacity((hex_bytes.len() + 1) / 2);
-
-    let start_idx = hex_bytes.len() % 2;
-    if start_idx > 0 {
-        // The first byte is formed of only one char.
-        decoded_bytes.push(try_decode_hex_char(hex_bytes[0])?);
-    }
-
-    for i in (start_idx..hex_bytes.len()).step_by(2) {
-        let high = try_decode_hex_char(hex_bytes[i])?;
-        let low = try_decode_hex_char(hex_bytes[i + 1])?;
-        decoded_bytes.push(high << 4 | low);
-    }
-
-    Some(decoded_bytes)
-}
-
-/// [Credit]: <https://github.com/apache/datafusion/blob/64a38963cb10b629ddfbd97e08208cc1c717ef2e/datafusion/sql/src/expr/value.rs#L311-L318>
-const fn try_decode_hex_char(c: u8) -> Option<u8> {
-    match c {
-        b'A'..=b'F' => Some(c - b'A' + 10),
-        b'a'..=b'f' => Some(c - b'a' + 10),
-        b'0'..=b'9' => Some(c - b'0'),
-        _ => None,
-    }
-}

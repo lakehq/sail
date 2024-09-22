@@ -15,7 +15,6 @@ use sqlparser::parser::Parser;
 use {chrono, chrono_tz};
 
 use crate::error::{SqlError, SqlResult};
-use crate::expression::value::try_decode_hex_literal;
 use crate::parser::{fail_on_extra_token, SparkDialect};
 
 lazy_static! {
@@ -354,21 +353,17 @@ impl TryFrom<String> for LiteralValue<Vec<u8>> {
         if !BINARY_REGEX.is_match(&value) {
             return Err(SqlError::invalid(format!("hex string: {:?}", value)));
         }
-        // let bytes = value
-        //     .as_bytes()
-        //     .chunks(2)
-        //     .map(|chunk| {
-        //         let chunk = std::str::from_utf8(chunk)
-        //             .map_err(|_| SqlError::invalid(format!("hex string: {:?}", value)))?;
-        //         u8::from_str_radix(chunk, 16)
-        //             .map_err(|_| SqlError::invalid(format!("hex string: {:?}", value)))
-        //     })
-        //     .collect::<SqlResult<_>>()?;
-        if let Some(bytes) = try_decode_hex_literal(&value) {
-            Ok(LiteralValue(bytes))
-        } else {
-            Err(SqlError::invalid(format!("hex string: {:?}", value)))
-        }
+        let bytes = value
+            .as_bytes()
+            .chunks(2)
+            .map(|chunk| {
+                let chunk = std::str::from_utf8(chunk)
+                    .map_err(|_| SqlError::invalid(format!("hex string: {:?}", value)))?;
+                u8::from_str_radix(chunk, 16)
+                    .map_err(|_| SqlError::invalid(format!("hex string: {:?}", value)))
+            })
+            .collect::<SqlResult<_>>()?;
+        Ok(LiteralValue(bytes))
     }
 }
 
