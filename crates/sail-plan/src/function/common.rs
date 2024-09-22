@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use datafusion_expr::{expr, BinaryExpr, Operator, ScalarUDF, ScalarUDFImpl};
+use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::{expr, AggregateUDF, BinaryExpr, Operator, ScalarUDF, ScalarUDFImpl};
 
 use crate::error::{PlanError, PlanResult};
 use crate::utils::ItemTaker;
 
 pub(crate) type Function = Arc<dyn Fn(Vec<expr::Expr>) -> PlanResult<expr::Expr> + Send + Sync>;
+pub(crate) type AggFunction =
+    Arc<dyn Fn(Vec<expr::Expr>, bool) -> PlanResult<expr::Expr> + Send + Sync>;
 
 pub(crate) struct FunctionBuilder;
 
@@ -123,5 +126,37 @@ impl FunctionBuilder {
     pub fn unknown(name: &str) -> Function {
         let name = name.to_string();
         Arc::new(move |_| Err(PlanError::todo(format!("function: {name}"))))
+    }
+
+    pub fn default_agg<F>(f: F) -> AggFunction
+    where
+        F: Fn() -> Arc<AggregateUDF> + Send + Sync + 'static,
+    {
+        Arc::new(move |args, distinct| {
+            Ok(expr::Expr::AggregateFunction(AggregateFunction {
+                func: f(),
+                args,
+                distinct,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            }))
+        })
+    }
+
+    pub fn custom_agg<F>(f: F) -> AggFunction
+    where
+        F: Fn(Vec<expr::Expr>, bool) -> PlanResult<expr::Expr> + Send + Sync + 'static,
+    {
+        Arc::new(f)
+    }
+
+    pub fn unknown_agg(name: &str) -> AggFunction {
+        let name = name.to_string();
+        Arc::new(move |_, _| {
+            Err(PlanError::todo(format!(
+                "unknown aggregate function: {name}"
+            )))
+        })
     }
 }

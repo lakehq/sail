@@ -776,10 +776,8 @@ impl PlanResolver<'_> {
             })
         } else if let Ok(func) = get_built_in_function(function_name.as_str()) {
             func(arguments.clone())?
-        } else if let Ok(func) =
-            get_built_in_aggregate_function(function_name.as_str(), arguments.clone(), is_distinct)
-        {
-            func
+        } else if let Ok(func) = get_built_in_aggregate_function(function_name.as_str()) {
+            func(arguments.clone(), is_distinct)?
         } else {
             return Err(PlanError::unsupported(format!(
                 "unknown function: {function_name}",
