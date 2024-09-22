@@ -22,10 +22,22 @@ services:
     build:
       context: ./scripts/hadoop
       dockerfile: Dockerfile
-    command: ["./hdfs-init.sh"]
+    environment:
+      HADOOP_USER: root
     ports:
       - "9870:9870"
-      - "1900:9000"
+      - "9000:9000"
+      - "9864:9864"
+    stop_grace_period: 90s
+
+
+    healthcheck:
+      test: ["CMD", "/opt/hadoop/bin/hdfs", "-test", "-e", "/user/root/test.json"]
+      start_period: 60s
+      interval: 60s
+      timeout: 30s
+      retries: 5
+
 
 
 volumes:

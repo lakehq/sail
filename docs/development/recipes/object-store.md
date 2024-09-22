@@ -42,6 +42,7 @@ env \
   AWS_ENDPOINT="http://localhost:19000" \
   AWS_VIRTUAL_HOSTED_STYLE_REQUEST="false" \
   AWS_ALLOW_HTTP="true" \
+  HADOOP_USER_NAME="sail" \
   scripts/spark-tests/run-server.sh
 ```
 
