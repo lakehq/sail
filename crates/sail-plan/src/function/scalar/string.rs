@@ -151,5 +151,6 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("ucase", F::unary(expr_fn::upper)),
         ("unbase64", F::unary(unbase64)),
         ("upper", F::unary(expr_fn::upper)),
+        ("strpos", F::binary(expr_fn::strpos)),
     ]
 }

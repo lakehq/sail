@@ -890,17 +890,24 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
             };
             Ok(spec::Expr::Cast { expr, cast_to_type })
         }
+        Expr::Position { expr, r#in } => {
+            let string = from_ast_expression(*r#in)?;
+            let substring = from_ast_expression(*expr)?;
+            Ok(spec::Expr::from(Function {
+                name: "strpos".to_string(),
+                args: vec![string, substring],
+            }))
+        }
         Expr::JsonAccess { .. }
         | Expr::InUnnest { .. }
         | Expr::Convert { .. }
-        | Expr::Position { .. }
         | Expr::Collate { .. }
         | Expr::IntroducedString { .. }
         | Expr::Array(_)
         | Expr::MatchAgainst { .. }
         | Expr::Dictionary(_)
         | Expr::OuterJoin(_)
-        | Expr::Prior(_) => Err(SqlError::unsupported(format!("expression: {:?}", expr))),
+        | Expr::Prior(_) => Err(SqlError::unsupported(format!("expression: {expr:?}"))),
     }
 }
 

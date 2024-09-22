@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "not supported: expression: Position { expr: Value(SingleQuotedString(\"bar\")), in: Value(SingleQuotedString(\"foobarbar\")) }"
+        "success": "ok"
       }
     },
     {
