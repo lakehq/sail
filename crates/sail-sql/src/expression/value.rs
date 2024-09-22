@@ -54,7 +54,7 @@ pub(crate) fn from_ast_value(value: ast::Value) -> SqlResult<spec::Expr> {
                 "number postfix: {:?}{:?}",
                 value, postfix
             ))),
-        }
+        },
         Value::HexStringLiteral(value) => {
             let value: LiteralValue<Vec<u8>> = value.try_into()?;
             spec::Expr::try_from(value)

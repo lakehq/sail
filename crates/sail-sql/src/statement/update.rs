@@ -2,7 +2,9 @@ use sail_common::spec;
 use sqlparser::ast;
 
 use crate::error::{SqlError, SqlResult};
-use crate::expression::common::{from_ast_expression, from_ast_ident, from_ast_object_name_normalized};
+use crate::expression::common::{
+    from_ast_expression, from_ast_ident, from_ast_object_name_normalized,
+};
 use crate::operation::filter::query_plan_with_filter;
 use crate::operation::join::join_plan_from_tables;
 
