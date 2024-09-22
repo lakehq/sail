@@ -2,7 +2,7 @@ use sail_common::spec;
 use sqlparser::ast;
 
 use crate::error::{SqlError, SqlResult};
-use crate::expression::{from_ast_expression, from_ast_object_name_normalized};
+use crate::expression::common::{from_ast_expression, from_ast_object_name_normalized};
 
 pub(crate) fn delete_statement_to_plan(delete: ast::Delete) -> SqlResult<spec::Plan> {
     let ast::Delete {

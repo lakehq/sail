@@ -6,7 +6,7 @@ use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Token;
 
 use crate::error::{SqlError, SqlResult};
-use crate::expression::{from_ast_expression, from_ast_object_name};
+use crate::expression::common::{from_ast_expression, from_ast_object_name};
 use crate::parser::{fail_on_extra_token, SparkDialect};
 use crate::query::from_ast_query;
 use crate::statement::create::{from_create_table_statement, parse_create_statement};
