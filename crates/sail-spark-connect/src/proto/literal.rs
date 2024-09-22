@@ -41,7 +41,10 @@ impl TryFrom<Literal> for spec::Literal {
             }
             LiteralType::String(x) => spec::Literal::String(x),
             LiteralType::Date(x) => spec::Literal::Date { days: x },
-            LiteralType::Timestamp(x) => spec::Literal::Timestamp { microseconds: x },
+            LiteralType::Timestamp(x) => spec::Literal::TimestampMicrosecond {
+                microseconds: x,
+                timezone: None,
+            },
             LiteralType::TimestampNtz(x) => spec::Literal::TimestampNtz { microseconds: x },
             LiteralType::CalendarInterval(x) => spec::Literal::CalendarInterval {
                 months: x.months,

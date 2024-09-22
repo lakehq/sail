@@ -89,6 +89,13 @@ fn array_contains(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     )
 }
 
+fn array_contains_all(array: expr::Expr, element: expr::Expr) -> expr::Expr {
+    nvl(
+        expr_fn::array_has_all(array, element),
+        lit(ScalarValue::Boolean(Some(false))),
+    )
+}
+
 pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -97,6 +104,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
         ("array_append", F::binary(expr_fn::array_append)),
         ("array_compact", F::unary(array_compact)),
         ("array_contains", F::binary(array_contains)),
+        ("array_contains_all", F::binary(array_contains_all)),
         ("array_distinct", F::unary(expr_fn::array_distinct)),
         ("array_except", F::binary(expr_fn::array_except)),
         ("array_insert", F::unknown("array_insert")),

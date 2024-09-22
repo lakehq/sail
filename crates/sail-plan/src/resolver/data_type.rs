@@ -47,13 +47,10 @@ impl PlanResolver<'_> {
             DataType::Char { .. } => Ok(adt::DataType::Utf8),
             DataType::VarChar { .. } => Ok(adt::DataType::Utf8),
             DataType::Date => Ok(adt::DataType::Date32),
-            DataType::Timestamp => {
-                let timezone: Arc<str> = Arc::from(self.config.time_zone.as_str());
-                Ok(adt::DataType::Timestamp(
-                    adt::TimeUnit::Microsecond,
-                    Some(timezone),
-                ))
-            }
+            DataType::Timestamp(time_unit, timezone) => Ok(adt::DataType::Timestamp(
+                Self::resolve_time_unit(time_unit)?,
+                self.resolve_timezone(timezone)?,
+            )),
             DataType::TimestampNtz => {
                 Ok(adt::DataType::Timestamp(adt::TimeUnit::Microsecond, None))
             }
@@ -116,7 +113,10 @@ impl PlanResolver<'_> {
             adt::DataType::Float64 => Ok(DataType::Double),
             // TODO: support timestamp precision in data type spec
             adt::DataType::Timestamp(_, None) => Ok(DataType::TimestampNtz),
-            adt::DataType::Timestamp(_, Some(_)) => Ok(DataType::Timestamp),
+            adt::DataType::Timestamp(time_unit, Some(timezone)) => Ok(DataType::Timestamp(
+                Some(Self::unresolve_time_unit(Some(time_unit))?),
+                Some(timezone),
+            )),
             adt::DataType::Date32 => Ok(DataType::Date),
             adt::DataType::Date64 => Err(PlanError::unsupported("date64")),
             adt::DataType::Time32(_) => Err(PlanError::unsupported("time32")),
@@ -290,5 +290,42 @@ impl PlanResolver<'_> {
         Ok(spec::Schema {
             fields: spec::Fields(fields.into()),
         })
+    }
+
+    pub fn resolve_time_unit(time_unit: Option<spec::TimeUnit>) -> PlanResult<adt::TimeUnit> {
+        match time_unit {
+            None => Ok(adt::TimeUnit::Microsecond),
+            Some(unit) => match unit {
+                spec::TimeUnit::Second => Ok(adt::TimeUnit::Second),
+                spec::TimeUnit::Millisecond => Ok(adt::TimeUnit::Millisecond),
+                spec::TimeUnit::Microsecond => Ok(adt::TimeUnit::Microsecond),
+                spec::TimeUnit::Nanosecond => Ok(adt::TimeUnit::Nanosecond),
+            },
+        }
+    }
+
+    pub fn unresolve_time_unit(time_unit: Option<adt::TimeUnit>) -> PlanResult<spec::TimeUnit> {
+        match time_unit {
+            None => Ok(spec::TimeUnit::Microsecond),
+            Some(unit) => match unit {
+                adt::TimeUnit::Second => Ok(spec::TimeUnit::Second),
+                adt::TimeUnit::Millisecond => Ok(spec::TimeUnit::Millisecond),
+                adt::TimeUnit::Microsecond => Ok(spec::TimeUnit::Microsecond),
+                adt::TimeUnit::Nanosecond => Ok(spec::TimeUnit::Nanosecond),
+            },
+        }
+    }
+
+    pub fn resolve_timezone(&self, timezone: Option<Arc<str>>) -> PlanResult<Option<Arc<str>>> {
+        match timezone {
+            None => Ok(Some(Arc::<str>::from(self.config.time_zone.as_str()))),
+            Some(timezone) => {
+                if timezone.is_empty() || timezone.as_ref().to_lowercase().trim() == "ltz" {
+                    Ok(Some(Arc::<str>::from(self.config.time_zone.as_str())))
+                } else {
+                    Ok(Some(timezone))
+                }
+            }
+        }
     }
 }

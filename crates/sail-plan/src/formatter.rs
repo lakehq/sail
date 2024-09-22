@@ -67,7 +67,7 @@ impl PlanFormatter for DefaultPlanFormatter {
             DataType::Char { length } => Ok(format!("char({})", length)),
             DataType::VarChar { length } => Ok(format!("varchar({})", length)),
             DataType::Date => Ok("date".to_string()),
-            DataType::Timestamp => Ok("timestamp".to_string()),
+            DataType::Timestamp(_time_unit, _timezone) => Ok("timestamp".to_string()),
             DataType::TimestampNtz => Ok("timestamp_ntz".to_string()),
             DataType::CalendarInterval => Ok("interval".to_string()),
             DataType::YearMonthInterval {
@@ -203,7 +203,11 @@ impl PlanFormatter for DefaultPlanFormatter {
                 let date = chrono::NaiveDateTime::UNIX_EPOCH + chrono::Duration::days(*days as i64);
                 Ok(format!("DATE '{}'", date.format("%Y-%m-%d")))
             }
-            Literal::Timestamp { microseconds } => {
+            Literal::TimestampMicrosecond {
+                microseconds,
+                timezone: _timezone,
+            } => {
+                // TODO: Integrate timezone
                 let date_time = chrono::NaiveDateTime::UNIX_EPOCH
                     + chrono::Duration::microseconds(*microseconds);
                 Ok(format!(
@@ -536,8 +540,9 @@ mod tests {
         assert_eq!(to_string(Literal::Date { days: 10 })?, "DATE '1970-01-11'");
         assert_eq!(to_string(Literal::Date { days: -5 })?, "DATE '1969-12-27'");
         assert_eq!(
-            to_string(Literal::Timestamp {
+            to_string(Literal::TimestampMicrosecond {
                 microseconds: 123_000_000,
+                timezone: None,
             })?,
             "TIMESTAMP '1970-01-01 00:02:03.000000'",
         );

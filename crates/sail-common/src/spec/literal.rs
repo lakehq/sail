@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use arrow::datatypes::i256;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -21,8 +23,13 @@ pub enum Literal {
     Date {
         days: i32,
     },
-    Timestamp {
+    // TODO: This is the preliminary work towards Sail spec::Literal achieving parity with Arrow.
+    //  spec::Literal::Timestamp and TimestampNtz need to be merged in follow-up work.
+    //  Additionally, we need to implement the remaining Timestamp variants:
+    //      TimestampSecond, TimestampMillisecond, TimestampMicrosecond, TimestampNanosecond
+    TimestampMicrosecond {
         microseconds: i64,
+        timezone: Option<Arc<str>>,
     },
     TimestampNtz {
         microseconds: i64,

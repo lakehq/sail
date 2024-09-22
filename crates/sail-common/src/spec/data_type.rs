@@ -1,9 +1,11 @@
+use std::sync::Arc;
+
 use num_enum::TryFromPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CommonError;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum DataType {
     Null,
@@ -31,7 +33,9 @@ pub enum DataType {
         length: u32,
     },
     Date,
-    Timestamp,
+    // TODO: This is the preliminary work towards Sail spec::DataType achieving parity with Arrow.
+    //  spec::DataType::Timestamp and TimestampNtz need to be merged in follow-up work.
+    Timestamp(Option<TimeUnit>, Option<Arc<str>>),
     TimestampNtz,
     CalendarInterval,
     YearMonthInterval {
@@ -77,7 +81,7 @@ impl DataType {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Field {
     pub name: String,
@@ -86,7 +90,7 @@ pub struct Field {
     pub metadata: Vec<(String, String)>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Fields(pub Vec<Field>);
 
 impl Fields {
@@ -117,11 +121,11 @@ impl From<Vec<Field>> for Fields {
     Copy,
     PartialEq,
     Eq,
+    Hash,
     PartialOrd,
     Ord,
     Serialize,
     Deserialize,
-    Hash,
     TryFromPrimitive,
 )]
 #[serde(rename_all = "camelCase")]
@@ -136,7 +140,7 @@ pub enum DayTimeIntervalField {
 
 impl DayTimeIntervalField {
     fn invalid(value: i32) -> CommonError {
-        CommonError::invalid(format!("day time interval field: {}", value))
+        CommonError::invalid(format!("day time interval field: {value}"))
     }
 }
 
@@ -146,11 +150,11 @@ impl DayTimeIntervalField {
     Copy,
     PartialEq,
     Eq,
+    Hash,
     PartialOrd,
     Ord,
     Serialize,
     Deserialize,
-    Hash,
     TryFromPrimitive,
 )]
 #[serde(rename_all = "camelCase")]
@@ -163,7 +167,7 @@ pub enum YearMonthIntervalField {
 
 impl YearMonthIntervalField {
     fn invalid(value: i32) -> CommonError {
-        CommonError::invalid(format!("year month interval field: {}", value))
+        CommonError::invalid(format!("year month interval field: {value}"))
     }
 }
 
@@ -178,4 +182,13 @@ impl Default for Schema {
             fields: Fields::empty(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TimeUnit {
+    Second,
+    Millisecond,
+    Microsecond,
+    Nanosecond,
 }

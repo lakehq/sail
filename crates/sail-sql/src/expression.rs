@@ -513,8 +513,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                 ast::DataType::Date => parse_date_string(value.as_str()),
                 ast::DataType::Timestamp(_, _) => parse_timestamp_string(value.as_str()),
                 _ => Err(SqlError::unsupported(format!(
-                    "typed string expression: {:?}",
-                    expr
+                    "typed string expression: {expr:?}"
                 ))),
             }?;
             Ok(spec::Expr::Literal(literal))
@@ -812,14 +811,88 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                 "Only tuple of identifiers or values are supported, found: {other:?}"
             ))),
         },
+        Expr::Ceil {
+            expr,
+            field: _field,
+        } => {
+            // TODO: When Sail's patched sqlparser is updated to the latest version, field will be
+            //  `CeilFloorKind` instead of `DateTimeField` which we can use.
+            Ok(spec::Expr::from(Function {
+                name: "ceil".to_string(),
+                args: vec![from_ast_expression(*expr)?],
+            }))
+        }
+        Expr::Floor {
+            expr,
+            field: _field,
+        } => {
+            // TODO: When Sail's patched sqlparser is updated to the latest version, field will be
+            //  `CeilFloorKind` instead of `DateTimeField` which we can use.
+            Ok(spec::Expr::from(Function {
+                name: "floor".to_string(),
+                args: vec![from_ast_expression(*expr)?],
+            }))
+        }
+        Expr::AnyOp {
+            left,
+            compare_op,
+            right,
+        } => {
+            match compare_op {
+                ast::BinaryOperator::Eq => {
+                    // left = ANY(right)
+                    Ok(spec::Expr::from(Function {
+                        name: "array_contains".to_string(),
+                        args: vec![from_ast_expression(*right)?, from_ast_expression(*left)?],
+                    }))
+                }
+                other => Err(SqlError::unsupported(format!(
+                    "ANY operator with compare operator: {other:?}"
+                ))),
+            }
+        }
+        Expr::AllOp {
+            left,
+            compare_op,
+            right,
+        } => {
+            match compare_op {
+                ast::BinaryOperator::Eq => {
+                    // left = ALL(right)
+                    Ok(spec::Expr::from(Function {
+                        name: "array_contains_all".to_string(),
+                        args: vec![from_ast_expression(*right)?, from_ast_expression(*left)?],
+                    }))
+                }
+                other => Err(SqlError::unsupported(format!(
+                    "ALL operator with compare operator: {other:?}"
+                ))),
+            }
+        }
+        Expr::AtTimeZone {
+            timestamp,
+            time_zone,
+        } => {
+            let expr = Box::new(from_ast_expression(*timestamp)?);
+            let cast_to_type = match *time_zone {
+                Expr::Value(ast::Value::SingleQuotedString(time_zone))
+                | Expr::Value(ast::Value::DoubleQuotedString(time_zone)) => {
+                    spec::DataType::Timestamp(
+                        Some(spec::TimeUnit::Microsecond),
+                        Some(time_zone.into()),
+                    )
+                }
+                _ => {
+                    return Err(SqlError::invalid(
+                        "AT TIME ZONE expression must be a single or double quoted string",
+                    ))
+                }
+            };
+            Ok(spec::Expr::Cast { expr, cast_to_type })
+        }
         Expr::JsonAccess { .. }
         | Expr::InUnnest { .. }
-        | Expr::AnyOp { .. }
-        | Expr::AllOp { .. }
         | Expr::Convert { .. }
-        | Expr::AtTimeZone { .. }
-        | Expr::Ceil { .. }
-        | Expr::Floor { .. }
         | Expr::Position { .. }
         | Expr::Collate { .. }
         | Expr::IntroducedString { .. }
