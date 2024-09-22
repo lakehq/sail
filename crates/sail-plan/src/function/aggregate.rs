@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::functions_aggregate::{
-    array_agg, average, bit_and_or_xor, bool_and_or, correlation, count, covariance, first_last,
-    grouping, median, min_max, regr, stddev, sum, variance,
+    approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
+    correlation, count, covariance, first_last, grouping, kurtosis_pop, median, min_max, regr,
+    stddev, sum, variance,
 };
 use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::{expr, AggregateUDF};
@@ -30,8 +31,14 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, Arc<AggregateUDF>)>
     vec![
         ("any", Some(bool_and_or::bool_or_udaf())),
         ("any_value", F::unknown("any_value")),
-        ("approx_count_distinct", F::unknown("approx_count_distinct")),
-        ("approx_percentile", F::unknown("approx_percentile")),
+        (
+            "approx_count_distinct",
+            Some(approx_distinct::approx_distinct_udaf()),
+        ),
+        (
+            "approx_percentile",
+            Some(approx_percentile_cont::approx_percentile_cont_udaf()),
+        ),
         ("array_agg", Some(array_agg::array_agg_udaf())),
         ("avg", Some(average::avg_udaf())),
         ("bit_and", Some(bit_and_or_xor::bit_and_udaf())),
@@ -57,7 +64,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, Arc<AggregateUDF>)>
         ("histogram_numeric", F::unknown("histogram_numeric")),
         ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
         ("hll_union_agg", F::unknown("hll_union_agg")),
-        ("kurtosis", F::unknown("kurtosis")),
+        ("kurtosis", Some(kurtosis_pop::kurtosis_pop_udaf())),
         ("last", Some(first_last::last_value_udaf())),
         ("last_value", Some(first_last::last_value_udaf())),
         ("max", Some(min_max::max_udaf())),
@@ -68,7 +75,10 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, Arc<AggregateUDF>)>
         ("min_by", F::unknown("min_by")),
         ("mode", F::unknown("mode")),
         ("percentile", F::unknown("percentile")),
-        ("percentile_approx", F::unknown("percentile_approx")),
+        (
+            "percentile_approx",
+            Some(approx_percentile_cont::approx_percentile_cont_udaf()),
+        ),
         ("regr_avgx", Some(regr::regr_avgx_udaf())),
         ("regr_avgy", Some(regr::regr_avgy_udaf())),
         ("regr_count", Some(regr::regr_count_udaf())),
