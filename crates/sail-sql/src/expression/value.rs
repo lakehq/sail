@@ -54,16 +54,16 @@ pub(crate) fn from_ast_value(value: ast::Value) -> SqlResult<spec::Expr> {
                 "number postfix: {:?}{:?}",
                 value, postfix
             ))),
-        },
+        }
+        Value::HexStringLiteral(value) => {
+            let value: LiteralValue<Vec<u8>> = value.try_into()?;
+            spec::Expr::try_from(value)
+        }
         Value::SingleQuotedString(value)
         | Value::DoubleQuotedString(value)
         | Value::DollarQuotedString(ast::DollarQuotedString { value, .. })
         | Value::TripleSingleQuotedString(value)
         | Value::TripleDoubleQuotedString(value) => spec::Expr::try_from(LiteralValue(value)),
-        Value::HexStringLiteral(value) => {
-            let value: LiteralValue<Vec<u8>> = value.try_into()?;
-            spec::Expr::try_from(value)
-        }
         Value::Boolean(value) => spec::Expr::try_from(LiteralValue(value)),
         Value::Null => Ok(spec::Expr::Literal(spec::Literal::Null)),
         Value::Placeholder(placeholder) => Ok(spec::Expr::Placeholder(placeholder)),
