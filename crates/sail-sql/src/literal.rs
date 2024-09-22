@@ -201,9 +201,9 @@ impl TryFrom<LiteralValue<(chrono::NaiveDateTime, TimeZoneVariant)>> for spec::L
         if ntz {
             Ok(spec::Literal::TimestampNtz { microseconds })
         } else {
-            // FIXME: Don't merge this pr until this is correct.
             Ok(spec::Literal::TimestampMicrosecond {
                 microseconds,
+                // FIXME: This is wrong but replicates the previous logic when there was no timezone
                 timezone: None,
             })
         }
