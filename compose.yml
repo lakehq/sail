@@ -22,8 +22,9 @@ services:
     build:
       context: ./scripts/hadoop
       dockerfile: Dockerfile
-    environment:
-      HADOOP_USER: root
+      args:
+        HADOOP_USER_NAME: root
+
     ports:
       - "9870:9870"
       - "9000:9000"
