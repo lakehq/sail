@@ -124,6 +124,13 @@ fn date_days_arithmetic(dt1: Expr, dt2: Expr, op: Operator) -> Expr {
     })
 }
 
+fn current_timezone(args: Vec<Expr>, config: Arc<PlanConfig>) -> PlanResult<Expr> {
+    args.zero()?;
+    Ok(Expr::Literal(ScalarValue::Utf8(Some(
+        config.time_zone.clone(),
+    ))))
+}
+
 // FIXME: Spark displays dates and timestamps according to the session time zone.
 //  We should be setting the DataFusion config `datafusion.execution.time_zone`
 //  and casting any datetime functions that don't use the DataFusion config.
@@ -147,7 +154,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("curdate", F::nullary(expr_fn::current_date)),
         ("current_date", F::nullary(expr_fn::current_date)),
         ("current_timestamp", F::nullary(expr_fn::now)),
-        ("current_timezone", F::unknown("current_timezone")),
+        ("current_timezone", F::custom(current_timezone)),
         (
             "date_add",
             F::custom(|args, _config| interval_arithmetic(args, "days", Operator::Plus)),
