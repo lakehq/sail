@@ -48,6 +48,7 @@ phf = { version = "0.11.2", features = ["macros"] }
 ryu = "1.0.18"
 either = "1.12.0"
 num-traits = "0.2.19"
+serde_arrow = { version = "0.11.8", features = ["arrow-53"] }
 mimalloc = { version = "0.1.43", features = ["local_dynamic_tls"] }
 rand = "0.8.5"
 rand_chacha = "0.3.1"
@@ -83,8 +84,6 @@ arrow-schema = { version = "53.0.0" }
 object_store = { version = "0.11.0", features = ["aws", "gcp", "azure", "http"] }
 # We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.
 sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "f631629", features = ["serde", "visitor"] }
-# Remove this patch when serde_arrow 0.11.8 is released.
-serde_arrow = { git = "https://github.com/lakehq/serde_arrow.git", rev = "a129d1f", features = ["arrow-53"] }
 ######
 # This is the end of the manually managed dependencies.
 # Do not add more dependencies below.
