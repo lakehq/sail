@@ -788,6 +788,7 @@ impl PlanResolver<'_> {
         let name = self.config.plan_formatter.function_to_string(
             function_name.as_str(),
             argument_names.iter().map(|x| x.as_str()).collect(),
+            is_distinct,
         )?;
         Ok(NamedExpr::new(vec![name], func))
     }
@@ -870,7 +871,7 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let (function_name, argument_names, arguments) = match window_function {
+        let (function_name, argument_names, arguments, is_distinct) = match window_function {
             spec::Expr::UnresolvedFunction {
                 function_name,
                 arguments,
@@ -886,7 +887,7 @@ impl PlanResolver<'_> {
                 let (argument_names, arguments) = self
                     .resolve_alias_expressions_and_names(arguments, schema, state)
                     .await?;
-                (function_name, argument_names, arguments)
+                (function_name, argument_names, arguments, is_distinct)
             }
             spec::Expr::CommonInlineUserDefinedFunction(_) => {
                 return Err(PlanError::unsupported(
@@ -928,6 +929,7 @@ impl PlanResolver<'_> {
         let name = self.config.plan_formatter.function_to_string(
             function_name.as_str(),
             argument_names.iter().map(|x| x.as_str()).collect(),
+            is_distinct,
         )?;
         Ok(NamedExpr::new(vec![name], window))
     }
@@ -1164,6 +1166,7 @@ impl PlanResolver<'_> {
         let name = self.config.plan_formatter.function_to_string(
             function_name,
             argument_names.iter().map(|x| x.as_str()).collect(),
+            false,
         )?;
         let func = expr::Expr::ScalarFunction(expr::ScalarFunction {
             func: Arc::new(ScalarUDF::from(python_udf)),

@@ -17,7 +17,12 @@ pub trait PlanFormatter: DynObject + Debug + Send + Sync {
     fn literal_to_string(&self, literal: &spec::Literal) -> PlanResult<String>;
 
     /// Returns a human-readable string for the function call.
-    fn function_to_string(&self, name: &str, arguments: Vec<&str>) -> PlanResult<String>;
+    fn function_to_string(
+        &self,
+        name: &str,
+        arguments: Vec<&str>,
+        is_distinct: bool,
+    ) -> PlanResult<String>;
 }
 
 impl_dyn_object_traits!(PlanFormatter);
@@ -306,7 +311,12 @@ impl PlanFormatter for DefaultPlanFormatter {
         }
     }
 
-    fn function_to_string(&self, name: &str, arguments: Vec<&str>) -> PlanResult<String> {
+    fn function_to_string(
+        &self,
+        name: &str,
+        arguments: Vec<&str>,
+        is_distinct: bool,
+    ) -> PlanResult<String> {
         match name.to_lowercase().as_str() {
             "!" | "~" => Ok(format!("({} {})", name, arguments.one()?)),
             "+" | "-" => {
@@ -359,6 +369,13 @@ impl PlanFormatter for DefaultPlanFormatter {
                 let arguments = arguments.join(", ");
                 Ok(format!("date_add({arguments})"))
             }
+            "sum" => {
+                let mut arguments = arguments.join(", ");
+                if is_distinct {
+                    arguments = format!("DISTINCT {arguments}");
+                }
+                Ok(format!("{name}({arguments})"))
+            }
             "any_value" | "first" | "first_value" | "last" | "last_value" => {
                 let argument = arguments[0];
                 Ok(format!("{name}({argument})"))
@@ -372,12 +389,13 @@ impl PlanFormatter for DefaultPlanFormatter {
             | "exp" | "floor" | "log10" | "regexp" | "regexp_like" | "signum" | "sqrt" | "cos"
             | "cosh" | "cot" | "degrees" | "power" | "radians" | "sin" | "sinh" | "tan"
             | "tanh" | "pi" | "expm1" | "hypot" | "log1p" => {
+                let name = name.to_uppercase();
                 let arguments = arguments.join(", ");
-                Ok(format!("{}({})", name.to_uppercase(), arguments))
+                Ok(format!("{name}({arguments})"))
             }
             _ => {
                 let arguments = arguments.join(", ");
-                Ok(format!("{}({})", name, arguments))
+                Ok(format!("{name}({arguments})"))
             }
         }
     }
