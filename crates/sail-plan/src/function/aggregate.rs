@@ -5,8 +5,10 @@ use datafusion::functions_aggregate::{
     correlation, count, covariance, first_last, grouping, kurtosis_pop, median, min_max, regr,
     stddev, sum, variance,
 };
+use datafusion_common::ScalarValue;
 use datafusion_expr::expr;
 use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::sqlparser::ast::NullTreatment;
 use lazy_static::lazy_static;
 
 use crate::error::{PlanError, PlanResult};
@@ -39,12 +41,46 @@ fn min_max_by(args: Vec<expr::Expr>, distinct: bool, asc: bool) -> PlanResult<ex
     }))
 }
 
+fn any_value(args: Vec<expr::Expr>, distinct: bool) -> PlanResult<expr::Expr> {
+    let (args, ignore_nulls) = if args.len() == 1 {
+        let expr = args.one()?;
+        Ok((vec![expr], NullTreatment::RespectNulls))
+    } else if args.len() == 2 {
+        let (expr, ignore_nulls) = args.two()?;
+        let ignore_nulls = match ignore_nulls {
+            expr::Expr::Literal(ScalarValue::Boolean(Some(ignore_nulls))) => {
+                if ignore_nulls {
+                    NullTreatment::IgnoreNulls
+                } else {
+                    NullTreatment::RespectNulls
+                }
+            }
+            _ => {
+                return Err(PlanError::invalid(
+                    "any_value requires a boolean literal as the second argument",
+                ))
+            }
+        };
+        Ok((vec![expr], ignore_nulls))
+    } else {
+        Err(PlanError::invalid("any_value requires 1 or s arguments"))
+    }?;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: first_last::first_value_udaf(),
+        args,
+        distinct,
+        filter: None,
+        order_by: None,
+        null_treatment: Some(ignore_nulls),
+    }))
+}
+
 fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
     use crate::function::common::FunctionBuilder as F;
 
     vec![
         ("any", F::default_agg(bool_and_or::bool_or_udaf)),
-        ("any_value", F::unknown_agg("any_value")),
+        ("any_value", F::custom_agg(any_value)),
         (
             "approx_count_distinct",
             F::default_agg(approx_distinct::approx_distinct_udaf),

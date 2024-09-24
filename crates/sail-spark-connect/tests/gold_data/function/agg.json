@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: any_value"
+        "success": "ok"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: any_value"
+        "success": "ok"
       }
     },
     {
@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: any_value"
+        "success": "ok"
       }
     },
     {
