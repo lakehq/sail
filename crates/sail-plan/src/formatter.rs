@@ -359,9 +359,9 @@ impl PlanFormatter for DefaultPlanFormatter {
                 let arguments = arguments.join(", ");
                 Ok(format!("date_add({arguments})"))
             }
-            "any_value" => {
-                let arguments = arguments[0];
-                Ok(format!("any_value({arguments})"))
+            "any_value" | "first" | "first_value" => {
+                let argument = arguments[0];
+                Ok(format!("{name}({argument})"))
             }
             // This case is only reached when both conditions are true:
             //   1. The explode operation is `ExplodeKind::ExplodeOuter`

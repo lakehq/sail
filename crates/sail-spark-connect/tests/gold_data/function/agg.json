@@ -875,7 +875,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Boolean] to the signature OneOf([ArraySignature(Array), Numeric(1), Uniform(1, [Utf8])]) failed. No function matches the given name and argument types 'first_value(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tfirst_value(array)\n\tfirst_value(Numeric(1))\n\tfirst_value(Utf8)"
+        "success": "ok"
       }
     },
     {
@@ -941,7 +941,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Boolean] to the signature OneOf([ArraySignature(Array), Numeric(1), Uniform(1, [Utf8])]) failed. No function matches the given name and argument types 'first_value(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tfirst_value(array)\n\tfirst_value(Numeric(1))\n\tfirst_value(Utf8)"
+        "success": "ok"
       }
     },
     {
