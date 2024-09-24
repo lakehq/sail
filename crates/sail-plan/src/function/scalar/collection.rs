@@ -1,13 +1,16 @@
+use std::sync::Arc;
+
 use datafusion::functions::string::expr_fn as str_expr_fn;
 use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr;
 
+use crate::config::PlanConfig;
 use crate::error::PlanResult;
 use crate::extension::function::size::Size;
 use crate::function::common::Function;
 
-fn concat(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+fn concat(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
     match args.first() {
         None
         | Some(expr::Expr::Literal(ScalarValue::Utf8(_)))

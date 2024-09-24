@@ -775,7 +775,7 @@ impl PlanResolver<'_> {
                 args: arguments,
             })
         } else if let Ok(func) = get_built_in_function(function_name.as_str()) {
-            func(arguments.clone())?
+            func(arguments.clone(), self.config.clone())?
         } else if let Ok(func) = get_built_in_aggregate_function(function_name.as_str()) {
             func(arguments.clone(), is_distinct)?
         } else {

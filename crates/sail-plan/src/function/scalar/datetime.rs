@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::{
     DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType,
 };
@@ -6,6 +8,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{lit, BinaryExpr, Operator};
 
+use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::Function;
 use crate::utils::ItemTaker;
@@ -18,7 +21,7 @@ fn integer_part(expr: Expr, part: String) -> Expr {
     })
 }
 
-fn trunc(args: Vec<Expr>) -> PlanResult<Expr> {
+fn trunc(args: Vec<Expr>, _config: Arc<PlanConfig>) -> PlanResult<Expr> {
     let (date, part) = args.two()?;
     Ok(expr_fn::date_trunc(part, date))
 }
@@ -130,15 +133,15 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
     vec![
         (
             "add_years",
-            F::custom(|args| interval_arithmetic(args, "years", Operator::Plus)),
+            F::custom(|args, _config| interval_arithmetic(args, "years", Operator::Plus)),
         ),
         (
             "add_months",
-            F::custom(|args| interval_arithmetic(args, "months", Operator::Plus)),
+            F::custom(|args, _config| interval_arithmetic(args, "months", Operator::Plus)),
         ),
         (
             "add_days",
-            F::custom(|args| interval_arithmetic(args, "days", Operator::Plus)),
+            F::custom(|args, _config| interval_arithmetic(args, "days", Operator::Plus)),
         ),
         ("convert_timezone", F::unknown("convert_timezone")),
         ("curdate", F::nullary(expr_fn::current_date)),
@@ -147,7 +150,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("current_timezone", F::unknown("current_timezone")),
         (
             "date_add",
-            F::custom(|args| interval_arithmetic(args, "days", Operator::Plus)),
+            F::custom(|args, _config| interval_arithmetic(args, "days", Operator::Plus)),
         ),
         (
             "date_diff",
@@ -158,12 +161,12 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("date_part", F::binary(expr_fn::date_part)),
         (
             "date_sub",
-            F::custom(|args| interval_arithmetic(args, "days", Operator::Minus)),
+            F::custom(|args, _config| interval_arithmetic(args, "days", Operator::Minus)),
         ),
         ("date_trunc", F::binary(expr_fn::date_trunc)),
         (
             "dateadd",
-            F::custom(|args| interval_arithmetic(args, "days", Operator::Plus)),
+            F::custom(|args, _config| interval_arithmetic(args, "days", Operator::Plus)),
         ),
         (
             "datediff",
@@ -200,7 +203,10 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("timestamp_seconds", F::unknown("timestamp_seconds")),
         ("to_date", F::unknown("to_date")),
         ("to_timestamp", F::var_arg(expr_fn::to_timestamp_micros)),
-        ("to_timestamp_ltz", F::unknown("to_timestamp_ltz")),
+        (
+            "to_timestamp_ltz",
+            F::unary(|x| integer_part(x, "YEAR".to_string())),
+        ),
         ("to_timestamp_ntz", F::unknown("to_timestamp_ntz")),
         ("to_unix_timestamp", F::unknown("to_unix_timestamp")),
         ("to_utc_timestamp", F::unknown("to_utc_timestamp")),

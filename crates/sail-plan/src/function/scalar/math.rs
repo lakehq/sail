@@ -1,15 +1,18 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, BinaryExpr, Operator};
 
+use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::randn::Randn;
 use crate::extension::function::random::Random;
 use crate::function::common::Function;
 use crate::utils::ItemTaker;
 
-fn plus(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+fn plus(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
     if args.len() < 2 {
         Ok(args.one()?)
     } else {
@@ -22,7 +25,7 @@ fn plus(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     }
 }
 
-fn minus(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+fn minus(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
     if args.len() < 2 {
         Ok(expr::Expr::Negative(Box::new(args.one()?)))
     } else {
@@ -56,7 +59,7 @@ fn power(base: expr::Expr, exponent: expr::Expr) -> expr::Expr {
     })
 }
 
-fn hex(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+fn hex(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
     let expr = args.one()?;
     let data_type = match &expr {
         expr::Expr::Literal(l) => Ok(l.data_type()),
@@ -79,12 +82,15 @@ fn hex(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
 }
 
 // FIXME: Implement the UDF for better numerical precision.
-fn expm1(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+fn expm1(args: Vec<expr::Expr>, config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
     let num = args.one()?;
-    minus(vec![
-        expr_fn::exp(num),
-        expr::Expr::Literal(ScalarValue::Float64(Some(1.0))),
-    ])
+    minus(
+        vec![
+            expr_fn::exp(num),
+            expr::Expr::Literal(ScalarValue::Float64(Some(1.0))),
+        ],
+        config,
+    )
 }
 
 fn hypot(expr1: expr::Expr, expr2: expr::Expr) -> expr::Expr {
