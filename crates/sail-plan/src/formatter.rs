@@ -370,15 +370,24 @@ impl PlanFormatter for DefaultPlanFormatter {
                 Ok(format!("date_add({arguments})"))
             }
             "sum" => {
-                let mut arguments = arguments.join(", ");
+                let mut args = arguments.join(", ");
                 if is_distinct {
-                    arguments = format!("DISTINCT {arguments}");
+                    args = format!("DISTINCT {args}");
                 }
-                Ok(format!("{name}({arguments})"))
+                Ok(format!("{name}({args})"))
             }
             "any_value" | "first" | "first_value" | "last" | "last_value" => {
-                let argument = arguments[0];
-                Ok(format!("{name}({argument})"))
+                let arg = arguments[0];
+                Ok(format!("{name}({arg})"))
+            }
+            "substr" | "substring" => {
+                let args = if arguments.len() == 2 {
+                    let args = arguments.join(", ");
+                    format!("{args}, 2147483647")
+                } else {
+                    arguments.join(", ")
+                };
+                Ok(format!("{name}({args})"))
             }
             // This case is only reached when both conditions are true:
             //   1. The explode operation is `ExplodeKind::ExplodeOuter`
