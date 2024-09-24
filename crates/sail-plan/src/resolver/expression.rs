@@ -7,7 +7,9 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
+use datafusion::sql::unparser::expr_to_sql;
 use datafusion_common::{plan_err, Column, DFSchemaRef, DataFusionError};
+use datafusion_expr::expr::PlannedReplaceSelectItem;
 use datafusion_expr::{expr, expr_fn, window_frame, ExprSchemable, Operator, ScalarUDF};
 use num_traits::Float;
 use sail_common::spec;
@@ -111,7 +113,7 @@ impl PlanResolver<'_> {
         resolve_literals: bool,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
-    ) -> PlanResult<expr::Expr> {
+    ) -> PlanResult<expr::Sort> {
         use spec::{NullOrdering, SortDirection};
 
         let spec::SortOrder {
@@ -137,32 +139,32 @@ impl PlanResolver<'_> {
                     spec::Literal::Integer(value) => *value as usize,
                     spec::Literal::Long(value) => *value as usize,
                     _ => {
-                        return Ok(expr::Expr::Sort(expr::Sort {
-                            expr: Box::new(self.resolve_expression(*child, schema, state).await?),
+                        return Ok(expr::Sort {
+                            expr: self.resolve_expression(*child, schema, state).await?,
                             asc,
                             nulls_first,
-                        }))
+                        })
                     }
                 };
                 if position > 0 && position <= num_fields {
-                    Ok(expr::Expr::Sort(expr::Sort {
-                        expr: Box::new(expr::Expr::Column(Column::from(
+                    Ok(expr::Sort {
+                        expr: expr::Expr::Column(Column::from(
                             schema.qualified_field(position - 1),
-                        ))),
+                        )),
                         asc,
                         nulls_first,
-                    }))
+                    })
                 } else {
                     Err(PlanError::invalid(format!(
                         "Cannot resolve column position {position}. Valid positions are 1 to {num_fields}."
                     )))
                 }
             }
-            _ => Ok(expr::Expr::Sort(expr::Sort {
-                expr: Box::new(self.resolve_expression(*child, schema, state).await?),
+            _ => Ok(expr::Sort {
+                expr: self.resolve_expression(*child, schema, state).await?,
                 asc,
                 nulls_first,
-            })),
+            }),
         }
     }
 
@@ -172,8 +174,8 @@ impl PlanResolver<'_> {
         resolve_literals: bool,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
-    ) -> PlanResult<Vec<expr::Expr>> {
-        let mut results: Vec<expr::Expr> = Vec::with_capacity(sort.len());
+    ) -> PlanResult<Vec<expr::Sort>> {
+        let mut results: Vec<expr::Sort> = Vec::with_capacity(sort.len());
         for s in sort {
             let expr = self
                 .resolve_sort_order(s, resolve_literals, schema, state)
@@ -186,7 +188,7 @@ impl PlanResolver<'_> {
     fn resolve_window_frame(
         &self,
         frame: spec::WindowFrame,
-        order_by: &[expr::Expr],
+        order_by: &[expr::Sort],
         schema: &DFSchemaRef,
     ) -> PlanResult<window_frame::WindowFrame> {
         use spec::WindowFrameType;
@@ -287,7 +289,7 @@ impl PlanResolver<'_> {
         &self,
         value: spec::WindowFrameBoundary,
         kind: WindowBoundaryKind,
-        order_by: &[expr::Expr],
+        order_by: &[expr::Sort],
         schema: &DFSchemaRef,
     ) -> PlanResult<window_frame::WindowFrameBound> {
         let unbounded = || match kind {
@@ -320,7 +322,7 @@ impl PlanResolver<'_> {
                             "range window frame requires exactly one order by expression",
                         ));
                     }
-                    let (data_type, _) = order_by[0].data_type_and_nullable(schema)?;
+                    let (data_type, _) = order_by[0].expr.data_type_and_nullable(schema)?;
                     let value = value.cast_to(&data_type)?;
                     // We always return the "following" bound since the value can be signed.
                     Ok(window_frame::WindowFrameBound::Following(value))
@@ -358,8 +360,11 @@ impl PlanResolver<'_> {
                 )
                 .await
             }
-            Expr::UnresolvedStar { target } => {
-                self.resolve_expression_wildcard(target, schema, state)
+            Expr::UnresolvedStar {
+                target,
+                wildcard_options,
+            } => {
+                self.resolve_expression_wildcard(target, wildcard_options, schema, state)
                     .await
             }
             Expr::Alias {
@@ -835,7 +840,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let sort = self.resolve_sort_order(sort, true, schema, state).await?;
-        Ok(NamedExpr::new(vec![], sort))
+        Ok(NamedExpr::new(vec![], sort.expr))
     }
 
     async fn resolve_expression_regex(
@@ -932,19 +937,137 @@ impl PlanResolver<'_> {
     async fn resolve_expression_wildcard(
         &self,
         target: Option<spec::ObjectName>,
-        _schema: &DFSchemaRef,
-        _state: &mut PlanResolverState,
+        wildcard_options: spec::WildcardOptions,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        let wildcard_options = self
+            .resolve_wildcard_options(wildcard_options, schema, state)
+            .await?;
         // FIXME: column reference is parsed as qualifier
         let expr = if let Some(target) = target {
             let target: Vec<String> = target.into();
             expr::Expr::Wildcard {
                 qualifier: Some(target.join(".").into()),
+                options: wildcard_options,
             }
         } else {
-            expr::Expr::Wildcard { qualifier: None }
+            expr::Expr::Wildcard {
+                qualifier: None,
+                options: wildcard_options,
+            }
         };
         Ok(NamedExpr::new(vec!["*".to_string()], expr))
+    }
+
+    async fn resolve_wildcard_options(
+        &self,
+        wildcard_options: spec::WildcardOptions,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<expr::WildcardOptions> {
+        use datafusion::sql::sqlparser::ast as df_ast;
+
+        let ilike = wildcard_options
+            .ilike_pattern
+            .map(|x| df_ast::IlikeSelectItem { pattern: x });
+        let exclude = wildcard_options
+            .exclude_columns
+            .map(|x| {
+                let exclude = if x.len() > 1 {
+                    df_ast::ExcludeSelectItem::Multiple(
+                        x.into_iter().map(df_ast::Ident::new).collect(),
+                    )
+                } else if let Some(x) = x.into_iter().next() {
+                    df_ast::ExcludeSelectItem::Single(df_ast::Ident::new(x))
+                } else {
+                    return Err(PlanError::invalid(
+                        "exclude columns must have at least one column",
+                    ));
+                };
+                Ok(exclude)
+            })
+            .transpose()?;
+        let except = wildcard_options
+            .except_columns
+            .map(|mut x| {
+                let except = if x.len() > 1 {
+                    let first_element = x.pop().ok_or_else(|| {
+                        PlanError::invalid("except columns must have at least one column")
+                    })?;
+                    let additional_elements = x.into_iter().map(df_ast::Ident::new).collect();
+                    df_ast::ExceptSelectItem {
+                        first_element: df_ast::Ident::new(first_element),
+                        additional_elements,
+                    }
+                } else if let Some(x) = x.into_iter().next() {
+                    df_ast::ExceptSelectItem {
+                        first_element: df_ast::Ident::new(x),
+                        additional_elements: vec![],
+                    }
+                } else {
+                    return Err(PlanError::invalid(
+                        "except columns must have at least one column",
+                    ));
+                };
+                Ok(except)
+            })
+            .transpose()?;
+        let replace = match wildcard_options.replace_columns {
+            Some(x) => {
+                let mut items = Vec::with_capacity(x.len());
+                let mut planned_expressions = Vec::with_capacity(x.len());
+                for elem in x.into_iter() {
+                    let expression = self
+                        .resolve_expression(*elem.expression, schema, state)
+                        .await?;
+                    let item = df_ast::ReplaceSelectElement {
+                        expr: expr_to_sql(&expression)?,
+                        column_name: df_ast::Ident::new(elem.column_name),
+                        as_keyword: elem.as_keyword,
+                    };
+                    items.push(item);
+                    planned_expressions.push(expression);
+                }
+                Some(PlannedReplaceSelectItem {
+                    items,
+                    planned_expressions,
+                })
+            }
+            None => None,
+        };
+        let rename = wildcard_options
+            .rename_columns
+            .map(|x| {
+                let exclude = if x.len() > 1 {
+                    df_ast::RenameSelectItem::Multiple(
+                        x.into_iter()
+                            .map(|x| df_ast::IdentWithAlias {
+                                ident: df_ast::Ident::new(x.identifier),
+                                alias: df_ast::Ident::new(x.alias),
+                            })
+                            .collect(),
+                    )
+                } else if let Some(x) = x.into_iter().next() {
+                    df_ast::RenameSelectItem::Single(df_ast::IdentWithAlias {
+                        ident: df_ast::Ident::new(x.identifier),
+                        alias: df_ast::Ident::new(x.alias),
+                    })
+                } else {
+                    return Err(PlanError::invalid(
+                        "exclude columns must have at least one column",
+                    ));
+                };
+                Ok(exclude)
+            })
+            .transpose()?;
+        Ok(expr::WildcardOptions {
+            ilike,
+            exclude,
+            except,
+            replace,
+            rename,
+        })
     }
 
     async fn resolve_expression_extract_value(

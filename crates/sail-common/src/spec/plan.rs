@@ -625,7 +625,7 @@ pub struct TableDefinition {
     pub file_format: Option<TableFileFormat>,
     pub row_format: Option<TableRowFormat>,
     pub table_partition_cols: Vec<Identifier>,
-    pub file_sort_order: Vec<Vec<Expr>>,
+    pub file_sort_order: Vec<Vec<SortOrder>>,
     pub if_not_exists: bool,
     pub or_replace: bool,
     pub unbounded: bool,

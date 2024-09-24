@@ -62,7 +62,10 @@ impl TryFrom<Expression> for spec::Expr {
                 let target = unparsed_target
                     .map(|x| parse_qualified_wildcard(x.as_str()))
                     .transpose()?;
-                Ok(spec::Expr::UnresolvedStar { target })
+                Ok(spec::Expr::UnresolvedStar {
+                    target,
+                    wildcard_options: Default::default(),
+                })
             }
             ExprType::Alias(alias) => {
                 let Alias {

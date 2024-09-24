@@ -86,7 +86,10 @@ impl Session {
                     .ok()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(16),
-            );
+            )
+            // Spark defaults to false:
+            //  https://spark.apache.org/docs/latest/sql-data-sources-csv.html
+            .set_bool("datafusion.catalog.has_header", false);
         let runtime = {
             let registry = DynamicObjectStoreRegistry::new().with_config(object_store_config);
             let config = RuntimeConfig::default().with_object_store_registry(Arc::new(registry));

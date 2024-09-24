@@ -31,7 +31,7 @@ impl<'s> TreeNodeRewriter for WindowRewriter<'s> {
     fn f_up(&mut self, node: Expr) -> Result<Transformed<Expr>> {
         match node {
             Expr::WindowFunction(_) => {
-                let name = node.display_name()?;
+                let name = node.schema_name().to_string();
                 let plan = mem::replace(&mut self.plan, empty_logical_plan());
                 self.plan = LogicalPlan::Window(Window::try_new(vec![node], Arc::new(plan))?);
                 Ok(Transformed::yes(ident(name)))

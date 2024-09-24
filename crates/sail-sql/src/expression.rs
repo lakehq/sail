@@ -239,8 +239,12 @@ fn from_ast_function_arg(arg: ast::FunctionArg) -> SqlResult<spec::Expr> {
                 FunctionArgExpr::Expr(e) => from_ast_expression(e)?,
                 FunctionArgExpr::QualifiedWildcard(name) => spec::Expr::UnresolvedStar {
                     target: Some(from_ast_object_name(name)?),
+                    wildcard_options: Default::default(),
                 },
-                FunctionArgExpr::Wildcard => spec::Expr::UnresolvedStar { target: None },
+                FunctionArgExpr::Wildcard => spec::Expr::UnresolvedStar {
+                    target: None,
+                    wildcard_options: Default::default(),
+                },
             };
             Ok(arg)
         }
@@ -640,9 +644,13 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
             }))
         }
         Expr::Interval(interval) => from_ast_interval(interval),
-        Expr::Wildcard => Ok(spec::Expr::UnresolvedStar { target: None }),
+        Expr::Wildcard => Ok(spec::Expr::UnresolvedStar {
+            target: None,
+            wildcard_options: Default::default(),
+        }),
         Expr::QualifiedWildcard(name) => Ok(spec::Expr::UnresolvedStar {
             target: Some(from_ast_object_name(name)?),
+            wildcard_options: Default::default(),
         }),
         Expr::Lambda(ast::LambdaFunction { params, body }) => {
             use ast::OneOrManyWithParens;

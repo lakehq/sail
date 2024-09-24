@@ -42,7 +42,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 ))
             } else if let Some(node) = node.as_any().downcast_ref::<SortWithinPartitionsNode>() {
                 let expr = create_physical_sort_exprs(
-                    node.expr(),
+                    node.sort_expr(),
                     node.schema(),
                     session_state.execution_props(),
                 )?;
