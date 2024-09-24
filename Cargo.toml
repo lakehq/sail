@@ -80,7 +80,7 @@ arrow = { version = "53.0.0", features = ["ffi", "pyarrow"] }
 arrow-cast = { version = "53.0.0" }
 arrow-schema = { version = "53.0.0" }
 # The `object_store` version must match the one used in DataFusion.
-object_store = { version = "0.11.0", features = ["aws", "gcp", "http", "azure"] }
+object_store = { version = "0.11.0", features = ["aws", "gcp", "azure", "http"] }
 # We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.
 sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "f631629", features = ["serde", "visitor"] }
 # Remove this patch when serde_arrow 0.11.8 is released.
