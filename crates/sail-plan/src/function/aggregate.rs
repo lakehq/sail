@@ -41,7 +41,11 @@ fn min_max_by(args: Vec<expr::Expr>, distinct: bool, asc: bool) -> PlanResult<ex
     }))
 }
 
-fn first_value(args: Vec<expr::Expr>, distinct: bool) -> PlanResult<expr::Expr> {
+fn first_last_value(
+    args: Vec<expr::Expr>,
+    distinct: bool,
+    first_value: bool,
+) -> PlanResult<expr::Expr> {
     let (args, ignore_nulls) = if args.len() == 1 {
         let expr = args.one()?;
         Ok((vec![expr], NullTreatment::RespectNulls))
@@ -65,8 +69,13 @@ fn first_value(args: Vec<expr::Expr>, distinct: bool) -> PlanResult<expr::Expr> 
     } else {
         Err(PlanError::invalid("any_value requires 1 or s arguments"))
     }?;
+    let func = if first_value {
+        first_last::first_value_udaf()
+    } else {
+        first_last::last_value_udaf()
+    };
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: first_last::first_value_udaf(),
+        func,
         args,
         distinct,
         filter: None,
@@ -80,7 +89,10 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
 
     vec![
         ("any", F::default_agg(bool_and_or::bool_or_udaf)),
-        ("any_value", F::custom_agg(first_value)),
+        (
+            "any_value",
+            F::custom_agg(|args, distinct| first_last_value(args, distinct, true)),
+        ),
         (
             "approx_count_distinct",
             F::default_agg(approx_distinct::approx_distinct_udaf),
@@ -110,16 +122,28 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("covar_pop", F::default_agg(covariance::covar_pop_udaf)),
         ("covar_samp", F::default_agg(covariance::covar_samp_udaf)),
         ("every", F::default_agg(bool_and_or::bool_and_udaf)),
-        ("first", F::custom_agg(first_value)),
-        ("first_value", F::custom_agg(first_value)),
+        (
+            "first",
+            F::custom_agg(|args, distinct| first_last_value(args, distinct, true)),
+        ),
+        (
+            "first_value",
+            F::custom_agg(|args, distinct| first_last_value(args, distinct, true)),
+        ),
         ("grouping", F::default_agg(grouping::grouping_udaf)),
         ("grouping_id", F::unknown_agg("grouping_id")),
         ("histogram_numeric", F::unknown_agg("histogram_numeric")),
         ("hll_sketch_agg", F::unknown_agg("hll_sketch_agg")),
         ("hll_union_agg", F::unknown_agg("hll_union_agg")),
         ("kurtosis", F::default_agg(kurtosis_pop::kurtosis_pop_udaf)),
-        ("last", F::default_agg(first_last::last_value_udaf)),
-        ("last_value", F::default_agg(first_last::last_value_udaf)),
+        (
+            "last",
+            F::custom_agg(|args, distinct| first_last_value(args, distinct, false)),
+        ),
+        (
+            "last_value",
+            F::custom_agg(|args, distinct| first_last_value(args, distinct, false)),
+        ),
         ("max", F::default_agg(min_max::max_udaf)),
         (
             "max_by",

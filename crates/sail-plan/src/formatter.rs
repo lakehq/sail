@@ -359,7 +359,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 let arguments = arguments.join(", ");
                 Ok(format!("date_add({arguments})"))
             }
-            "any_value" | "first" | "first_value" => {
+            "any_value" | "first" | "first_value" | "last" | "last_value" => {
                 let argument = arguments[0];
                 Ok(format!("{name}({argument})"))
             }
