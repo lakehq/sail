@@ -2372,7 +2372,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: to_timestamp_ltz"
       }
     },
     {
@@ -2394,7 +2394,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: one value expected: [Literal(Utf8(\"2016-12-31\")), Literal(Utf8(\"yyyy-MM-dd\"))]"
+        "failure": "not implemented: function: to_timestamp_ltz"
       }
     },
     {
