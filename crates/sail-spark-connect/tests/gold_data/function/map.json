@@ -208,7 +208,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: map_from_arrays"
       }
     },
     {

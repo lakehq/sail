@@ -25,7 +25,7 @@ pub(super) fn list_built_in_map_functions() -> Vec<(&'static str, Function)> {
         ("map_concat", F::unknown("map_concat")),
         ("map_contains_key", F::custom(map_contains_key)),
         ("map_entries", F::var_arg(expr_fn::make_array)),
-        ("map_from_arrays", F::udf(MapFunction::new())),
+        ("map_from_arrays", F::unknown("map_from_arrays")),
         ("map_from_entries", F::unknown("map_from_entries")),
         ("map_keys", F::unary(expr_fn::map_keys)),
         ("map_values", F::unary(expr_fn::map_values)),
