@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: element_at"
+        "failure": "error in DataFusion: Error during planning: Execution error: User-defined coercion failed with Internal(\"Expected a Map type, got List(Field { name: \\\"item\\\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })\") No function matches the given name and argument types 'map_extract(List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tmap_extract(UserDefined)"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: element_at"
+        "success": "ok"
       }
     },
     {
@@ -117,7 +117,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: map_contains_key"
+        "success": "ok"
       }
     },
     {
@@ -139,7 +139,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: map_contains_key"
+        "success": "ok"
       }
     },
     {
@@ -181,7 +181,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: map_entries"
+        "success": "ok"
       }
     },
     {
@@ -208,7 +208,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: map_from_arrays"
+        "success": "ok"
       }
     },
     {
@@ -261,7 +261,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: map_keys"
+        "success": "ok"
       }
     },
     {
@@ -287,7 +287,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: map_values"
+        "success": "ok"
       }
     },
     {

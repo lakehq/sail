@@ -950,14 +950,14 @@ impl<'a> DisplayIndexState<'a> for &'a MapArray {
         f.write_char('{')?;
         if let Some(idx) = iter.next() {
             s.0.write(idx, f)?;
-            write!(f, " -> ")?;
+            write!(f, ", ")?;
             s.1.write(idx, f)?;
         }
 
         for idx in iter {
-            write!(f, ", ")?;
+            write!(f, "}}, {{")?;
             s.0.write(idx, f)?;
-            write!(f, " -> ")?;
+            write!(f, ", ")?;
             s.1.write(idx, f)?;
         }
 
@@ -1060,7 +1060,7 @@ mod tests {
             MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
                 .unwrap();
         assert_eq!(
-            "{d -> 30, e -> 40, f -> 50}",
+            "{d, 30}, {e, 40}, {f, 50}",
             array_value_to_string(&map_array, 1).unwrap()
         );
     }

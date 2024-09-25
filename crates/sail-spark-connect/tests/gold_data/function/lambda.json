@@ -599,7 +599,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: map_from_arrays"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -626,7 +626,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: map_from_arrays"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -653,7 +653,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: map_from_arrays"
+        "failure": "not implemented: lambda function"
       }
     },
     {
@@ -680,7 +680,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: map_from_arrays"
+        "failure": "not implemented: lambda function"
       }
     },
     {
