@@ -7,6 +7,7 @@ use datafusion_expr::{expr, BinaryExpr, Operator};
 
 use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::least_greatest;
 use crate::extension::function::randn::Randn;
 use crate::extension::function::random::Random;
 use crate::function::common::Function;
@@ -169,10 +170,10 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("expm1", F::custom(expm1)),
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::unary(floor)),
-        ("greatest", F::unknown("greatest")),
+        ("greatest", F::udf(least_greatest::Greatest::new())),
         ("hex", F::custom(hex)),
         ("hypot", F::binary(hypot)),
-        ("least", F::unknown("least")),
+        ("least", F::udf(least_greatest::Least::new())),
         ("ln", F::unary(expr_fn::ln)),
         ("log", F::binary(expr_fn::log)),
         ("log10", F::unary(expr_fn::log10)),

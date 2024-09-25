@@ -4,6 +4,7 @@ pub(crate) mod drop_struct_field;
 pub(crate) mod explode;
 mod functions_nested_utils;
 mod functions_utils;
+pub(crate) mod least_greatest;
 pub(crate) mod levenshtein;
 pub(crate) mod map_function;
 pub(crate) mod multi_expr;
