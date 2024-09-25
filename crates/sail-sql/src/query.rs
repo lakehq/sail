@@ -22,6 +22,8 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
         fetch,
         locks,
         for_clause,
+        settings,
+        format_clause,
     } = query;
     if !limit_by.is_empty() {
         return Err(SqlError::unsupported("LIMIT BY clause"));
@@ -35,11 +37,20 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
     if for_clause.is_some() {
         return Err(SqlError::unsupported("FOR clause"));
     }
+    if settings.is_some() {
+        return Err(SqlError::unsupported("SETTINGS clause"));
+    }
+    if format_clause.is_some() {
+        return Err(SqlError::unsupported("FORMAT clause"));
+    }
 
     let plan = from_ast_set_expr(*body)?;
 
-    let plan = if !order_by.is_empty() {
-        let order_by = order_by
+    let plan = if let Some(ast::OrderBy { exprs, interpolate }) = order_by {
+        if interpolate.is_some() {
+            return Err(SqlError::unsupported("INTERPOLATE in ORDER BY"));
+        }
+        let order_by = exprs
             .into_iter()
             .map(from_ast_order_by)
             .collect::<SqlResult<_>>()?;
@@ -98,6 +109,7 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
         into,
         from,
         lateral_views,
+        prewhere,
         selection,
         group_by,
         cluster_by,
@@ -118,6 +130,9 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
     }
     if !lateral_views.is_empty() {
         return Err(SqlError::todo("LATERAL VIEW clause in SELECT"));
+    }
+    if prewhere.is_some() {
+        return Err(SqlError::unsupported("PREWHERE clause in SELECT"));
     }
     if !cluster_by.is_empty() {
         return Err(SqlError::unsupported("CLUSTER BY clause in SELECT"));
@@ -174,11 +189,24 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
         .collect::<SqlResult<_>>()?;
 
     let group_by = match group_by {
-        GroupByExpr::All => return Err(SqlError::unsupported("GROUP BY ALL")),
-        GroupByExpr::Expressions(group_by) => group_by
-            .into_iter()
-            .map(from_ast_expression)
-            .collect::<SqlResult<Vec<spec::Expr>>>()?,
+        GroupByExpr::All(_) => return Err(SqlError::unsupported("GROUP BY ALL")),
+        GroupByExpr::Expressions(expr, modifiers) => {
+            let expr = expr
+                .into_iter()
+                .map(from_ast_expression)
+                .collect::<SqlResult<Vec<spec::Expr>>>()?;
+            match modifiers.as_slice() {
+                [] => expr,
+                [ast::GroupByWithModifier::Rollup] => vec![spec::Expr::Rollup(expr)],
+                [ast::GroupByWithModifier::Cube] => vec![spec::Expr::Cube(expr)],
+                _ => {
+                    return Err(SqlError::unsupported(format!(
+                        "GROUP BY modifiers {:?}",
+                        modifiers
+                    )))
+                }
+            }
+        }
     };
 
     let having = match having {
@@ -209,6 +237,7 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
                     expr,
                     asc: None,
                     nulls_first: None,
+                    with_fill: None,
                 };
                 from_ast_order_by(expr)
             })
@@ -322,8 +351,12 @@ pub fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::
         .try_fold(plan, |left, join| -> SqlResult<_> {
             let ast::Join {
                 relation: right,
+                global,
                 join_operator,
             } = join;
+            if global {
+                return Err(SqlError::unsupported("global join"));
+            }
             let right = from_ast_table_factor(right)?;
             let (join_type, constraint) = match join_operator {
                 JoinOperator::Inner(constraint) => (spec::JoinType::Inner, Some(constraint)),
@@ -382,6 +415,7 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
             args,
             with_hints,
             version,
+            with_ordinality,
             partitions,
         } => {
             if !with_hints.is_empty() {
@@ -390,12 +424,18 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
             if version.is_some() {
                 return Err(SqlError::unsupported("table version"));
             }
+            if with_ordinality {
+                return Err(SqlError::unsupported("table with ordinality"));
+            }
             if !partitions.is_empty() {
                 return Err(SqlError::unsupported("table partitions"));
             }
 
-            let plan = if let Some(func_args) = args {
-                let args: Vec<spec::Expr> = func_args
+            let plan = if let Some(ast::TableFunctionArgs { args, settings }) = args {
+                if settings.is_some() {
+                    return Err(SqlError::unsupported("table function settings"));
+                }
+                let args: Vec<spec::Expr> = args
                     .into_iter()
                     .map(|arg| {
                         if let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(expr)) = arg {

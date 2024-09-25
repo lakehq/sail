@@ -1024,7 +1024,7 @@
       "input": "CREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS ()) USING PARQUET",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'.(line 1, pos 54)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS ()) USING PARQUET\n------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an expression:, found: ) at Line: 1, Column: 55"
+        "failure": "invalid argument: sql parser error: Expected: an expression, found: ) at Line: 1, Column: 55"
       }
     },
     {

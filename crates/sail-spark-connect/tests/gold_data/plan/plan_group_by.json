@@ -105,13 +105,187 @@
     {
       "input": "select a, b, sum(c) as c from d group by a, b with cube",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: with"
+        "success": {
+          "query": {
+            "aggregate": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "d"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "grouping": [
+                {
+                  "cube": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "b"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "aggregate": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "alias": {
+                    "expr": {
+                      "unresolvedFunction": {
+                        "functionName": "sum",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "c"
+                              ],
+                              "planId": null
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    },
+                    "name": [
+                      "c"
+                    ],
+                    "metadata": null
+                  }
+                }
+              ],
+              "having": null,
+              "withGroupingExpressions": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select a, b, sum(c) as c from d group by a, b with rollup",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: with"
+        "success": {
+          "query": {
+            "aggregate": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "d"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "grouping": [
+                {
+                  "rollup": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "b"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ]
+                }
+              ],
+              "aggregate": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "alias": {
+                    "expr": {
+                      "unresolvedFunction": {
+                        "functionName": "sum",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "c"
+                              ],
+                              "planId": null
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    },
+                    "name": [
+                      "c"
+                    ],
+                    "metadata": null
+                  }
+                }
+              ],
+              "having": null,
+              "withGroupingExpressions": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

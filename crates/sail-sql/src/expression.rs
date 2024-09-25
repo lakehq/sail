@@ -217,6 +217,7 @@ fn from_ast_value(value: ast::Value) -> SqlResult<spec::Expr> {
         | Value::DoubleQuotedRawStringLiteral(_)
         | Value::TripleSingleQuotedRawStringLiteral(_)
         | Value::TripleDoubleQuotedRawStringLiteral(_)
+        | Value::UnicodeStringLiteral(_)
         | Value::NationalStringLiteral(_) => {
             Err(SqlError::unsupported(format!("value: {:?}", value)))
         }
@@ -256,7 +257,11 @@ pub(crate) fn from_ast_order_by(order_by: ast::OrderByExpr) -> SqlResult<spec::S
         expr,
         asc,
         nulls_first,
+        with_fill,
     } = order_by;
+    if with_fill.is_some() {
+        return Err(SqlError::unsupported("order by with fill"));
+    }
     let direction = match asc {
         None => spec::SortDirection::Unspecified,
         Some(true) => spec::SortDirection::Ascending,
@@ -435,7 +440,11 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                 cast_to_type: from_ast_data_type(&data_type)?,
             })
         }
-        Expr::Extract { field, expr } => Ok(spec::Expr::from(Function {
+        Expr::Extract {
+            field,
+            syntax: _,
+            expr,
+        } => Ok(spec::Expr::from(Function {
             name: "extract".to_string(),
             args: vec![
                 LiteralValue(from_ast_date_time_field(field)?).try_into()?,
@@ -691,6 +700,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                 plan_id: None,
             }),
         }),
+        Expr::Map(_) => Err(SqlError::unsupported("map expression")),
         Expr::Subscript { expr, subscript } => {
             let mut expr = from_ast_expression(*expr)?;
             expr = match *subscript {
