@@ -1,7 +1,7 @@
 use std::any::TypeId;
 
 use sqlparser::ast;
-use sqlparser::dialect::{Dialect, GenericDialect};
+use sqlparser::dialect::{Dialect, GenericDialect, Precedence};
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::Token;
@@ -14,7 +14,7 @@ pub struct SparkDialect {}
 impl SparkDialect {
     fn parse_exclamation_mark_unary(&self, parser: &mut Parser) -> Result<ast::Expr, ParserError> {
         parser.expect_token(&Token::ExclamationMark)?;
-        let expr = parser.parse_subexpr(Parser::UNARY_NOT_PREC)?;
+        let expr = parser.parse_subexpr(self.prec_value(Precedence::UnaryNot))?;
         Ok(ast::Expr::UnaryOp {
             op: ast::UnaryOperator::Not,
             expr: Box::new(expr),

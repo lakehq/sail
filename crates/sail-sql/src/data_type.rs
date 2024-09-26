@@ -201,7 +201,7 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
                 | ArrayElemTypeDef::None => Err(SqlError::unsupported("array data type")),
             }
         }
-        ast::DataType::Struct(fields) => {
+        ast::DataType::Struct(fields, _bracket_kind) => {
             let fields = fields
                 .iter()
                 .map(|f| {
@@ -291,6 +291,7 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
         | ast::DataType::Nested(_)
         | ast::DataType::Union(_)
         | ast::DataType::Nullable(_)
+        | ast::DataType::Trigger
         | ast::DataType::LowCardinality(_) => {
             Err(SqlError::unsupported(format!("SQL type {sql_type:?}")))
         }

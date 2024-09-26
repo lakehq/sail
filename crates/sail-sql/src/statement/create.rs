@@ -322,6 +322,10 @@ pub(crate) fn calc_inline_constraints_from_columns(
                 | ast::ColumnOption::Generated { .. }
                 | ast::ColumnOption::Comment(_)
                 | ast::ColumnOption::Options(_)
+                | ast::ColumnOption::Materialized(_)
+                | ast::ColumnOption::Identity(_)
+                | ast::ColumnOption::Ephemeral(_)
+                | ast::ColumnOption::Alias(_)
                 | ast::ColumnOption::OnUpdate(_) => {}
             }
         }

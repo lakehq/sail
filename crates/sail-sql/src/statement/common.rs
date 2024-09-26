@@ -193,6 +193,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
             only: _,
             operations: _,
             location: _,
+            on_cluster: _,
         } => Err(SqlError::todo("SQL alter table")),
         Statement::AlterView {
             name: _,
@@ -284,6 +285,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
             if_not_exists: _,
             include: _,
             nulls_distinct: _,
+            with: _,
             predicate: _,
         }) => Err(SqlError::todo("SQL create index")),
         Statement::CreateView {
@@ -564,8 +566,11 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
         | Statement::Commit { .. }
         | Statement::Rollback { .. }
         | Statement::CreateProcedure { .. }
+        | Statement::DropProcedure { .. }
         | Statement::CreateMacro { .. }
         | Statement::CreateStage { .. }
+        | Statement::CreateTrigger { .. }
+        | Statement::DropTrigger { .. }
         | Statement::Assert { .. }
         | Statement::Grant { .. }
         | Statement::Revoke { .. }
@@ -580,6 +585,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
         | Statement::Pragma { .. }
         | Statement::LockTables { .. }
         | Statement::UnlockTables
+        | Statement::OptimizeTable { .. }
         | Statement::Unload { .. } => Err(SqlError::unsupported(format!(
             "Unsupported statement: {}",
             statement
@@ -593,7 +599,10 @@ pub(crate) fn from_ast_sql_options(
     options
         .into_iter()
         .map(|opt| {
-            let ast::SqlOption { name, value } = opt;
+            let (name, value) = match opt {
+                ast::SqlOption::KeyValue { key, value } => (key, value),
+                _ => return Err(SqlError::unsupported("SQL option")),
+            };
             let value = match from_ast_expression(value)? {
                 spec::Expr::Literal(spec::Literal::String(s)) => s,
                 x => return Err(SqlError::invalid(format!("SQL option value: {:?}", x))),
