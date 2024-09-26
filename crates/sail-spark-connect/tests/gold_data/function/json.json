@@ -147,7 +147,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: get_json_object"
+        "success": "ok"
       }
     },
     {
