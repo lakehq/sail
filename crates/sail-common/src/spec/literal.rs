@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use arrow::datatypes::i256;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -21,8 +23,11 @@ pub enum Literal {
     Date {
         days: i32,
     },
-    Timestamp {
+    // TODO: We need to implement the remaining Timestamp variants:
+    //  TimestampSecond, TimestampMillisecond, TimestampMicrosecond, TimestampNanosecond
+    TimestampMicrosecond {
         microseconds: i64,
+        timezone: Option<Arc<str>>,
     },
     TimestampNtz {
         microseconds: i64,

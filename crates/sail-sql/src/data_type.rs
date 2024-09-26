@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION;
 use sail_common::spec;
 use sqlparser::ast;
@@ -14,7 +16,7 @@ pub const SQL_DECIMAL_MAX_SCALE: i8 = 38;
 
 pub fn parse_data_type(sql: &str) -> SqlResult<spec::DataType> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
-    if parser.peek_token() == Token::EOF {
+    if parser.peek_token().token == Token::EOF {
         return Err(SqlError::invalid("empty data type"));
     }
     let data_type = parser.parse_data_type()?;
@@ -110,10 +112,16 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
 
             match tz_info {
                 // FIXME: `timestamp` can either be `timestamp_ltz` (default) or `timestamp_ntz`,
-                // We need to consider the `spark.sql.timestampType` configuration.
-                TimezoneInfo::None => Ok(spec::DataType::Timestamp),
+                //  We need to consider the `spark.sql.timestampType` configuration.
                 TimezoneInfo::WithoutTimeZone => Ok(spec::DataType::TimestampNtz),
-                TimezoneInfo::WithLocalTimeZone => Ok(spec::DataType::Timestamp),
+                TimezoneInfo::None => Ok(spec::DataType::Timestamp(
+                    Some(spec::TimeUnit::Microsecond),
+                    None,
+                )),
+                TimezoneInfo::WithLocalTimeZone => Ok(spec::DataType::Timestamp(
+                    Some(spec::TimeUnit::Microsecond),
+                    Some(Arc::<str>::from("ltz")),
+                )),
                 TimezoneInfo::WithTimeZone | TimezoneInfo::Tz => {
                     Err(SqlError::unsupported("timestamp with time zone"))
                 }

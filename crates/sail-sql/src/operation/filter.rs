@@ -2,7 +2,7 @@ use sail_common::spec;
 use sqlparser::ast;
 
 use crate::error::SqlResult;
-use crate::expression::from_ast_expression;
+use crate::expression::common::from_ast_expression;
 
 pub fn query_plan_with_filter(
     plan: spec::QueryPlan,

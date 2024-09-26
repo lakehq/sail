@@ -43,7 +43,12 @@
                 "name": "MAP",
                 "dataType": {
                   "map": {
-                    "keyType": "timestamp",
+                    "keyType": {
+                      "timestamp": [
+                        "microsecond",
+                        null
+                      ]
+                    },
                     "valueType": {
                       "varChar": {
                         "length": 10
@@ -264,7 +269,12 @@
               },
               {
                 "name": "timestamp",
-                "dataType": "timestamp",
+                "dataType": {
+                  "timestamp": [
+                    "microsecond",
+                    null
+                  ]
+                },
                 "nullable": true,
                 "metadata": []
               }
@@ -523,7 +533,12 @@
               },
               {
                 "name": "ts",
-                "dataType": "timestamp",
+                "dataType": {
+                  "timestamp": [
+                    "microsecond",
+                    null
+                  ]
+                },
                 "nullable": true,
                 "metadata": []
               }
@@ -572,13 +587,23 @@
     {
       "input": "timestamp",
       "output": {
-        "success": "timestamp"
+        "success": {
+          "timestamp": [
+            "microsecond",
+            null
+          ]
+        }
       }
     },
     {
       "input": "timestamp_ltz",
       "output": {
-        "success": "timestamp"
+        "success": {
+          "timestamp": [
+            "microsecond",
+            "ltz"
+          ]
+        }
       }
     },
     {

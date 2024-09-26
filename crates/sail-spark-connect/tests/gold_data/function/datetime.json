@@ -414,7 +414,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: current_timezone"
+        "success": "ok"
       }
     },
     {

@@ -53,9 +53,6 @@ pub(crate) fn get_built_in_window_function(
         "percent_rank" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
             BuiltInWindowFunction::PercentRank,
         )),
-        s => Err(PlanError::invalid(format!(
-            "unknown window function: {}",
-            s
-        ))),
+        s => Err(PlanError::invalid(format!("unknown window function: {s}",))),
     }
 }
