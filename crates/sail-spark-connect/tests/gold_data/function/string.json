@@ -437,7 +437,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: space"
+        "failure": "error in DataFusion: Error during planning: The array_concat function can only accept list as the args."
       }
     },
     {
@@ -1337,7 +1337,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: locate"
+        "success": "ok"
       }
     },
     {
@@ -1359,7 +1359,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: locate"
+        "failure": "not implemented: position with 3 arguments is not supported yet"
       }
     },
     {
@@ -2063,7 +2063,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: position"
+        "success": "ok"
       }
     },
     {
@@ -2085,7 +2085,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: position"
+        "failure": "not implemented: position with 3 arguments is not supported yet"
       }
     },
     {
@@ -2331,7 +2331,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: replace"
+        "success": "ok"
       }
     },
     {
@@ -2593,7 +2593,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: split_part"
+        "success": "ok"
       }
     },
     {

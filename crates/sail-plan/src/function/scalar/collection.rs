@@ -17,6 +17,7 @@ fn concat(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::E
         | Some(expr::Expr::Literal(ScalarValue::Utf8View(_)))
         | Some(expr::Expr::Literal(ScalarValue::LargeUtf8(_))) => Ok(str_expr_fn::concat(args)),
         _ => Ok(expr_fn::array_concat(args)),
+        // FIXME: Create UDF for concat to properly determine datatype
     }
 }
 
