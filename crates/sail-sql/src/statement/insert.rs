@@ -2,7 +2,7 @@ use sail_common::spec;
 use sqlparser::ast;
 
 use crate::error::{SqlError, SqlResult};
-use crate::expression::common::{from_ast_expression, from_ast_object_name};
+use crate::expression::common::{from_ast_expression, from_ast_object_name_normalized};
 use crate::query::from_ast_query;
 use crate::utils::normalize_ident;
 
@@ -70,7 +70,7 @@ pub(crate) fn insert_statement_to_plan(insert: ast::Insert) -> SqlResult<spec::P
         return Err(SqlError::invalid("INSERT with an alias is not supported."));
     }
 
-    let table_name = from_ast_object_name(table_name)?;
+    let table_name = from_ast_object_name_normalized(&table_name)?;
     let columns: Vec<spec::Identifier> = columns
         .iter()
         .map(|x| spec::Identifier::from(normalize_ident(x)))
