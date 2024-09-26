@@ -10,19 +10,19 @@ edition = "2021"
 
 [workspace.dependencies]
 thiserror = { version = "1.0.64" }
-tokio = { version = "1.40.0", features = ["full"] }
+tokio = { version = "1.38.1", features = ["full"] }
 tokio-stream = "0.1.16"
 tonic = { version = "0.12", features = ["tls", "tls-roots", "gzip", "zstd"] }
-tonic-build = "0.11"
-tonic-reflection = "0.11"
-tonic-health = "0.11"
-tonic-types = "0.11"
-prost-build = "0.12"
-prost = "0.13"
-prost-types = "0.12"
-pbjson = "0.6"
-pbjson-types = "0.6"
-pbjson-build = "0.6"
+tonic-build = "0.12.2"
+tonic-reflection = "0.12.2"
+tonic-health = "0.12.2"
+tonic-types = "0.12.2"
+prost-build = "0.13.3"
+prost = "0.13.3"
+prost-types = "0.13.3"
+pbjson = "0.7.0"
+pbjson-types = "0.7.0"
+pbjson-build = "0.7.0"
 tower = { version = "0.4", features = ["full"] }
 tower-http = { version = "0.4", features = ["full"] }
 uuid = { version = "1.10.0", features = ["v4"] }
@@ -65,7 +65,7 @@ fastrace = { version = "0.7.3", features = ["enable"] }
 fastrace-opentelemetry = "0.7.3"
 opentelemetry = "0.25.0"
 opentelemetry_sdk = "0.25.0"
-opentelemetry-otlp = { version = "0.17.0", features = ["tls", "tls-roots"] }
+opentelemetry-otlp = { version = "0.25.0", features = ["tls", "tls-roots"] }
 
 ######
 # The versions of the following dependencies are managed manually.
