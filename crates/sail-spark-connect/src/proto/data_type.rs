@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use arrow::datatypes::DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION;
 use sail_common::spec;
@@ -121,7 +122,10 @@ impl TryFrom<DataType> for spec::DataType {
                 Ok(spec::DataType::VarChar { length })
             }
             Kind::Date(_) => Ok(spec::DataType::Date),
-            Kind::Timestamp(_) => Ok(spec::DataType::Timestamp),
+            Kind::Timestamp(_) => Ok(spec::DataType::Timestamp(
+                Some(spec::TimeUnit::Microsecond),
+                Some(Arc::<str>::from("ltz")),
+            )),
             Kind::TimestampNtz(_) => Ok(spec::DataType::TimestampNtz),
             Kind::CalendarInterval(_) => Ok(spec::DataType::CalendarInterval),
             Kind::YearMonthInterval(sdt::YearMonthInterval {
@@ -282,7 +286,9 @@ impl TryFrom<spec::DataType> for DataType {
                 })
             }
             spec::DataType::Date => Kind::Date(sdt::Date::default()),
-            spec::DataType::Timestamp => Kind::Timestamp(sdt::Timestamp::default()),
+            spec::DataType::Timestamp(_time_unit, _timezone) => {
+                Kind::Timestamp(sdt::Timestamp::default())
+            }
             spec::DataType::TimestampNtz => Kind::TimestampNtz(sdt::TimestampNtz::default()),
             spec::DataType::CalendarInterval => {
                 Kind::CalendarInterval(sdt::CalendarInterval::default())

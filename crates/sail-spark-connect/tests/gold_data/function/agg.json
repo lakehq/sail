@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: any_value"
+        "success": "ok"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: any_value"
+        "success": "ok"
       }
     },
     {
@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: any_value"
+        "success": "ok"
       }
     },
     {
@@ -151,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: approx_count_distinct"
+        "success": "ok"
       }
     },
     {
@@ -173,7 +173,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: approx_percentile"
+        "success": "ok"
       }
     },
     {
@@ -195,7 +195,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: approx_percentile"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Interval(YearMonth), Decimal128(1, 1), Int32] to the signature OneOf([Exact([Int8, Float64]), Exact([Int8, Float64, Int8]), Exact([Int8, Float64, Int16]), Exact([Int8, Float64, Int32]), Exact([Int8, Float64, Int64]), Exact([Int8, Float64, UInt8]), Exact([Int8, Float64, UInt16]), Exact([Int8, Float64, UInt32]), Exact([Int8, Float64, UInt64]), Exact([Int16, Float64]), Exact([Int16, Float64, Int8]), Exact([Int16, Float64, Int16]), Exact([Int16, Float64, Int32]), Exact([Int16, Float64, Int64]), Exact([Int16, Float64, UInt8]), Exact([Int16, Float64, UInt16]), Exact([Int16, Float64, UInt32]), Exact([Int16, Float64, UInt64]), Exact([Int32, Float64]), Exact([Int32, Float64, Int8]), Exact([Int32, Float64, Int16]), Exact([Int32, Float64, Int32]), Exact([Int32, Float64, Int64]), Exact([Int32, Float64, UInt8]), Exact([Int32, Float64, UInt16]), Exact([Int32, Float64, UInt32]), Exact([Int32, Float64, UInt64]), Exact([Int64, Float64]), Exact([Int64, Float64, Int8]), Exact([Int64, Float64, Int16]), Exact([Int64, Float64, Int32]), Exact([Int64, Float64, Int64]), Exact([Int64, Float64, UInt8]), Exact([Int64, Float64, UInt16]), Exact([Int64, Float64, UInt32]), Exact([Int64, Float64, UInt64]), Exact([UInt8, Float64]), Exact([UInt8, Float64, Int8]), Exact([UInt8, Float64, Int16]), Exact([UInt8, Float64, Int32]), Exact([UInt8, Float64, Int64]), Exact([UInt8, Float64, UInt8]), Exact([UInt8, Float64, UInt16]), Exact([UInt8, Float64, UInt32]), Exact([UInt8, Float64, UInt64]), Exact([UInt16, Float64]), Exact([UInt16, Float64, Int8]), Exact([UInt16, Float64, Int16]), Exact([UInt16, Float64, Int32]), Exact([UInt16, Float64, Int64]), Exact([UInt16, Float64, UInt8]), Exact([UInt16, Float64, UInt16]), Exact([UInt16, Float64, UInt32]), Exact([UInt16, Float64, UInt64]), Exact([UInt32, Float64]), Exact([UInt32, Float64, Int8]), Exact([UInt32, Float64, Int16]), Exact([UInt32, Float64, Int32]), Exact([UInt32, Float64, Int64]), Exact([UInt32, Float64, UInt8]), Exact([UInt32, Float64, UInt16]), Exact([UInt32, Float64, UInt32]), Exact([UInt32, Float64, UInt64]), Exact([UInt64, Float64]), Exact([UInt64, Float64, Int8]), Exact([UInt64, Float64, Int16]), Exact([UInt64, Float64, Int32]), Exact([UInt64, Float64, Int64]), Exact([UInt64, Float64, UInt8]), Exact([UInt64, Float64, UInt16]), Exact([UInt64, Float64, UInt32]), Exact([UInt64, Float64, UInt64]), Exact([Float32, Float64]), Exact([Float32, Float64, Int8]), Exact([Float32, Float64, Int16]), Exact([Float32, Float64, Int32]), Exact([Float32, Float64, Int64]), Exact([Float32, Float64, UInt8]), Exact([Float32, Float64, UInt16]), Exact([Float32, Float64, UInt32]), Exact([Float32, Float64, UInt64]), Exact([Float64, Float64]), Exact([Float64, Float64, Int8]), Exact([Float64, Float64, Int16]), Exact([Float64, Float64, Int32]), Exact([Float64, Float64, Int64]), Exact([Float64, Float64, UInt8]), Exact([Float64, Float64, UInt16]), Exact([Float64, Float64, UInt32]), Exact([Float64, Float64, UInt64])]) failed. No function matches the given name and argument types 'approx_percentile_cont(Interval(YearMonth), Decimal128(1, 1), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Int8, Float64)\n\tapprox_percentile_cont(Int8, Float64, Int8)\n\tapprox_percentile_cont(Int8, Float64, Int16)\n\tapprox_percentile_cont(Int8, Float64, Int32)\n\tapprox_percentile_cont(Int8, Float64, Int64)\n\tapprox_percentile_cont(Int8, Float64, UInt8)\n\tapprox_percentile_cont(Int8, Float64, UInt16)\n\tapprox_percentile_cont(Int8, Float64, UInt32)\n\tapprox_percentile_cont(Int8, Float64, UInt64)\n\tapprox_percentile_cont(Int16, Float64)\n\tapprox_percentile_cont(Int16, Float64, Int8)\n\tapprox_percentile_cont(Int16, Float64, Int16)\n\tapprox_percentile_cont(Int16, Float64, Int32)\n\tapprox_percentile_cont(Int16, Float64, Int64)\n\tapprox_percentile_cont(Int16, Float64, UInt8)\n\tapprox_percentile_cont(Int16, Float64, UInt16)\n\tapprox_percentile_cont(Int16, Float64, UInt32)\n\tapprox_percentile_cont(Int16, Float64, UInt64)\n\tapprox_percentile_cont(Int32, Float64)\n\tapprox_percentile_cont(Int32, Float64, Int8)\n\tapprox_percentile_cont(Int32, Float64, Int16)\n\tapprox_percentile_cont(Int32, Float64, Int32)\n\tapprox_percentile_cont(Int32, Float64, Int64)\n\tapprox_percentile_cont(Int32, Float64, UInt8)\n\tapprox_percentile_cont(Int32, Float64, UInt16)\n\tapprox_percentile_cont(Int32, Float64, UInt32)\n\tapprox_percentile_cont(Int32, Float64, UInt64)\n\tapprox_percentile_cont(Int64, Float64)\n\tapprox_percentile_cont(Int64, Float64, Int8)\n\tapprox_percentile_cont(Int64, Float64, Int16)\n\tapprox_percentile_cont(Int64, Float64, Int32)\n\tapprox_percentile_cont(Int64, Float64, Int64)\n\tapprox_percentile_cont(Int64, Float64, UInt8)\n\tapprox_percentile_cont(Int64, Float64, UInt16)\n\tapprox_percentile_cont(Int64, Float64, UInt32)\n\tapprox_percentile_cont(Int64, Float64, UInt64)\n\tapprox_percentile_cont(UInt8, Float64)\n\tapprox_percentile_cont(UInt8, Float64, Int8)\n\tapprox_percentile_cont(UInt8, Float64, Int16)\n\tapprox_percentile_cont(UInt8, Float64, Int32)\n\tapprox_percentile_cont(UInt8, Float64, Int64)\n\tapprox_percentile_cont(UInt8, Float64, UInt8)\n\tapprox_percentile_cont(UInt8, Float64, UInt16)\n\tapprox_percentile_cont(UInt8, Float64, UInt32)\n\tapprox_percentile_cont(UInt8, Float64, UInt64)\n\tapprox_percentile_cont(UInt16, Float64)\n\tapprox_percentile_cont(UInt16, Float64, Int8)\n\tapprox_percentile_cont(UInt16, Float64, Int16)\n\tapprox_percentile_cont(UInt16, Float64, Int32)\n\tapprox_percentile_cont(UInt16, Float64, Int64)\n\tapprox_percentile_cont(UInt16, Float64, UInt8)\n\tapprox_percentile_cont(UInt16, Float64, UInt16)\n\tapprox_percentile_cont(UInt16, Float64, UInt32)\n\tapprox_percentile_cont(UInt16, Float64, UInt64)\n\tapprox_percentile_cont(UInt32, Float64)\n\tapprox_percentile_cont(UInt32, Float64, Int8)\n\tapprox_percentile_cont(UInt32, Float64, Int16)\n\tapprox_percentile_cont(UInt32, Float64, Int32)\n\tapprox_percentile_cont(UInt32, Float64, Int64)\n\tapprox_percentile_cont(UInt32, Float64, UInt8)\n\tapprox_percentile_cont(UInt32, Float64, UInt16)\n\tapprox_percentile_cont(UInt32, Float64, UInt32)\n\tapprox_percentile_cont(UInt32, Float64, UInt64)\n\tapprox_percentile_cont(UInt64, Float64)\n\tapprox_percentile_cont(UInt64, Float64, Int8)\n\tapprox_percentile_cont(UInt64, Float64, Int16)\n\tapprox_percentile_cont(UInt64, Float64, Int32)\n\tapprox_percentile_cont(UInt64, Float64, Int64)\n\tapprox_percentile_cont(UInt64, Float64, UInt8)\n\tapprox_percentile_cont(UInt64, Float64, UInt16)\n\tapprox_percentile_cont(UInt64, Float64, UInt32)\n\tapprox_percentile_cont(UInt64, Float64, UInt64)\n\tapprox_percentile_cont(Float32, Float64)\n\tapprox_percentile_cont(Float32, Float64, Int8)\n\tapprox_percentile_cont(Float32, Float64, Int16)\n\tapprox_percentile_cont(Float32, Float64, Int32)\n\tapprox_percentile_cont(Float32, Float64, Int64)\n\tapprox_percentile_cont(Float32, Float64, UInt8)\n\tapprox_percentile_cont(Float32, Float64, UInt16)\n\tapprox_percentile_cont(Float32, Float64, UInt32)\n\tapprox_percentile_cont(Float32, Float64, UInt64)\n\tapprox_percentile_cont(Float64, Float64)\n\tapprox_percentile_cont(Float64, Float64, Int8)\n\tapprox_percentile_cont(Float64, Float64, Int16)\n\tapprox_percentile_cont(Float64, Float64, Int32)\n\tapprox_percentile_cont(Float64, Float64, Int64)\n\tapprox_percentile_cont(Float64, Float64, UInt8)\n\tapprox_percentile_cont(Float64, Float64, UInt16)\n\tapprox_percentile_cont(Float64, Float64, UInt32)\n\tapprox_percentile_cont(Float64, Float64, UInt64)"
       }
     },
     {
@@ -221,7 +221,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: approx_percentile"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, List(Field { name: \"item\", data_type: Decimal128(1, 1), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Int32] to the signature OneOf([Exact([Int8, Float64]), Exact([Int8, Float64, Int8]), Exact([Int8, Float64, Int16]), Exact([Int8, Float64, Int32]), Exact([Int8, Float64, Int64]), Exact([Int8, Float64, UInt8]), Exact([Int8, Float64, UInt16]), Exact([Int8, Float64, UInt32]), Exact([Int8, Float64, UInt64]), Exact([Int16, Float64]), Exact([Int16, Float64, Int8]), Exact([Int16, Float64, Int16]), Exact([Int16, Float64, Int32]), Exact([Int16, Float64, Int64]), Exact([Int16, Float64, UInt8]), Exact([Int16, Float64, UInt16]), Exact([Int16, Float64, UInt32]), Exact([Int16, Float64, UInt64]), Exact([Int32, Float64]), Exact([Int32, Float64, Int8]), Exact([Int32, Float64, Int16]), Exact([Int32, Float64, Int32]), Exact([Int32, Float64, Int64]), Exact([Int32, Float64, UInt8]), Exact([Int32, Float64, UInt16]), Exact([Int32, Float64, UInt32]), Exact([Int32, Float64, UInt64]), Exact([Int64, Float64]), Exact([Int64, Float64, Int8]), Exact([Int64, Float64, Int16]), Exact([Int64, Float64, Int32]), Exact([Int64, Float64, Int64]), Exact([Int64, Float64, UInt8]), Exact([Int64, Float64, UInt16]), Exact([Int64, Float64, UInt32]), Exact([Int64, Float64, UInt64]), Exact([UInt8, Float64]), Exact([UInt8, Float64, Int8]), Exact([UInt8, Float64, Int16]), Exact([UInt8, Float64, Int32]), Exact([UInt8, Float64, Int64]), Exact([UInt8, Float64, UInt8]), Exact([UInt8, Float64, UInt16]), Exact([UInt8, Float64, UInt32]), Exact([UInt8, Float64, UInt64]), Exact([UInt16, Float64]), Exact([UInt16, Float64, Int8]), Exact([UInt16, Float64, Int16]), Exact([UInt16, Float64, Int32]), Exact([UInt16, Float64, Int64]), Exact([UInt16, Float64, UInt8]), Exact([UInt16, Float64, UInt16]), Exact([UInt16, Float64, UInt32]), Exact([UInt16, Float64, UInt64]), Exact([UInt32, Float64]), Exact([UInt32, Float64, Int8]), Exact([UInt32, Float64, Int16]), Exact([UInt32, Float64, Int32]), Exact([UInt32, Float64, Int64]), Exact([UInt32, Float64, UInt8]), Exact([UInt32, Float64, UInt16]), Exact([UInt32, Float64, UInt32]), Exact([UInt32, Float64, UInt64]), Exact([UInt64, Float64]), Exact([UInt64, Float64, Int8]), Exact([UInt64, Float64, Int16]), Exact([UInt64, Float64, Int32]), Exact([UInt64, Float64, Int64]), Exact([UInt64, Float64, UInt8]), Exact([UInt64, Float64, UInt16]), Exact([UInt64, Float64, UInt32]), Exact([UInt64, Float64, UInt64]), Exact([Float32, Float64]), Exact([Float32, Float64, Int8]), Exact([Float32, Float64, Int16]), Exact([Float32, Float64, Int32]), Exact([Float32, Float64, Int64]), Exact([Float32, Float64, UInt8]), Exact([Float32, Float64, UInt16]), Exact([Float32, Float64, UInt32]), Exact([Float32, Float64, UInt64]), Exact([Float64, Float64]), Exact([Float64, Float64, Int8]), Exact([Float64, Float64, Int16]), Exact([Float64, Float64, Int32]), Exact([Float64, Float64, Int64]), Exact([Float64, Float64, UInt8]), Exact([Float64, Float64, UInt16]), Exact([Float64, Float64, UInt32]), Exact([Float64, Float64, UInt64])]) failed. No function matches the given name and argument types 'approx_percentile_cont(Int32, List(Field { name: \"item\", data_type: Decimal128(1, 1), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Int8, Float64)\n\tapprox_percentile_cont(Int8, Float64, Int8)\n\tapprox_percentile_cont(Int8, Float64, Int16)\n\tapprox_percentile_cont(Int8, Float64, Int32)\n\tapprox_percentile_cont(Int8, Float64, Int64)\n\tapprox_percentile_cont(Int8, Float64, UInt8)\n\tapprox_percentile_cont(Int8, Float64, UInt16)\n\tapprox_percentile_cont(Int8, Float64, UInt32)\n\tapprox_percentile_cont(Int8, Float64, UInt64)\n\tapprox_percentile_cont(Int16, Float64)\n\tapprox_percentile_cont(Int16, Float64, Int8)\n\tapprox_percentile_cont(Int16, Float64, Int16)\n\tapprox_percentile_cont(Int16, Float64, Int32)\n\tapprox_percentile_cont(Int16, Float64, Int64)\n\tapprox_percentile_cont(Int16, Float64, UInt8)\n\tapprox_percentile_cont(Int16, Float64, UInt16)\n\tapprox_percentile_cont(Int16, Float64, UInt32)\n\tapprox_percentile_cont(Int16, Float64, UInt64)\n\tapprox_percentile_cont(Int32, Float64)\n\tapprox_percentile_cont(Int32, Float64, Int8)\n\tapprox_percentile_cont(Int32, Float64, Int16)\n\tapprox_percentile_cont(Int32, Float64, Int32)\n\tapprox_percentile_cont(Int32, Float64, Int64)\n\tapprox_percentile_cont(Int32, Float64, UInt8)\n\tapprox_percentile_cont(Int32, Float64, UInt16)\n\tapprox_percentile_cont(Int32, Float64, UInt32)\n\tapprox_percentile_cont(Int32, Float64, UInt64)\n\tapprox_percentile_cont(Int64, Float64)\n\tapprox_percentile_cont(Int64, Float64, Int8)\n\tapprox_percentile_cont(Int64, Float64, Int16)\n\tapprox_percentile_cont(Int64, Float64, Int32)\n\tapprox_percentile_cont(Int64, Float64, Int64)\n\tapprox_percentile_cont(Int64, Float64, UInt8)\n\tapprox_percentile_cont(Int64, Float64, UInt16)\n\tapprox_percentile_cont(Int64, Float64, UInt32)\n\tapprox_percentile_cont(Int64, Float64, UInt64)\n\tapprox_percentile_cont(UInt8, Float64)\n\tapprox_percentile_cont(UInt8, Float64, Int8)\n\tapprox_percentile_cont(UInt8, Float64, Int16)\n\tapprox_percentile_cont(UInt8, Float64, Int32)\n\tapprox_percentile_cont(UInt8, Float64, Int64)\n\tapprox_percentile_cont(UInt8, Float64, UInt8)\n\tapprox_percentile_cont(UInt8, Float64, UInt16)\n\tapprox_percentile_cont(UInt8, Float64, UInt32)\n\tapprox_percentile_cont(UInt8, Float64, UInt64)\n\tapprox_percentile_cont(UInt16, Float64)\n\tapprox_percentile_cont(UInt16, Float64, Int8)\n\tapprox_percentile_cont(UInt16, Float64, Int16)\n\tapprox_percentile_cont(UInt16, Float64, Int32)\n\tapprox_percentile_cont(UInt16, Float64, Int64)\n\tapprox_percentile_cont(UInt16, Float64, UInt8)\n\tapprox_percentile_cont(UInt16, Float64, UInt16)\n\tapprox_percentile_cont(UInt16, Float64, UInt32)\n\tapprox_percentile_cont(UInt16, Float64, UInt64)\n\tapprox_percentile_cont(UInt32, Float64)\n\tapprox_percentile_cont(UInt32, Float64, Int8)\n\tapprox_percentile_cont(UInt32, Float64, Int16)\n\tapprox_percentile_cont(UInt32, Float64, Int32)\n\tapprox_percentile_cont(UInt32, Float64, Int64)\n\tapprox_percentile_cont(UInt32, Float64, UInt8)\n\tapprox_percentile_cont(UInt32, Float64, UInt16)\n\tapprox_percentile_cont(UInt32, Float64, UInt32)\n\tapprox_percentile_cont(UInt32, Float64, UInt64)\n\tapprox_percentile_cont(UInt64, Float64)\n\tapprox_percentile_cont(UInt64, Float64, Int8)\n\tapprox_percentile_cont(UInt64, Float64, Int16)\n\tapprox_percentile_cont(UInt64, Float64, Int32)\n\tapprox_percentile_cont(UInt64, Float64, Int64)\n\tapprox_percentile_cont(UInt64, Float64, UInt8)\n\tapprox_percentile_cont(UInt64, Float64, UInt16)\n\tapprox_percentile_cont(UInt64, Float64, UInt32)\n\tapprox_percentile_cont(UInt64, Float64, UInt64)\n\tapprox_percentile_cont(Float32, Float64)\n\tapprox_percentile_cont(Float32, Float64, Int8)\n\tapprox_percentile_cont(Float32, Float64, Int16)\n\tapprox_percentile_cont(Float32, Float64, Int32)\n\tapprox_percentile_cont(Float32, Float64, Int64)\n\tapprox_percentile_cont(Float32, Float64, UInt8)\n\tapprox_percentile_cont(Float32, Float64, UInt16)\n\tapprox_percentile_cont(Float32, Float64, UInt32)\n\tapprox_percentile_cont(Float32, Float64, UInt64)\n\tapprox_percentile_cont(Float64, Float64)\n\tapprox_percentile_cont(Float64, Float64, Int8)\n\tapprox_percentile_cont(Float64, Float64, Int16)\n\tapprox_percentile_cont(Float64, Float64, Int32)\n\tapprox_percentile_cont(Float64, Float64, Int64)\n\tapprox_percentile_cont(Float64, Float64, UInt8)\n\tapprox_percentile_cont(Float64, Float64, UInt16)\n\tapprox_percentile_cont(Float64, Float64, UInt32)\n\tapprox_percentile_cont(Float64, Float64, UInt64)"
       }
     },
     {
@@ -247,7 +247,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: approx_percentile"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Interval(DayTime), List(Field { name: \"item\", data_type: Decimal128(1, 1), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Int32] to the signature OneOf([Exact([Int8, Float64]), Exact([Int8, Float64, Int8]), Exact([Int8, Float64, Int16]), Exact([Int8, Float64, Int32]), Exact([Int8, Float64, Int64]), Exact([Int8, Float64, UInt8]), Exact([Int8, Float64, UInt16]), Exact([Int8, Float64, UInt32]), Exact([Int8, Float64, UInt64]), Exact([Int16, Float64]), Exact([Int16, Float64, Int8]), Exact([Int16, Float64, Int16]), Exact([Int16, Float64, Int32]), Exact([Int16, Float64, Int64]), Exact([Int16, Float64, UInt8]), Exact([Int16, Float64, UInt16]), Exact([Int16, Float64, UInt32]), Exact([Int16, Float64, UInt64]), Exact([Int32, Float64]), Exact([Int32, Float64, Int8]), Exact([Int32, Float64, Int16]), Exact([Int32, Float64, Int32]), Exact([Int32, Float64, Int64]), Exact([Int32, Float64, UInt8]), Exact([Int32, Float64, UInt16]), Exact([Int32, Float64, UInt32]), Exact([Int32, Float64, UInt64]), Exact([Int64, Float64]), Exact([Int64, Float64, Int8]), Exact([Int64, Float64, Int16]), Exact([Int64, Float64, Int32]), Exact([Int64, Float64, Int64]), Exact([Int64, Float64, UInt8]), Exact([Int64, Float64, UInt16]), Exact([Int64, Float64, UInt32]), Exact([Int64, Float64, UInt64]), Exact([UInt8, Float64]), Exact([UInt8, Float64, Int8]), Exact([UInt8, Float64, Int16]), Exact([UInt8, Float64, Int32]), Exact([UInt8, Float64, Int64]), Exact([UInt8, Float64, UInt8]), Exact([UInt8, Float64, UInt16]), Exact([UInt8, Float64, UInt32]), Exact([UInt8, Float64, UInt64]), Exact([UInt16, Float64]), Exact([UInt16, Float64, Int8]), Exact([UInt16, Float64, Int16]), Exact([UInt16, Float64, Int32]), Exact([UInt16, Float64, Int64]), Exact([UInt16, Float64, UInt8]), Exact([UInt16, Float64, UInt16]), Exact([UInt16, Float64, UInt32]), Exact([UInt16, Float64, UInt64]), Exact([UInt32, Float64]), Exact([UInt32, Float64, Int8]), Exact([UInt32, Float64, Int16]), Exact([UInt32, Float64, Int32]), Exact([UInt32, Float64, Int64]), Exact([UInt32, Float64, UInt8]), Exact([UInt32, Float64, UInt16]), Exact([UInt32, Float64, UInt32]), Exact([UInt32, Float64, UInt64]), Exact([UInt64, Float64]), Exact([UInt64, Float64, Int8]), Exact([UInt64, Float64, Int16]), Exact([UInt64, Float64, Int32]), Exact([UInt64, Float64, Int64]), Exact([UInt64, Float64, UInt8]), Exact([UInt64, Float64, UInt16]), Exact([UInt64, Float64, UInt32]), Exact([UInt64, Float64, UInt64]), Exact([Float32, Float64]), Exact([Float32, Float64, Int8]), Exact([Float32, Float64, Int16]), Exact([Float32, Float64, Int32]), Exact([Float32, Float64, Int64]), Exact([Float32, Float64, UInt8]), Exact([Float32, Float64, UInt16]), Exact([Float32, Float64, UInt32]), Exact([Float32, Float64, UInt64]), Exact([Float64, Float64]), Exact([Float64, Float64, Int8]), Exact([Float64, Float64, Int16]), Exact([Float64, Float64, Int32]), Exact([Float64, Float64, Int64]), Exact([Float64, Float64, UInt8]), Exact([Float64, Float64, UInt16]), Exact([Float64, Float64, UInt32]), Exact([Float64, Float64, UInt64])]) failed. No function matches the given name and argument types 'approx_percentile_cont(Interval(DayTime), List(Field { name: \"item\", data_type: Decimal128(1, 1), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Int8, Float64)\n\tapprox_percentile_cont(Int8, Float64, Int8)\n\tapprox_percentile_cont(Int8, Float64, Int16)\n\tapprox_percentile_cont(Int8, Float64, Int32)\n\tapprox_percentile_cont(Int8, Float64, Int64)\n\tapprox_percentile_cont(Int8, Float64, UInt8)\n\tapprox_percentile_cont(Int8, Float64, UInt16)\n\tapprox_percentile_cont(Int8, Float64, UInt32)\n\tapprox_percentile_cont(Int8, Float64, UInt64)\n\tapprox_percentile_cont(Int16, Float64)\n\tapprox_percentile_cont(Int16, Float64, Int8)\n\tapprox_percentile_cont(Int16, Float64, Int16)\n\tapprox_percentile_cont(Int16, Float64, Int32)\n\tapprox_percentile_cont(Int16, Float64, Int64)\n\tapprox_percentile_cont(Int16, Float64, UInt8)\n\tapprox_percentile_cont(Int16, Float64, UInt16)\n\tapprox_percentile_cont(Int16, Float64, UInt32)\n\tapprox_percentile_cont(Int16, Float64, UInt64)\n\tapprox_percentile_cont(Int32, Float64)\n\tapprox_percentile_cont(Int32, Float64, Int8)\n\tapprox_percentile_cont(Int32, Float64, Int16)\n\tapprox_percentile_cont(Int32, Float64, Int32)\n\tapprox_percentile_cont(Int32, Float64, Int64)\n\tapprox_percentile_cont(Int32, Float64, UInt8)\n\tapprox_percentile_cont(Int32, Float64, UInt16)\n\tapprox_percentile_cont(Int32, Float64, UInt32)\n\tapprox_percentile_cont(Int32, Float64, UInt64)\n\tapprox_percentile_cont(Int64, Float64)\n\tapprox_percentile_cont(Int64, Float64, Int8)\n\tapprox_percentile_cont(Int64, Float64, Int16)\n\tapprox_percentile_cont(Int64, Float64, Int32)\n\tapprox_percentile_cont(Int64, Float64, Int64)\n\tapprox_percentile_cont(Int64, Float64, UInt8)\n\tapprox_percentile_cont(Int64, Float64, UInt16)\n\tapprox_percentile_cont(Int64, Float64, UInt32)\n\tapprox_percentile_cont(Int64, Float64, UInt64)\n\tapprox_percentile_cont(UInt8, Float64)\n\tapprox_percentile_cont(UInt8, Float64, Int8)\n\tapprox_percentile_cont(UInt8, Float64, Int16)\n\tapprox_percentile_cont(UInt8, Float64, Int32)\n\tapprox_percentile_cont(UInt8, Float64, Int64)\n\tapprox_percentile_cont(UInt8, Float64, UInt8)\n\tapprox_percentile_cont(UInt8, Float64, UInt16)\n\tapprox_percentile_cont(UInt8, Float64, UInt32)\n\tapprox_percentile_cont(UInt8, Float64, UInt64)\n\tapprox_percentile_cont(UInt16, Float64)\n\tapprox_percentile_cont(UInt16, Float64, Int8)\n\tapprox_percentile_cont(UInt16, Float64, Int16)\n\tapprox_percentile_cont(UInt16, Float64, Int32)\n\tapprox_percentile_cont(UInt16, Float64, Int64)\n\tapprox_percentile_cont(UInt16, Float64, UInt8)\n\tapprox_percentile_cont(UInt16, Float64, UInt16)\n\tapprox_percentile_cont(UInt16, Float64, UInt32)\n\tapprox_percentile_cont(UInt16, Float64, UInt64)\n\tapprox_percentile_cont(UInt32, Float64)\n\tapprox_percentile_cont(UInt32, Float64, Int8)\n\tapprox_percentile_cont(UInt32, Float64, Int16)\n\tapprox_percentile_cont(UInt32, Float64, Int32)\n\tapprox_percentile_cont(UInt32, Float64, Int64)\n\tapprox_percentile_cont(UInt32, Float64, UInt8)\n\tapprox_percentile_cont(UInt32, Float64, UInt16)\n\tapprox_percentile_cont(UInt32, Float64, UInt32)\n\tapprox_percentile_cont(UInt32, Float64, UInt64)\n\tapprox_percentile_cont(UInt64, Float64)\n\tapprox_percentile_cont(UInt64, Float64, Int8)\n\tapprox_percentile_cont(UInt64, Float64, Int16)\n\tapprox_percentile_cont(UInt64, Float64, Int32)\n\tapprox_percentile_cont(UInt64, Float64, Int64)\n\tapprox_percentile_cont(UInt64, Float64, UInt8)\n\tapprox_percentile_cont(UInt64, Float64, UInt16)\n\tapprox_percentile_cont(UInt64, Float64, UInt32)\n\tapprox_percentile_cont(UInt64, Float64, UInt64)\n\tapprox_percentile_cont(Float32, Float64)\n\tapprox_percentile_cont(Float32, Float64, Int8)\n\tapprox_percentile_cont(Float32, Float64, Int16)\n\tapprox_percentile_cont(Float32, Float64, Int32)\n\tapprox_percentile_cont(Float32, Float64, Int64)\n\tapprox_percentile_cont(Float32, Float64, UInt8)\n\tapprox_percentile_cont(Float32, Float64, UInt16)\n\tapprox_percentile_cont(Float32, Float64, UInt32)\n\tapprox_percentile_cont(Float32, Float64, UInt64)\n\tapprox_percentile_cont(Float64, Float64)\n\tapprox_percentile_cont(Float64, Float64, Int8)\n\tapprox_percentile_cont(Float64, Float64, Int16)\n\tapprox_percentile_cont(Float64, Float64, Int32)\n\tapprox_percentile_cont(Float64, Float64, Int64)\n\tapprox_percentile_cont(Float64, Float64, UInt8)\n\tapprox_percentile_cont(Float64, Float64, UInt16)\n\tapprox_percentile_cont(Float64, Float64, UInt32)\n\tapprox_percentile_cont(Float64, Float64, UInt64)"
       }
     },
     {
@@ -567,7 +567,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: collect_set"
+        "failure": "not implemented: unknown aggregate function: collect_set"
       }
     },
     {
@@ -677,7 +677,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: count_if"
+        "failure": "not implemented: unknown aggregate function: count_if"
       }
     },
     {
@@ -699,7 +699,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: count_if"
+        "failure": "not implemented: unknown aggregate function: count_if"
       }
     },
     {
@@ -875,7 +875,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Boolean] to the signature OneOf([ArraySignature(Array), Numeric(1), Uniform(1, [Utf8])]) failed. No function matches the given name and argument types 'first_value(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tfirst_value(array)\n\tfirst_value(Numeric(1))\n\tfirst_value(Utf8)"
+        "success": "ok"
       }
     },
     {
@@ -941,7 +941,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Boolean] to the signature OneOf([ArraySignature(Array), Numeric(1), Uniform(1, [Utf8])]) failed. No function matches the given name and argument types 'first_value(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tfirst_value(array)\n\tfirst_value(Numeric(1))\n\tfirst_value(Utf8)"
+        "success": "ok"
       }
     },
     {
@@ -963,7 +963,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: count_min_sketch"
+        "failure": "not implemented: unknown aggregate function: count_min_sketch"
       }
     },
     {
@@ -1005,7 +1005,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: histogram_numeric"
+        "failure": "not implemented: unknown aggregate function: histogram_numeric"
       }
     },
     {
@@ -1027,7 +1027,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: hll_sketch_agg"
+        "failure": "not implemented: unknown aggregate function: hll_sketch_agg"
       }
     },
     {
@@ -1049,7 +1049,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: hll_sketch_agg"
+        "failure": "not implemented: unknown aggregate function: hll_sketch_agg"
       }
     },
     {
@@ -1071,7 +1071,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kurtosis"
+        "success": "ok"
       }
     },
     {
@@ -1093,7 +1093,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kurtosis"
+        "success": "ok"
       }
     },
     {
@@ -1159,7 +1159,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Boolean] to the signature OneOf([ArraySignature(Array), Numeric(1), Uniform(1, [Utf8])]) failed. No function matches the given name and argument types 'last_value(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tlast_value(array)\n\tlast_value(Numeric(1))\n\tlast_value(Utf8)"
+        "success": "ok"
       }
     },
     {
@@ -1225,7 +1225,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Boolean] to the signature OneOf([ArraySignature(Array), Numeric(1), Uniform(1, [Utf8])]) failed. No function matches the given name and argument types 'last_value(Int32, Boolean)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tlast_value(array)\n\tlast_value(Numeric(1))\n\tlast_value(Utf8)"
+        "success": "ok"
       }
     },
     {
@@ -1269,7 +1269,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: max_by"
+        "success": "ok"
       }
     },
     {
@@ -1401,7 +1401,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: min_by"
+        "success": "ok"
       }
     },
     {
@@ -1423,7 +1423,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: mode"
+        "failure": "not implemented: unknown aggregate function: mode"
       }
     },
     {
@@ -1445,7 +1445,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: mode"
+        "failure": "not implemented: unknown aggregate function: mode"
       }
     },
     {
@@ -1467,7 +1467,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: mode"
+        "failure": "not implemented: unknown aggregate function: mode"
       }
     },
     {
@@ -1549,7 +1549,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: grouping_id"
+        "failure": "not implemented: unknown aggregate function: grouping_id"
       }
     },
     {
@@ -1571,7 +1571,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: percentile"
+        "failure": "not implemented: unknown aggregate function: percentile"
       }
     },
     {
@@ -1593,7 +1593,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: percentile"
+        "failure": "not implemented: unknown aggregate function: percentile"
       }
     },
     {
@@ -1619,7 +1619,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: percentile"
+        "failure": "not implemented: unknown aggregate function: percentile"
       }
     },
     {
@@ -1645,7 +1645,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: percentile"
+        "failure": "not implemented: unknown aggregate function: percentile"
       }
     },
     {
@@ -1667,7 +1667,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: percentile_approx"
+        "success": "ok"
       }
     },
     {
@@ -1689,7 +1689,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: percentile_approx"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Interval(YearMonth), Decimal128(1, 1), Int32] to the signature OneOf([Exact([Int8, Float64]), Exact([Int8, Float64, Int8]), Exact([Int8, Float64, Int16]), Exact([Int8, Float64, Int32]), Exact([Int8, Float64, Int64]), Exact([Int8, Float64, UInt8]), Exact([Int8, Float64, UInt16]), Exact([Int8, Float64, UInt32]), Exact([Int8, Float64, UInt64]), Exact([Int16, Float64]), Exact([Int16, Float64, Int8]), Exact([Int16, Float64, Int16]), Exact([Int16, Float64, Int32]), Exact([Int16, Float64, Int64]), Exact([Int16, Float64, UInt8]), Exact([Int16, Float64, UInt16]), Exact([Int16, Float64, UInt32]), Exact([Int16, Float64, UInt64]), Exact([Int32, Float64]), Exact([Int32, Float64, Int8]), Exact([Int32, Float64, Int16]), Exact([Int32, Float64, Int32]), Exact([Int32, Float64, Int64]), Exact([Int32, Float64, UInt8]), Exact([Int32, Float64, UInt16]), Exact([Int32, Float64, UInt32]), Exact([Int32, Float64, UInt64]), Exact([Int64, Float64]), Exact([Int64, Float64, Int8]), Exact([Int64, Float64, Int16]), Exact([Int64, Float64, Int32]), Exact([Int64, Float64, Int64]), Exact([Int64, Float64, UInt8]), Exact([Int64, Float64, UInt16]), Exact([Int64, Float64, UInt32]), Exact([Int64, Float64, UInt64]), Exact([UInt8, Float64]), Exact([UInt8, Float64, Int8]), Exact([UInt8, Float64, Int16]), Exact([UInt8, Float64, Int32]), Exact([UInt8, Float64, Int64]), Exact([UInt8, Float64, UInt8]), Exact([UInt8, Float64, UInt16]), Exact([UInt8, Float64, UInt32]), Exact([UInt8, Float64, UInt64]), Exact([UInt16, Float64]), Exact([UInt16, Float64, Int8]), Exact([UInt16, Float64, Int16]), Exact([UInt16, Float64, Int32]), Exact([UInt16, Float64, Int64]), Exact([UInt16, Float64, UInt8]), Exact([UInt16, Float64, UInt16]), Exact([UInt16, Float64, UInt32]), Exact([UInt16, Float64, UInt64]), Exact([UInt32, Float64]), Exact([UInt32, Float64, Int8]), Exact([UInt32, Float64, Int16]), Exact([UInt32, Float64, Int32]), Exact([UInt32, Float64, Int64]), Exact([UInt32, Float64, UInt8]), Exact([UInt32, Float64, UInt16]), Exact([UInt32, Float64, UInt32]), Exact([UInt32, Float64, UInt64]), Exact([UInt64, Float64]), Exact([UInt64, Float64, Int8]), Exact([UInt64, Float64, Int16]), Exact([UInt64, Float64, Int32]), Exact([UInt64, Float64, Int64]), Exact([UInt64, Float64, UInt8]), Exact([UInt64, Float64, UInt16]), Exact([UInt64, Float64, UInt32]), Exact([UInt64, Float64, UInt64]), Exact([Float32, Float64]), Exact([Float32, Float64, Int8]), Exact([Float32, Float64, Int16]), Exact([Float32, Float64, Int32]), Exact([Float32, Float64, Int64]), Exact([Float32, Float64, UInt8]), Exact([Float32, Float64, UInt16]), Exact([Float32, Float64, UInt32]), Exact([Float32, Float64, UInt64]), Exact([Float64, Float64]), Exact([Float64, Float64, Int8]), Exact([Float64, Float64, Int16]), Exact([Float64, Float64, Int32]), Exact([Float64, Float64, Int64]), Exact([Float64, Float64, UInt8]), Exact([Float64, Float64, UInt16]), Exact([Float64, Float64, UInt32]), Exact([Float64, Float64, UInt64])]) failed. No function matches the given name and argument types 'approx_percentile_cont(Interval(YearMonth), Decimal128(1, 1), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Int8, Float64)\n\tapprox_percentile_cont(Int8, Float64, Int8)\n\tapprox_percentile_cont(Int8, Float64, Int16)\n\tapprox_percentile_cont(Int8, Float64, Int32)\n\tapprox_percentile_cont(Int8, Float64, Int64)\n\tapprox_percentile_cont(Int8, Float64, UInt8)\n\tapprox_percentile_cont(Int8, Float64, UInt16)\n\tapprox_percentile_cont(Int8, Float64, UInt32)\n\tapprox_percentile_cont(Int8, Float64, UInt64)\n\tapprox_percentile_cont(Int16, Float64)\n\tapprox_percentile_cont(Int16, Float64, Int8)\n\tapprox_percentile_cont(Int16, Float64, Int16)\n\tapprox_percentile_cont(Int16, Float64, Int32)\n\tapprox_percentile_cont(Int16, Float64, Int64)\n\tapprox_percentile_cont(Int16, Float64, UInt8)\n\tapprox_percentile_cont(Int16, Float64, UInt16)\n\tapprox_percentile_cont(Int16, Float64, UInt32)\n\tapprox_percentile_cont(Int16, Float64, UInt64)\n\tapprox_percentile_cont(Int32, Float64)\n\tapprox_percentile_cont(Int32, Float64, Int8)\n\tapprox_percentile_cont(Int32, Float64, Int16)\n\tapprox_percentile_cont(Int32, Float64, Int32)\n\tapprox_percentile_cont(Int32, Float64, Int64)\n\tapprox_percentile_cont(Int32, Float64, UInt8)\n\tapprox_percentile_cont(Int32, Float64, UInt16)\n\tapprox_percentile_cont(Int32, Float64, UInt32)\n\tapprox_percentile_cont(Int32, Float64, UInt64)\n\tapprox_percentile_cont(Int64, Float64)\n\tapprox_percentile_cont(Int64, Float64, Int8)\n\tapprox_percentile_cont(Int64, Float64, Int16)\n\tapprox_percentile_cont(Int64, Float64, Int32)\n\tapprox_percentile_cont(Int64, Float64, Int64)\n\tapprox_percentile_cont(Int64, Float64, UInt8)\n\tapprox_percentile_cont(Int64, Float64, UInt16)\n\tapprox_percentile_cont(Int64, Float64, UInt32)\n\tapprox_percentile_cont(Int64, Float64, UInt64)\n\tapprox_percentile_cont(UInt8, Float64)\n\tapprox_percentile_cont(UInt8, Float64, Int8)\n\tapprox_percentile_cont(UInt8, Float64, Int16)\n\tapprox_percentile_cont(UInt8, Float64, Int32)\n\tapprox_percentile_cont(UInt8, Float64, Int64)\n\tapprox_percentile_cont(UInt8, Float64, UInt8)\n\tapprox_percentile_cont(UInt8, Float64, UInt16)\n\tapprox_percentile_cont(UInt8, Float64, UInt32)\n\tapprox_percentile_cont(UInt8, Float64, UInt64)\n\tapprox_percentile_cont(UInt16, Float64)\n\tapprox_percentile_cont(UInt16, Float64, Int8)\n\tapprox_percentile_cont(UInt16, Float64, Int16)\n\tapprox_percentile_cont(UInt16, Float64, Int32)\n\tapprox_percentile_cont(UInt16, Float64, Int64)\n\tapprox_percentile_cont(UInt16, Float64, UInt8)\n\tapprox_percentile_cont(UInt16, Float64, UInt16)\n\tapprox_percentile_cont(UInt16, Float64, UInt32)\n\tapprox_percentile_cont(UInt16, Float64, UInt64)\n\tapprox_percentile_cont(UInt32, Float64)\n\tapprox_percentile_cont(UInt32, Float64, Int8)\n\tapprox_percentile_cont(UInt32, Float64, Int16)\n\tapprox_percentile_cont(UInt32, Float64, Int32)\n\tapprox_percentile_cont(UInt32, Float64, Int64)\n\tapprox_percentile_cont(UInt32, Float64, UInt8)\n\tapprox_percentile_cont(UInt32, Float64, UInt16)\n\tapprox_percentile_cont(UInt32, Float64, UInt32)\n\tapprox_percentile_cont(UInt32, Float64, UInt64)\n\tapprox_percentile_cont(UInt64, Float64)\n\tapprox_percentile_cont(UInt64, Float64, Int8)\n\tapprox_percentile_cont(UInt64, Float64, Int16)\n\tapprox_percentile_cont(UInt64, Float64, Int32)\n\tapprox_percentile_cont(UInt64, Float64, Int64)\n\tapprox_percentile_cont(UInt64, Float64, UInt8)\n\tapprox_percentile_cont(UInt64, Float64, UInt16)\n\tapprox_percentile_cont(UInt64, Float64, UInt32)\n\tapprox_percentile_cont(UInt64, Float64, UInt64)\n\tapprox_percentile_cont(Float32, Float64)\n\tapprox_percentile_cont(Float32, Float64, Int8)\n\tapprox_percentile_cont(Float32, Float64, Int16)\n\tapprox_percentile_cont(Float32, Float64, Int32)\n\tapprox_percentile_cont(Float32, Float64, Int64)\n\tapprox_percentile_cont(Float32, Float64, UInt8)\n\tapprox_percentile_cont(Float32, Float64, UInt16)\n\tapprox_percentile_cont(Float32, Float64, UInt32)\n\tapprox_percentile_cont(Float32, Float64, UInt64)\n\tapprox_percentile_cont(Float64, Float64)\n\tapprox_percentile_cont(Float64, Float64, Int8)\n\tapprox_percentile_cont(Float64, Float64, Int16)\n\tapprox_percentile_cont(Float64, Float64, Int32)\n\tapprox_percentile_cont(Float64, Float64, Int64)\n\tapprox_percentile_cont(Float64, Float64, UInt8)\n\tapprox_percentile_cont(Float64, Float64, UInt16)\n\tapprox_percentile_cont(Float64, Float64, UInt32)\n\tapprox_percentile_cont(Float64, Float64, UInt64)"
       }
     },
     {
@@ -1715,7 +1715,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: percentile_approx"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, List(Field { name: \"item\", data_type: Decimal128(1, 1), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Int32] to the signature OneOf([Exact([Int8, Float64]), Exact([Int8, Float64, Int8]), Exact([Int8, Float64, Int16]), Exact([Int8, Float64, Int32]), Exact([Int8, Float64, Int64]), Exact([Int8, Float64, UInt8]), Exact([Int8, Float64, UInt16]), Exact([Int8, Float64, UInt32]), Exact([Int8, Float64, UInt64]), Exact([Int16, Float64]), Exact([Int16, Float64, Int8]), Exact([Int16, Float64, Int16]), Exact([Int16, Float64, Int32]), Exact([Int16, Float64, Int64]), Exact([Int16, Float64, UInt8]), Exact([Int16, Float64, UInt16]), Exact([Int16, Float64, UInt32]), Exact([Int16, Float64, UInt64]), Exact([Int32, Float64]), Exact([Int32, Float64, Int8]), Exact([Int32, Float64, Int16]), Exact([Int32, Float64, Int32]), Exact([Int32, Float64, Int64]), Exact([Int32, Float64, UInt8]), Exact([Int32, Float64, UInt16]), Exact([Int32, Float64, UInt32]), Exact([Int32, Float64, UInt64]), Exact([Int64, Float64]), Exact([Int64, Float64, Int8]), Exact([Int64, Float64, Int16]), Exact([Int64, Float64, Int32]), Exact([Int64, Float64, Int64]), Exact([Int64, Float64, UInt8]), Exact([Int64, Float64, UInt16]), Exact([Int64, Float64, UInt32]), Exact([Int64, Float64, UInt64]), Exact([UInt8, Float64]), Exact([UInt8, Float64, Int8]), Exact([UInt8, Float64, Int16]), Exact([UInt8, Float64, Int32]), Exact([UInt8, Float64, Int64]), Exact([UInt8, Float64, UInt8]), Exact([UInt8, Float64, UInt16]), Exact([UInt8, Float64, UInt32]), Exact([UInt8, Float64, UInt64]), Exact([UInt16, Float64]), Exact([UInt16, Float64, Int8]), Exact([UInt16, Float64, Int16]), Exact([UInt16, Float64, Int32]), Exact([UInt16, Float64, Int64]), Exact([UInt16, Float64, UInt8]), Exact([UInt16, Float64, UInt16]), Exact([UInt16, Float64, UInt32]), Exact([UInt16, Float64, UInt64]), Exact([UInt32, Float64]), Exact([UInt32, Float64, Int8]), Exact([UInt32, Float64, Int16]), Exact([UInt32, Float64, Int32]), Exact([UInt32, Float64, Int64]), Exact([UInt32, Float64, UInt8]), Exact([UInt32, Float64, UInt16]), Exact([UInt32, Float64, UInt32]), Exact([UInt32, Float64, UInt64]), Exact([UInt64, Float64]), Exact([UInt64, Float64, Int8]), Exact([UInt64, Float64, Int16]), Exact([UInt64, Float64, Int32]), Exact([UInt64, Float64, Int64]), Exact([UInt64, Float64, UInt8]), Exact([UInt64, Float64, UInt16]), Exact([UInt64, Float64, UInt32]), Exact([UInt64, Float64, UInt64]), Exact([Float32, Float64]), Exact([Float32, Float64, Int8]), Exact([Float32, Float64, Int16]), Exact([Float32, Float64, Int32]), Exact([Float32, Float64, Int64]), Exact([Float32, Float64, UInt8]), Exact([Float32, Float64, UInt16]), Exact([Float32, Float64, UInt32]), Exact([Float32, Float64, UInt64]), Exact([Float64, Float64]), Exact([Float64, Float64, Int8]), Exact([Float64, Float64, Int16]), Exact([Float64, Float64, Int32]), Exact([Float64, Float64, Int64]), Exact([Float64, Float64, UInt8]), Exact([Float64, Float64, UInt16]), Exact([Float64, Float64, UInt32]), Exact([Float64, Float64, UInt64])]) failed. No function matches the given name and argument types 'approx_percentile_cont(Int32, List(Field { name: \"item\", data_type: Decimal128(1, 1), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Int8, Float64)\n\tapprox_percentile_cont(Int8, Float64, Int8)\n\tapprox_percentile_cont(Int8, Float64, Int16)\n\tapprox_percentile_cont(Int8, Float64, Int32)\n\tapprox_percentile_cont(Int8, Float64, Int64)\n\tapprox_percentile_cont(Int8, Float64, UInt8)\n\tapprox_percentile_cont(Int8, Float64, UInt16)\n\tapprox_percentile_cont(Int8, Float64, UInt32)\n\tapprox_percentile_cont(Int8, Float64, UInt64)\n\tapprox_percentile_cont(Int16, Float64)\n\tapprox_percentile_cont(Int16, Float64, Int8)\n\tapprox_percentile_cont(Int16, Float64, Int16)\n\tapprox_percentile_cont(Int16, Float64, Int32)\n\tapprox_percentile_cont(Int16, Float64, Int64)\n\tapprox_percentile_cont(Int16, Float64, UInt8)\n\tapprox_percentile_cont(Int16, Float64, UInt16)\n\tapprox_percentile_cont(Int16, Float64, UInt32)\n\tapprox_percentile_cont(Int16, Float64, UInt64)\n\tapprox_percentile_cont(Int32, Float64)\n\tapprox_percentile_cont(Int32, Float64, Int8)\n\tapprox_percentile_cont(Int32, Float64, Int16)\n\tapprox_percentile_cont(Int32, Float64, Int32)\n\tapprox_percentile_cont(Int32, Float64, Int64)\n\tapprox_percentile_cont(Int32, Float64, UInt8)\n\tapprox_percentile_cont(Int32, Float64, UInt16)\n\tapprox_percentile_cont(Int32, Float64, UInt32)\n\tapprox_percentile_cont(Int32, Float64, UInt64)\n\tapprox_percentile_cont(Int64, Float64)\n\tapprox_percentile_cont(Int64, Float64, Int8)\n\tapprox_percentile_cont(Int64, Float64, Int16)\n\tapprox_percentile_cont(Int64, Float64, Int32)\n\tapprox_percentile_cont(Int64, Float64, Int64)\n\tapprox_percentile_cont(Int64, Float64, UInt8)\n\tapprox_percentile_cont(Int64, Float64, UInt16)\n\tapprox_percentile_cont(Int64, Float64, UInt32)\n\tapprox_percentile_cont(Int64, Float64, UInt64)\n\tapprox_percentile_cont(UInt8, Float64)\n\tapprox_percentile_cont(UInt8, Float64, Int8)\n\tapprox_percentile_cont(UInt8, Float64, Int16)\n\tapprox_percentile_cont(UInt8, Float64, Int32)\n\tapprox_percentile_cont(UInt8, Float64, Int64)\n\tapprox_percentile_cont(UInt8, Float64, UInt8)\n\tapprox_percentile_cont(UInt8, Float64, UInt16)\n\tapprox_percentile_cont(UInt8, Float64, UInt32)\n\tapprox_percentile_cont(UInt8, Float64, UInt64)\n\tapprox_percentile_cont(UInt16, Float64)\n\tapprox_percentile_cont(UInt16, Float64, Int8)\n\tapprox_percentile_cont(UInt16, Float64, Int16)\n\tapprox_percentile_cont(UInt16, Float64, Int32)\n\tapprox_percentile_cont(UInt16, Float64, Int64)\n\tapprox_percentile_cont(UInt16, Float64, UInt8)\n\tapprox_percentile_cont(UInt16, Float64, UInt16)\n\tapprox_percentile_cont(UInt16, Float64, UInt32)\n\tapprox_percentile_cont(UInt16, Float64, UInt64)\n\tapprox_percentile_cont(UInt32, Float64)\n\tapprox_percentile_cont(UInt32, Float64, Int8)\n\tapprox_percentile_cont(UInt32, Float64, Int16)\n\tapprox_percentile_cont(UInt32, Float64, Int32)\n\tapprox_percentile_cont(UInt32, Float64, Int64)\n\tapprox_percentile_cont(UInt32, Float64, UInt8)\n\tapprox_percentile_cont(UInt32, Float64, UInt16)\n\tapprox_percentile_cont(UInt32, Float64, UInt32)\n\tapprox_percentile_cont(UInt32, Float64, UInt64)\n\tapprox_percentile_cont(UInt64, Float64)\n\tapprox_percentile_cont(UInt64, Float64, Int8)\n\tapprox_percentile_cont(UInt64, Float64, Int16)\n\tapprox_percentile_cont(UInt64, Float64, Int32)\n\tapprox_percentile_cont(UInt64, Float64, Int64)\n\tapprox_percentile_cont(UInt64, Float64, UInt8)\n\tapprox_percentile_cont(UInt64, Float64, UInt16)\n\tapprox_percentile_cont(UInt64, Float64, UInt32)\n\tapprox_percentile_cont(UInt64, Float64, UInt64)\n\tapprox_percentile_cont(Float32, Float64)\n\tapprox_percentile_cont(Float32, Float64, Int8)\n\tapprox_percentile_cont(Float32, Float64, Int16)\n\tapprox_percentile_cont(Float32, Float64, Int32)\n\tapprox_percentile_cont(Float32, Float64, Int64)\n\tapprox_percentile_cont(Float32, Float64, UInt8)\n\tapprox_percentile_cont(Float32, Float64, UInt16)\n\tapprox_percentile_cont(Float32, Float64, UInt32)\n\tapprox_percentile_cont(Float32, Float64, UInt64)\n\tapprox_percentile_cont(Float64, Float64)\n\tapprox_percentile_cont(Float64, Float64, Int8)\n\tapprox_percentile_cont(Float64, Float64, Int16)\n\tapprox_percentile_cont(Float64, Float64, Int32)\n\tapprox_percentile_cont(Float64, Float64, Int64)\n\tapprox_percentile_cont(Float64, Float64, UInt8)\n\tapprox_percentile_cont(Float64, Float64, UInt16)\n\tapprox_percentile_cont(Float64, Float64, UInt32)\n\tapprox_percentile_cont(Float64, Float64, UInt64)"
       }
     },
     {
@@ -1741,7 +1741,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: percentile_approx"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Interval(DayTime), List(Field { name: \"item\", data_type: Decimal128(1, 1), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Int32] to the signature OneOf([Exact([Int8, Float64]), Exact([Int8, Float64, Int8]), Exact([Int8, Float64, Int16]), Exact([Int8, Float64, Int32]), Exact([Int8, Float64, Int64]), Exact([Int8, Float64, UInt8]), Exact([Int8, Float64, UInt16]), Exact([Int8, Float64, UInt32]), Exact([Int8, Float64, UInt64]), Exact([Int16, Float64]), Exact([Int16, Float64, Int8]), Exact([Int16, Float64, Int16]), Exact([Int16, Float64, Int32]), Exact([Int16, Float64, Int64]), Exact([Int16, Float64, UInt8]), Exact([Int16, Float64, UInt16]), Exact([Int16, Float64, UInt32]), Exact([Int16, Float64, UInt64]), Exact([Int32, Float64]), Exact([Int32, Float64, Int8]), Exact([Int32, Float64, Int16]), Exact([Int32, Float64, Int32]), Exact([Int32, Float64, Int64]), Exact([Int32, Float64, UInt8]), Exact([Int32, Float64, UInt16]), Exact([Int32, Float64, UInt32]), Exact([Int32, Float64, UInt64]), Exact([Int64, Float64]), Exact([Int64, Float64, Int8]), Exact([Int64, Float64, Int16]), Exact([Int64, Float64, Int32]), Exact([Int64, Float64, Int64]), Exact([Int64, Float64, UInt8]), Exact([Int64, Float64, UInt16]), Exact([Int64, Float64, UInt32]), Exact([Int64, Float64, UInt64]), Exact([UInt8, Float64]), Exact([UInt8, Float64, Int8]), Exact([UInt8, Float64, Int16]), Exact([UInt8, Float64, Int32]), Exact([UInt8, Float64, Int64]), Exact([UInt8, Float64, UInt8]), Exact([UInt8, Float64, UInt16]), Exact([UInt8, Float64, UInt32]), Exact([UInt8, Float64, UInt64]), Exact([UInt16, Float64]), Exact([UInt16, Float64, Int8]), Exact([UInt16, Float64, Int16]), Exact([UInt16, Float64, Int32]), Exact([UInt16, Float64, Int64]), Exact([UInt16, Float64, UInt8]), Exact([UInt16, Float64, UInt16]), Exact([UInt16, Float64, UInt32]), Exact([UInt16, Float64, UInt64]), Exact([UInt32, Float64]), Exact([UInt32, Float64, Int8]), Exact([UInt32, Float64, Int16]), Exact([UInt32, Float64, Int32]), Exact([UInt32, Float64, Int64]), Exact([UInt32, Float64, UInt8]), Exact([UInt32, Float64, UInt16]), Exact([UInt32, Float64, UInt32]), Exact([UInt32, Float64, UInt64]), Exact([UInt64, Float64]), Exact([UInt64, Float64, Int8]), Exact([UInt64, Float64, Int16]), Exact([UInt64, Float64, Int32]), Exact([UInt64, Float64, Int64]), Exact([UInt64, Float64, UInt8]), Exact([UInt64, Float64, UInt16]), Exact([UInt64, Float64, UInt32]), Exact([UInt64, Float64, UInt64]), Exact([Float32, Float64]), Exact([Float32, Float64, Int8]), Exact([Float32, Float64, Int16]), Exact([Float32, Float64, Int32]), Exact([Float32, Float64, Int64]), Exact([Float32, Float64, UInt8]), Exact([Float32, Float64, UInt16]), Exact([Float32, Float64, UInt32]), Exact([Float32, Float64, UInt64]), Exact([Float64, Float64]), Exact([Float64, Float64, Int8]), Exact([Float64, Float64, Int16]), Exact([Float64, Float64, Int32]), Exact([Float64, Float64, Int64]), Exact([Float64, Float64, UInt8]), Exact([Float64, Float64, UInt16]), Exact([Float64, Float64, UInt32]), Exact([Float64, Float64, UInt64])]) failed. No function matches the given name and argument types 'approx_percentile_cont(Interval(DayTime), List(Field { name: \"item\", data_type: Decimal128(1, 1), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Int8, Float64)\n\tapprox_percentile_cont(Int8, Float64, Int8)\n\tapprox_percentile_cont(Int8, Float64, Int16)\n\tapprox_percentile_cont(Int8, Float64, Int32)\n\tapprox_percentile_cont(Int8, Float64, Int64)\n\tapprox_percentile_cont(Int8, Float64, UInt8)\n\tapprox_percentile_cont(Int8, Float64, UInt16)\n\tapprox_percentile_cont(Int8, Float64, UInt32)\n\tapprox_percentile_cont(Int8, Float64, UInt64)\n\tapprox_percentile_cont(Int16, Float64)\n\tapprox_percentile_cont(Int16, Float64, Int8)\n\tapprox_percentile_cont(Int16, Float64, Int16)\n\tapprox_percentile_cont(Int16, Float64, Int32)\n\tapprox_percentile_cont(Int16, Float64, Int64)\n\tapprox_percentile_cont(Int16, Float64, UInt8)\n\tapprox_percentile_cont(Int16, Float64, UInt16)\n\tapprox_percentile_cont(Int16, Float64, UInt32)\n\tapprox_percentile_cont(Int16, Float64, UInt64)\n\tapprox_percentile_cont(Int32, Float64)\n\tapprox_percentile_cont(Int32, Float64, Int8)\n\tapprox_percentile_cont(Int32, Float64, Int16)\n\tapprox_percentile_cont(Int32, Float64, Int32)\n\tapprox_percentile_cont(Int32, Float64, Int64)\n\tapprox_percentile_cont(Int32, Float64, UInt8)\n\tapprox_percentile_cont(Int32, Float64, UInt16)\n\tapprox_percentile_cont(Int32, Float64, UInt32)\n\tapprox_percentile_cont(Int32, Float64, UInt64)\n\tapprox_percentile_cont(Int64, Float64)\n\tapprox_percentile_cont(Int64, Float64, Int8)\n\tapprox_percentile_cont(Int64, Float64, Int16)\n\tapprox_percentile_cont(Int64, Float64, Int32)\n\tapprox_percentile_cont(Int64, Float64, Int64)\n\tapprox_percentile_cont(Int64, Float64, UInt8)\n\tapprox_percentile_cont(Int64, Float64, UInt16)\n\tapprox_percentile_cont(Int64, Float64, UInt32)\n\tapprox_percentile_cont(Int64, Float64, UInt64)\n\tapprox_percentile_cont(UInt8, Float64)\n\tapprox_percentile_cont(UInt8, Float64, Int8)\n\tapprox_percentile_cont(UInt8, Float64, Int16)\n\tapprox_percentile_cont(UInt8, Float64, Int32)\n\tapprox_percentile_cont(UInt8, Float64, Int64)\n\tapprox_percentile_cont(UInt8, Float64, UInt8)\n\tapprox_percentile_cont(UInt8, Float64, UInt16)\n\tapprox_percentile_cont(UInt8, Float64, UInt32)\n\tapprox_percentile_cont(UInt8, Float64, UInt64)\n\tapprox_percentile_cont(UInt16, Float64)\n\tapprox_percentile_cont(UInt16, Float64, Int8)\n\tapprox_percentile_cont(UInt16, Float64, Int16)\n\tapprox_percentile_cont(UInt16, Float64, Int32)\n\tapprox_percentile_cont(UInt16, Float64, Int64)\n\tapprox_percentile_cont(UInt16, Float64, UInt8)\n\tapprox_percentile_cont(UInt16, Float64, UInt16)\n\tapprox_percentile_cont(UInt16, Float64, UInt32)\n\tapprox_percentile_cont(UInt16, Float64, UInt64)\n\tapprox_percentile_cont(UInt32, Float64)\n\tapprox_percentile_cont(UInt32, Float64, Int8)\n\tapprox_percentile_cont(UInt32, Float64, Int16)\n\tapprox_percentile_cont(UInt32, Float64, Int32)\n\tapprox_percentile_cont(UInt32, Float64, Int64)\n\tapprox_percentile_cont(UInt32, Float64, UInt8)\n\tapprox_percentile_cont(UInt32, Float64, UInt16)\n\tapprox_percentile_cont(UInt32, Float64, UInt32)\n\tapprox_percentile_cont(UInt32, Float64, UInt64)\n\tapprox_percentile_cont(UInt64, Float64)\n\tapprox_percentile_cont(UInt64, Float64, Int8)\n\tapprox_percentile_cont(UInt64, Float64, Int16)\n\tapprox_percentile_cont(UInt64, Float64, Int32)\n\tapprox_percentile_cont(UInt64, Float64, Int64)\n\tapprox_percentile_cont(UInt64, Float64, UInt8)\n\tapprox_percentile_cont(UInt64, Float64, UInt16)\n\tapprox_percentile_cont(UInt64, Float64, UInt32)\n\tapprox_percentile_cont(UInt64, Float64, UInt64)\n\tapprox_percentile_cont(Float32, Float64)\n\tapprox_percentile_cont(Float32, Float64, Int8)\n\tapprox_percentile_cont(Float32, Float64, Int16)\n\tapprox_percentile_cont(Float32, Float64, Int32)\n\tapprox_percentile_cont(Float32, Float64, Int64)\n\tapprox_percentile_cont(Float32, Float64, UInt8)\n\tapprox_percentile_cont(Float32, Float64, UInt16)\n\tapprox_percentile_cont(Float32, Float64, UInt32)\n\tapprox_percentile_cont(Float32, Float64, UInt64)\n\tapprox_percentile_cont(Float64, Float64)\n\tapprox_percentile_cont(Float64, Float64, Int8)\n\tapprox_percentile_cont(Float64, Float64, Int16)\n\tapprox_percentile_cont(Float64, Float64, Int32)\n\tapprox_percentile_cont(Float64, Float64, Int64)\n\tapprox_percentile_cont(Float64, Float64, UInt8)\n\tapprox_percentile_cont(Float64, Float64, UInt16)\n\tapprox_percentile_cont(Float64, Float64, UInt32)\n\tapprox_percentile_cont(Float64, Float64, UInt64)"
       }
     },
     {
@@ -2489,7 +2489,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: skewness"
+        "failure": "not implemented: unknown aggregate function: skewness"
       }
     },
     {
@@ -2511,7 +2511,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: skewness"
+        "failure": "not implemented: unknown aggregate function: skewness"
       }
     },
     {
@@ -2841,7 +2841,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_avg"
+        "failure": "not implemented: unknown aggregate function: try_avg"
       }
     },
     {
@@ -2863,7 +2863,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_avg"
+        "failure": "not implemented: unknown aggregate function: try_avg"
       }
     },
     {
@@ -2885,7 +2885,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_avg"
+        "failure": "not implemented: unknown aggregate function: try_avg"
       }
     },
     {
@@ -2907,7 +2907,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_sum"
+        "failure": "not implemented: unknown aggregate function: try_sum"
       }
     },
     {
@@ -2929,7 +2929,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_sum"
+        "failure": "not implemented: unknown aggregate function: try_sum"
       }
     },
     {
@@ -2951,7 +2951,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_sum"
+        "failure": "not implemented: unknown aggregate function: try_sum"
       }
     },
     {
@@ -2973,7 +2973,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_sum"
+        "failure": "not implemented: unknown aggregate function: try_sum"
       }
     },
     {

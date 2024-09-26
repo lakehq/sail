@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use datafusion_expr::{expr, BinaryExpr, Operator, ScalarUDF, ScalarUDFImpl};
+use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::{expr, AggregateUDF, BinaryExpr, Operator, ScalarUDF, ScalarUDFImpl};
 
+use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::utils::ItemTaker;
 
-pub(crate) type Function = Arc<dyn Fn(Vec<expr::Expr>) -> PlanResult<expr::Expr> + Send + Sync>;
+pub(crate) type Function =
+    Arc<dyn Fn(Vec<expr::Expr>, Arc<PlanConfig>) -> PlanResult<expr::Expr> + Send + Sync>;
 
 pub(crate) struct FunctionBuilder;
 
@@ -15,7 +18,7 @@ impl FunctionBuilder {
     where
         F: Fn() -> expr::Expr + Send + Sync + 'static,
     {
-        Arc::new(move |args| {
+        Arc::new(move |args, _config| {
             args.zero()?;
             Ok(f())
         })
@@ -25,14 +28,14 @@ impl FunctionBuilder {
     where
         F: Fn(expr::Expr) -> expr::Expr + Send + Sync + 'static,
     {
-        Arc::new(move |args| Ok(f(args.one()?)))
+        Arc::new(move |args, _config| Ok(f(args.one()?)))
     }
 
     pub fn binary<F>(f: F) -> Function
     where
         F: Fn(expr::Expr, expr::Expr) -> expr::Expr + Send + Sync + 'static,
     {
-        Arc::new(move |args| {
+        Arc::new(move |args, _config| {
             let (left, right) = args.two()?;
             Ok(f(left, right))
         })
@@ -42,7 +45,7 @@ impl FunctionBuilder {
     where
         F: Fn(expr::Expr, expr::Expr, expr::Expr) -> expr::Expr + Send + Sync + 'static,
     {
-        Arc::new(move |args| {
+        Arc::new(move |args, _config| {
             let (first, second, third) = args.three()?;
             Ok(f(first, second, third))
         })
@@ -52,11 +55,11 @@ impl FunctionBuilder {
     where
         F: Fn(Vec<expr::Expr>) -> expr::Expr + Send + Sync + 'static,
     {
-        Arc::new(move |args| Ok(f(args)))
+        Arc::new(move |args, _config| Ok(f(args)))
     }
 
     pub fn binary_op(op: Operator) -> Function {
-        Arc::new(move |args| {
+        Arc::new(move |args, _config| {
             let (left, right) = args.two()?;
             Ok(expr::Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(left),
@@ -67,7 +70,7 @@ impl FunctionBuilder {
     }
 
     pub fn cast(data_type: DataType) -> Function {
-        Arc::new(move |args| {
+        Arc::new(move |args, _config| {
             Ok(expr::Expr::Cast(expr::Cast {
                 expr: Box::new(args.one()?),
                 data_type: data_type.clone(),
@@ -80,7 +83,7 @@ impl FunctionBuilder {
         F: ScalarUDFImpl + Send + Sync + 'static,
     {
         let func = Arc::new(ScalarUDF::from(f));
-        Arc::new(move |args| {
+        Arc::new(move |args, _config| {
             Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                 func: func.clone(),
                 args,
@@ -92,7 +95,7 @@ impl FunctionBuilder {
     where
         F: Fn() -> Arc<ScalarUDF> + Send + Sync + 'static,
     {
-        Arc::new(move |args| {
+        Arc::new(move |args, _config| {
             Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                 func: f(),
                 args,
@@ -105,7 +108,7 @@ impl FunctionBuilder {
         F: Fn(Vec<expr::Expr>) -> PlanResult<U> + Send + Sync + 'static,
         U: ScalarUDFImpl + Send + Sync + 'static,
     {
-        Arc::new(move |args| {
+        Arc::new(move |args, _config| {
             Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                 func: Arc::new(ScalarUDF::from(f(args.clone())?)),
                 args,
@@ -115,13 +118,52 @@ impl FunctionBuilder {
 
     pub fn custom<F>(f: F) -> Function
     where
-        F: Fn(Vec<expr::Expr>) -> PlanResult<expr::Expr> + Send + Sync + 'static,
+        F: Fn(Vec<expr::Expr>, Arc<PlanConfig>) -> PlanResult<expr::Expr> + Send + Sync + 'static,
     {
         Arc::new(f)
     }
 
     pub fn unknown(name: &str) -> Function {
         let name = name.to_string();
-        Arc::new(move |_| Err(PlanError::todo(format!("function: {name}"))))
+        Arc::new(move |_, _| Err(PlanError::todo(format!("function: {name}"))))
+    }
+}
+
+pub(crate) type AggFunction =
+    Arc<dyn Fn(Vec<expr::Expr>, bool) -> PlanResult<expr::Expr> + Send + Sync>;
+
+pub(crate) struct AggregateFunctionBuilder;
+
+impl AggregateFunctionBuilder {
+    pub fn default<F>(f: F) -> AggFunction
+    where
+        F: Fn() -> Arc<AggregateUDF> + Send + Sync + 'static,
+    {
+        Arc::new(move |args, distinct| {
+            Ok(expr::Expr::AggregateFunction(AggregateFunction {
+                func: f(),
+                args,
+                distinct,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            }))
+        })
+    }
+
+    pub fn custom<F>(f: F) -> AggFunction
+    where
+        F: Fn(Vec<expr::Expr>, bool) -> PlanResult<expr::Expr> + Send + Sync + 'static,
+    {
+        Arc::new(f)
+    }
+
+    pub fn unknown(name: &str) -> AggFunction {
+        let name = name.to_string();
+        Arc::new(move |_, _| {
+            Err(PlanError::todo(format!(
+                "unknown aggregate function: {name}"
+            )))
+        })
     }
 }

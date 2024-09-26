@@ -1,5 +1,5 @@
 use sail_common::spec;
-use sail_sql::expression::{parse_expression, parse_object_name};
+use sail_sql::expression::common::{parse_expression, parse_object_name};
 use sail_sql::statement::common::parse_sql_statement;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};

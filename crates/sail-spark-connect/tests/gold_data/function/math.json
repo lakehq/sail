@@ -635,7 +635,7 @@
         }
       },
       "output": {
-        "failure": "not supported: expression: Ceil { expr: UnaryOp { op: Minus, expr: Value(Number(\"0.1\", None)) }, field: DateTimeField(NoDateTime) }"
+        "success": "ok"
       }
     },
     {
@@ -679,7 +679,7 @@
         }
       },
       "output": {
-        "failure": "not supported: expression: Ceil { expr: Value(Number(\"3.1411\", None)), field: Scale(Number(\"3\", None)) }"
+        "success": "ok"
       }
     },
     {
@@ -701,7 +701,7 @@
         }
       },
       "output": {
-        "failure": "not supported: expression: Ceil { expr: Value(Number(\"5\", None)), field: DateTimeField(NoDateTime) }"
+        "success": "ok"
       }
     },
     {
@@ -1075,7 +1075,7 @@
         }
       },
       "output": {
-        "failure": "not supported: expression: Floor { expr: UnaryOp { op: Minus, expr: Value(Number(\"0.1\", None)) }, field: DateTimeField(NoDateTime) }"
+        "success": "ok"
       }
     },
     {
@@ -1119,7 +1119,7 @@
         }
       },
       "output": {
-        "failure": "not supported: expression: Floor { expr: Value(Number(\"3.1411\", None)), field: Scale(Number(\"3\", None)) }"
+        "success": "ok"
       }
     },
     {
@@ -1141,7 +1141,7 @@
         }
       },
       "output": {
-        "failure": "not supported: expression: Floor { expr: Value(Number(\"5\", None)), field: DateTimeField(NoDateTime) }"
+        "success": "ok"
       }
     },
     {
@@ -1163,7 +1163,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: greatest"
+        "success": "ok"
       }
     },
     {
@@ -1251,7 +1251,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: least"
+        "success": "ok"
       }
     },
     {

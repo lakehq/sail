@@ -4,7 +4,7 @@ use sqlparser::ast;
 
 use crate::data_type::from_ast_data_type;
 use crate::error::SqlResult;
-use crate::expression::from_ast_expression;
+use crate::expression::common::from_ast_expression;
 
 /// Normalize an identifier to a lowercase string if the identifier is not quoted.
 ///

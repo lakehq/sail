@@ -1851,7 +1851,24 @@
     {
       "input": "-interval '3 month 1 hour'",
       "output": {
-        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "calendarInterval": {
+                    "months": 3,
+                    "days": 0,
+                    "microseconds": 3600000000
+                  }
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
@@ -3537,7 +3554,24 @@
     {
       "input": "-interval 3 monThs 4 dayS 22 sEcond 1 millisecond",
       "output": {
-        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "literal": {
+                  "calendarInterval": {
+                    "months": 3,
+                    "days": 4,
+                    "microseconds": 22001000
+                  }
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
@@ -3589,13 +3623,29 @@
       "input": "INTERVAL '1 year 2 second'",
       "exception": "\nCannot mix year-month and day-time fields: INTERVAL '1 year 2 second'.(line 1, pos 0)\n\n== SQL ==\nINTERVAL '1 year 2 second'\n^^^\n",
       "output": {
-        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
+        "success": {
+          "literal": {
+            "calendarInterval": {
+              "months": 12,
+              "days": 0,
+              "microseconds": 2000000
+            }
+          }
+        }
       }
     },
     {
       "input": "INTERVAL '3 month 1 hour'",
       "output": {
-        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
+        "success": {
+          "literal": {
+            "calendarInterval": {
+              "months": 3,
+              "days": 0,
+              "microseconds": 3600000000
+            }
+          }
+        }
       }
     },
     {
@@ -3625,7 +3675,15 @@
     {
       "input": "InterVal 'interval 3 month 1 hour'",
       "output": {
-        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
+        "success": {
+          "literal": {
+            "calendarInterval": {
+              "months": 3,
+              "days": 0,
+              "microseconds": 3600000000
+            }
+          }
+        }
       }
     },
     {
@@ -4216,7 +4274,15 @@
     {
       "input": "interval '1 year 3 months 2 weeks 2 days 1 hour 3 minutes 2 seconds 100 millisecond 200 microseconds'",
       "output": {
-        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
+        "success": {
+          "literal": {
+            "calendarInterval": {
+              "months": 15,
+              "days": 16,
+              "microseconds": 3782100200
+            }
+          }
+        }
       }
     },
     {
@@ -5664,7 +5730,15 @@
     {
       "input": "interval 3 monThs 4 dayS 22 sEcond 1 millisecond",
       "output": {
-        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
+        "success": {
+          "literal": {
+            "calendarInterval": {
+              "months": 3,
+              "days": 4,
+              "microseconds": 22001000
+            }
+          }
+        }
       }
     },
     {

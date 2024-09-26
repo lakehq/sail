@@ -1,11 +1,14 @@
+use std::sync::Arc;
+
 use datafusion::functions::expr_fn;
 use datafusion_expr::expr;
 
+use crate::config::PlanConfig;
 use crate::error::PlanResult;
 use crate::function::common::Function;
 use crate::utils::ItemTaker;
 
-fn case(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+fn case(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
     let mut when_then_expr = Vec::new();
     let mut iter = args.into_iter();
     let mut else_expr: Option<Box<expr::Expr>> = None;
@@ -24,7 +27,7 @@ fn case(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn if_expr(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+fn if_expr(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
     let (when_expr, then_expr, else_expr) = args.three()?;
     Ok(expr::Expr::Case(expr::Case {
         expr: None,

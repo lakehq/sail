@@ -774,7 +774,7 @@
         }
       },
       "output": {
-        "failure": "not supported: expression: Tuple([Identifier(Ident { value: \"y\", quote_style: None }), Identifier(Ident { value: \"x\", quote_style: None })])"
+        "failure": "not implemented: lambda function"
       }
     }
   ]

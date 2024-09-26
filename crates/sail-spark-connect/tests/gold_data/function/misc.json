@@ -657,7 +657,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: hll_sketch_agg"
+        "failure": "not implemented: unknown aggregate function: hll_sketch_agg"
       }
     },
     {
@@ -679,7 +679,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: hll_sketch_agg"
+        "failure": "not implemented: unknown aggregate function: hll_sketch_agg"
       }
     },
     {

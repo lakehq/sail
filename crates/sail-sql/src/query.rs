@@ -3,7 +3,7 @@ use sqlparser::ast;
 use sqlparser::ast::PivotValueSource;
 
 use crate::error::{SqlError, SqlResult};
-use crate::expression::{
+use crate::expression::common::{
     from_ast_expression, from_ast_ident, from_ast_object_name, from_ast_order_by,
 };
 use crate::literal::LiteralValue;

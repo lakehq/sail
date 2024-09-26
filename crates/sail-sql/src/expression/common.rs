@@ -5,6 +5,7 @@ use sqlparser::parser::Parser;
 
 use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
+use crate::expression::value::from_ast_value;
 use crate::literal::{parse_date_string, parse_timestamp_string, LiteralValue, Signed};
 use crate::parser::{fail_on_extra_token, SparkDialect};
 use crate::query::from_ast_query;
@@ -145,85 +146,6 @@ fn from_ast_date_time_field(field: ast::DateTimeField) -> SqlResult<String> {
     Ok(field.to_string())
 }
 
-fn from_ast_value(value: ast::Value) -> SqlResult<spec::Expr> {
-    use ast::Value;
-
-    match value {
-        Value::Number(value, postfix) => match postfix.as_deref() {
-            Some("Y") | Some("y") => {
-                let value = LiteralValue::<i8>::try_from(value.clone())?;
-                spec::Expr::try_from(value)
-            }
-            Some("S") | Some("s") => {
-                let value = LiteralValue::<i16>::try_from(value.clone())?;
-                spec::Expr::try_from(value)
-            }
-            Some("L") | Some("l") => {
-                let value = LiteralValue::<i64>::try_from(value.clone())?;
-                spec::Expr::try_from(value)
-            }
-            Some("F") | Some("f") => {
-                let value = LiteralValue::<f32>::try_from(value.clone())?;
-                spec::Expr::try_from(value)
-            }
-            Some("D") | Some("d") => {
-                let value = LiteralValue::<f64>::try_from(value.clone())?;
-                spec::Expr::try_from(value)
-            }
-            Some(x) if x.to_uppercase() == "BD" => {
-                if let Ok(value) = LiteralValue::<spec::Decimal128>::try_from(value.clone()) {
-                    spec::Expr::try_from(value)
-                } else {
-                    let value = LiteralValue::<spec::Decimal256>::try_from(value.clone())?;
-                    spec::Expr::try_from(value)
-                }
-            }
-            None | Some("") => {
-                if let Ok(value) = LiteralValue::<i32>::try_from(value.clone()) {
-                    spec::Expr::try_from(value)
-                } else if let Ok(value) = LiteralValue::<i64>::try_from(value.clone()) {
-                    spec::Expr::try_from(value)
-                } else if let Ok(value) = LiteralValue::<spec::Decimal128>::try_from(value.clone())
-                {
-                    spec::Expr::try_from(value)
-                } else {
-                    let value = LiteralValue::<spec::Decimal256>::try_from(value.clone())?;
-                    spec::Expr::try_from(value)
-                }
-            }
-            Some(&_) => Err(SqlError::invalid(format!(
-                "number postfix: {:?}{:?}",
-                value, postfix
-            ))),
-        },
-        Value::SingleQuotedString(value)
-        | Value::DoubleQuotedString(value)
-        | Value::DollarQuotedString(ast::DollarQuotedString { value, .. })
-        | Value::TripleSingleQuotedString(value)
-        | Value::TripleDoubleQuotedString(value) => spec::Expr::try_from(LiteralValue(value)),
-        Value::HexStringLiteral(value) => {
-            let value: LiteralValue<Vec<u8>> = value.try_into()?;
-            spec::Expr::try_from(value)
-        }
-        Value::Boolean(value) => spec::Expr::try_from(LiteralValue(value)),
-        Value::Null => Ok(spec::Expr::Literal(spec::Literal::Null)),
-        Value::Placeholder(placeholder) => Ok(spec::Expr::Placeholder(placeholder)),
-        Value::EscapedStringLiteral(_)
-        | Value::SingleQuotedByteStringLiteral(_)
-        | Value::DoubleQuotedByteStringLiteral(_)
-        | Value::TripleSingleQuotedByteStringLiteral(_)
-        | Value::TripleDoubleQuotedByteStringLiteral(_)
-        | Value::SingleQuotedRawStringLiteral(_)
-        | Value::DoubleQuotedRawStringLiteral(_)
-        | Value::TripleSingleQuotedRawStringLiteral(_)
-        | Value::TripleDoubleQuotedRawStringLiteral(_)
-        | Value::UnicodeStringLiteral(_)
-        | Value::NationalStringLiteral(_) => {
-            Err(SqlError::unsupported(format!("value: {:?}", value)))
-        }
-    }
-}
-
 fn from_ast_interval(interval: ast::Interval) -> SqlResult<spec::Expr> {
     Ok(spec::Expr::Literal(
         LiteralValue(Signed(interval, false)).try_into()?,
@@ -234,8 +156,8 @@ fn from_ast_function_arg(arg: ast::FunctionArg) -> SqlResult<spec::Expr> {
     use ast::{FunctionArg, FunctionArgExpr};
 
     match arg {
-        FunctionArg::Named { .. } => Err(SqlError::unsupported("named function argument")),
-        FunctionArg::Unnamed(arg) => {
+        // TODO: Support named argument names.
+        FunctionArg::Unnamed(arg) | FunctionArg::Named { arg, .. } => {
             let arg = match arg {
                 FunctionArgExpr::Expr(e) => from_ast_expression(e)?,
                 FunctionArgExpr::QualifiedWildcard(name) => spec::Expr::UnresolvedStar {
@@ -523,8 +445,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                 ast::DataType::Date => parse_date_string(value.as_str()),
                 ast::DataType::Timestamp(_, _) => parse_timestamp_string(value.as_str()),
                 _ => Err(SqlError::unsupported(format!(
-                    "typed string expression: {:?}",
-                    expr
+                    "typed string expression: {expr:?}"
                 ))),
             }?;
             Ok(spec::Expr::Literal(literal))
@@ -816,25 +737,135 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                 .collect::<SqlResult<Vec<_>>>()?;
             Ok(spec::Expr::GroupingSets(sets))
         }
+        Expr::Struct { values, fields } => from_ast_struct(values, fields),
+        Expr::Tuple(values) => match values.first() {
+            Some(Expr::Identifier(_)) | Some(Expr::Value(_)) => from_ast_struct(values, vec![]),
+            other => Err(SqlError::unsupported(format!(
+                "Only tuple of identifiers or values are supported, found: {other:?}"
+            ))),
+        },
+        Expr::Ceil {
+            expr,
+            field: _field,
+        } => {
+            // TODO: When Sail's patched sqlparser is updated to the latest version, field will be
+            //  `CeilFloorKind` instead of `DateTimeField` which we can use.
+            Ok(spec::Expr::from(Function {
+                name: "ceil".to_string(),
+                args: vec![from_ast_expression(*expr)?],
+            }))
+        }
+        Expr::Floor {
+            expr,
+            field: _field,
+        } => {
+            // TODO: When Sail's patched sqlparser is updated to the latest version, field will be
+            //  `CeilFloorKind` instead of `DateTimeField` which we can use.
+            Ok(spec::Expr::from(Function {
+                name: "floor".to_string(),
+                args: vec![from_ast_expression(*expr)?],
+            }))
+        }
+        Expr::AnyOp {
+            left,
+            compare_op,
+            right,
+        } => {
+            match compare_op {
+                ast::BinaryOperator::Eq => {
+                    // left = ANY(right)
+                    Ok(spec::Expr::from(Function {
+                        name: "array_contains".to_string(),
+                        args: vec![from_ast_expression(*right)?, from_ast_expression(*left)?],
+                    }))
+                }
+                other => Err(SqlError::unsupported(format!(
+                    "ANY operator with compare operator: {other:?}"
+                ))),
+            }
+        }
+        Expr::AllOp {
+            left,
+            compare_op,
+            right,
+        } => {
+            match compare_op {
+                ast::BinaryOperator::Eq => {
+                    // left = ALL(right)
+                    Ok(spec::Expr::from(Function {
+                        name: "array_contains_all".to_string(),
+                        args: vec![from_ast_expression(*right)?, from_ast_expression(*left)?],
+                    }))
+                }
+                other => Err(SqlError::unsupported(format!(
+                    "ALL operator with compare operator: {other:?}"
+                ))),
+            }
+        }
+        Expr::AtTimeZone {
+            timestamp,
+            time_zone,
+        } => {
+            let expr = Box::new(from_ast_expression(*timestamp)?);
+            let cast_to_type = match *time_zone {
+                Expr::Value(ast::Value::SingleQuotedString(time_zone))
+                | Expr::Value(ast::Value::DoubleQuotedString(time_zone)) => {
+                    spec::DataType::Timestamp(
+                        Some(spec::TimeUnit::Microsecond),
+                        Some(time_zone.into()),
+                    )
+                }
+                _ => {
+                    return Err(SqlError::invalid(
+                        "AT TIME ZONE expression must be a single or double quoted string",
+                    ))
+                }
+            };
+            Ok(spec::Expr::Cast { expr, cast_to_type })
+        }
+        Expr::Position { expr, r#in } => {
+            let string = from_ast_expression(*r#in)?;
+            let substring = from_ast_expression(*expr)?;
+            Ok(spec::Expr::from(Function {
+                name: "strpos".to_string(),
+                args: vec![string, substring],
+            }))
+        }
         Expr::JsonAccess { .. }
         | Expr::InUnnest { .. }
-        | Expr::AnyOp { .. }
-        | Expr::AllOp { .. }
         | Expr::Convert { .. }
-        | Expr::AtTimeZone { .. }
-        | Expr::Ceil { .. }
-        | Expr::Floor { .. }
-        | Expr::Position { .. }
         | Expr::Collate { .. }
         | Expr::IntroducedString { .. }
-        | Expr::Tuple(_)
         | Expr::Array(_)
         | Expr::MatchAgainst { .. }
-        | Expr::Struct { .. }
         | Expr::Dictionary(_)
         | Expr::OuterJoin(_)
-        | Expr::Prior(_) => Err(SqlError::unsupported(format!("expression: {:?}", expr))),
+        | Expr::Prior(_) => Err(SqlError::unsupported(format!("expression: {expr:?}"))),
     }
+}
+
+pub fn from_ast_struct(
+    values: Vec<ast::Expr>,
+    fields: Vec<ast::StructField>,
+) -> SqlResult<spec::Expr> {
+    if !fields.is_empty() {
+        return Err(SqlError::unsupported("struct fields"));
+    }
+    let is_named_struct = values
+        .iter()
+        .any(|value| matches!(value, ast::Expr::Named { .. }));
+    let args = values
+        .into_iter()
+        .map(from_ast_expression)
+        .collect::<SqlResult<Vec<_>>>()?;
+    Ok(spec::Expr::from(Function {
+        name: if is_named_struct {
+            "named_struct".to_string()
+        } else {
+            "struct".to_string()
+        },
+        args,
+    }))
 }
 
 pub fn parse_object_name(s: &str) -> SqlResult<spec::ObjectName> {
