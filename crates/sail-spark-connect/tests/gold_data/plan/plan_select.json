@@ -43,7 +43,7 @@
     {
       "input": "\nSELECT TRANSFORM(a, b, c)\n  ROW FORMAT DELIMITED\n  FIELDS TERMINATED BY '\\t'\n  COLLECTION ITEMS TERMINATED BY '\u0002'\n  MAP KEYS TERMINATED BY '\u0003'\n  LINES TERMINATED BY '\\n'\n  NULL DEFINED AS 'null'\n  USING 'cat' AS (a, b, c)\n  ROW FORMAT DELIMITED\n  FIELDS TERMINATED BY '\\t'\n  COLLECTION ITEMS TERMINATED BY '\u0004'\n  MAP KEYS TERMINATED BY '\u0005'\n  LINES TERMINATED BY '\\n'\n  NULL DEFINED AS 'NULL'\nFROM testData\n      ",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: FORMAT"
+        "failure": "invalid argument: extra tokens after statement: FIELDS"
       }
     },
     {
@@ -829,7 +829,7 @@
       "input": "SELECT TRANSFORM(a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\n  USING 'cat' AS (a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\nFROM testData",
       "exception": "\n[UNSUPPORTED_FEATURE.TRANSFORM_NON_HIVE] The feature is not supported: TRANSFORM with SERDE is only supported in hive mode.(line 1, pos 0)\n\n== SQL ==\nSELECT TRANSFORM(a, b, c)\n^^^\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\n  USING 'cat' AS (a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\nFROM testData\n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: FORMAT"
+        "failure": "invalid argument: extra tokens after statement: 'org.apache.hadoop.hive.serde2.OpenCSVSerde'"
       }
     },
     {

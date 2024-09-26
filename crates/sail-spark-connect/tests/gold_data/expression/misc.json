@@ -463,7 +463,7 @@
     {
       "input": "-+~~a",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an expression:, found: ~~ at Line: 1, Column: 3"
+        "failure": "invalid argument: sql parser error: Expected: an expression, found: ~~ at Line: 1, Column: 3"
       }
     },
     {
@@ -3198,7 +3198,7 @@
     {
       "input": "~a",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an expression:, found: ~ at Line: 1, Column: 1"
+        "failure": "invalid argument: sql parser error: Expected: an expression, found: ~ at Line: 1, Column: 1"
       }
     }
   ]

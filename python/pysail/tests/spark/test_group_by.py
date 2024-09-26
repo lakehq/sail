@@ -151,7 +151,6 @@ def test_grouping_sets(spark):
 #   https://github.com/sqlparser-rs/sqlparser-rs/pull/1323
 
 
-@pytest.mark.skip(reason="SQL parsing 'WITH ROLLUP' not implemented")
 def test_rollup(spark):
     actual = spark.sql("""
         SELECT city, car_model, sum(quantity) AS sum
@@ -195,7 +194,6 @@ def test_rollup(spark):
     assert_frame_equal(actual, expected)
 
 
-@pytest.mark.skip(reason="SQL parsing 'WITH CUBE' not implemented")
 def test_cube(spark):
     actual = spark.sql("""
         SELECT city, car_model, sum(quantity) AS sum

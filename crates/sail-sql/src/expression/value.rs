@@ -76,6 +76,7 @@ pub(crate) fn from_ast_value(value: ast::Value) -> SqlResult<spec::Expr> {
         | Value::DoubleQuotedRawStringLiteral(_)
         | Value::TripleSingleQuotedRawStringLiteral(_)
         | Value::TripleDoubleQuotedRawStringLiteral(_)
+        | Value::UnicodeStringLiteral(_)
         | Value::NationalStringLiteral(_) => {
             Err(SqlError::unsupported(format!("value: {:?}", value)))
         }

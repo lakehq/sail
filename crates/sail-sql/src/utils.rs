@@ -87,6 +87,7 @@ pub fn value_to_string(value: &ast::Value) -> Option<String> {
         | ast::Value::DoubleQuotedRawStringLiteral(_)
         | ast::Value::TripleSingleQuotedRawStringLiteral(_)
         | ast::Value::TripleDoubleQuotedRawStringLiteral(_)
+        | ast::Value::UnicodeStringLiteral(_)
         | ast::Value::HexStringLiteral(_)
         | ast::Value::Null
         | ast::Value::Placeholder(_) => None,
