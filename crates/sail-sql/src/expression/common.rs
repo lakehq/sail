@@ -156,6 +156,7 @@ fn from_ast_function_arg(arg: ast::FunctionArg) -> SqlResult<spec::Expr> {
     use ast::{FunctionArg, FunctionArgExpr};
 
     match arg {
+        // TODO: Support named argument names.
         FunctionArg::Unnamed(arg) | FunctionArg::Named { arg, .. } => {
             let arg = match arg {
                 FunctionArgExpr::Expr(e) => from_ast_expression(e)?,

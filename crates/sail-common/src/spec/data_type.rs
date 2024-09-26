@@ -33,8 +33,6 @@ pub enum DataType {
         length: u32,
     },
     Date,
-    // TODO: This is the preliminary work towards Sail spec::DataType achieving parity with Arrow.
-    //  spec::DataType::Timestamp and TimestampNtz need to be merged in follow-up work.
     Timestamp(Option<TimeUnit>, Option<Arc<str>>),
     TimestampNtz,
     CalendarInterval,

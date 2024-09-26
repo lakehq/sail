@@ -10,8 +10,6 @@ use crate::utils::ItemTaker;
 
 pub(crate) type Function =
     Arc<dyn Fn(Vec<expr::Expr>, Arc<PlanConfig>) -> PlanResult<expr::Expr> + Send + Sync>;
-pub(crate) type AggFunction =
-    Arc<dyn Fn(Vec<expr::Expr>, bool) -> PlanResult<expr::Expr> + Send + Sync>;
 
 pub(crate) struct FunctionBuilder;
 
@@ -129,8 +127,15 @@ impl FunctionBuilder {
         let name = name.to_string();
         Arc::new(move |_, _| Err(PlanError::todo(format!("function: {name}"))))
     }
+}
 
-    pub fn default_agg<F>(f: F) -> AggFunction
+pub(crate) type AggFunction =
+    Arc<dyn Fn(Vec<expr::Expr>, bool) -> PlanResult<expr::Expr> + Send + Sync>;
+
+pub(crate) struct AggregateFunctionBuilder;
+
+impl AggregateFunctionBuilder {
+    pub fn default<F>(f: F) -> AggFunction
     where
         F: Fn() -> Arc<AggregateUDF> + Send + Sync + 'static,
     {
@@ -146,14 +151,14 @@ impl FunctionBuilder {
         })
     }
 
-    pub fn custom_agg<F>(f: F) -> AggFunction
+    pub fn custom<F>(f: F) -> AggFunction
     where
         F: Fn(Vec<expr::Expr>, bool) -> PlanResult<expr::Expr> + Send + Sync + 'static,
     {
         Arc::new(f)
     }
 
-    pub fn unknown_agg(name: &str) -> AggFunction {
+    pub fn unknown(name: &str) -> AggFunction {
         let name = name.to_string();
         Arc::new(move |_, _| {
             Err(PlanError::todo(format!(
