@@ -3,7 +3,7 @@ use std::sync::PoisonError;
 
 use arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
-use prost::DecodeError;
+use prost::{DecodeError, UnknownEnumValue};
 use pyo3::PyErr;
 use sail_common::error::CommonError;
 use sail_plan::error::PlanError;
@@ -126,6 +126,12 @@ impl From<JoinError> for SparkError {
 
 impl From<DecodeError> for SparkError {
     fn from(error: DecodeError) -> Self {
+        SparkError::InvalidArgument(error.to_string())
+    }
+}
+
+impl From<UnknownEnumValue> for SparkError {
+    fn from(error: UnknownEnumValue) -> Self {
         SparkError::InvalidArgument(error.to_string())
     }
 }
