@@ -12,6 +12,8 @@ pub(crate) trait ItemTaker {
     fn one(self) -> Result<Self::Item>;
     fn two(self) -> Result<(Self::Item, Self::Item)>;
     fn three(self) -> Result<(Self::Item, Self::Item, Self::Item)>;
+    #[allow(clippy::type_complexity)]
+    fn four(self) -> Result<(Self::Item, Self::Item, Self::Item, Self::Item)>;
     fn at_least_one(self) -> Result<(Self::Item, Vec<Self::Item>)>;
     fn one_or_more(self) -> Result<Either<Self::Item, Vec<Self::Item>>>;
 }
@@ -50,6 +52,17 @@ impl<T: Debug> ItemTaker for Vec<T> {
         let second = self.pop().unwrap();
         let first = self.pop().unwrap();
         Ok((first, second, third))
+    }
+
+    fn four(mut self) -> Result<(T, T, T, T)> {
+        if self.len() != 4 {
+            return plan_err!("four values expected: {:?}", self);
+        }
+        let fourth = self.pop().unwrap();
+        let third = self.pop().unwrap();
+        let second = self.pop().unwrap();
+        let first = self.pop().unwrap();
+        Ok((first, second, third, fourth))
     }
 
     fn at_least_one(self) -> Result<(T, Vec<T>)> {

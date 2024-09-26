@@ -83,6 +83,23 @@ fn unbase64(expr: expr::Expr) -> expr::Expr {
     expr_fn::decode(expr, format)
 }
 
+fn overlay(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
+    if args.len() == 3 {
+        return Ok(expr_fn::overlay(args));
+    }
+    if args.len() == 4 {
+        let (str, substr, pos, count) = args.four()?;
+        return match count {
+            expr::Expr::Literal(ScalarValue::Int64(Some(-1)))
+            | expr::Expr::Literal(ScalarValue::Int32(Some(-1))) => {
+                Ok(expr_fn::overlay(vec![str, substr, pos]))
+            }
+            _ => Ok(expr_fn::overlay(vec![str, substr, pos, count])),
+        };
+    }
+    Err(PlanError::invalid("overlay requires 3 or 4 arguments"))
+}
+
 pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -118,7 +135,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("luhn_check", F::unknown("luhn_check")),
         ("mask", F::unknown("mask")),
         ("octet_length", F::unary(expr_fn::octet_length)),
-        ("overlay", F::unknown("overlay")),
+        ("overlay", F::custom(overlay)),
         ("position", F::unknown("position")),
         ("printf", F::unknown("printf")),
         ("regexp_count", F::unknown("regexp_count")),

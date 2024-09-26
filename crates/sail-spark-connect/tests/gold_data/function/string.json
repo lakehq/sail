@@ -1887,7 +1887,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: overlay"
+        "success": "ok"
       }
     },
     {
@@ -1909,7 +1909,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: overlay"
+        "success": "ok"
       }
     },
     {
@@ -1931,7 +1931,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: overlay"
+        "success": "ok"
       }
     },
     {
@@ -1953,7 +1953,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: overlay"
+        "success": "ok"
       }
     },
     {
