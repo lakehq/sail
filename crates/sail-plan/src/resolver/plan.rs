@@ -531,6 +531,7 @@ impl PlanResolver<'_> {
             CommandNode::Delete { table, condition } => {
                 self.resolve_command_delete(table, condition, state).await
             }
+            CommandNode::AlterTable { .. } => Err(PlanError::todo("CommandNode::AlterTable")),
         }
     }
 

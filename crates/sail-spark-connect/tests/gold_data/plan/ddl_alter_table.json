@@ -11,7 +11,64 @@
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\"",
       "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"DEFAULT\" more than once, which is invalid.(line 1, pos 62)\n\n== SQL ==\nALTER TABLE my_tab ADD COLUMN b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\"\n--------------------------------------------------------------^^^\n",
       "output": {
-        "failure": "not implemented: SQL alter table"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operations": [
+                {
+                  "AddColumn": {
+                    "column_keyword": true,
+                    "if_not_exists": false,
+                    "column_def": {
+                      "name": {
+                        "value": "b",
+                        "quote_style": null
+                      },
+                      "data_type": {
+                        "String": null
+                      },
+                      "collation": null,
+                      "options": [
+                        {
+                          "name": null,
+                          "option": {
+                            "Default": {
+                              "Value": {
+                                "DoubleQuotedString": "123"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": null,
+                          "option": "NotNull"
+                        },
+                        {
+                          "name": null,
+                          "option": {
+                            "Default": {
+                              "Value": {
+                                "DoubleQuotedString": "abc"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "column_position": null
+                  }
+                }
+              ],
+              "location": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -25,7 +82,58 @@
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING NOT NULL DEFAULT \"abc\" NOT NULL",
       "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"NOT NULL\" more than once, which is invalid.(line 1, pos 62)\n\n== SQL ==\nALTER TABLE my_tab ADD COLUMN b STRING NOT NULL DEFAULT \"abc\" NOT NULL\n--------------------------------------------------------------^^^\n",
       "output": {
-        "failure": "not implemented: SQL alter table"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operations": [
+                {
+                  "AddColumn": {
+                    "column_keyword": true,
+                    "if_not_exists": false,
+                    "column_def": {
+                      "name": {
+                        "value": "b",
+                        "quote_style": null
+                      },
+                      "data_type": {
+                        "String": null
+                      },
+                      "collation": null,
+                      "options": [
+                        {
+                          "name": null,
+                          "option": "NotNull"
+                        },
+                        {
+                          "name": null,
+                          "option": {
+                            "Default": {
+                              "Value": {
+                                "DoubleQuotedString": "abc"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "name": null,
+                          "option": "NotNull"
+                        }
+                      ]
+                    },
+                    "column_position": null
+                  }
+                }
+              ],
+              "location": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -175,7 +283,57 @@
     {
       "input": "ALTER TABLE t1 ADD COLUMN x int NOT NULL DEFAULT 42",
       "output": {
-        "failure": "not implemented: SQL alter table"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t1"
+              ],
+              "ifExists": false,
+              "operations": [
+                {
+                  "AddColumn": {
+                    "column_keyword": true,
+                    "if_not_exists": false,
+                    "column_def": {
+                      "name": {
+                        "value": "x",
+                        "quote_style": null
+                      },
+                      "data_type": {
+                        "Int": null
+                      },
+                      "collation": null,
+                      "options": [
+                        {
+                          "name": null,
+                          "option": "NotNull"
+                        },
+                        {
+                          "name": null,
+                          "option": {
+                            "Default": {
+                              "Value": {
+                                "Number": [
+                                  "42",
+                                  null
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "column_position": null
+                  }
+                }
+              ],
+              "location": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -213,31 +371,208 @@
     {
       "input": "ALTER TABLE table_name ADD COLUMN x int",
       "output": {
-        "failure": "not implemented: SQL alter table"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operations": [
+                {
+                  "AddColumn": {
+                    "column_keyword": true,
+                    "if_not_exists": false,
+                    "column_def": {
+                      "name": {
+                        "value": "x",
+                        "quote_style": null
+                      },
+                      "data_type": {
+                        "Int": null
+                      },
+                      "collation": null,
+                      "options": []
+                    },
+                    "column_position": null
+                  }
+                }
+              ],
+              "location": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name ADD COLUMN x int AFTER y",
       "output": {
-        "failure": "not implemented: SQL alter table"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operations": [
+                {
+                  "AddColumn": {
+                    "column_keyword": true,
+                    "if_not_exists": false,
+                    "column_def": {
+                      "name": {
+                        "value": "x",
+                        "quote_style": null
+                      },
+                      "data_type": {
+                        "Int": null
+                      },
+                      "collation": null,
+                      "options": []
+                    },
+                    "column_position": {
+                      "After": {
+                        "value": "y",
+                        "quote_style": null
+                      }
+                    }
+                  }
+                }
+              ],
+              "location": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name ADD COLUMN x int COMMENT 'doc'",
       "output": {
-        "failure": "not implemented: SQL alter table"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operations": [
+                {
+                  "AddColumn": {
+                    "column_keyword": true,
+                    "if_not_exists": false,
+                    "column_def": {
+                      "name": {
+                        "value": "x",
+                        "quote_style": null
+                      },
+                      "data_type": {
+                        "Int": null
+                      },
+                      "collation": null,
+                      "options": [
+                        {
+                          "name": null,
+                          "option": {
+                            "Comment": "doc"
+                          }
+                        }
+                      ]
+                    },
+                    "column_position": null
+                  }
+                }
+              ],
+              "location": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name ADD COLUMN x int FIRST",
       "output": {
-        "failure": "not implemented: SQL alter table"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operations": [
+                {
+                  "AddColumn": {
+                    "column_keyword": true,
+                    "if_not_exists": false,
+                    "column_def": {
+                      "name": {
+                        "value": "x",
+                        "quote_style": null
+                      },
+                      "data_type": {
+                        "Int": null
+                      },
+                      "collation": null,
+                      "options": []
+                    },
+                    "column_position": "First"
+                  }
+                }
+              ],
+              "location": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name ADD COLUMN x int NOT NULL",
       "output": {
-        "failure": "not implemented: SQL alter table"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operations": [
+                {
+                  "AddColumn": {
+                    "column_keyword": true,
+                    "if_not_exists": false,
+                    "column_def": {
+                      "name": {
+                        "value": "x",
+                        "quote_style": null
+                      },
+                      "data_type": {
+                        "Int": null
+                      },
+                      "collation": null,
+                      "options": [
+                        {
+                          "name": null,
+                          "option": "NotNull"
+                        }
+                      ]
+                    },
+                    "column_position": null
+                  }
+                }
+              ],
+              "location": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -476,7 +811,53 @@
     {
       "input": "ALTER TABLE table_name SET TBLPROPERTIES ('test' = 'test', 'comment' = 'new_comment')",
       "output": {
-        "failure": "not implemented: SQL alter table"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operations": [
+                {
+                  "SetTblProperties": {
+                    "table_properties": [
+                      {
+                        "KeyValue": {
+                          "key": {
+                            "value": "test",
+                            "quote_style": "'"
+                          },
+                          "value": {
+                            "Value": {
+                              "SingleQuotedString": "test"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "KeyValue": {
+                          "key": {
+                            "value": "comment",
+                            "quote_style": "'"
+                          },
+                          "value": {
+                            "Value": {
+                              "SingleQuotedString": "new_comment"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ],
+              "location": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

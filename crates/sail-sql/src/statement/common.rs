@@ -9,6 +9,7 @@ use crate::error::{SqlError, SqlResult};
 use crate::expression::common::{from_ast_expression, from_ast_object_name};
 use crate::parser::{fail_on_extra_token, SparkDialect};
 use crate::query::from_ast_query;
+use crate::statement::alter_table::alter_table_statement_to_plan;
 use crate::statement::create::{from_create_table_statement, parse_create_statement};
 use crate::statement::delete::delete_statement_to_plan;
 use crate::statement::explain::{from_explain_statement, parse_explain_statement};
@@ -95,14 +96,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
             legacy_options: _,
             values: _,
         } => Err(SqlError::todo("SQL copy")),
-        Statement::AlterTable {
-            name: _,
-            if_exists: _,
-            only: _,
-            operations: _,
-            location: _,
-            on_cluster: _,
-        } => Err(SqlError::todo("SQL alter table")),
+        alter_table @ Statement::AlterTable { .. } => alter_table_statement_to_plan(alter_table),
         Statement::AlterView {
             name: _,
             columns: _,

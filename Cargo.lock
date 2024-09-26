@@ -3744,6 +3744,7 @@ dependencies = [
  "ryu",
  "serde",
  "serde_json",
+ "sqlparser 0.51.0",
  "thiserror",
 ]
 
