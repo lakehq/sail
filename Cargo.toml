@@ -12,7 +12,7 @@ edition = "2021"
 thiserror = { version = "1.0.64" }
 tokio = { version = "1.38.1", features = ["full"] }
 tokio-stream = "0.1.16"
-tonic = { version = "0.12", features = ["tls", "tls-roots", "gzip", "zstd"] }
+tonic = { version = "0.12.2", features = ["tls", "tls-roots", "gzip", "zstd"] }
 tonic-build = "0.12.2"
 tonic-reflection = "0.12.2"
 tonic-health = "0.12.2"
