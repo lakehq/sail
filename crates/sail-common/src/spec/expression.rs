@@ -22,6 +22,7 @@ pub enum Expr {
     },
     UnresolvedStar {
         target: Option<ObjectName>,
+        wildcard_options: WildcardOptions,
     },
     Alias {
         expr: Box<Expr>,
@@ -160,6 +161,18 @@ impl From<Vec<String>> for ObjectName {
 impl From<ObjectName> for Vec<String> {
     fn from(name: ObjectName) -> Self {
         name.0.into_iter().map(String::from).collect()
+    }
+}
+
+impl<'a> From<&'a ObjectName> for Vec<&'a str> {
+    fn from(name: &'a ObjectName) -> Self {
+        name.0
+            .iter()
+            .map(|part| {
+                let part: &str = part.into();
+                part
+            })
+            .collect()
     }
 }
 
@@ -340,4 +353,29 @@ impl PySparkUdfType {
 #[serde(rename_all = "camelCase")]
 pub struct UnresolvedNamedLambdaVariable {
     pub name: ObjectName,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WildcardOptions {
+    pub ilike_pattern: Option<String>,
+    pub exclude_columns: Option<Vec<Identifier>>,
+    pub except_columns: Option<Vec<Identifier>>,
+    pub replace_columns: Option<Vec<WildcardReplaceColumn>>,
+    pub rename_columns: Option<Vec<IdentifierWithAlias>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WildcardReplaceColumn {
+    pub expression: Box<Expr>,
+    pub column_name: Identifier,
+    pub as_keyword: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentifierWithAlias {
+    pub identifier: Identifier,
+    pub alias: Identifier,
 }

@@ -4,7 +4,7 @@ use sqlparser::ast;
 
 use crate::data_type::from_ast_data_type;
 use crate::error::SqlResult;
-use crate::expression::from_ast_expression;
+use crate::expression::common::from_ast_expression;
 
 /// Normalize an identifier to a lowercase string if the identifier is not quoted.
 ///
@@ -30,10 +30,6 @@ pub fn object_name_to_string(object_name: &ast::ObjectName) -> String {
         .map(normalize_ident)
         .collect::<Vec<String>>()
         .join(".")
-}
-
-pub fn ast_idents_to_spec_object_name(idents: Vec<ast::Ident>) -> spec::ObjectName {
-    spec::ObjectName::from(idents.iter().map(normalize_ident).collect::<Vec<String>>())
 }
 
 pub fn build_column_defaults(
@@ -91,6 +87,7 @@ pub fn value_to_string(value: &ast::Value) -> Option<String> {
         | ast::Value::DoubleQuotedRawStringLiteral(_)
         | ast::Value::TripleSingleQuotedRawStringLiteral(_)
         | ast::Value::TripleDoubleQuotedRawStringLiteral(_)
+        | ast::Value::UnicodeStringLiteral(_)
         | ast::Value::HexStringLiteral(_)
         | ast::Value::Null
         | ast::Value::Placeholder(_) => None,

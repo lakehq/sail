@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use sail_common::spec;
 use sail_sql::data_type::parse_data_type;
-use sail_sql::expression::{
+use sail_sql::expression::common::{
     parse_expression, parse_object_name, parse_qualified_wildcard, parse_wildcard_expression,
 };
 
@@ -62,7 +62,10 @@ impl TryFrom<Expression> for spec::Expr {
                 let target = unparsed_target
                     .map(|x| parse_qualified_wildcard(x.as_str()))
                     .transpose()?;
-                Ok(spec::Expr::UnresolvedStar { target })
+                Ok(spec::Expr::UnresolvedStar {
+                    target,
+                    wildcard_options: Default::default(),
+                })
             }
             ExprType::Alias(alias) => {
                 let Alias {
@@ -431,8 +434,9 @@ impl TryFrom<UnresolvedNamedLambdaVariable> for spec::UnresolvedNamedLambdaVaria
 mod tests {
     use std::thread;
 
+    use sail_common::spec;
     use sail_common::tests::test_gold_set;
-    use sail_sql::expression::parse_wildcard_expression;
+    use sail_sql::expression::common::parse_wildcard_expression;
 
     use crate::error::SparkError;
 
@@ -440,14 +444,16 @@ mod tests {
     fn test_sql_to_expression() -> Result<(), Box<dyn std::error::Error>> {
         // Run the test in a separate thread with a large stack size
         // so that it can handle deeply nested expressions.
-        let builder = thread::Builder::new().stack_size(96 * 1024 * 1024);
+        let builder = thread::Builder::new().stack_size(128 * 1024 * 1024);
         let handle = builder.spawn(|| {
             test_gold_set(
                 "tests/gold_data/expression/*.json",
                 |sql: String| {
                     let expr = parse_wildcard_expression(&sql)?;
                     if sql.len() > 128 {
-                        Err(SparkError::internal("result omitted for long expression"))
+                        Ok(spec::Expr::Literal(spec::Literal::String(
+                            "Result omitted for long expression.".to_string(),
+                        )))
                     } else {
                         Ok(expr)
                     }

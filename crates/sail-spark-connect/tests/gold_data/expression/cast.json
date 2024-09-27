@@ -54,7 +54,12 @@
                 "planId": null
               }
             },
-            "castToType": "timestamp"
+            "castToType": {
+              "timestamp": [
+                "microsecond",
+                null
+              ]
+            }
           }
         }
       }

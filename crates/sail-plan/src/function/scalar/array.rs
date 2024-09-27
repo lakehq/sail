@@ -1,9 +1,13 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::DataType;
+use datafusion::functions::expr_fn::nvl;
 use datafusion::functions_nested::expr_fn;
 use datafusion::functions_nested::position::array_position_udf;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, BinaryExpr, Operator};
 
+use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::array_min_max::{ArrayMax, ArrayMin};
 use crate::function::common::Function;
@@ -42,7 +46,7 @@ fn slice(array: expr::Expr, start: expr::Expr, length: expr::Expr) -> expr::Expr
     expr_fn::array_slice(array, start, end, None)
 }
 
-fn sort_array(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+fn sort_array(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
     let (array, asc) = args.two()?;
     let (sort, nulls) = match asc {
         expr::Expr::Literal(ScalarValue::Boolean(Some(true))) => (
@@ -81,6 +85,20 @@ fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     expr_fn::array_element(array, element)
 }
 
+fn array_contains(array: expr::Expr, element: expr::Expr) -> expr::Expr {
+    nvl(
+        expr_fn::array_has(array, element),
+        lit(ScalarValue::Boolean(Some(false))),
+    )
+}
+
+fn array_contains_all(array: expr::Expr, element: expr::Expr) -> expr::Expr {
+    nvl(
+        expr_fn::array_has_all(array, element),
+        lit(ScalarValue::Boolean(Some(false))),
+    )
+}
+
 pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -88,7 +106,8 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
         ("array", F::var_arg(expr_fn::make_array)),
         ("array_append", F::binary(expr_fn::array_append)),
         ("array_compact", F::unary(array_compact)),
-        ("array_contains", F::binary(expr_fn::array_has)),
+        ("array_contains", F::binary(array_contains)),
+        ("array_contains_all", F::binary(array_contains_all)),
         ("array_distinct", F::unary(expr_fn::array_distinct)),
         ("array_except", F::binary(expr_fn::array_except)),
         ("array_insert", F::unknown("array_insert")),

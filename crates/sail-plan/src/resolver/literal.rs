@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNanoType};
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::ScalarValue;
@@ -40,13 +38,13 @@ impl PlanResolver<'_> {
             }
             Literal::String(x) => Ok(ScalarValue::Utf8(Some(x))),
             Literal::Date { days } => Ok(ScalarValue::Date32(Some(days))),
-            Literal::Timestamp { microseconds } => {
-                let timezone: Arc<str> = Arc::from(self.config.time_zone.as_str());
-                Ok(ScalarValue::TimestampMicrosecond(
-                    Some(microseconds),
-                    Some(timezone),
-                ))
-            }
+            Literal::TimestampMicrosecond {
+                microseconds,
+                timezone,
+            } => Ok(ScalarValue::TimestampMicrosecond(
+                Some(microseconds),
+                self.resolve_timezone(timezone)?,
+            )),
             Literal::TimestampNtz { microseconds } => {
                 Ok(ScalarValue::TimestampMicrosecond(Some(microseconds), None))
             }

@@ -3,8 +3,12 @@ use sqlparser::ast;
 use sqlparser::ast::PivotValueSource;
 
 use crate::error::{SqlError, SqlResult};
-use crate::expression::{from_ast_expression, from_ast_object_name, from_ast_order_by};
+use crate::expression::common::{
+    from_ast_expression, from_ast_ident, from_ast_object_name, from_ast_order_by,
+};
 use crate::literal::LiteralValue;
+use crate::operation::filter::query_plan_with_filter;
+use crate::operation::join::join_plan_from_tables;
 use crate::utils::normalize_ident;
 
 pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
@@ -18,6 +22,8 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
         fetch,
         locks,
         for_clause,
+        settings,
+        format_clause,
     } = query;
     if !limit_by.is_empty() {
         return Err(SqlError::unsupported("LIMIT BY clause"));
@@ -31,11 +37,20 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
     if for_clause.is_some() {
         return Err(SqlError::unsupported("FOR clause"));
     }
+    if settings.is_some() {
+        return Err(SqlError::unsupported("SETTINGS clause"));
+    }
+    if format_clause.is_some() {
+        return Err(SqlError::unsupported("FORMAT clause"));
+    }
 
     let plan = from_ast_set_expr(*body)?;
 
-    let plan = if !order_by.is_empty() {
-        let order_by = order_by
+    let plan = if let Some(ast::OrderBy { exprs, interpolate }) = order_by {
+        if interpolate.is_some() {
+            return Err(SqlError::unsupported("INTERPOLATE in ORDER BY"));
+        }
+        let order_by = exprs
             .into_iter()
             .map(from_ast_order_by)
             .collect::<SqlResult<_>>()?;
@@ -94,6 +109,7 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
         into,
         from,
         lateral_views,
+        prewhere,
         selection,
         group_by,
         cluster_by,
@@ -115,6 +131,9 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
     if !lateral_views.is_empty() {
         return Err(SqlError::todo("LATERAL VIEW clause in SELECT"));
     }
+    if prewhere.is_some() {
+        return Err(SqlError::unsupported("PREWHERE clause in SELECT"));
+    }
     if !cluster_by.is_empty() {
         return Err(SqlError::unsupported("CLUSTER BY clause in SELECT"));
     }
@@ -134,42 +153,8 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
         return Err(SqlError::unsupported("CONNECT BY clause in SELECT"));
     }
 
-    let plan = from
-        .into_iter()
-        .try_fold(
-            None,
-            |r: Option<spec::QueryPlan>, table| -> SqlResult<Option<spec::QueryPlan>> {
-                let right = from_ast_table_with_joins(table)?;
-                match r {
-                    Some(left) => Ok(Some(spec::QueryPlan::new(spec::QueryNode::Join(
-                        spec::Join {
-                            left: Box::new(left),
-                            right: Box::new(right),
-                            join_condition: None,
-                            join_type: spec::JoinType::Cross,
-                            using_columns: vec![],
-                            join_data_type: None,
-                        },
-                    )))),
-                    None => Ok(Some(right)),
-                }
-            },
-        )?
-        .unwrap_or_else(|| {
-            spec::QueryPlan::new(spec::QueryNode::Empty {
-                produce_one_row: true,
-            })
-        });
-
-    let plan = if let Some(selection) = selection {
-        let selection = from_ast_expression(selection)?;
-        spec::QueryPlan::new(spec::QueryNode::Filter {
-            input: Box::new(plan),
-            condition: selection,
-        })
-    } else {
-        plan
-    };
+    let plan = join_plan_from_tables(from)?;
+    let plan = query_plan_with_filter(plan, selection)?;
 
     let projection = projection
         .into_iter()
@@ -186,19 +171,42 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
                     metadata: None,
                 })
             }
-            SelectItem::QualifiedWildcard(name, _) => Ok(spec::Expr::UnresolvedStar {
-                target: Some(from_ast_object_name(name)?),
-            }),
-            SelectItem::Wildcard(_) => Ok(spec::Expr::UnresolvedStar { target: None }),
+            SelectItem::QualifiedWildcard(name, options) => {
+                let wildcard_options = from_ast_wildcard_options(options)?;
+                Ok(spec::Expr::UnresolvedStar {
+                    target: Some(from_ast_object_name(name)?),
+                    wildcard_options,
+                })
+            }
+            SelectItem::Wildcard(options) => {
+                let wildcard_options = from_ast_wildcard_options(options)?;
+                Ok(spec::Expr::UnresolvedStar {
+                    target: None,
+                    wildcard_options,
+                })
+            }
         })
         .collect::<SqlResult<_>>()?;
 
     let group_by = match group_by {
-        GroupByExpr::All => return Err(SqlError::unsupported("GROUP BY ALL")),
-        GroupByExpr::Expressions(group_by) => group_by
-            .into_iter()
-            .map(from_ast_expression)
-            .collect::<SqlResult<Vec<spec::Expr>>>()?,
+        GroupByExpr::All(_) => return Err(SqlError::unsupported("GROUP BY ALL")),
+        GroupByExpr::Expressions(expr, modifiers) => {
+            let expr = expr
+                .into_iter()
+                .map(from_ast_expression)
+                .collect::<SqlResult<Vec<spec::Expr>>>()?;
+            match modifiers.as_slice() {
+                [] => expr,
+                [ast::GroupByWithModifier::Rollup] => vec![spec::Expr::Rollup(expr)],
+                [ast::GroupByWithModifier::Cube] => vec![spec::Expr::Cube(expr)],
+                _ => {
+                    return Err(SqlError::unsupported(format!(
+                        "GROUP BY modifiers {:?}",
+                        modifiers
+                    )))
+                }
+            }
+        }
     };
 
     let having = match having {
@@ -229,6 +237,7 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
                     expr,
                     asc: None,
                     nulls_first: None,
+                    with_fill: None,
                 };
                 from_ast_order_by(expr)
             })
@@ -332,7 +341,7 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::QueryPlan> {
     }
 }
 
-fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::QueryPlan> {
+pub fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::QueryPlan> {
     use sqlparser::ast::{JoinConstraint, JoinOperator};
 
     let ast::TableWithJoins { relation, joins } = table;
@@ -342,8 +351,12 @@ fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::Quer
         .try_fold(plan, |left, join| -> SqlResult<_> {
             let ast::Join {
                 relation: right,
+                global,
                 join_operator,
             } = join;
+            if global {
+                return Err(SqlError::unsupported("global join"));
+            }
             let right = from_ast_table_factor(right)?;
             let (join_type, constraint) = match join_operator {
                 JoinOperator::Inner(constraint) => (spec::JoinType::Inner, Some(constraint)),
@@ -402,6 +415,7 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
             args,
             with_hints,
             version,
+            with_ordinality,
             partitions,
         } => {
             if !with_hints.is_empty() {
@@ -410,12 +424,18 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
             if version.is_some() {
                 return Err(SqlError::unsupported("table version"));
             }
+            if with_ordinality {
+                return Err(SqlError::unsupported("table with ordinality"));
+            }
             if !partitions.is_empty() {
                 return Err(SqlError::unsupported("table partitions"));
             }
 
-            let plan = if let Some(func_args) = args {
-                let args: Vec<spec::Expr> = func_args
+            let plan = if let Some(ast::TableFunctionArgs { args, settings }) = args {
+                if settings.is_some() {
+                    return Err(SqlError::unsupported("table function settings"));
+                }
+                let args: Vec<spec::Expr> = args
                     .into_iter()
                     .map(|arg| {
                         if let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(expr)) = arg {
@@ -584,4 +604,81 @@ pub fn from_ast_with(with: ast::With) -> SqlResult<Vec<(spec::Identifier, spec::
         ctes.push((cte_name, plan));
     }
     Ok(ctes)
+}
+
+pub fn from_ast_wildcard_options(
+    wildcard_options: ast::WildcardAdditionalOptions,
+) -> SqlResult<spec::WildcardOptions> {
+    let exclude_columns = wildcard_options
+        .opt_exclude
+        .map(|x| -> SqlResult<Vec<spec::Identifier>> {
+            match x {
+                ast::ExcludeSelectItem::Single(ident) => Ok(vec![from_ast_ident(&ident, true)?]),
+                ast::ExcludeSelectItem::Multiple(idents) => Ok(idents
+                    .into_iter()
+                    .map(|x| from_ast_ident(&x, true))
+                    .collect::<SqlResult<Vec<spec::Identifier>>>()?),
+            }
+        })
+        .transpose()?;
+    let except_columns = wildcard_options
+        .opt_except
+        .map(|x| -> SqlResult<Vec<spec::Identifier>> {
+            let mut elements = vec![from_ast_ident(&x.first_element, true)?];
+            let additional_elements = x
+                .additional_elements
+                .into_iter()
+                .map(|x| from_ast_ident(&x, true))
+                .collect::<SqlResult<Vec<spec::Identifier>>>()?;
+            elements.extend(additional_elements);
+            Ok(elements)
+        })
+        .transpose()?;
+    let replace_columns = wildcard_options
+        .opt_replace
+        .map(|x| -> SqlResult<Vec<spec::WildcardReplaceColumn>> {
+            let replace_columns = x
+                .items
+                .iter()
+                .map(|item| {
+                    Ok(spec::WildcardReplaceColumn {
+                        expression: Box::new(from_ast_expression(item.expr.clone())?),
+                        column_name: from_ast_ident(&item.column_name, true)?,
+                        as_keyword: item.as_keyword,
+                    })
+                })
+                .collect::<SqlResult<Vec<spec::WildcardReplaceColumn>>>()?;
+            Ok(replace_columns)
+        })
+        .transpose()?;
+    let rename_columns = wildcard_options
+        .opt_rename
+        .map(|x| -> SqlResult<Vec<spec::IdentifierWithAlias>> {
+            match x {
+                ast::RenameSelectItem::Single(ident_with_alias) => {
+                    Ok(vec![spec::IdentifierWithAlias {
+                        identifier: from_ast_ident(&ident_with_alias.ident, true)?,
+                        alias: from_ast_ident(&ident_with_alias.alias, true)?,
+                    }])
+                }
+                ast::RenameSelectItem::Multiple(ident_with_aliases) => Ok(ident_with_aliases
+                    .into_iter()
+                    .map(|x| {
+                        Ok(spec::IdentifierWithAlias {
+                            identifier: from_ast_ident(&x.ident, true)?,
+                            alias: from_ast_ident(&x.alias, true)?,
+                        })
+                    })
+                    .collect::<SqlResult<Vec<spec::IdentifierWithAlias>>>()?),
+            }
+        })
+        .transpose()?;
+    let wildcard_options = spec::WildcardOptions {
+        ilike_pattern: wildcard_options.opt_ilike.map(|x| x.pattern),
+        exclude_columns,
+        except_columns,
+        replace_columns,
+        rename_columns,
+    };
+    Ok(wildcard_options)
 }

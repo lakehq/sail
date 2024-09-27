@@ -107,7 +107,12 @@
                     },
                     {
                       "name": "ts",
-                      "dataType": "timestamp",
+                      "dataType": {
+                        "timestamp": [
+                          "microsecond",
+                          null
+                        ]
+                      },
                       "nullable": true,
                       "metadata": []
                     }
@@ -209,7 +214,12 @@
                       "name": "MAP",
                       "dataType": {
                         "map": {
-                          "keyType": "timestamp",
+                          "keyType": {
+                            "timestamp": [
+                              "microsecond",
+                              null
+                            ]
+                          },
                           "valueType": {
                             "varChar": {
                               "length": 10

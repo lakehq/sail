@@ -24,7 +24,14 @@
                   "expressions": [
                     {
                       "unresolvedStar": {
-                        "target": null
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
                       }
                     }
                   ]
@@ -123,7 +130,14 @@
                   "expressions": [
                     {
                       "unresolvedStar": {
-                        "target": null
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
                       }
                     }
                   ]
@@ -180,7 +194,14 @@
                   "expressions": [
                     {
                       "unresolvedStar": {
-                        "target": null
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
                       }
                     }
                   ]
@@ -230,7 +251,14 @@
                   "expressions": [
                     {
                       "unresolvedStar": {
-                        "target": null
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
                       }
                     }
                   ]
@@ -558,7 +586,60 @@
     {
       "input": "INSERT INTO t PARTITION(part = interval'7 months 1 days 0.001 seconds') VALUES('a')",
       "output": {
-        "failure": "invalid argument: cannot mix year-month and day-time fields in interval"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "values": [
+                  [
+                    {
+                      "literal": {
+                        "string": "a"
+                      }
+                    }
+                  ]
+                ],
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "t"
+              ],
+              "columns": [],
+              "partitionSpec": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "==",
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "part"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      {
+                        "literal": {
+                          "calendarInterval": {
+                            "months": 7,
+                            "days": 1,
+                            "microseconds": 1000
+                          }
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ],
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -642,7 +723,14 @@
                   "expressions": [
                     {
                       "unresolvedStar": {
-                        "target": null
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
                       }
                     }
                   ]
@@ -699,7 +787,14 @@
                   "expressions": [
                     {
                       "unresolvedStar": {
-                        "target": null
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
                       }
                     }
                   ]

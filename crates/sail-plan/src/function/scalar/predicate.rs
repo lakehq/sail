@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use datafusion::functions::expr_fn;
 use datafusion_expr::{expr, Operator};
 
+use crate::config::PlanConfig;
 use crate::error::PlanResult;
 use crate::function::common::Function;
 use crate::utils::ItemTaker;
@@ -41,7 +44,7 @@ fn rlike(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
     expr_fn::regexp_like(expr, pattern, None)
 }
 
-fn is_in_list(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+fn is_in_list(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
     let (value, list) = args.at_least_one()?;
     Ok(expr::Expr::InList(expr::InList {
         expr: Box::new(value),

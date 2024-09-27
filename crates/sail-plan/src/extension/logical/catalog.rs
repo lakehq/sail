@@ -10,6 +10,7 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::{
     exec_datafusion_err, not_impl_err, Constraints, DFSchema, SchemaReference, TableReference,
 };
+use datafusion_expr::expr::Sort;
 use datafusion_expr::{ScalarUDF, TableScan, UNNAMED_TABLE};
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
 use serde::Serialize;
@@ -94,7 +95,7 @@ pub(crate) enum CatalogCommand {
         location: String,
         file_format: String,
         table_partition_cols: Vec<String>,
-        file_sort_order: Vec<Vec<Expr>>,
+        file_sort_order: Vec<Vec<Sort>>,
         if_not_exists: bool,
         or_replace: bool,
         unbounded: bool,

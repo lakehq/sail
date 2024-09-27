@@ -17,8 +17,9 @@
       "output": {
         "success": {
           "literal": {
-            "timestamp": {
-              "microseconds": 1547668200567000
+            "timestampMicrosecond": {
+              "microseconds": 1547668200567000,
+              "timezone": null
             }
           }
         }
@@ -41,8 +42,9 @@
       "output": {
         "success": {
           "literal": {
-            "timestamp": {
-              "microseconds": -3600000000
+            "timestampMicrosecond": {
+              "microseconds": -3600000000,
+              "timezone": null
             }
           }
         }

@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "not supported: expression: Position { expr: Value(SingleQuotedString(\"bar\")), in: Value(SingleQuotedString(\"foobarbar\")) }"
+        "success": "ok"
       }
     },
     {
@@ -2063,7 +2063,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: sql parser error: Position function must include IN keyword at Line: 1, Column: 22"
+        "failure": "not implemented: function: position"
       }
     },
     {
@@ -2085,7 +2085,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: sql parser error: Position function must include IN keyword at Line: 1, Column: 22"
+        "failure": "not implemented: function: position"
       }
     },
     {

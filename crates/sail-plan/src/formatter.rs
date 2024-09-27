@@ -17,7 +17,12 @@ pub trait PlanFormatter: DynObject + Debug + Send + Sync {
     fn literal_to_string(&self, literal: &spec::Literal) -> PlanResult<String>;
 
     /// Returns a human-readable string for the function call.
-    fn function_to_string(&self, name: &str, arguments: Vec<&str>) -> PlanResult<String>;
+    fn function_to_string(
+        &self,
+        name: &str,
+        arguments: Vec<&str>,
+        is_distinct: bool,
+    ) -> PlanResult<String>;
 }
 
 impl_dyn_object_traits!(PlanFormatter);
@@ -67,7 +72,7 @@ impl PlanFormatter for DefaultPlanFormatter {
             DataType::Char { length } => Ok(format!("char({})", length)),
             DataType::VarChar { length } => Ok(format!("varchar({})", length)),
             DataType::Date => Ok("date".to_string()),
-            DataType::Timestamp => Ok("timestamp".to_string()),
+            DataType::Timestamp(_time_unit, _timezone) => Ok("timestamp".to_string()),
             DataType::TimestampNtz => Ok("timestamp_ntz".to_string()),
             DataType::CalendarInterval => Ok("interval".to_string()),
             DataType::YearMonthInterval {
@@ -203,7 +208,11 @@ impl PlanFormatter for DefaultPlanFormatter {
                 let date = chrono::NaiveDateTime::UNIX_EPOCH + chrono::Duration::days(*days as i64);
                 Ok(format!("DATE '{}'", date.format("%Y-%m-%d")))
             }
-            Literal::Timestamp { microseconds } => {
+            Literal::TimestampMicrosecond {
+                microseconds,
+                timezone: _timezone,
+            } => {
+                // TODO: Integrate timezone
                 let date_time = chrono::NaiveDateTime::UNIX_EPOCH
                     + chrono::Duration::microseconds(*microseconds);
                 Ok(format!(
@@ -302,7 +311,12 @@ impl PlanFormatter for DefaultPlanFormatter {
         }
     }
 
-    fn function_to_string(&self, name: &str, arguments: Vec<&str>) -> PlanResult<String> {
+    fn function_to_string(
+        &self,
+        name: &str,
+        arguments: Vec<&str>,
+        is_distinct: bool,
+    ) -> PlanResult<String> {
         match name.to_lowercase().as_str() {
             "!" | "~" => Ok(format!("({} {})", name, arguments.one()?)),
             "+" | "-" => {
@@ -355,6 +369,26 @@ impl PlanFormatter for DefaultPlanFormatter {
                 let arguments = arguments.join(", ");
                 Ok(format!("date_add({arguments})"))
             }
+            "sum" => {
+                let mut args = arguments.join(", ");
+                if is_distinct {
+                    args = format!("DISTINCT {args}");
+                }
+                Ok(format!("{name}({args})"))
+            }
+            "any_value" | "first" | "first_value" | "last" | "last_value" => {
+                let arg = arguments[0];
+                Ok(format!("{name}({arg})"))
+            }
+            "substr" | "substring" => {
+                let args = if arguments.len() == 2 {
+                    let args = arguments.join(", ");
+                    format!("{args}, 2147483647")
+                } else {
+                    arguments.join(", ")
+                };
+                Ok(format!("{name}({args})"))
+            }
             // This case is only reached when both conditions are true:
             //   1. The explode operation is `ExplodeKind::ExplodeOuter`
             //   2. The data type being exploded is `ExplodeDataType::List`
@@ -364,12 +398,13 @@ impl PlanFormatter for DefaultPlanFormatter {
             | "exp" | "floor" | "log10" | "regexp" | "regexp_like" | "signum" | "sqrt" | "cos"
             | "cosh" | "cot" | "degrees" | "power" | "radians" | "sin" | "sinh" | "tan"
             | "tanh" | "pi" | "expm1" | "hypot" | "log1p" => {
+                let name = name.to_uppercase();
                 let arguments = arguments.join(", ");
-                Ok(format!("{}({})", name.to_uppercase(), arguments))
+                Ok(format!("{name}({arguments})"))
             }
             _ => {
                 let arguments = arguments.join(", ");
-                Ok(format!("{}({})", name, arguments))
+                Ok(format!("{name}({arguments})"))
             }
         }
     }
@@ -536,8 +571,9 @@ mod tests {
         assert_eq!(to_string(Literal::Date { days: 10 })?, "DATE '1970-01-11'");
         assert_eq!(to_string(Literal::Date { days: -5 })?, "DATE '1969-12-27'");
         assert_eq!(
-            to_string(Literal::Timestamp {
+            to_string(Literal::TimestampMicrosecond {
                 microseconds: 123_000_000,
+                timezone: None,
             })?,
             "TIMESTAMP '1970-01-01 00:02:03.000000'",
         );

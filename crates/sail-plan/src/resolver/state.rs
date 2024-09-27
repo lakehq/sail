@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion_common::{DFSchemaRef, TableReference};
 use datafusion_expr::LogicalPlan;
-use serde_arrow::_impl::arrow::_raw::schema::SchemaRef;
 
 use crate::error::{PlanError, PlanResult};
 

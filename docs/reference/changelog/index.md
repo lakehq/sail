@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.3
+
+_September 18, 2024_
+
+- Support Group By and Order By Column Positions [#205](https://github.com/lakehq/sail/pull/205).
+- Expanded support for `INSERT` statements [#195](https://github.com/lakehq/sail/pull/195).
+- Fix issues with Spark config [#192](https://github.com/lakehq/sail/pull/192).
+- Expanded Support for `CREATE` and `REPLACE` statement syntax [#183](https://github.com/lakehq/sail/pull/183).
+- Support `Grouping SETS` Aggregation [#184](https://github.com/lakehq/sail/pull/184/files).
+- Fastrace integration for improved and more performant logging and tracing [#166](https://github.com/lakehq/sail/pull/166).
+- Enable `GZIP` and `ZSTD` in Tonic [#166](https://github.com/lakehq/sail/pull/166).
+
 ## 0.1.2
 
 _September 10, 2024_

@@ -11,7 +11,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -37,7 +44,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -80,7 +94,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -136,7 +157,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -179,7 +207,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -230,7 +265,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -288,7 +330,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -346,7 +395,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -404,7 +460,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -462,7 +525,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -520,7 +590,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -578,7 +655,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -650,7 +734,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -722,7 +813,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -780,7 +878,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -838,7 +943,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -902,7 +1014,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -960,7 +1079,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -1018,7 +1144,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -1076,7 +1209,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -1134,7 +1274,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -1206,7 +1353,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -1278,7 +1432,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -1336,7 +1497,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -1394,7 +1562,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -1466,7 +1641,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -1524,7 +1706,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -1576,7 +1765,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -1628,7 +1824,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -1686,7 +1889,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -1758,7 +1968,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -1816,7 +2033,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -1868,7 +2092,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -1920,7 +2151,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -1972,7 +2210,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -2024,7 +2269,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -2076,7 +2328,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -2134,7 +2393,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -2192,7 +2458,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -2250,7 +2523,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -2308,7 +2588,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -2366,7 +2653,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -2424,7 +2718,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -2496,7 +2797,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -2568,7 +2876,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -2626,7 +2941,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -2684,7 +3006,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -2748,7 +3077,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -2806,7 +3142,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -2864,7 +3207,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -2922,7 +3272,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -2980,7 +3337,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -3052,7 +3416,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -3124,7 +3495,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -3182,7 +3560,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -3240,7 +3625,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -3312,7 +3704,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -3370,7 +3769,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -3422,7 +3828,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -3474,7 +3887,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -3532,7 +3952,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -3604,7 +4031,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -3662,7 +4096,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -3714,7 +4155,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -3766,7 +4214,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -3819,7 +4274,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -3889,7 +4351,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -3941,7 +4410,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -3993,7 +4469,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -4049,7 +4532,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],
@@ -4092,7 +4582,14 @@
                 "arguments": [
                   {
                     "unresolvedStar": {
-                      "target": null
+                      "target": null,
+                      "wildcardOptions": {
+                        "ilikePattern": null,
+                        "excludeColumns": null,
+                        "exceptColumns": null,
+                        "replaceColumns": null,
+                        "renameColumns": null
+                      }
                     }
                   }
                 ],

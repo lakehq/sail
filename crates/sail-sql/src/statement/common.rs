@@ -6,11 +6,13 @@ use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Token;
 
 use crate::error::{SqlError, SqlResult};
-use crate::expression::{from_ast_expression, from_ast_object_name};
+use crate::expression::common::{from_ast_expression, from_ast_object_name};
 use crate::parser::{fail_on_extra_token, SparkDialect};
 use crate::query::from_ast_query;
 use crate::statement::create::{from_create_table_statement, parse_create_statement};
+use crate::statement::delete::delete_statement_to_plan;
 use crate::statement::explain::{from_explain_statement, parse_explain_statement};
+use crate::statement::update::update_statement_to_plan;
 use crate::utils::{
     normalize_ident, object_name_to_string, to_datafusion_ast_object_name, value_to_string,
 };
@@ -191,6 +193,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
             only: _,
             operations: _,
             location: _,
+            on_cluster: _,
         } => Err(SqlError::todo("SQL alter table")),
         Statement::AlterView {
             name: _,
@@ -282,6 +285,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
             if_not_exists: _,
             include: _,
             nulls_distinct: _,
+            with: _,
             predicate: _,
         }) => Err(SqlError::todo("SQL create index")),
         Statement::CreateView {
@@ -335,15 +339,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::Delete(ast::Delete {
-            tables: _,
-            from: _,
-            using: _,
-            selection: _,
-            returning: _,
-            order_by: _,
-            limit: _,
-        }) => Err(SqlError::todo("SQL delete")),
+        Statement::Delete(delete) => delete_statement_to_plan(delete),
         Statement::Drop {
             object_type,
             if_exists,
@@ -529,7 +525,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
                 Err(SqlError::invalid("Function name not provided."))
             }
         }
-        Statement::Update { .. } => Err(SqlError::todo("SQL update")),
+        update @ Statement::Update { .. } => update_statement_to_plan(update),
         Statement::Use { .. } => Err(SqlError::todo("SQL use")),
         Statement::Cache { .. } => Err(SqlError::todo("SQL cache")),
         Statement::UNCache { .. } => Err(SqlError::todo("SQL uncache")),
@@ -570,8 +566,11 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
         | Statement::Commit { .. }
         | Statement::Rollback { .. }
         | Statement::CreateProcedure { .. }
+        | Statement::DropProcedure { .. }
         | Statement::CreateMacro { .. }
         | Statement::CreateStage { .. }
+        | Statement::CreateTrigger { .. }
+        | Statement::DropTrigger { .. }
         | Statement::Assert { .. }
         | Statement::Grant { .. }
         | Statement::Revoke { .. }
@@ -586,6 +585,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
         | Statement::Pragma { .. }
         | Statement::LockTables { .. }
         | Statement::UnlockTables
+        | Statement::OptimizeTable { .. }
         | Statement::Unload { .. } => Err(SqlError::unsupported(format!(
             "Unsupported statement: {}",
             statement
@@ -599,7 +599,10 @@ pub(crate) fn from_ast_sql_options(
     options
         .into_iter()
         .map(|opt| {
-            let ast::SqlOption { name, value } = opt;
+            let (name, value) = match opt {
+                ast::SqlOption::KeyValue { key, value } => (key, value),
+                _ => return Err(SqlError::unsupported("SQL option")),
+            };
             let value = match from_ast_expression(value)? {
                 spec::Expr::Literal(spec::Literal::String(s)) => s,
                 x => return Err(SqlError::invalid(format!("SQL option value: {:?}", x))),

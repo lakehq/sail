@@ -133,25 +133,221 @@
     {
       "input": "(a, b)",
       "output": {
-        "failure": "not supported: expression: Tuple([Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None })])"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "struct",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
       "input": "(a, b) in (select c from d)",
       "output": {
-        "failure": "not supported: expression: Tuple([Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None })])"
+        "success": {
+          "inSubquery": {
+            "expr": {
+              "unresolvedFunction": {
+                "functionName": "struct",
+                "arguments": [
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "a"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "b"
+                      ],
+                      "planId": null
+                    }
+                  }
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
+              }
+            },
+            "subquery": {
+              "project": {
+                "input": {
+                  "read": {
+                    "namedTable": {
+                      "name": [
+                        "d"
+                      ],
+                      "options": []
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "c"
+                      ],
+                      "planId": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "negated": false
+          }
+        }
       }
     },
     {
       "input": "(a, b, c)",
       "output": {
-        "failure": "not supported: expression: Tuple([Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None }), Identifier(Ident { value: \"c\", quote_style: None })])"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "struct",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "c"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
       "input": "(a, b, c) in (select d, e, f from g)",
       "output": {
-        "failure": "not supported: expression: Tuple([Identifier(Ident { value: \"a\", quote_style: None }), Identifier(Ident { value: \"b\", quote_style: None }), Identifier(Ident { value: \"c\", quote_style: None })])"
+        "success": {
+          "inSubquery": {
+            "expr": {
+              "unresolvedFunction": {
+                "functionName": "struct",
+                "arguments": [
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "a"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "b"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "c"
+                      ],
+                      "planId": null
+                    }
+                  }
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
+              }
+            },
+            "subquery": {
+              "project": {
+                "input": {
+                  "read": {
+                    "namedTable": {
+                      "name": [
+                        "g"
+                      ],
+                      "options": []
+                    },
+                    "isStreaming": false
+                  },
+                  "planId": null,
+                  "sourceInfo": null
+                },
+                "expressions": [
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "d"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "e"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "f"
+                      ],
+                      "planId": null
+                    }
+                  }
+                ]
+              },
+              "planId": null,
+              "sourceInfo": null
+            },
+            "negated": false
+          }
+        }
       }
     },
     {
@@ -267,7 +463,7 @@
     {
       "input": "-+~~a",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an expression:, found: ~~ at Line: 1, Column: 3"
+        "failure": "invalid argument: sql parser error: Expected: an expression, found: ~~ at Line: 1, Column: 3"
       }
     },
     {
@@ -2246,7 +2442,14 @@
             "target": [
               "a",
               "b"
-            ]
+            ],
+            "wildcardOptions": {
+              "ilikePattern": null,
+              "excludeColumns": null,
+              "exceptColumns": null,
+              "replaceColumns": null,
+              "renameColumns": null
+            }
           }
         }
       }
@@ -2334,7 +2537,14 @@
             "arguments": [
               {
                 "unresolvedStar": {
-                  "target": null
+                  "target": null,
+                  "wildcardOptions": {
+                    "ilikePattern": null,
+                    "excludeColumns": null,
+                    "exceptColumns": null,
+                    "replaceColumns": null,
+                    "renameColumns": null
+                  }
                 }
               }
             ],
@@ -2347,31 +2557,154 @@
     {
       "input": "encode('abc', charset => 'utf' || '-8')",
       "output": {
-        "failure": "not supported: named function argument"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "encode",
+            "arguments": [
+              {
+                "literal": {
+                  "string": "abc"
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": "concat",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "string": "utf"
+                      }
+                    },
+                    {
+                      "literal": {
+                        "string": "-8"
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
       "input": "encode('abc', charset => 'utf-8')",
       "output": {
-        "failure": "not supported: named function argument"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "encode",
+            "arguments": [
+              {
+                "literal": {
+                  "string": "abc"
+                }
+              },
+              {
+                "literal": {
+                  "string": "utf-8"
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
       "input": "encode(charset => 'utf-8', 'abc')",
       "output": {
-        "failure": "not supported: named function argument"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "encode",
+            "arguments": [
+              {
+                "literal": {
+                  "string": "utf-8"
+                }
+              },
+              {
+                "literal": {
+                  "string": "abc"
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
       "input": "encode(value => 'abc', charset => 'utf-8')",
       "output": {
-        "failure": "not supported: named function argument"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "encode",
+            "arguments": [
+              {
+                "literal": {
+                  "string": "abc"
+                }
+              },
+              {
+                "literal": {
+                  "string": "utf-8"
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
       "input": "encode(value => ((select '1')), charset => 'utf-8')",
       "output": {
-        "failure": "not supported: named function argument"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "encode",
+            "arguments": [
+              {
+                "scalarSubquery": {
+                  "subquery": {
+                    "project": {
+                      "input": {
+                        "empty": {
+                          "produceOneRow": true
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expressions": [
+                        {
+                          "literal": {
+                            "string": "1"
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  }
+                }
+              },
+              {
+                "literal": {
+                  "string": "utf-8"
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
@@ -2493,7 +2826,14 @@
             "arguments": [
               {
                 "unresolvedStar": {
-                  "target": null
+                  "target": null,
+                  "wildcardOptions": {
+                    "ilikePattern": null,
+                    "excludeColumns": null,
+                    "exceptColumns": null,
+                    "replaceColumns": null,
+                    "renameColumns": null
+                  }
                 }
               }
             ],
@@ -2858,7 +3198,7 @@
     {
       "input": "~a",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an expression:, found: ~ at Line: 1, Column: 1"
+        "failure": "invalid argument: sql parser error: Expected: an expression, found: ~ at Line: 1, Column: 1"
       }
     }
   ]

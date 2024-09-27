@@ -33,7 +33,7 @@ where
     let reflect_server = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
         .register_encoded_file_descriptor_set(crate::spark::connect::FILE_DESCRIPTOR_SET)
-        .build()?;
+        .build_v1()?;
 
     let object_store_config = ObjectStoreConfig::default().with_aws(load_aws_config().await);
     let session_manager = SessionManager::new().with_object_store_config(object_store_config);

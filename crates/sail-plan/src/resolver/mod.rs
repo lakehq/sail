@@ -10,6 +10,7 @@ mod ddl;
 mod expression;
 mod literal;
 pub mod plan;
+mod schema;
 mod state;
 mod tree;
 

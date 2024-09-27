@@ -1,7 +1,7 @@
 use std::any::TypeId;
 
 use sqlparser::ast;
-use sqlparser::dialect::{Dialect, GenericDialect};
+use sqlparser::dialect::{Dialect, GenericDialect, Precedence};
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::Token;
@@ -14,7 +14,7 @@ pub struct SparkDialect {}
 impl SparkDialect {
     fn parse_exclamation_mark_unary(&self, parser: &mut Parser) -> Result<ast::Expr, ParserError> {
         parser.expect_token(&Token::ExclamationMark)?;
-        let expr = parser.parse_subexpr(Parser::UNARY_NOT_PREC)?;
+        let expr = parser.parse_subexpr(self.prec_value(Precedence::UnaryNot))?;
         Ok(ast::Expr::UnaryOp {
             op: ast::UnaryOperator::Not,
             expr: Box::new(expr),
@@ -23,7 +23,7 @@ impl SparkDialect {
 
     fn parse_array_function(&self, parser: &mut Parser) -> Result<ast::Expr, ParserError> {
         parser.expect_keyword(Keyword::ARRAY)?;
-        if parser.peek_token() == Token::LParen {
+        if parser.peek_token().token == Token::LParen {
             parser.parse_function(ast::ObjectName(vec![ast::Ident::new("array")]))
         } else {
             Ok(ast::Expr::Identifier(ast::Ident::new("array")))
@@ -137,7 +137,7 @@ impl Dialect for SparkDialect {
 }
 
 pub fn fail_on_extra_token(parser: &mut Parser, kind: &str) -> SqlResult<()> {
-    if parser.peek_token() != Token::EOF {
+    if parser.peek_token().token != Token::EOF {
         let token = parser.next_token();
         Err(SqlError::invalid(format!(
             "extra tokens after {kind}: {token}"
