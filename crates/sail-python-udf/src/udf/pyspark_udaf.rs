@@ -199,7 +199,17 @@ impl Accumulator for PySparkAggregateUDFAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self)
+        let mut size = size_of_val(self);
+        size += size_of::<Vec<ArrayRef>>() * self.inputs.capacity();
+        for input in &self.inputs {
+            size += size_of::<ArrayRef>() * input.capacity();
+            for array in input {
+                size += array.get_array_memory_size();
+            }
+        }
+        size += self.output_type.size();
+        size -= size_of_val(&self.output_type);
+        size
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
