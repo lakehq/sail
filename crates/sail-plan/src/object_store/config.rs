@@ -27,6 +27,9 @@ impl ObjectStoreConfig {
     pub fn aws(&self) -> Option<&SdkConfig> {
         self.aws.as_ref()
     }
+    pub fn hdfs(&self) -> Option<&HashMap<String, String>> {
+        self.hdfs.as_ref()
+    }
 }
 
 impl Default for ObjectStoreConfig {

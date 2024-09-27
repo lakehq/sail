@@ -88,15 +88,16 @@ impl DynamicObjectStoreRegistry {
             }
             #[cfg(feature = "hdfs")]
             "hdfs" => {
+                let store = match self.config.hdfs(){
+                    Some(hdfs_config) => {
+                        HdfsObjectStore::with_config(url.as_str(), hdfs_config.clone()).unwrap()
+                    }
+                    None => {
+                        HdfsObjectStore::with_url(url.as_str()).unwrap()
+                    }
+                };
 
-                let hdfs_url = format!(
-                    "hdfs://{}:{}",
-                    key.host,
-                    url.port().unwrap_or(9000)
-                );
 
-                let store = HdfsObjectStore::with_url(url.as_str()).unwrap();
-                println!("HDFS object store created {:#?}", store);
                 Ok(Arc::new(store))
             }
             _ => {
