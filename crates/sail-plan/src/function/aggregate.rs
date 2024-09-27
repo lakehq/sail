@@ -23,13 +23,13 @@ lazy_static! {
 fn min_max_by(args: Vec<expr::Expr>, distinct: bool, asc: bool) -> PlanResult<expr::Expr> {
     let (args, order_by, filter) = if args.len() == 2 {
         let (first, second) = args.two()?;
-        Ok((vec![first], second, None))
+        (vec![first], second, None)
     } else if args.len() == 3 {
         let (first, second, third) = args.three()?;
-        Ok((vec![first], third, Some(Box::new(second))))
+        (vec![first], third, Some(Box::new(second)))
     } else {
-        Err(PlanError::invalid("max_by requires 2 or 3 arguments"))
-    }?;
+        return Err(PlanError::invalid("max_by requires 2 or 3 arguments"));
+    };
     // TODO: Not efficient due to sorting.
     let order_by = Some(vec![expr::Sort::new(order_by, asc, false)]);
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
@@ -49,7 +49,7 @@ fn first_last_value(
 ) -> PlanResult<expr::Expr> {
     let (args, ignore_nulls) = if args.len() == 1 {
         let expr = args.one()?;
-        Ok((vec![expr], NullTreatment::RespectNulls))
+        (vec![expr], NullTreatment::RespectNulls)
     } else if args.len() == 2 {
         let (expr, ignore_nulls) = args.two()?;
         let ignore_nulls = match ignore_nulls {
@@ -66,10 +66,10 @@ fn first_last_value(
                 ))
             }
         };
-        Ok((vec![expr], ignore_nulls))
+        (vec![expr], ignore_nulls)
     } else {
-        Err(PlanError::invalid("any_value requires 1 or s arguments"))
-    }?;
+        return Err(PlanError::invalid("any_value requires 1 or 2 arguments"));
+    };
     let func = if first_value {
         first_last::first_value_udaf()
     } else {
@@ -86,7 +86,7 @@ fn first_last_value(
 }
 
 fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
-    use crate::function::common::AggregateFunctionBuilder as F;
+    use crate::function::common::AggFunctionBuilder as F;
 
     vec![
         ("any", F::default(bool_and_or::bool_or_udaf)),

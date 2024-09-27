@@ -132,9 +132,9 @@ impl FunctionBuilder {
 pub(crate) type AggFunction =
     Arc<dyn Fn(Vec<expr::Expr>, bool) -> PlanResult<expr::Expr> + Send + Sync>;
 
-pub(crate) struct AggregateFunctionBuilder;
+pub(crate) struct AggFunctionBuilder;
 
-impl AggregateFunctionBuilder {
+impl AggFunctionBuilder {
     pub fn default<F>(f: F) -> AggFunction
     where
         F: Fn() -> Arc<AggregateUDF> + Send + Sync + 'static,

@@ -10,10 +10,14 @@ use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::sql::unparser::expr_to_sql;
 use datafusion_common::{plan_err, Column, DFSchemaRef, DataFusionError};
 use datafusion_expr::expr::PlannedReplaceSelectItem;
-use datafusion_expr::{expr, expr_fn, window_frame, ExprSchemable, Operator, ScalarUDF};
+use datafusion_expr::{
+    expr, expr_fn, window_frame, AggregateUDF, ExprSchemable, Operator, ScalarUDF,
+};
 use num_traits::Float;
 use sail_common::spec;
+use sail_common::spec::PySparkUdfType;
 use sail_python_udf::cereal::pyspark_udf::{deserialize_partial_pyspark_udf, PySparkUdfObject};
+use sail_python_udf::udf::pyspark_udaf::PySparkAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 use sail_python_udf::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
@@ -1155,23 +1159,56 @@ impl PlanResolver<'_> {
         )
         .map_err(|e| PlanError::invalid(format!("Python UDF deserialization error: {:?}", e)))?;
 
-        let python_udf: PySparkUDF = PySparkUDF::new(
-            function_name.to_owned(),
-            deterministic,
-            input_types,
-            eval_type,
-            python_function,
-            output_type,
-        );
+        let func = match eval_type {
+            PySparkUdfType::None
+            | PySparkUdfType::Batched
+            | PySparkUdfType::ArrowBatched
+            | PySparkUdfType::ScalarPandas
+            | PySparkUdfType::GroupedMapPandas
+            | PySparkUdfType::WindowAggPandas
+            | PySparkUdfType::ScalarPandasIter
+            | PySparkUdfType::MapPandasIter
+            | PySparkUdfType::CogroupedMapPandas
+            | PySparkUdfType::MapArrowIter
+            | PySparkUdfType::GroupedMapPandasWithState
+            | PySparkUdfType::Table
+            | PySparkUdfType::ArrowTable => {
+                let udf = PySparkUDF::new(
+                    function_name.to_owned(),
+                    deterministic,
+                    input_types,
+                    eval_type,
+                    python_function,
+                    output_type,
+                );
+                expr::Expr::ScalarFunction(expr::ScalarFunction {
+                    func: Arc::new(ScalarUDF::from(udf)),
+                    args: arguments,
+                })
+            }
+            PySparkUdfType::GroupedAggPandas => {
+                let udaf = PySparkAggregateUDF::new(
+                    function_name.to_owned(),
+                    deterministic,
+                    input_types,
+                    output_type,
+                    python_function,
+                );
+                expr::Expr::AggregateFunction(expr::AggregateFunction {
+                    func: Arc::new(AggregateUDF::from(udaf)),
+                    args: arguments,
+                    distinct: false,
+                    filter: None,
+                    order_by: None,
+                    null_treatment: None,
+                })
+            }
+        };
         let name = self.config.plan_formatter.function_to_string(
             function_name,
             argument_names.iter().map(|x| x.as_str()).collect(),
             false,
         )?;
-        let func = expr::Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(python_udf)),
-            args: arguments,
-        });
         Ok(NamedExpr::new(vec![name], func))
     }
 
