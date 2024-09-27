@@ -875,36 +875,100 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let (function_name, argument_names, arguments, is_distinct) = match window_function {
-            spec::Expr::UnresolvedFunction {
-                function_name,
-                arguments,
-                is_user_defined_function,
-                is_distinct,
-            } => {
-                if is_user_defined_function {
-                    return Err(PlanError::unsupported("user defined window function"));
+        let (function, function_name, argument_names, arguments, is_distinct) =
+            match window_function {
+                spec::Expr::UnresolvedFunction {
+                    function_name,
+                    arguments,
+                    is_user_defined_function,
+                    is_distinct,
+                } => {
+                    if is_user_defined_function {
+                        return Err(PlanError::unsupported("user defined window function"));
+                    }
+                    if is_distinct {
+                        return Err(PlanError::unsupported("distinct window function"));
+                    }
+                    let (argument_names, arguments) = self
+                        .resolve_alias_expressions_and_names(arguments, schema, state)
+                        .await?;
+                    let function = get_built_in_window_function(function_name.as_str())?;
+                    (
+                        function,
+                        function_name,
+                        argument_names,
+                        arguments,
+                        is_distinct,
+                    )
                 }
-                if is_distinct {
-                    return Err(PlanError::unsupported("distinct window function"));
+                spec::Expr::CommonInlineUserDefinedFunction(function) => {
+                    let spec::CommonInlineUserDefinedFunction {
+                        function_name,
+                        deterministic,
+                        arguments,
+                        function,
+                    } = function;
+                    let (argument_names, arguments) = self
+                        .resolve_alias_expressions_and_names(arguments, schema, state)
+                        .await?;
+                    let input_types: Vec<DataType> = arguments
+                        .iter()
+                        .map(|arg| arg.get_type(schema))
+                        .collect::<Result<Vec<DataType>, DataFusionError>>()?;
+
+                    let (output_type, eval_type, command, python_version) = match function {
+                        spec::FunctionDefinition::PythonUdf {
+                            output_type,
+                            eval_type,
+                            command,
+                            python_version,
+                        } => (output_type, eval_type, command, python_version),
+                        _ => {
+                            return Err(PlanError::invalid(
+                                "user-defined window function type must be Python UDF",
+                            ));
+                        }
+                    };
+                    let output_type = self.resolve_data_type(output_type)?;
+
+                    let python_function: PySparkUdfObject = deserialize_partial_pyspark_udf(
+                        &python_version,
+                        &command,
+                        eval_type,
+                        arguments.len(),
+                        &self.config.spark_udf_config,
+                    )
+                    .map_err(|e| {
+                        PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
+                    })?;
+
+                    let function = match eval_type {
+                        PySparkUdfType::GroupedAggPandas => {
+                            let udaf = PySparkAggregateUDF::new(
+                                function_name.to_owned(),
+                                deterministic,
+                                input_types,
+                                output_type,
+                                python_function,
+                            );
+                            let udaf = AggregateUDF::from(udaf);
+                            expr::WindowFunctionDefinition::AggregateUDF(Arc::new(udaf))
+                        }
+                        _ => {
+                            return Err(PlanError::invalid(
+                                "invalid user-defined window function type",
+                            ))
+                        }
+                    };
+                    (function, function_name, argument_names, arguments, false)
                 }
-                let (argument_names, arguments) = self
-                    .resolve_alias_expressions_and_names(arguments, schema, state)
-                    .await?;
-                (function_name, argument_names, arguments, is_distinct)
-            }
-            spec::Expr::CommonInlineUserDefinedFunction(_) => {
-                return Err(PlanError::unsupported(
-                    "inline user defined window function",
-                ));
-            }
-            _ => {
-                return Err(PlanError::invalid(format!(
-                    "invalid window function expression: {:?}",
-                    window_function
-                )));
-            }
-        };
+                _ => {
+                    return Err(PlanError::invalid(format!(
+                        "invalid window function expression: {:?}",
+                        window_function
+                    )));
+                }
+            };
         let partition_by = self
             .resolve_expressions(partition_spec, schema, state)
             .await?;
@@ -923,7 +987,7 @@ impl PlanResolver<'_> {
             })
         };
         let window = expr::Expr::WindowFunction(expr::WindowFunction {
-            fun: get_built_in_window_function(function_name.as_str())?,
+            fun: function,
             args: arguments,
             partition_by,
             order_by,

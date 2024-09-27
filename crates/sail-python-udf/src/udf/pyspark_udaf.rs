@@ -88,6 +88,8 @@ impl AggregateUDFImpl for PySparkAggregateUDF {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        // We accumulate the inputs in the state.
+        // Each state field corresponds to an input argument.
         let fields = self
             .input_types
             .iter()
