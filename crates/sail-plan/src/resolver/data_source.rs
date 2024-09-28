@@ -33,11 +33,24 @@ impl PlanResolver<'_> {
                 } else {
                     let store = self.ctx.runtime_env().object_store(&url)?;
 
-                    if store.head(&url.prefix()).await.is_ok()  {
-                        //hdfs returns okay if directory exists without trailing delimiter, but returning that causes an error when
-                        //listing files in the directory, hence the double check
-                        if url.scheme() == "hdfs" && store.head(&Path::from(format!("{}{}", url.prefix(), object_store::path::DELIMITER))).await.is_ok() {
-                            ListingTableUrl::parse(format!("{}{}", path, object_store::path::DELIMITER))?
+                    if store.head(url.prefix()).await.is_ok() {
+                        // HDFS returns okay if directory exists without trailing delimiter, but returning that causes an error when
+                        // listing files in the directory, hence the double check
+                        if url.scheme() == "hdfs"
+                            && store
+                                .head(&Path::from(format!(
+                                    "{}{}",
+                                    url.prefix(),
+                                    object_store::path::DELIMITER
+                                )))
+                                .await
+                                .is_ok()
+                        {
+                            ListingTableUrl::parse(format!(
+                                "{}{}",
+                                path,
+                                object_store::path::DELIMITER
+                            ))?
                         } else {
                             url
                         }

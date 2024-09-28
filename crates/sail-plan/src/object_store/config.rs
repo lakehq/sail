@@ -11,7 +11,10 @@ pub struct ObjectStoreConfig {
 
 impl ObjectStoreConfig {
     pub fn new() -> Self {
-        Self { aws: None, hdfs: None }
+        Self {
+            aws: None,
+            hdfs: None,
+        }
     }
 
     pub fn with_aws(mut self, aws: SdkConfig) -> Self {
@@ -27,6 +30,7 @@ impl ObjectStoreConfig {
     pub fn aws(&self) -> Option<&SdkConfig> {
         self.aws.as_ref()
     }
+
     pub fn hdfs(&self) -> Option<&HashMap<String, String>> {
         self.hdfs.as_ref()
     }

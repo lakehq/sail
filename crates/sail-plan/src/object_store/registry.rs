@@ -3,13 +3,11 @@ use std::sync::{Arc, RwLock};
 
 use datafusion::execution::object_store::ObjectStoreRegistry;
 use datafusion_common::{plan_datafusion_err, plan_err, Result};
+#[cfg(feature = "hdfs")]
+use hdfs_native_object_store::HdfsObjectStore;
 use object_store::aws::AmazonS3Builder;
 use object_store::local::LocalFileSystem;
 use object_store::ObjectStore;
-
-#[cfg(feature = "hdfs")]
-use hdfs_native_object_store::HdfsObjectStore;
-
 use url::Url;
 
 use crate::object_store::s3::S3CredentialProvider;
@@ -19,16 +17,13 @@ use crate::object_store::ObjectStoreConfig;
 struct ObjectStoreKey {
     scheme: String,
     authority: String,
-    host: String,
 }
 
 impl ObjectStoreKey {
     fn new(url: &Url) -> Self {
-        let host = url.host_str().unwrap_or("").to_string();
         Self {
             scheme: url.scheme().to_string(),
             authority: url.authority().to_string(),
-            host
         }
     }
 }
@@ -52,7 +47,6 @@ impl DynamicObjectStoreRegistry {
             ObjectStoreKey {
                 scheme: "file".to_string(),
                 authority: "".to_string(),
-                host: "".to_string(),
             },
             Arc::new(LocalFileSystem::new()),
         );
@@ -87,16 +81,12 @@ impl DynamicObjectStoreRegistry {
             }
             #[cfg(feature = "hdfs")]
             "hdfs" => {
-                let store = match self.config.hdfs(){
+                let store = match self.config.hdfs() {
                     Some(hdfs_config) => {
-                        HdfsObjectStore::with_config(url.as_str(), hdfs_config.clone()).unwrap()
+                        HdfsObjectStore::with_config(url.as_str(), hdfs_config.clone())?
                     }
-                    None => {
-                        HdfsObjectStore::with_url(url.as_str()).unwrap()
-                    }
+                    None => HdfsObjectStore::with_url(url.as_str())?,
                 };
-
-
                 Ok(Arc::new(store))
             }
             _ => {
