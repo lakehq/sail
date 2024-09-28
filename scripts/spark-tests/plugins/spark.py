@@ -183,6 +183,13 @@ SKIPPED_SPARK_TESTS = [
 ]
 
 
+def add_pyspark_test_markers(items: list[pytest.Item]):
+    for item in items:
+        for test in SKIPPED_SPARK_TESTS:
+            if all(k in item.keywords for k in test.keywords):
+                item.add_marker(pytest.mark.skip(reason=test.reason))
+
+
 def normalize_show_string(s: str) -> str:
     """Normalize the PySpark `show()` output with a canonical row order.
     We split the table into lines and sort rows after the header.
@@ -207,13 +214,6 @@ def normalize_show_string(s: str) -> str:
         return s
 
     return "\n".join(lines[:3] + sorted(lines[3:last]) + lines[last:])
-
-
-def add_pyspark_test_markers(items: list[pytest.Item]):
-    for item in items:
-        for test in SKIPPED_SPARK_TESTS:
-            if all(k in item.keywords for k in test.keywords):
-                item.add_marker(pytest.mark.skip(reason=test.reason))
 
 
 def patch_pyspark_doctest_output_checker():
