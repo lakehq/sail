@@ -29,3 +29,9 @@ Please submit GitHub issues for bug reports and feature requests.
 
 Feel free to create a pull request if you would like to make a code change.
 You can refer to the [development guide](https://docs.lakesail.com/sail/main/development/) to get started.
+
+## Sail vs. Spark Benchmark
+Check out our blog post, [Supercharge Spark: Quadruple Speed, Cut Costs by 94%](https://lakesail.com/blog/supercharge-spark/), for detailed benchmark results.
+
+## Support
+See the [Support Options Page](https://lakesail.com/#support) for more information.
