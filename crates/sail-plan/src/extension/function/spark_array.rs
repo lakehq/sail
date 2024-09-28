@@ -45,7 +45,7 @@ impl ScalarUDFImpl for SparkArray {
     }
 
     fn name(&self) -> &str {
-        "make_array"
+        "spark_array"
     }
 
     fn signature(&self) -> &Signature {

@@ -10,6 +10,7 @@ use datafusion_expr::{expr, lit, BinaryExpr, Operator};
 use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::array_min_max::{ArrayMax, ArrayMin};
+use crate::extension::function::spark_array::SparkArray;
 use crate::function::common::Function;
 use crate::utils::ItemTaker;
 
@@ -103,7 +104,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
     vec![
-        ("array", F::var_arg(expr_fn::make_array)),
+        ("array", F::udf(SparkArray::new())),
         ("array_append", F::binary(expr_fn::array_append)),
         ("array_compact", F::unary(array_compact)),
         ("array_contains", F::binary(array_contains)),
