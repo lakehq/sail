@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import importlib
 import os
+import re
 import shlex
 import shutil
 from dataclasses import dataclass
@@ -74,6 +76,13 @@ def spark_doctest_session(doctest_namespace, request):
         yield
 
 
+def normalize_pandas_data_frame(df):
+    from pandas.api.types import is_hashable
+
+    columns = [col for col in df.columns if all(is_hashable(v) for v in df[col])]
+    return df.sort_values(by=columns, ignore_index=True)
+
+
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
 def patch_pyspark_pandas_test_utils():
     from pyspark.testing.pandasutils import PandasOnSparkTestUtils
@@ -91,8 +100,8 @@ def patch_pyspark_pandas_test_utils():
         import pandas as pd
 
         if not check_row_order and isinstance(left, pd.DataFrame) and isinstance(right, pd.DataFrame):
-            left = left.sort_values(by=list(left.columns), ignore_index=True)
-            right = right.sort_values(by=list(right.columns), ignore_index=True)
+            left = normalize_pandas_data_frame(left)
+            right = normalize_pandas_data_frame(right)
 
         _assert_eq(self, left, right, check_row_order=check_row_order, **kwargs)
 
@@ -101,13 +110,11 @@ def patch_pyspark_pandas_test_utils():
 
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
 def patch_pandas_test_utils():
-    import importlib
-
     from pandas.testing import assert_frame_equal as _assert_frame_equal
 
     def assert_frame_equal(left, right, **kwargs):
-        left = left.sort_values(by=list(left.columns), ignore_index=True)
-        right = right.sort_values(by=list(right.columns), ignore_index=True)
+        left = normalize_pandas_data_frame(left)
+        right = normalize_pandas_data_frame(right)
         _assert_frame_equal(left, right, **kwargs)
 
     modules = [
@@ -176,6 +183,32 @@ SKIPPED_SPARK_TESTS = [
 ]
 
 
+def normalize_show_string(s: str) -> str:
+    """Normalize the PySpark `show()` output with a canonical row order.
+    We split the table into lines and sort rows after the header.
+    If the table is invalid, we return the original string.
+    """
+
+    lines = s.split("\n")
+    if len(lines) < 4:  # noqa: PLR2004
+        return s
+    if re.match(r"(\+-+)+\+", lines[0]) is None:
+        return s
+    if lines[2] != lines[0]:
+        return s
+    # We need to find the last table line, since there may be other content
+    # (such as empty lines) after the table.
+    last = 0
+    for n in range(len(lines) - 1, 2, -1):
+        if lines[n] == lines[0]:
+            last = n
+            break
+    if last == 0:
+        return s
+
+    return "\n".join(lines[:3] + sorted(lines[3:last]) + lines[last:])
+
+
 def add_pyspark_test_markers(items: list[pytest.Item]):
     for item in items:
         for test in SKIPPED_SPARK_TESTS:
@@ -184,8 +217,6 @@ def add_pyspark_test_markers(items: list[pytest.Item]):
 
 
 def patch_pyspark_doctest_output_checker():
-    import re
-
     import _pytest.doctest
 
     # ensure the doctest output checker class is initialized
@@ -194,28 +225,6 @@ def patch_pyspark_doctest_output_checker():
     if _pytest.doctest.CHECKER_CLASS is None:
         msg = "the doctest output checker class is not initialized in pytest"
         raise RuntimeError(msg)
-
-    def normalize_show_string(s: str) -> str:
-        # We split the table into lines and sort rows after the header.
-        # If the table is invalid, we return the original string.
-        lines = s.split("\n")
-        if len(lines) < 4:  # noqa: PLR2004
-            return s
-        if re.match(r"(\+-+)+\+", lines[0]) is None:
-            return s
-        if lines[2] != lines[0]:
-            return s
-        # We need to find the last table line, since there may be other content
-        # (such as empty lines) after the table.
-        last = 0
-        for n in range(len(lines) - 1, 2, -1):
-            if lines[n] == lines[0]:
-                last = n
-                break
-        if last == 0:
-            return s
-
-        return "\n".join(lines[:3] + sorted(lines[3:last]) + lines[last:])
 
     class OutputChecker(_pytest.doctest.CHECKER_CLASS):
         def check_output(self, want: str, got: str, optionflags: int) -> bool:
