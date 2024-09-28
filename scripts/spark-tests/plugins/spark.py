@@ -77,6 +77,11 @@ def spark_doctest_session(doctest_namespace, request):
         yield
 
 
+# Here we patch test utilities to ignore row order in PySpark tests.
+# This may result in false positives in some tests where the result is expected to be sorted.
+# Such tests should be ported to the PySail test suite where the patch is not applied.
+
+
 def normalize_pandas_data_frame(df):
     from pandas.api.types import is_hashable
 
