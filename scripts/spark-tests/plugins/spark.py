@@ -7,6 +7,7 @@ import os
 import re
 import shlex
 import shutil
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -135,6 +136,29 @@ def patch_pandas_test_utils():
     for name in modules:
         module = importlib.import_module(name)
         module.assert_frame_equal = assert_frame_equal
+
+
+def is_row_collection(obj):
+    from pyspark.sql import Row
+
+    return isinstance(obj, Iterable) and all(isinstance(x, Row) for x in obj)
+
+
+def normalize_row_collection(obj):
+    return sorted(obj, key=lambda x: str(x))
+
+
+@pytest.fixture(scope="session", autouse=_is_spark_testing())
+def patch_pyspark_connect_test_class():
+    from pyspark.testing.connectutils import ReusedConnectTestCase
+
+    def assertEqual(self, first, second, msg=None):  # noqa: N802
+        if is_row_collection(first) and is_row_collection(second):
+            first = normalize_row_collection(first)
+            second = normalize_row_collection(second)
+        return super(ReusedConnectTestCase, self).assertEqual(first, second, msg)  # noqa: PT009
+
+    ReusedConnectTestCase.assertEqual = assertEqual
 
 
 @dataclass
