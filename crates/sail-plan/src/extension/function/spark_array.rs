@@ -9,9 +9,9 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::array_into_list_array_nullable;
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{internal_err, plan_err, ExprSchema, Result};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility};
+use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, TypeSignature, Volatility};
 
 use crate::extension::function::functions_nested_utils::make_scalar_function;
 
@@ -73,6 +73,10 @@ impl ScalarUDFImpl for SparkArray {
                 ))))
             }
         }
+    }
+
+    fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
+        false
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
