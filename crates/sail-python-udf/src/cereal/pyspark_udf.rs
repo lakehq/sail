@@ -13,6 +13,13 @@ use crate::error::{PyUdfError, PyUdfResult};
 #[derive(Debug)]
 pub struct PySparkUdfObject(pub PyObject);
 
+impl Clone for PySparkUdfObject {
+    fn clone(&self) -> Self {
+        let obj = Python::with_gil(|py| self.0.bind(py).to_object(py));
+        Self(obj)
+    }
+}
+
 impl PythonFunction for PySparkUdfObject {
     fn load(v: &[u8]) -> PyUdfResult<Self> {
         // build_pyspark_udf_payload adds eval_type to the beginning of the payload

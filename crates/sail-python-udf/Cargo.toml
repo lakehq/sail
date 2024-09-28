@@ -17,5 +17,6 @@ serde_bytes = { workspace = true }
 pyo3 = { workspace = true }
 arrow = { workspace = true }
 arrow-cast = { workspace = true }
+arrow-select = { workspace = true }
 sqlparser = { workspace = true }
 async-trait = { workspace = true }

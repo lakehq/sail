@@ -81,6 +81,7 @@ pyo3 = { version = "0.22.0", features = ["auto-initialize", "serde"] }
 arrow = { version = "53.0.0", features = ["ffi", "pyarrow"] }
 arrow-cast = { version = "53.0.0" }
 arrow-schema = { version = "53.0.0" }
+arrow-select = { version = "53.0.0" }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.11.0", features = ["aws", "gcp", "azure", "http"] }
 # We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.
