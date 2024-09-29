@@ -2284,7 +2284,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_date"
+        "success": "ok"
       }
     },
     {
@@ -2306,7 +2306,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_date"
+        "failure": "error in DataFusion: Execution error: Error parsing timestamp from '2016-12-31' using format 'yyyy-MM-dd': input contains invalid characters"
       }
     },
     {

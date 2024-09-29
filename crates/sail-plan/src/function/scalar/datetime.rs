@@ -208,7 +208,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("timestamp_micros", F::unknown("timestamp_micros")),
         ("timestamp_millis", F::unknown("timestamp_millis")),
         ("timestamp_seconds", F::unknown("timestamp_seconds")),
-        ("to_date", F::unknown("to_date")),
+        ("to_date", F::var_arg(expr_fn::to_date)),
         ("to_timestamp", F::var_arg(expr_fn::to_timestamp_micros)),
         ("to_timestamp_ltz", F::unknown("to_timestamp_ltz")),
         ("to_timestamp_ntz", F::unknown("to_timestamp_ntz")),
