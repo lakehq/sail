@@ -278,6 +278,9 @@ export default async () => {
           ariaLabel: "GitHub",
         },
       ],
+      search: {
+        provider: "local",
+      },
     },
     sitemap: {
       hostname: Site.url(),
