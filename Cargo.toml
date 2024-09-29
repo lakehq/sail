@@ -67,7 +67,7 @@ fastrace-opentelemetry = "0.7.3"
 opentelemetry = "0.25.0"
 opentelemetry_sdk = "0.25.0"
 opentelemetry-otlp = { version = "0.25.0", features = ["tls", "tls-roots"] }
-hdfs-native-object-store = "0.12.0"
+hdfs-native-object-store = "0.12.1"
 
 
 ######

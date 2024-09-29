@@ -4,7 +4,6 @@ use arrow::datatypes as adt;
 use datafusion::datasource::listing::{ListingOptions, ListingTableUrl};
 use datafusion_common::plan_err;
 use futures::TryStreamExt;
-use object_store::path::Path;
 use sail_common::spec;
 
 use crate::error::PlanResult;
@@ -34,26 +33,7 @@ impl PlanResolver<'_> {
                     let store = self.ctx.runtime_env().object_store(&url)?;
 
                     if store.head(url.prefix()).await.is_ok() {
-                        // HDFS returns okay if directory exists without trailing delimiter, but returning that causes an error when
-                        // listing files in the directory, hence the double check
-                        if url.scheme() == "hdfs"
-                            && store
-                                .head(&Path::from(format!(
-                                    "{}{}",
-                                    url.prefix(),
-                                    object_store::path::DELIMITER
-                                )))
-                                .await
-                                .is_ok()
-                        {
-                            ListingTableUrl::parse(format!(
-                                "{}{}",
-                                path,
-                                object_store::path::DELIMITER
-                            ))?
-                        } else {
-                            url
-                        }
+                        url
                     } else {
                         // The object at the path does not exist, so we treat it as a directory.
                         let path = format!("{}{}", path, object_store::path::DELIMITER);
