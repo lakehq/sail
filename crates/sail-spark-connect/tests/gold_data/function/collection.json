@@ -133,7 +133,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: array_reverse does not support type 'Utf8'."
+        "success": "ok"
       }
     },
     {
