@@ -18,6 +18,27 @@ services:
       timeout: 5s
       retries: 6
 
+  hdfs:
+    build:
+      context: ./scripts/hadoop
+      dockerfile: Dockerfile
+      args:
+        HADOOP_USER_NAME: root
+
+    ports:
+      - "9870:9870"
+      - "127.0.0.1:9000:9000"
+      - "9864:9864"
+      - "9866:9866"
+
+    healthcheck:
+      test:
+        ["CMD", "/opt/hadoop/bin/hdfs", "-test", "-e", "/user/root/test.json"]
+      start_period: 60s
+      interval: 60s
+      timeout: 60s
+      retries: 5
+
 volumes:
   minio-data:
     driver: local

@@ -3,6 +3,8 @@ use std::sync::{Arc, RwLock};
 
 use datafusion::execution::object_store::ObjectStoreRegistry;
 use datafusion_common::{plan_datafusion_err, plan_err, Result};
+#[cfg(feature = "hdfs")]
+use hdfs_native_object_store::HdfsObjectStore;
 use object_store::aws::AmazonS3Builder;
 use object_store::local::LocalFileSystem;
 use object_store::ObjectStore;
@@ -76,6 +78,16 @@ impl DynamicObjectStoreRegistry {
                 let credentials = S3CredentialProvider::new(credentials);
                 builder = builder.with_credentials(Arc::new(credentials));
                 Ok(Arc::new(builder.build()?))
+            }
+            #[cfg(feature = "hdfs")]
+            "hdfs" => {
+                let store = match self.config.hdfs() {
+                    Some(hdfs_config) => {
+                        HdfsObjectStore::with_config(url.as_str(), hdfs_config.clone())?
+                    }
+                    None => HdfsObjectStore::with_url(url.as_str())?,
+                };
+                Ok(Arc::new(store))
             }
             _ => {
                 plan_err!("unsupported object store URL: {url}")
