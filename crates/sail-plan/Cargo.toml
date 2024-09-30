@@ -40,3 +40,8 @@ url = { workspace = true }
 object_store = { workspace = true }
 aws-config = { workspace = true }
 aws-credential-types = { workspace = true }
+hdfs-native-object-store = { workspace = true, optional = true }
+
+[features]
+hdfs = ["dep:hdfs-native-object-store"]
+default = ["hdfs"]

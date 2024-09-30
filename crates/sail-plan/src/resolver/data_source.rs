@@ -31,6 +31,7 @@ impl PlanResolver<'_> {
                     url
                 } else {
                     let store = self.ctx.runtime_env().object_store(&url)?;
+
                     if store.head(url.prefix()).await.is_ok() {
                         url
                     } else {

@@ -17,7 +17,7 @@ fn build_proto() -> Result<(), Box<dyn std::error::Error>> {
         .compile_well_known_types(true)
         .extern_path(".google.protobuf", "::pbjson_types")
         .build_server(true)
-        .compile_with_config(
+        .compile_protos_with_config(
             config,
             &[
                 "proto/spark/connect/base.proto",
