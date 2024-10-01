@@ -4062,7 +4062,7 @@ dependencies = [
  "tonic-health",
  "tonic-reflection",
  "tonic-types",
- "tower 0.4.13",
+ "tower 0.5.1",
  "tower-http",
  "uuid",
 ]
@@ -4105,7 +4105,7 @@ dependencies = [
  "tonic-build",
  "tonic-health",
  "tonic-reflection",
- "tower 0.4.13",
+ "tower 0.5.1",
  "tower-http",
 ]
 
@@ -4745,7 +4745,6 @@ checksum = "b8fa9be0de6cf49e536ce1851f987bd21a43b771b09473c3549a6c853db37c1c"
 dependencies = [
  "futures-core",
  "futures-util",
- "hdrhistogram",
  "indexmap 1.9.3",
  "pin-project",
  "pin-project-lite",
@@ -4766,10 +4765,16 @@ checksum = "2873938d487c3cfb9aed7546dc9f2711d867c9f90c46b889989a2cb84eba6b4f"
 dependencies = [
  "futures-core",
  "futures-util",
+ "hdrhistogram",
+ "indexmap 2.5.0",
  "pin-project-lite",
+ "slab",
  "sync_wrapper 0.1.2",
+ "tokio",
+ "tokio-util",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
