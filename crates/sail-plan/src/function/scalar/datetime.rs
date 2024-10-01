@@ -11,7 +11,7 @@ use datafusion_expr::{lit, BinaryExpr, Operator};
 use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::Function;
-use crate::utils::ItemTaker;
+use crate::utils::{spark_datetime_format_to_chrono_strftime, ItemTaker};
 
 fn integer_part(expr: Expr, part: String) -> Expr {
     let part = lit(ScalarValue::Utf8(Some(part.to_uppercase())));
@@ -131,6 +131,24 @@ fn current_timezone(args: Vec<Expr>, config: Arc<PlanConfig>) -> PlanResult<Expr
     ))))
 }
 
+fn to_date(args: Vec<Expr>, _config: Arc<PlanConfig>) -> PlanResult<Expr> {
+    if args.len() == 1 {
+        Ok(expr_fn::to_date(args))
+    } else if args.len() == 2 {
+        let (expr, format) = args.two()?;
+        let format = match format {
+            Expr::Literal(ScalarValue::Utf8(Some(format))) => {
+                let format = spark_datetime_format_to_chrono_strftime(&format)?;
+                lit(ScalarValue::Utf8(Some(format)))
+            }
+            _ => format,
+        };
+        Ok(expr_fn::to_date(vec![expr, format]))
+    } else {
+        return Err(PlanError::invalid("to_date requires 1 or 2 arguments"));
+    }
+}
+
 // FIXME: Spark displays dates and timestamps according to the session time zone.
 //  We should be setting the DataFusion config `datafusion.execution.time_zone`
 //  and casting any datetime functions that don't use the DataFusion config.
@@ -208,7 +226,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("timestamp_micros", F::unknown("timestamp_micros")),
         ("timestamp_millis", F::unknown("timestamp_millis")),
         ("timestamp_seconds", F::unknown("timestamp_seconds")),
-        ("to_date", F::var_arg(expr_fn::to_date)),
+        ("to_date", F::custom(to_date)),
         ("to_timestamp", F::var_arg(expr_fn::to_timestamp_micros)),
         ("to_timestamp_ltz", F::unknown("to_timestamp_ltz")),
         ("to_timestamp_ntz", F::unknown("to_timestamp_ntz")),
