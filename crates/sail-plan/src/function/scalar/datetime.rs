@@ -62,8 +62,7 @@ fn interval_arithmetic(args: Vec<Expr>, unit: &str, op: Operator) -> PlanResult<
         },
         _ => {
             return Err(PlanError::invalid(format!(
-                "add_interval does not support interval unit type '{}'",
-                unit
+                "add_interval does not support interval unit type '{unit}'"
             )))
         }
     };
