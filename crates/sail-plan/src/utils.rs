@@ -167,6 +167,7 @@ pub fn spark_datetime_format_to_chrono_strftime(format: &str) -> Result<String> 
         ("VV", "%Z"),
     ];
 
+    // TODO: Create regex using lazy_static
     let mut result = format.to_string();
     for &(pattern, replacement) in &patterns {
         let regex_pattern = format!(r"(?P<pre>^|[^%]){}", regex::escape(pattern));

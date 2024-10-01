@@ -115,7 +115,7 @@ fn position(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr:
 }
 
 fn space(n: expr::Expr) -> expr::Expr {
-    expr_fn::repeat(lit(""), n)
+    expr_fn::repeat(lit(" "), n)
 }
 
 fn replace(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
