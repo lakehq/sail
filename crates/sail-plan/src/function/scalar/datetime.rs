@@ -130,21 +130,59 @@ fn current_timezone(args: Vec<Expr>, config: Arc<PlanConfig>) -> PlanResult<Expr
     ))))
 }
 
+fn to_chrono_fmt(format: Expr) -> PlanResult<Expr> {
+    match format {
+        Expr::Literal(ScalarValue::Utf8(Some(format))) => {
+            let format = spark_datetime_format_to_chrono_strftime(&format)?;
+            Ok(lit(ScalarValue::Utf8(Some(format))))
+        }
+        _ => Ok(format),
+    }
+}
+
 fn to_date(args: Vec<Expr>, _config: Arc<PlanConfig>) -> PlanResult<Expr> {
     if args.len() == 1 {
         Ok(expr_fn::to_date(args))
     } else if args.len() == 2 {
         let (expr, format) = args.two()?;
-        let format = match format {
-            Expr::Literal(ScalarValue::Utf8(Some(format))) => {
-                let format = spark_datetime_format_to_chrono_strftime(&format)?;
-                lit(ScalarValue::Utf8(Some(format)))
-            }
-            _ => format,
-        };
+        let format = to_chrono_fmt(format)?;
         Ok(expr_fn::to_date(vec![expr, format]))
     } else {
         return Err(PlanError::invalid("to_date requires 1 or 2 arguments"));
+    }
+}
+
+fn unix_timestamp(args: Vec<Expr>, _config: Arc<PlanConfig>) -> PlanResult<Expr> {
+    if args.is_empty() {
+        Ok(expr_fn::now())
+    } else if args.len() == 1 {
+        Ok(expr_fn::to_date(args))
+    } else if args.len() == 2 {
+        let (expr, format) = args.two()?;
+        let format = to_chrono_fmt(format)?;
+        Ok(expr_fn::to_unixtime(vec![expr, format]))
+    } else {
+        return Err(PlanError::invalid(
+            "unix_timestamp requires 1 or 2 arguments",
+        ));
+    }
+}
+
+fn date_format(args: Vec<Expr>, _config: Arc<PlanConfig>) -> PlanResult<Expr> {
+    let (expr, format) = args.two()?;
+    let format = to_chrono_fmt(format)?;
+    Ok(expr_fn::to_char(expr, format))
+}
+
+fn to_timestamp(args: Vec<Expr>, _config: Arc<PlanConfig>) -> PlanResult<Expr> {
+    if args.len() == 1 {
+        Ok(expr_fn::to_timestamp(args))
+    } else if args.len() == 2 {
+        let (expr, format) = args.two()?;
+        let format = to_chrono_fmt(format)?;
+        Ok(expr_fn::to_timestamp_micros(vec![expr, format]))
+    } else {
+        return Err(PlanError::invalid("to_timestamp requires 1 or 2 arguments"));
     }
 }
 
@@ -180,7 +218,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
             "date_diff",
             F::binary(|start, end| date_days_arithmetic(start, end, Operator::Minus)),
         ),
-        ("date_format", F::binary(expr_fn::to_char)),
+        ("date_format", F::custom(date_format)),
         ("date_from_unix_date", F::unknown("date_from_unix_date")),
         ("date_part", F::binary(expr_fn::date_part)),
         (
@@ -226,7 +264,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("timestamp_millis", F::unknown("timestamp_millis")),
         ("timestamp_seconds", F::unknown("timestamp_seconds")),
         ("to_date", F::custom(to_date)),
-        ("to_timestamp", F::var_arg(expr_fn::to_timestamp_micros)),
+        ("to_timestamp", F::custom(to_timestamp)),
         ("to_timestamp_ltz", F::unknown("to_timestamp_ltz")),
         ("to_timestamp_ntz", F::unknown("to_timestamp_ntz")),
         ("to_unix_timestamp", F::unknown("to_unix_timestamp")),
@@ -237,7 +275,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("unix_micros", F::unknown("unix_micros")),
         ("unix_millis", F::unknown("unix_millis")),
         ("unix_seconds", F::unknown("unix_seconds")),
-        ("unix_timestamp", F::var_arg(expr_fn::to_unixtime)),
+        ("unix_timestamp", F::custom(unix_timestamp)),
         ("weekday", F::unknown("weekday")),
         ("weekofyear", F::unknown("weekofyear")),
         ("window", F::unknown("window")),
