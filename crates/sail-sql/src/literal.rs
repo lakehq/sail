@@ -346,24 +346,35 @@ impl TryFrom<LiteralValue<Signed<ast::Interval>>> for spec::Literal {
 impl TryFrom<String> for LiteralValue<Vec<u8>> {
     type Error = SqlError;
 
+    /// [Credit]: <https://github.com/apache/datafusion/blob/a0a635afe481b7b3cdc89591f9eff209010b911a/datafusion/sql/src/expr/value.rs#L285-L306>
     fn try_from(value: String) -> SqlResult<Self> {
-        if value.len() % 2 != 0 {
-            return Err(SqlError::invalid(format!("hex string: {:?}", value)));
-        }
         if !BINARY_REGEX.is_match(&value) {
-            return Err(SqlError::invalid(format!("hex string: {:?}", value)));
+            return Err(SqlError::invalid(format!("hex string: {value}")));
         }
-        let bytes = value
-            .as_bytes()
-            .chunks(2)
-            .map(|chunk| {
-                let chunk = std::str::from_utf8(chunk)
-                    .map_err(|_| SqlError::invalid(format!("hex string: {:?}", value)))?;
-                u8::from_str_radix(chunk, 16)
-                    .map_err(|_| SqlError::invalid(format!("hex string: {:?}", value)))
-            })
-            .collect::<SqlResult<_>>()?;
-        Ok(LiteralValue(bytes))
+
+        let hex_bytes = value.as_bytes();
+        let mut decoded_bytes = Vec::with_capacity((hex_bytes.len() + 1) / 2);
+
+        let start_idx = hex_bytes.len() % 2;
+        if start_idx > 0 {
+            // The first byte is formed of only one char.
+            match try_decode_hex_char(hex_bytes[0])? {
+                Some(byte) => decoded_bytes.push(byte),
+                None => return Err(SqlError::invalid(format!("hex string: {value}"))),
+            };
+        }
+
+        for i in (start_idx..hex_bytes.len()).step_by(2) {
+            match (
+                try_decode_hex_char(hex_bytes[i])?,
+                try_decode_hex_char(hex_bytes[i + 1])?,
+            ) {
+                (Some(high), Some(low)) => decoded_bytes.push(high << 4 | low),
+                _ => return Err(SqlError::invalid(format!("hex string: {value}"))),
+            }
+        }
+
+        Ok(LiteralValue(decoded_bytes))
     }
 }
 
@@ -928,6 +939,19 @@ fn parse_unqualified_interval_string(s: &str, negated: Negated) -> SqlResult<spe
         return Err(SqlError::invalid(format!("interval: {s}")));
     }
     spec::Literal::try_from(LiteralValue(Signed(interval, negated)))
+}
+
+/// [Credit]: <https://github.com/apache/datafusion/blob/a0a635afe481b7b3cdc89591f9eff209010b911a/datafusion/sql/src/expr/value.rs#L308-L318>
+/// Try to decode a byte from a hex char.
+///
+/// None will be returned if the input char is hex-invalid.
+const fn try_decode_hex_char(c: u8) -> SqlResult<Option<u8>> {
+    match c {
+        b'A'..=b'F' => Ok(Some(c - b'A' + 10)),
+        b'a'..=b'f' => Ok(Some(c - b'a' + 10)),
+        b'0'..=b'9' => Ok(Some(c - b'0')),
+        _ => Ok(None),
+    }
 }
 
 #[cfg(test)]

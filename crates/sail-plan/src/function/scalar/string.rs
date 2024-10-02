@@ -5,7 +5,7 @@ use datafusion::functions;
 use datafusion::functions::expr_fn;
 use datafusion::functions::string::contains::ContainsFunc;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, ScalarUDF};
+use datafusion_expr::{expr, lit, ScalarUDF};
 
 use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
@@ -83,6 +83,53 @@ fn unbase64(expr: expr::Expr) -> expr::Expr {
     expr_fn::decode(expr, format)
 }
 
+fn overlay(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
+    if args.len() == 3 {
+        return Ok(expr_fn::overlay(args));
+    }
+    if args.len() == 4 {
+        let (str, substr, pos, count) = args.four()?;
+        return match count {
+            expr::Expr::Literal(ScalarValue::Int64(Some(-1)))
+            | expr::Expr::Literal(ScalarValue::Int32(Some(-1))) => {
+                Ok(expr_fn::overlay(vec![str, substr, pos]))
+            }
+            _ => Ok(expr_fn::overlay(vec![str, substr, pos, count])),
+        };
+    }
+    Err(PlanError::invalid("overlay requires 3 or 4 arguments"))
+}
+
+fn position(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
+    if args.len() == 2 {
+        let (substr, str) = args.two()?;
+        return Ok(expr_fn::strpos(str, substr));
+    }
+    if args.len() == 3 {
+        // TODO: optional third argument
+        return Err(PlanError::todo(
+            "position with 3 arguments is not supported yet",
+        ));
+    }
+    Err(PlanError::invalid("position requires 2 arguments"))
+}
+
+fn space(n: expr::Expr) -> expr::Expr {
+    expr_fn::repeat(lit(" "), n)
+}
+
+fn replace(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
+    if args.len() == 2 {
+        let (str, substr) = args.two()?;
+        return Ok(expr_fn::replace(str, substr, lit("")));
+    }
+    if args.len() == 3 {
+        let (str, substr, replacement) = args.three()?;
+        return Ok(expr_fn::replace(str, substr, replacement));
+    }
+    Err(PlanError::invalid("replace requires 2 or 3 arguments"))
+}
+
 pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -111,15 +158,15 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("len", F::unary(expr_fn::length)),
         ("length", F::unary(expr_fn::length)),
         ("levenshtein", F::udf(Levenshtein::new())),
-        ("locate", F::unknown("locate")),
+        ("locate", F::custom(position)),
         ("lower", F::unary(expr_fn::lower)),
         ("lpad", F::var_arg(expr_fn::lpad)),
         ("ltrim", F::var_arg(expr_fn::ltrim)),
         ("luhn_check", F::unknown("luhn_check")),
         ("mask", F::unknown("mask")),
         ("octet_length", F::unary(expr_fn::octet_length)),
-        ("overlay", F::unknown("overlay")),
-        ("position", F::unknown("position")),
+        ("overlay", F::custom(overlay)),
+        ("position", F::custom(position)),
         ("printf", F::unknown("printf")),
         ("regexp_count", F::unknown("regexp_count")),
         ("regexp_extract", F::unknown("regexp_extract")),
@@ -128,15 +175,15 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("regexp_replace", F::custom(regexp_replace)),
         ("regexp_substr", F::unknown("regexp_substr")),
         ("repeat", F::binary(expr_fn::repeat)),
-        ("replace", F::unknown("replace")),
+        ("replace", F::custom(replace)),
         ("right", F::binary(expr_fn::right)),
         ("rpad", F::var_arg(expr_fn::rpad)),
         ("rtrim", F::var_arg(expr_fn::rtrim)),
         ("sentences", F::unknown("sentences")),
         ("soundex", F::unknown("soundex")),
-        ("space", F::unknown("space")),
+        ("space", F::unary(space)),
         ("split", F::unknown("split")),
-        ("split_part", F::unknown("split_part")),
+        ("split_part", F::ternary(expr_fn::split_part)),
         ("startswith", F::binary(expr_fn::starts_with)),
         ("substr", F::custom(substr)),
         ("substring", F::custom(substr)),

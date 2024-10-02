@@ -349,7 +349,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: hex string: \"0\""
+        "failure": "not implemented: function: bitmap_count"
       }
     },
     {

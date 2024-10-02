@@ -618,7 +618,13 @@
     {
       "input": "X'A'",
       "output": {
-        "failure": "invalid argument: hex string: \"A\""
+        "success": {
+          "literal": {
+            "binary": [
+              10
+            ]
+          }
+        }
       }
     },
     {
@@ -3192,7 +3198,7 @@
       "input": "x'A1OC'",
       "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"X\" is invalid: 'A1OC'.(line 1, pos 0)\n\n== SQL ==\nx'A1OC'\n^^^\n",
       "output": {
-        "failure": "invalid argument: hex string: \"A1OC\""
+        "failure": "invalid argument: hex string: A1OC"
       }
     },
     {

@@ -1,4 +1,4 @@
-use arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 
 use crate::function::common::Function;

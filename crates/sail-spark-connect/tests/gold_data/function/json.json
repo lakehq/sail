@@ -147,7 +147,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: get_json_object"
+        "success": "ok"
       }
     },
     {
@@ -169,7 +169,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: json_array_length"
+        "success": "ok"
       }
     },
     {
@@ -191,7 +191,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: json_array_length"
+        "success": "ok"
       }
     },
     {
@@ -213,7 +213,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: json_array_length"
+        "success": "ok"
       }
     },
     {

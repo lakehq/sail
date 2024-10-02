@@ -1141,7 +1141,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_date"
+        "success": "ok"
       }
     },
     {
@@ -1163,7 +1163,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_date"
+        "success": "ok"
       }
     },
     {
@@ -1185,7 +1185,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_date"
+        "success": "ok"
       }
     },
     {
@@ -1207,7 +1207,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_date"
+        "success": "ok"
       }
     },
     {
@@ -1229,7 +1229,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_date"
+        "success": "ok"
       }
     },
     {
@@ -1251,7 +1251,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_date"
+        "success": "ok"
       }
     },
     {
@@ -1273,7 +1273,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_date"
+        "success": "ok"
       }
     },
     {
@@ -1295,7 +1295,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_date"
+        "success": "ok"
       }
     },
     {

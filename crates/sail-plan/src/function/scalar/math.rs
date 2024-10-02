@@ -65,6 +65,7 @@ fn hex(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr
     let data_type = match &expr {
         expr::Expr::Literal(l) => Ok(l.data_type()),
         _ => Err(PlanError::invalid("hex requires a literal argument")),
+        // FIXME: Create UDF for hex to properly determine datatype
     }?;
     match data_type {
         DataType::Int32 => {
