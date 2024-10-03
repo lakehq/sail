@@ -4,19 +4,19 @@
 
 _October 03, 2024_
 
-- Enable AVRO in DataFusion [#234](https://github.com/lakehq/sail/pull/234).
+- Enable Avro in DataFusion [#234](https://github.com/lakehq/sail/pull/234).
 - Expanded support for Spark SQL syntax and functions [#213](https://github.com/lakehq/sail/pull/213) and [#207](https://github.com/lakehq/sail/pull/207).
-  - Added full parity and coverage for the following SQL functions:
-    - `array`, `date_format`, `get_json_object`, `json_array_length`, `overlay`, `replace`, `split_part`, `to_date`,
-    `any_value`, `approx_count_distinct`, `current_timezone`, `first_value`, `greatest`, `last`, `last_value`, `least`,
-    `map_contains_key`, `map_keys`, `map_values`, `min_by`, `substr`, `sum_distinct`.
+  Added full parity and coverage for the following SQL functions:
+  `array`, `date_format`, `get_json_object`, `json_array_length`, `overlay`, `replace`, `split_part`, `to_date`,
+  `any_value`, `approx_count_distinct`, `current_timezone`, `first_value`, `greatest`, `last`, `last_value`, `least`,
+  `map_contains_key`, `map_keys`, `map_values`, `min_by`, `substr`, `sum_distinct`.
 - HDFS support [#196](https://github.com/lakehq/sail/pull/196).
 - Support parsing value prefixes followed by whitespace [#218](https://github.com/lakehq/sail/pull/218) and [#6](https://github.com/lakehq/sqlparser-rs/pull/6).
 - Python UDAF support [#214](https://github.com/lakehq/sail/pull/214).
 
 ### Contributors
-Huge thanks to our first community contributor, [@skewballfox](https://github.com/skewballfox) for adding support for HDFS!!
 
+Huge thanks to our first community contributor, [@skewballfox](https://github.com/skewballfox) for adding support for HDFS!!
 
 ## 0.1.3
 
