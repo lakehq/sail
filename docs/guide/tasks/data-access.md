@@ -20,6 +20,10 @@ Relative file paths
 
 : These are paths in AWS S3 or an S3-compatible object storage, such as `s3://bucket/path/to/data`.
 
+`hdfs://` URIs
+
+: These are paths in HDFS, such as `hdfs://namenode:port/path/to/data`.
+
 ::: info
 
 - For local file systems, the path can refer to a file or a directory.
