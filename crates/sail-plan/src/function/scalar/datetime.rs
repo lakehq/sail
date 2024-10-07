@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use datafusion::arrow::datatypes::{
     DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType,
 };
@@ -8,9 +6,8 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{lit, BinaryExpr, Operator};
 
-use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::Function;
+use crate::function::common::{Function, FunctionContext};
 use crate::utils::{spark_datetime_format_to_chrono_strftime, ItemTaker};
 
 fn integer_part(expr: Expr, part: String) -> Expr {
@@ -21,7 +18,7 @@ fn integer_part(expr: Expr, part: String) -> Expr {
     })
 }
 
-fn trunc(args: Vec<Expr>, _config: Arc<PlanConfig>) -> PlanResult<Expr> {
+fn trunc(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<Expr> {
     let (date, part) = args.two()?;
     Ok(expr_fn::date_trunc(part, date))
 }
@@ -123,10 +120,10 @@ fn date_days_arithmetic(dt1: Expr, dt2: Expr, op: Operator) -> Expr {
     })
 }
 
-fn current_timezone(args: Vec<Expr>, config: Arc<PlanConfig>) -> PlanResult<Expr> {
+fn current_timezone(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult<Expr> {
     args.zero()?;
     Ok(Expr::Literal(ScalarValue::Utf8(Some(
-        config.time_zone.clone(),
+        function_context.plan_config().time_zone.clone(),
     ))))
 }
 
@@ -140,7 +137,7 @@ fn to_chrono_fmt(format: Expr) -> PlanResult<Expr> {
     }
 }
 
-fn to_date(args: Vec<Expr>, _config: Arc<PlanConfig>) -> PlanResult<Expr> {
+fn to_date(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<Expr> {
     if args.len() == 1 {
         Ok(expr_fn::to_date(args))
     } else if args.len() == 2 {
@@ -152,7 +149,7 @@ fn to_date(args: Vec<Expr>, _config: Arc<PlanConfig>) -> PlanResult<Expr> {
     }
 }
 
-fn unix_timestamp(args: Vec<Expr>, _config: Arc<PlanConfig>) -> PlanResult<Expr> {
+fn unix_timestamp(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<Expr> {
     if args.is_empty() {
         Ok(expr_fn::now())
     } else if args.len() == 1 {
@@ -168,13 +165,13 @@ fn unix_timestamp(args: Vec<Expr>, _config: Arc<PlanConfig>) -> PlanResult<Expr>
     }
 }
 
-fn date_format(args: Vec<Expr>, _config: Arc<PlanConfig>) -> PlanResult<Expr> {
+fn date_format(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<Expr> {
     let (expr, format) = args.two()?;
     let format = to_chrono_fmt(format)?;
     Ok(expr_fn::to_char(expr, format))
 }
 
-fn to_timestamp(args: Vec<Expr>, _config: Arc<PlanConfig>) -> PlanResult<Expr> {
+fn to_timestamp(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<Expr> {
     if args.len() == 1 {
         Ok(expr_fn::to_timestamp(args))
     } else if args.len() == 2 {

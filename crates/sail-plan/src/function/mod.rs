@@ -6,7 +6,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::Function;
 
 mod aggregate;
-mod common;
+pub(crate) mod common;
 mod generator;
 mod scalar;
 mod window;

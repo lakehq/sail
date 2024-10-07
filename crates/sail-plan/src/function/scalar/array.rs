@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn::nvl;
 use datafusion::functions_nested::expr_fn;
@@ -7,11 +5,10 @@ use datafusion::functions_nested::position::array_position_udf;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, BinaryExpr, Operator};
 
-use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::array_min_max::{ArrayMax, ArrayMin};
 use crate::extension::function::spark_array::SparkArray;
-use crate::function::common::Function;
+use crate::function::common::{Function, FunctionContext};
 use crate::utils::ItemTaker;
 
 fn array_repeat(element: expr::Expr, count: expr::Expr) -> expr::Expr {
@@ -47,7 +44,10 @@ fn slice(array: expr::Expr, start: expr::Expr, length: expr::Expr) -> expr::Expr
     expr_fn::array_slice(array, start, end, None)
 }
 
-fn sort_array(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
+fn sort_array(
+    args: Vec<expr::Expr>,
+    _function_context: &FunctionContext,
+) -> PlanResult<expr::Expr> {
     let (array, asc) = args.two()?;
     let (sort, nulls) = match asc {
         expr::Expr::Literal(ScalarValue::Boolean(Some(true))) => (

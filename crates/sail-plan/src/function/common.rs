@@ -8,8 +8,22 @@ use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::utils::ItemTaker;
 
+pub struct FunctionContext {
+    plan_config: Arc<PlanConfig>,
+}
+
+impl FunctionContext {
+    pub fn new(plan_config: Arc<PlanConfig>) -> Self {
+        Self { plan_config }
+    }
+
+    pub fn plan_config(&self) -> &Arc<PlanConfig> {
+        &self.plan_config
+    }
+}
+
 pub(crate) type Function =
-    Arc<dyn Fn(Vec<expr::Expr>, Arc<PlanConfig>) -> PlanResult<expr::Expr> + Send + Sync>;
+    Arc<dyn Fn(Vec<expr::Expr>, &FunctionContext) -> PlanResult<expr::Expr> + Send + Sync>;
 
 pub(crate) struct FunctionBuilder;
 
@@ -118,7 +132,7 @@ impl FunctionBuilder {
 
     pub fn custom<F>(f: F) -> Function
     where
-        F: Fn(Vec<expr::Expr>, Arc<PlanConfig>) -> PlanResult<expr::Expr> + Send + Sync + 'static,
+        F: Fn(Vec<expr::Expr>, &FunctionContext) -> PlanResult<expr::Expr> + Send + Sync + 'static,
     {
         Arc::new(f)
     }

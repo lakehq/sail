@@ -4,13 +4,15 @@ use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, Operator, ScalarUDF};
 
-use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::raise_error::RaiseError;
-use crate::function::common::Function;
+use crate::function::common::{Function, FunctionContext};
 use crate::utils::ItemTaker;
 
-fn assert_true(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
+fn assert_true(
+    args: Vec<expr::Expr>,
+    _function_context: &FunctionContext,
+) -> PlanResult<expr::Expr> {
     let (err_msg, col) = if args.len() == 1 {
         let col = args.one()?;
         (

@@ -24,6 +24,7 @@ use sail_python_udf::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::drop_struct_field::DropStructField;
 use crate::extension::function::update_struct_field::UpdateStructField;
+use crate::function::common::FunctionContext;
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, get_built_in_window_function,
 };
@@ -779,7 +780,8 @@ impl PlanResolver<'_> {
                 args: arguments,
             })
         } else if let Ok(func) = get_built_in_function(function_name.as_str()) {
-            func(arguments.clone(), self.config.clone())?
+            let function_context = FunctionContext::new(self.config.clone());
+            func(arguments.clone(), &function_context)?
         } else if let Ok(func) = get_built_in_aggregate_function(function_name.as_str()) {
             func(arguments.clone(), is_distinct)?
         } else {

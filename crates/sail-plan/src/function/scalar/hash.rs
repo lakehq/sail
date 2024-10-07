@@ -1,15 +1,12 @@
-use std::sync::Arc;
-
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr;
 
-use crate::config::PlanConfig;
 use crate::error::PlanResult;
-use crate::function::common::Function;
+use crate::function::common::{Function, FunctionContext};
 use crate::utils::ItemTaker;
 
-fn sha2(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
+fn sha2(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
     let (expr, bit_length) = args.two()?;
     Ok(match bit_length {
         expr::Expr::Literal(ScalarValue::Int32(Some(0)))

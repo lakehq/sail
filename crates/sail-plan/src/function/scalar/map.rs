@@ -1,15 +1,15 @@
-use std::sync::Arc;
-
 use datafusion::functions_nested::expr_fn;
 use datafusion_expr::expr;
 
-use crate::config::PlanConfig;
 use crate::error::PlanResult;
 use crate::extension::function::map_function::MapFunction;
-use crate::function::common::Function;
+use crate::function::common::{Function, FunctionContext};
 use crate::utils::ItemTaker;
 
-fn map_contains_key(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
+fn map_contains_key(
+    args: Vec<expr::Expr>,
+    _function_context: &FunctionContext,
+) -> PlanResult<expr::Expr> {
     let (map, key) = args.two()?;
     Ok(expr::Expr::Not(Box::new(expr_fn::array_empty(
         expr_fn::map_extract(map, key),
