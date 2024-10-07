@@ -2,13 +2,17 @@ use std::collections::HashMap;
 
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, first_last, grouping, kurtosis_pop, median, min_max, regr,
-    stddev, sum, variance,
+    correlation, count, covariance, first_last, grouping, median, min_max, regr, stddev, sum,
+    variance,
 };
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr;
 use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::sqlparser::ast::NullTreatment;
+use datafusion_functions_extra::kurtosis::kurtosis_udaf;
+use datafusion_functions_extra::max_min_by::{max_by_udaf, min_by_udaf};
+use datafusion_functions_extra::mode::mode_udaf;
+use datafusion_functions_extra::skewness::skewness_udaf;
 use lazy_static::lazy_static;
 
 use crate::error::{PlanError, PlanResult};
@@ -18,32 +22,6 @@ use crate::utils::ItemTaker;
 lazy_static! {
     static ref BUILT_IN_AGGREGATE_FUNCTIONS: HashMap<&'static str, AggFunction> =
         HashMap::from_iter(list_built_in_aggregate_functions());
-}
-
-fn min_max_by(
-    args: Vec<expr::Expr>,
-    agg_function_context: AggFunctionContext,
-    asc: bool,
-) -> PlanResult<expr::Expr> {
-    let (args, order_by, filter) = if args.len() == 2 {
-        let (first, second) = args.two()?;
-        (vec![first], second, None)
-    } else if args.len() == 3 {
-        let (first, second, third) = args.three()?;
-        (vec![first], third, Some(Box::new(second)))
-    } else {
-        return Err(PlanError::invalid("max_by requires 2 or 3 arguments"));
-    };
-    // TODO: Not efficient due to sorting.
-    let order_by = Some(vec![expr::Sort::new(order_by, asc, false)]);
-    Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: first_last::first_value_udaf(),
-        args,
-        distinct: agg_function_context.distinct(),
-        filter,
-        order_by,
-        null_treatment: None,
-    }))
 }
 
 fn first_last_value(
@@ -143,7 +121,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("histogram_numeric", F::unknown("histogram_numeric")),
         ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
         ("hll_union_agg", F::unknown("hll_union_agg")),
-        ("kurtosis", F::default(kurtosis_pop::kurtosis_pop_udaf)),
+        ("kurtosis", F::default(kurtosis_udaf)),
         (
             "last",
             F::custom(|args, agg_function_context| {
@@ -157,18 +135,12 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
             }),
         ),
         ("max", F::default(min_max::max_udaf)),
-        (
-            "max_by",
-            F::custom(|args, agg_function_context| min_max_by(args, agg_function_context, false)),
-        ),
+        ("max_by", F::default(max_by_udaf)),
         ("mean", F::default(average::avg_udaf)),
         ("median", F::default(median::median_udaf)),
         ("min", F::default(min_max::min_udaf)),
-        (
-            "min_by",
-            F::custom(|args, agg_function_context| min_max_by(args, agg_function_context, true)),
-        ),
-        ("mode", F::unknown("mode")),
+        ("min_by", F::default(min_by_udaf)),
+        ("mode", F::default(mode_udaf)),
         ("percentile", F::unknown("percentile")),
         (
             "percentile_approx",
@@ -183,7 +155,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("regr_sxx", F::default(regr::regr_sxx_udaf)),
         ("regr_sxy", F::default(regr::regr_sxy_udaf)),
         ("regr_syy", F::default(regr::regr_syy_udaf)),
-        ("skewness", F::unknown("skewness")),
+        ("skewness", F::default(skewness_udaf)),
         ("some", F::default(bool_and_or::bool_or_udaf)),
         ("std", F::default(stddev::stddev_udaf)),
         ("stddev", F::default(stddev::stddev_udaf)),

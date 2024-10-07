@@ -207,7 +207,9 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "arrow-string",
+ "chrono",
  "pyo3",
+ "rand",
 ]
 
 [[package]]
@@ -1593,6 +1595,20 @@ dependencies = [
  "datafusion-expr-common",
  "datafusion-physical-expr-common",
  "rand",
+]
+
+[[package]]
+name = "datafusion-functions-extra"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b684414b60bd724054b10dea1185112bc9f1b034d3684945474c63dc62732ff1"
+dependencies = [
+ "ahash",
+ "arrow",
+ "datafusion",
+ "hashbrown 0.14.5",
+ "log",
+ "paste",
 ]
 
 [[package]]
@@ -4097,6 +4113,7 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-functions-extra",
  "datafusion-functions-json",
  "datafusion-functions-nested",
  "either",

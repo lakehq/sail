@@ -13,6 +13,7 @@ datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 datafusion-functions-json = { workspace = true }
+datafusion-functions-extra = { workspace = true }
 thiserror = { workspace = true }
 tokio-stream = { workspace = true }
 async-trait = { workspace = true }
