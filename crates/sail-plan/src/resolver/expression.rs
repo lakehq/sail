@@ -780,7 +780,7 @@ impl PlanResolver<'_> {
                 args: arguments,
             })
         } else if let Ok(func) = get_built_in_function(function_name.as_str()) {
-            let function_context = FunctionContext::new(self.config.clone());
+            let function_context = FunctionContext::new(self.config.clone(), self.ctx);
             func(arguments.clone(), &function_context)?
         } else if let Ok(func) = get_built_in_aggregate_function(function_name.as_str()) {
             let agg_function_context = AggFunctionContext::new(is_distinct);

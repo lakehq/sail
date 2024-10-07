@@ -185,6 +185,7 @@ impl Session {
             .get(SPARK_SQL_GLOBAL_TEMP_DATABASE)?
             .map(|x| x.to_string())
             .unwrap_or_else(|| PlanConfig::default().global_temp_database);
+        let plan_config_default = PlanConfig::default();
         Ok(Arc::new(PlanConfig {
             time_zone,
             // TODO: get the default timestamp type from configuration
@@ -194,7 +195,11 @@ impl Session {
             default_bounded_table_file_format,
             default_warehouse_directory,
             global_temp_database,
-            ..PlanConfig::default()
+            session_user_id: self
+                .user_id()
+                .unwrap_or(&plan_config_default.session_user_id)
+                .to_string(),
+            ..plan_config_default
         }))
     }
 

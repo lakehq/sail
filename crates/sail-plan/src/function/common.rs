@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
+use datafusion::prelude::SessionContext;
 use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::{expr, AggregateUDF, BinaryExpr, Operator, ScalarUDF, ScalarUDFImpl};
 
@@ -8,17 +9,22 @@ use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::utils::ItemTaker;
 
-pub struct FunctionContext {
+pub struct FunctionContext<'a> {
     plan_config: Arc<PlanConfig>,
+    ctx: &'a SessionContext,
 }
 
-impl FunctionContext {
-    pub fn new(plan_config: Arc<PlanConfig>) -> Self {
-        Self { plan_config }
+impl<'a> FunctionContext<'a> {
+    pub fn new(plan_config: Arc<PlanConfig>, ctx: &'a SessionContext) -> Self {
+        Self { plan_config, ctx }
     }
 
     pub fn plan_config(&self) -> &Arc<PlanConfig> {
         &self.plan_config
+    }
+
+    pub fn session_context(&self) -> &SessionContext {
+        self.ctx
     }
 }
 
