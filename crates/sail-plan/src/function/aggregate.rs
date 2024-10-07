@@ -12,7 +12,7 @@ use datafusion_expr::sqlparser::ast::NullTreatment;
 use lazy_static::lazy_static;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::AggFunction;
+use crate::function::common::{AggFunction, AggFunctionContext};
 use crate::utils::ItemTaker;
 
 lazy_static! {
@@ -20,7 +20,11 @@ lazy_static! {
         HashMap::from_iter(list_built_in_aggregate_functions());
 }
 
-fn min_max_by(args: Vec<expr::Expr>, distinct: bool, asc: bool) -> PlanResult<expr::Expr> {
+fn min_max_by(
+    args: Vec<expr::Expr>,
+    agg_function_context: AggFunctionContext,
+    asc: bool,
+) -> PlanResult<expr::Expr> {
     let (args, order_by, filter) = if args.len() == 2 {
         let (first, second) = args.two()?;
         (vec![first], second, None)
@@ -35,7 +39,7 @@ fn min_max_by(args: Vec<expr::Expr>, distinct: bool, asc: bool) -> PlanResult<ex
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: first_last::first_value_udaf(),
         args,
-        distinct,
+        distinct: agg_function_context.distinct(),
         filter,
         order_by,
         null_treatment: None,
@@ -44,7 +48,7 @@ fn min_max_by(args: Vec<expr::Expr>, distinct: bool, asc: bool) -> PlanResult<ex
 
 fn first_last_value(
     args: Vec<expr::Expr>,
-    distinct: bool,
+    agg_function_context: AggFunctionContext,
     first_value: bool,
 ) -> PlanResult<expr::Expr> {
     let (args, ignore_nulls) = if args.len() == 1 {
@@ -78,7 +82,7 @@ fn first_last_value(
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func,
         args,
-        distinct,
+        distinct: agg_function_context.distinct(),
         filter: None,
         order_by: None,
         null_treatment: Some(ignore_nulls),
@@ -92,7 +96,9 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("any", F::default(bool_and_or::bool_or_udaf)),
         (
             "any_value",
-            F::custom(|args, distinct| first_last_value(args, distinct, true)),
+            F::custom(|args, agg_function_context| {
+                first_last_value(args, agg_function_context, true)
+            }),
         ),
         (
             "approx_count_distinct",
@@ -122,11 +128,15 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("every", F::default(bool_and_or::bool_and_udaf)),
         (
             "first",
-            F::custom(|args, distinct| first_last_value(args, distinct, true)),
+            F::custom(|args, agg_function_context| {
+                first_last_value(args, agg_function_context, true)
+            }),
         ),
         (
             "first_value",
-            F::custom(|args, distinct| first_last_value(args, distinct, true)),
+            F::custom(|args, agg_function_context| {
+                first_last_value(args, agg_function_context, true)
+            }),
         ),
         ("grouping", F::default(grouping::grouping_udaf)),
         ("grouping_id", F::unknown("grouping_id")),
@@ -136,23 +146,27 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("kurtosis", F::default(kurtosis_pop::kurtosis_pop_udaf)),
         (
             "last",
-            F::custom(|args, distinct| first_last_value(args, distinct, false)),
+            F::custom(|args, agg_function_context| {
+                first_last_value(args, agg_function_context, false)
+            }),
         ),
         (
             "last_value",
-            F::custom(|args, distinct| first_last_value(args, distinct, false)),
+            F::custom(|args, agg_function_context| {
+                first_last_value(args, agg_function_context, false)
+            }),
         ),
         ("max", F::default(min_max::max_udaf)),
         (
             "max_by",
-            F::custom(|args, distinct| min_max_by(args, distinct, false)),
+            F::custom(|args, agg_function_context| min_max_by(args, agg_function_context, false)),
         ),
         ("mean", F::default(average::avg_udaf)),
         ("median", F::default(median::median_udaf)),
         ("min", F::default(min_max::min_udaf)),
         (
             "min_by",
-            F::custom(|args, distinct| min_max_by(args, distinct, true)),
+            F::custom(|args, agg_function_context| min_max_by(args, agg_function_context, true)),
         ),
         ("mode", F::unknown("mode")),
         ("percentile", F::unknown("percentile")),
