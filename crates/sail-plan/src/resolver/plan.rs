@@ -4,8 +4,8 @@ use std::sync::Arc;
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes as adt;
 use datafusion::dataframe::DataFrame;
-use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
-use datafusion::datasource::file_format::avro::AvroFormatFactory;
+use datafusion::datasource::file_format::arrow::{ArrowFormat, ArrowFormatFactory};
+use datafusion::datasource::file_format::avro::{AvroFormat, AvroFormatFactory};
 use datafusion::datasource::file_format::csv::{CsvFormat, CsvFormatFactory};
 use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
 use datafusion::datasource::file_format::parquet::{ParquetFormat, ParquetFormatFactory};
@@ -638,10 +638,12 @@ impl PlanResolver<'_> {
             return Err(PlanError::invalid("empty data source paths"));
         }
         let urls = self.resolve_listing_urls(paths).await?;
-        let (format, extension): (Arc<dyn FileFormat>, _) = match format.as_deref() {
+        let (format, extension): (Arc<dyn FileFormat>, _) = match format.map(|x| x.to_lowercase()).as_deref() {
             Some("json") => (Arc::new(JsonFormat::default()), ".json"),
             Some("csv") => (Arc::new(CsvFormat::default()), ".csv"),
             Some("parquet") => (Arc::new(ParquetFormat::new()), ".parquet"),
+            Some("arrow") => (Arc::new(ArrowFormat::default()), ".arrow"),
+            Some("avro") => (Arc::new(AvroFormat::default()), ".avro"),
             other => {
                 return Err(PlanError::unsupported(format!(
                     "unsupported data source format: {:?}",
