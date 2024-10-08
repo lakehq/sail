@@ -638,19 +638,20 @@ impl PlanResolver<'_> {
             return Err(PlanError::invalid("empty data source paths"));
         }
         let urls = self.resolve_listing_urls(paths).await?;
-        let (format, extension): (Arc<dyn FileFormat>, _) = match format.map(|x| x.to_lowercase()).as_deref() {
-            Some("json") => (Arc::new(JsonFormat::default()), ".json"),
-            Some("csv") => (Arc::new(CsvFormat::default()), ".csv"),
-            Some("parquet") => (Arc::new(ParquetFormat::new()), ".parquet"),
-            Some("arrow") => (Arc::new(ArrowFormat::default()), ".arrow"),
-            Some("avro") => (Arc::new(AvroFormat::default()), ".avro"),
-            other => {
-                return Err(PlanError::unsupported(format!(
-                    "unsupported data source format: {:?}",
-                    other
-                )))
-            }
-        };
+        let (format, extension): (Arc<dyn FileFormat>, _) =
+            match format.map(|x| x.to_lowercase()).as_deref() {
+                Some("json") => (Arc::new(JsonFormat::default()), ".json"),
+                Some("csv") => (Arc::new(CsvFormat::default()), ".csv"),
+                Some("parquet") => (Arc::new(ParquetFormat::new()), ".parquet"),
+                Some("arrow") => (Arc::new(ArrowFormat), ".arrow"),
+                Some("avro") => (Arc::new(AvroFormat), ".avro"),
+                other => {
+                    return Err(PlanError::unsupported(format!(
+                        "unsupported data source format: {:?}",
+                        other
+                    )))
+                }
+            };
         let options = ListingOptions::new(format).with_file_extension(extension);
         let schema = self.resolve_listing_schema(&urls, &options, schema).await?;
         let config = ListingTableConfig::new_with_multi_paths(urls)
