@@ -3,6 +3,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::expr;
 
 use crate::error::PlanResult;
+use crate::extension::function::spark_xxhash64::SparkXxhash64;
 use crate::function::common::{Function, FunctionContext};
 use crate::utils::ItemTaker;
 
@@ -32,6 +33,6 @@ pub(super) fn list_built_in_hash_functions() -> Vec<(&'static str, Function)> {
         ("sha", F::unknown("sha")),
         ("sha1", F::unknown("sha1")),
         ("sha2", F::custom(sha2)),
-        ("xxhash64", F::unknown("xxhash64")),
+        ("xxhash64", F::udf(SparkXxhash64::new())),
     ]
 }
