@@ -3,6 +3,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::expr;
 
 use crate::error::PlanResult;
+use crate::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
 use crate::extension::function::spark_xxhash64::SparkXxhash64;
 use crate::function::common::{Function, FunctionContext};
 use crate::utils::ItemTaker;
@@ -28,7 +29,7 @@ pub(super) fn list_built_in_hash_functions() -> Vec<(&'static str, Function)> {
 
     vec![
         ("crc32", F::unknown("crc32")),
-        ("hash", F::unknown("hash")),
+        ("hash", F::udf(SparkMurmur3Hash::new())),
         ("md5", F::unary(expr_fn::md5)),
         ("sha", F::unknown("sha")),
         ("sha1", F::unknown("sha1")),
