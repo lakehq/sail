@@ -943,7 +943,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unhex"
+        "failure": "not implemented: function: decode"
       }
     },
     {

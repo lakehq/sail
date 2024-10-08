@@ -1007,7 +1007,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unhex"
+        "failure": "error in DataFusion: Arrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
       }
     },
     {
@@ -1029,7 +1029,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unhex"
+        "failure": "error in DataFusion: Arrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
       }
     },
     {
@@ -1051,7 +1051,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unhex"
+        "failure": "error in DataFusion: Arrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
       }
     },
     {
@@ -1073,7 +1073,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unhex"
+        "failure": "error in DataFusion: Arrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
       }
     },
     {

@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unhex"
+        "failure": "not implemented: function: aes_decrypt"
       }
     },
     {
@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unhex"
+        "failure": "not implemented: function: aes_decrypt"
       }
     },
     {
@@ -217,7 +217,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unhex"
+        "failure": "not implemented: function: aes_encrypt"
       }
     },
     {
@@ -239,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unhex"
+        "failure": "not implemented: function: aes_encrypt"
       }
     },
     {
@@ -920,7 +920,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unhex"
+        "failure": "not implemented: function: try_aes_decrypt"
       }
     },
     {
@@ -942,7 +942,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unhex"
+        "failure": "not implemented: function: try_aes_decrypt"
       }
     },
     {

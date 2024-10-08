@@ -13,5 +13,6 @@ pub(crate) mod randn;
 pub(crate) mod random;
 pub(crate) mod size;
 pub(crate) mod spark_array;
+pub(crate) mod spark_hex_unhex;
 pub(crate) mod struct_function;
 pub(crate) mod update_struct_field;

@@ -3,10 +3,11 @@ use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, BinaryExpr, Operator};
 
-use crate::error::{PlanError, PlanResult};
+use crate::error::PlanResult;
 use crate::extension::function::least_greatest;
 use crate::extension::function::randn::Randn;
 use crate::extension::function::random::Random;
+use crate::extension::function::spark_hex_unhex::{SparkHex, SparkUnHex};
 use crate::function::common::{Function, FunctionContext};
 use crate::utils::ItemTaker;
 
@@ -55,29 +56,6 @@ fn power(base: expr::Expr, exponent: expr::Expr) -> expr::Expr {
         expr: Box::new(expr_fn::power(base, exponent)),
         data_type: DataType::Float64,
     })
-}
-
-fn hex(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
-    let expr = args.one()?;
-    let data_type = match &expr {
-        expr::Expr::Literal(l) => Ok(l.data_type()),
-        _ => Err(PlanError::invalid("hex requires a literal argument")),
-        // FIXME: Create UDF for hex to properly determine datatype
-    }?;
-    match data_type {
-        DataType::Int32 => {
-            let expr = expr::Expr::Cast(expr::Cast {
-                expr: Box::new(expr),
-                data_type: DataType::Int64,
-            });
-            Ok(expr_fn::to_hex(expr))
-        }
-        DataType::Int64 => Ok(expr_fn::to_hex(expr)),
-        _ => Ok(expr_fn::encode(
-            expr,
-            expr::Expr::Literal(ScalarValue::Utf8(Some("hex".to_string()))),
-        )),
-    }
 }
 
 // FIXME: Implement the UDF for better numerical precision.
@@ -169,7 +147,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::unary(floor)),
         ("greatest", F::udf(least_greatest::Greatest::new())),
-        ("hex", F::custom(hex)),
+        ("hex", F::udf(SparkHex::new())),
         ("hypot", F::binary(hypot)),
         ("least", F::udf(least_greatest::Least::new())),
         ("ln", F::unary(expr_fn::ln)),
@@ -203,7 +181,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("try_divide", F::unknown("try_divide")),
         ("try_multiply", F::unknown("try_multiply")),
         ("try_subtract", F::unknown("try_subtract")),
-        ("unhex", F::unknown("unhex")),
+        ("unhex", F::udf(SparkUnHex::new())),
         ("width_bucket", F::unknown("width_bucket")),
     ]
 }
