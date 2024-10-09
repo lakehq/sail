@@ -244,19 +244,25 @@ impl Session {
                 if key == SPARK_SQL_SESSION_TIME_ZONE {
                     let state = self.context.state_ref();
                     let mut state = state.write();
-                    let tz: Tz = value
-                        .parse()
-                        .map_err(|e| SparkError::invalid(format!("invalid time zone: {e}")))?;
-                    let local_time_offset = Utc::now()
-                        .with_timezone(&tz)
-                        .offset()
-                        .fix()
-                        .local_minus_utc();
-                    let offset_string = format!(
-                        "{:+02}:{:02}",
-                        local_time_offset / 3600,
-                        (local_time_offset.abs() % 3600) / 60
-                    );
+                    let offset_string = if value.starts_with("+") || value.starts_with("-") {
+                        value.clone()
+                    } else if value.to_lowercase() == "z" {
+                        "+00:00".to_string()
+                    } else {
+                        let tz: Tz = value
+                            .parse()
+                            .map_err(|e| SparkError::invalid(format!("invalid time zone: {e}")))?;
+                        let local_time_offset = Utc::now()
+                            .with_timezone(&tz)
+                            .offset()
+                            .fix()
+                            .local_minus_utc();
+                        format!(
+                            "{:+03}:{:02}",
+                            local_time_offset / 3600,
+                            (local_time_offset.abs() % 3600) / 60
+                        )
+                    };
                     state.config_mut().options_mut().execution.time_zone = Some(offset_string);
                 }
                 state.config.set(key, value)?;
