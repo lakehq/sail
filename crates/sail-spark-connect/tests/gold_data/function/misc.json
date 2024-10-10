@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unhex"
+        "failure": "not implemented: function: aes_decrypt"
       }
     },
     {
@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unhex"
+        "failure": "not implemented: function: aes_decrypt"
       }
     },
     {
@@ -217,7 +217,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unhex"
+        "failure": "not implemented: function: aes_encrypt"
       }
     },
     {
@@ -239,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unhex"
+        "failure": "not implemented: function: aes_encrypt"
       }
     },
     {
@@ -437,7 +437,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: current_database"
+        "success": "ok"
       }
     },
     {
@@ -459,7 +459,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: current_schema"
+        "success": "ok"
       }
     },
     {
@@ -481,7 +481,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: extra tokens after statement: ("
+        "success": "ok"
       }
     },
     {
@@ -920,7 +920,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unhex"
+        "failure": "not implemented: function: try_aes_decrypt"
       }
     },
     {
@@ -942,7 +942,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unhex"
+        "failure": "not implemented: function: try_aes_decrypt"
       }
     },
     {

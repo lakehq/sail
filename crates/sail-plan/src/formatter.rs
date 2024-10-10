@@ -394,6 +394,7 @@ impl PlanFormatter for DefaultPlanFormatter {
             //   2. The data type being exploded is `ExplodeDataType::List`
             // In this specific scenario, we always use "col" as the column name.
             "explode_outer" => Ok("col".to_string()),
+            "current_schema" => Ok("current_database()".to_string()),
             "acos" | "acosh" | "asin" | "asinh" | "atan" | "atan2" | "atanh" | "cbrt" | "ceil"
             | "exp" | "floor" | "log10" | "regexp" | "regexp_like" | "signum" | "sqrt" | "cos"
             | "cosh" | "cot" | "degrees" | "power" | "radians" | "sin" | "sinh" | "tan"

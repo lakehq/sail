@@ -185,6 +185,7 @@ impl Session {
             .get(SPARK_SQL_GLOBAL_TEMP_DATABASE)?
             .map(|x| x.to_string())
             .unwrap_or_else(|| PlanConfig::default().global_temp_database);
+        let plan_config_default = PlanConfig::default();
         Ok(Arc::new(PlanConfig {
             time_zone,
             // TODO: get the default timestamp type from configuration
@@ -194,7 +195,11 @@ impl Session {
             default_bounded_table_file_format,
             default_warehouse_directory,
             global_temp_database,
-            ..PlanConfig::default()
+            session_user_id: self
+                .user_id()
+                .unwrap_or(&plan_config_default.session_user_id)
+                .to_string(),
+            ..plan_config_default
         }))
     }
 
@@ -230,16 +235,36 @@ impl Session {
     }
 
     pub(crate) fn set_config(&self, kv: ConfigKeyValueList) -> SparkResult<()> {
+        use chrono::{Offset, Utc};
+        use chrono_tz::Tz;
         let mut state = self.state.lock()?;
         let kv: Vec<ConfigKeyValue> = kv.into();
         for ConfigKeyValue { key, value } in kv {
             if let Some(value) = value {
-                // FIXME: Parse timezone to format datafusion expects.
-                // if key == SPARK_SQL_SESSION_TIME_ZONE {
-                //     let state = self.context.state_ref();
-                //     let mut state = state.write();
-                //     state.config_mut().options_mut().execution.time_zone = Some(value.clone());
-                // }
+                if key == SPARK_SQL_SESSION_TIME_ZONE {
+                    let state = self.context.state_ref();
+                    let mut state = state.write();
+                    let offset_string = if value.starts_with("+") || value.starts_with("-") {
+                        value.clone()
+                    } else if value.to_lowercase() == "z" {
+                        "+00:00".to_string()
+                    } else {
+                        let tz: Tz = value
+                            .parse()
+                            .map_err(|e| SparkError::invalid(format!("invalid time zone: {e}")))?;
+                        let local_time_offset = Utc::now()
+                            .with_timezone(&tz)
+                            .offset()
+                            .fix()
+                            .local_minus_utc();
+                        format!(
+                            "{:+03}:{:02}",
+                            local_time_offset / 3600,
+                            (local_time_offset.abs() % 3600) / 60
+                        )
+                    };
+                    state.config_mut().options_mut().execution.time_zone = Some(offset_string);
+                }
                 state.config.set(key, value)?;
             } else {
                 return Err(SparkError::invalid(format!(

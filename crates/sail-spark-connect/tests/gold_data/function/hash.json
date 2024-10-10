@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: hash"
+        "failure": "error in DataFusion: Internal error: Unsupported data type in hasher: List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }).\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
       }
     },
     {
@@ -151,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: xxhash64"
+        "failure": "error in DataFusion: Internal error: Unsupported data type in hasher: List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }).\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
       }
     }
   ]

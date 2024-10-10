@@ -4,13 +4,16 @@ use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, Operator, ScalarUDF};
 
-use crate::config::PlanConfig;
+use crate::catalog::CatalogManager;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::raise_error::RaiseError;
-use crate::function::common::Function;
+use crate::function::common::{Function, FunctionContext};
 use crate::utils::ItemTaker;
 
-fn assert_true(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
+fn assert_true(
+    args: Vec<expr::Expr>,
+    _function_context: &FunctionContext,
+) -> PlanResult<expr::Expr> {
     let (err_msg, col) = if args.len() == 1 {
         let col = args.one()?;
         (
@@ -43,6 +46,38 @@ fn assert_true(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<ex
     }))
 }
 
+fn current_catalog(
+    args: Vec<expr::Expr>,
+    function_context: &FunctionContext,
+) -> PlanResult<expr::Expr> {
+    args.zero()?;
+    let catalog_manager = CatalogManager::new(
+        function_context.session_context(),
+        function_context.plan_config().clone(),
+    );
+    Ok(lit(catalog_manager.default_catalog()?))
+}
+
+fn current_database(
+    args: Vec<expr::Expr>,
+    function_context: &FunctionContext,
+) -> PlanResult<expr::Expr> {
+    args.zero()?;
+    let catalog_manager = CatalogManager::new(
+        function_context.session_context(),
+        function_context.plan_config().clone(),
+    );
+    Ok(lit(catalog_manager.default_database()?))
+}
+
+fn current_user(
+    args: Vec<expr::Expr>,
+    function_context: &FunctionContext,
+) -> PlanResult<expr::Expr> {
+    args.zero()?;
+    Ok(lit(function_context.plan_config().session_user_id.clone()))
+}
+
 pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -53,10 +88,10 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, Function)> {
         ("bitmap_bit_position", F::unknown("bitmap_bit_position")),
         ("bitmap_bucket_number", F::unknown("bitmap_bucket_number")),
         ("bitmap_count", F::unknown("bitmap_count")),
-        ("current_catalog", F::unknown("current_catalog")),
-        ("current_database", F::unknown("current_database")),
-        ("current_schema", F::unknown("current_schema")),
-        ("current_user", F::unknown("current_user")),
+        ("current_catalog", F::custom(current_catalog)),
+        ("current_database", F::custom(current_database)),
+        ("current_schema", F::custom(current_database)),
+        ("current_user", F::custom(current_user)),
         ("equal_null", F::binary_op(Operator::IsNotDistinctFrom)),
         ("hll_sketch_estimate", F::unknown("hll_sketch_estimate")),
         ("hll_union", F::unknown("hll_union")),

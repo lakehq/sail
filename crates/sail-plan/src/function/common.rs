@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
+use datafusion::prelude::SessionContext;
 use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::{expr, AggregateUDF, BinaryExpr, Operator, ScalarUDF, ScalarUDFImpl};
 
@@ -8,8 +9,27 @@ use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::utils::ItemTaker;
 
+pub struct FunctionContext<'a> {
+    plan_config: Arc<PlanConfig>,
+    ctx: &'a SessionContext,
+}
+
+impl<'a> FunctionContext<'a> {
+    pub fn new(plan_config: Arc<PlanConfig>, ctx: &'a SessionContext) -> Self {
+        Self { plan_config, ctx }
+    }
+
+    pub fn plan_config(&self) -> &Arc<PlanConfig> {
+        &self.plan_config
+    }
+
+    pub fn session_context(&self) -> &SessionContext {
+        self.ctx
+    }
+}
+
 pub(crate) type Function =
-    Arc<dyn Fn(Vec<expr::Expr>, Arc<PlanConfig>) -> PlanResult<expr::Expr> + Send + Sync>;
+    Arc<dyn Fn(Vec<expr::Expr>, &FunctionContext) -> PlanResult<expr::Expr> + Send + Sync>;
 
 pub(crate) struct FunctionBuilder;
 
@@ -118,7 +138,7 @@ impl FunctionBuilder {
 
     pub fn custom<F>(f: F) -> Function
     where
-        F: Fn(Vec<expr::Expr>, Arc<PlanConfig>) -> PlanResult<expr::Expr> + Send + Sync + 'static,
+        F: Fn(Vec<expr::Expr>, &FunctionContext) -> PlanResult<expr::Expr> + Send + Sync + 'static,
     {
         Arc::new(f)
     }
@@ -129,8 +149,22 @@ impl FunctionBuilder {
     }
 }
 
+pub struct AggFunctionContext {
+    distinct: bool,
+}
+
+impl AggFunctionContext {
+    pub fn new(distinct: bool) -> Self {
+        Self { distinct }
+    }
+
+    pub fn distinct(&self) -> bool {
+        self.distinct
+    }
+}
+
 pub(crate) type AggFunction =
-    Arc<dyn Fn(Vec<expr::Expr>, bool) -> PlanResult<expr::Expr> + Send + Sync>;
+    Arc<dyn Fn(Vec<expr::Expr>, AggFunctionContext) -> PlanResult<expr::Expr> + Send + Sync>;
 
 pub(crate) struct AggFunctionBuilder;
 
@@ -139,11 +173,11 @@ impl AggFunctionBuilder {
     where
         F: Fn() -> Arc<AggregateUDF> + Send + Sync + 'static,
     {
-        Arc::new(move |args, distinct| {
+        Arc::new(move |args, agg_function_context| {
             Ok(expr::Expr::AggregateFunction(AggregateFunction {
                 func: f(),
                 args,
-                distinct,
+                distinct: agg_function_context.distinct(),
                 filter: None,
                 order_by: None,
                 null_treatment: None,
@@ -153,7 +187,10 @@ impl AggFunctionBuilder {
 
     pub fn custom<F>(f: F) -> AggFunction
     where
-        F: Fn(Vec<expr::Expr>, bool) -> PlanResult<expr::Expr> + Send + Sync + 'static,
+        F: Fn(Vec<expr::Expr>, AggFunctionContext) -> PlanResult<expr::Expr>
+            + Send
+            + Sync
+            + 'static,
     {
         Arc::new(f)
     }

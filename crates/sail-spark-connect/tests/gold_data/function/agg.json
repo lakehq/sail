@@ -1423,7 +1423,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: mode"
+        "success": "ok"
       }
     },
     {
@@ -1445,7 +1445,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: mode"
+        "success": "ok"
       }
     },
     {
@@ -1467,7 +1467,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: mode"
+        "failure": "error in DataFusion: This feature is not implemented: Unsupported data type: Interval(YearMonth) for mode function"
       }
     },
     {
@@ -2489,7 +2489,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: skewness"
+        "success": "ok"
       }
     },
     {
@@ -2511,7 +2511,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: skewness"
+        "success": "ok"
       }
     },
     {

@@ -30,6 +30,25 @@ impl SparkDialect {
         }
     }
 
+    fn parse_current_user_function(&self, parser: &mut Parser) -> Result<ast::Expr, ParserError> {
+        parser.expect_keyword(Keyword::CURRENT_USER)?;
+        parser.expect_token(&Token::LParen)?;
+        parser.expect_token(&Token::RParen)?;
+        Ok(ast::Expr::Function(ast::Function {
+            name: ast::ObjectName(vec![ast::Ident::new("current_user")]),
+            parameters: ast::FunctionArguments::None,
+            args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                duplicate_treatment: None,
+                args: vec![],
+                clauses: vec![],
+            }),
+            filter: None,
+            null_treatment: None,
+            over: None,
+            within_group: vec![],
+        }))
+    }
+
     fn parse_struct_function(&self, parser: &mut Parser) -> Result<ast::Expr, ParserError> {
         parser.expect_keyword(Keyword::STRUCT)?;
         parser.expect_token(&Token::LParen)?;
@@ -111,6 +130,9 @@ impl Dialect for SparkDialect {
             Token::ExclamationMark => Some(self.parse_exclamation_mark_unary(parser)),
             Token::Word(w) if w.keyword == Keyword::ARRAY => {
                 Some(self.parse_array_function(parser))
+            }
+            Token::Word(w) if w.keyword == Keyword::CURRENT_USER => {
+                Some(self.parse_current_user_function(parser))
             }
             Token::Word(w) if w.keyword == Keyword::STRUCT => {
                 Some(self.parse_struct_function(parser))

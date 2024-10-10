@@ -1,15 +1,15 @@
-use std::sync::Arc;
-
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit};
 use datafusion_functions_json::udfs;
 
-use crate::config::PlanConfig;
 use crate::error::PlanResult;
-use crate::function::common::Function;
+use crate::function::common::{Function, FunctionContext};
 use crate::utils::ItemTaker;
 
-fn get_json_object(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
+fn get_json_object(
+    args: Vec<expr::Expr>,
+    _function_context: &FunctionContext,
+) -> PlanResult<expr::Expr> {
     // > 1 path means nested access e.g. json_as_text(json, p1, p2) => json.p1.p2
     let (expr, paths) = args.at_least_one()?;
     let paths: Vec<expr::Expr> = paths

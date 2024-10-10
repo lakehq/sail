@@ -33,6 +33,7 @@ pub struct PlanConfig<F: ?Sized = dyn PlanFormatter> {
     pub default_warehouse_directory: String,
     /// The database name for the global temporary views.
     pub global_temp_database: String,
+    pub session_user_id: String,
 }
 
 impl Default for PlanConfig {
@@ -68,6 +69,7 @@ impl Default for PlanConfig {
             default_unbounded_table_file_format: "ARROW".to_string(),
             default_warehouse_directory: "spark-warehouse".to_string(),
             global_temp_database: "global_temp".to_string(),
+            session_user_id: "sail".to_string(),
         }
     }
 }

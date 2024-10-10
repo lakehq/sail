@@ -7,13 +7,15 @@ use datafusion::functions::string::contains::ContainsFunc;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, ScalarUDF};
 
-use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::levenshtein::Levenshtein;
-use crate::function::common::Function;
+use crate::function::common::{Function, FunctionContext};
 use crate::utils::ItemTaker;
 
-fn regexp_replace(mut args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
+fn regexp_replace(
+    mut args: Vec<expr::Expr>,
+    _function_context: &FunctionContext,
+) -> PlanResult<expr::Expr> {
     if args.len() != 3 {
         return Err(PlanError::invalid("regexp_replace requires 3 arguments"));
     }
@@ -29,7 +31,7 @@ fn regexp_replace(mut args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanRe
     }))
 }
 
-fn substr(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
+fn substr(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
     if args.len() == 2 {
         let (first, second) = args.two()?;
         return Ok(expr_fn::substr(first, second));
@@ -41,7 +43,7 @@ fn substr(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::E
     Err(PlanError::invalid("substr requires 2 or 3 arguments"))
 }
 
-fn concat_ws(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
+fn concat_ws(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
     let (delimiter, args) = args.at_least_one()?;
     if args.is_empty() {
         return Ok(expr::Expr::Literal(ScalarValue::Utf8(Some("".to_string()))));
@@ -49,7 +51,7 @@ fn concat_ws(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr
     Ok(expr_fn::concat_ws(delimiter, args))
 }
 
-fn to_binary(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
+fn to_binary(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
     let hex_format = expr::Expr::Literal(ScalarValue::Utf8(Some("hex".to_string())));
     if args.len() == 1 {
         let expr = args.one()?;
@@ -83,7 +85,7 @@ fn unbase64(expr: expr::Expr) -> expr::Expr {
     expr_fn::decode(expr, format)
 }
 
-fn overlay(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
+fn overlay(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
     if args.len() == 3 {
         return Ok(expr_fn::overlay(args));
     }
@@ -100,7 +102,7 @@ fn overlay(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::
     Err(PlanError::invalid("overlay requires 3 or 4 arguments"))
 }
 
-fn position(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
+fn position(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
     if args.len() == 2 {
         let (substr, str) = args.two()?;
         return Ok(expr_fn::strpos(str, substr));
@@ -118,7 +120,7 @@ fn space(n: expr::Expr) -> expr::Expr {
     expr_fn::repeat(lit(" "), n)
 }
 
-fn replace(args: Vec<expr::Expr>, _config: Arc<PlanConfig>) -> PlanResult<expr::Expr> {
+fn replace(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
     if args.len() == 2 {
         let (str, substr) = args.two()?;
         return Ok(expr_fn::replace(str, substr, lit("")));
