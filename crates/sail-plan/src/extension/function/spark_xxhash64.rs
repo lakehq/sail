@@ -38,6 +38,11 @@ impl ScalarUDFImpl for SparkXxhash64 {
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let length = args.len();
+        if length < 1 {
+            return Err(datafusion::error::DataFusionError::Internal(
+                "spark_xxhash64 requires at least one argument".to_string(),
+            ));
+        }
         let seed = &args[length - 1];
         let mut args = args.to_vec();
         match seed {
