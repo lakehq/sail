@@ -100,7 +100,7 @@ pub fn parse_file_format(parser: &mut Parser) -> SqlResult<String> {
         Token::SingleQuotedString(s) => Ok(s.to_uppercase()),
         Token::DoubleQuotedString(s) => Ok(s.to_uppercase()),
         _ => Err(SqlError::invalid(format!(
-            "Expected file format as one of ARROW, PARQUET, AVRO, CSV, etc, found: {token}"
+            "Expected file format as one of DELTA, ARROW, PARQUET, AVRO, CSV, etc, found: {token}"
         ))),
     }
 }
