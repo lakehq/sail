@@ -68,6 +68,7 @@ impl Session {
         // TODO: return error on invalid environment variables
         // Register delta storage handlers for all supported object stores at most once per process.
         REGISTER_DELTA_STORAGE_HANDLERS.call_once(|| {
+            /// TODO: Note to self, look into best place to put this before merging this PR!!
             deltalake::aws::register_handlers(None);
             deltalake::azure::register_handlers(None);
             deltalake::gcp::register_handlers(None);

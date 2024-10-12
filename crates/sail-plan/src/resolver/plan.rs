@@ -631,19 +631,26 @@ impl PlanResolver<'_> {
         let spec::ReadDataSource {
             format,
             schema,
-            options: _,
+            options,
             paths,
             predicates: _,
         } = source;
+        let options: HashMap<String, String> = options.into_iter().collect();
         if paths.is_empty() {
             return Err(PlanError::invalid("empty data source paths"));
         }
         let urls = self.resolve_listing_urls(paths).await?;
         let table_provider = match format.map(|x| x.to_lowercase()).as_deref() {
                 Some("delta") | Some("deltatable") => {
-                    let table_provider: Arc<dyn TableProvider> = Arc::new(DeltaTableBuilder::from_uri(&urls[0])
+                    if urls.len() > 1 {
+                        return Err(PlanError::invalid("multiple paths for DeltaTable"));
+                    }
+                    /// TODO: Note to self, look into [`DeltaTableBuilder::with_storage_backend()`] before merging this PR!!
+                    let delta_table = DeltaTableBuilder::from_uri(&urls[0])
+                        .with_storage_options(options)
                         .build()
-                        .map_err(|e| PlanError::internal(format!("{e}")))?);
+                        .map_err(|e| PlanError::internal(format!("{e}")))?;
+                    let table_provider: Arc<dyn TableProvider> = Arc::new(delta_table);
                     table_provider
                 }
                 other => {
