@@ -102,7 +102,7 @@ impl Session {
             .with_default_features()
             .with_query_planner(new_query_planner())
             .build();
-        ["DELTA", "DELTATABLE"].iter().for_each(|key| {
+        ["DELTA", "DELTATABLE"].into_iter().for_each(|key| {
             state.table_factories_mut().insert(key.to_string(), Arc::new(DeltaTableFactory {}));
         });
         let context = SessionContext::new_with_state(state);
