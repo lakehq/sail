@@ -47,6 +47,7 @@ mimalloc = { workspace = true }
 clap = { workspace = true }
 log = { workspace = true }
 fastrace = { workspace = true }
+deltalake = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

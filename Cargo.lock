@@ -5182,6 +5182,7 @@ dependencies = [
  "datafusion-common 42.0.0",
  "datafusion-expr 42.0.0",
  "datafusion-functions-nested 42.0.0",
+ "deltalake",
  "fastrace",
  "glob",
  "lazy_static",
