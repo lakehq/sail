@@ -31,6 +31,7 @@ use datafusion_expr::{
     build_join_schema, col, lit, when, BinaryExpr, DmlStatement, ExprSchemable, LogicalPlanBuilder,
     Operator, ScalarUDF, TryCast, WriteOp,
 };
+use deltalake::DeltaTableBuilder;
 use sail_common::spec;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
@@ -638,26 +639,35 @@ impl PlanResolver<'_> {
             return Err(PlanError::invalid("empty data source paths"));
         }
         let urls = self.resolve_listing_urls(paths).await?;
-        let (format, extension): (Arc<dyn FileFormat>, _) =
-            match format.map(|x| x.to_lowercase()).as_deref() {
-                Some("json") => (Arc::new(JsonFormat::default()), ".json"),
-                Some("csv") => (Arc::new(CsvFormat::default()), ".csv"),
-                Some("parquet") => (Arc::new(ParquetFormat::new()), ".parquet"),
-                Some("arrow") => (Arc::new(ArrowFormat), ".arrow"),
-                Some("avro") => (Arc::new(AvroFormat), ".avro"),
+        let table_provider = match format.map(|x| x.to_lowercase()).as_deref() {
+                Some("delta") | Some("deltatable") => {
+                    let table_provider: Arc<dyn TableProvider> = Arc::new(DeltaTableBuilder::from_uri(&urls[0])
+                        .build()
+                        .map_err(|e| PlanError::internal(format!("{e}")))?);
+                    table_provider
+                }
                 other => {
-                    return Err(PlanError::unsupported(format!(
-                        "unsupported data source format: {:?}",
-                        other
-                    )))
+                    let (format, extension): (Arc<dyn FileFormat>, _) = match other {
+                        Some("json") => (Arc::new(JsonFormat::default()), ".json"),
+                        Some("csv") => (Arc::new(CsvFormat::default()), ".csv"),
+                        Some("parquet") => (Arc::new(ParquetFormat::new()), ".parquet"),
+                        Some("arrow") => (Arc::new(ArrowFormat), ".arrow"),
+                        Some("avro") => (Arc::new(AvroFormat), ".avro"),
+                        _ => {
+                            return Err(PlanError::unsupported(format!(
+                                "unsupported data source format: {:?}",
+                                other
+                            )))
+                        }
+                    };
+                    let options = ListingOptions::new(format).with_file_extension(extension);
+                    let schema = self.resolve_listing_schema(&urls, &options, schema).await?;
+                    let config = ListingTableConfig::new_with_multi_paths(urls)
+                        .with_listing_options(options)
+                        .with_schema(Arc::new(schema));
+                    Arc::new(ListingTable::try_new(config)?)
                 }
             };
-        let options = ListingOptions::new(format).with_file_extension(extension);
-        let schema = self.resolve_listing_schema(&urls, &options, schema).await?;
-        let config = ListingTableConfig::new_with_multi_paths(urls)
-            .with_listing_options(options)
-            .with_schema(Arc::new(schema));
-        let table_provider = Arc::new(ListingTable::try_new(config)?);
         let names = state.register_fields(&table_provider.schema());
         let table_provider = RenameTableProvider::try_new(table_provider, names)?;
         Ok(LogicalPlan::TableScan(plan::TableScan::try_new(

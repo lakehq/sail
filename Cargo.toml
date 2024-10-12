@@ -67,7 +67,7 @@ opentelemetry = "0.25.0"
 opentelemetry_sdk = "0.25.0"
 opentelemetry-otlp = { version = "0.25.0", features = ["tls", "tls-roots"] }
 hdfs-native-object-store = "0.12.1"
-deltalake = { version = "0.20.1", features = ["datafusion", "s3", "azure", "gcs", "hdfs"] }
+deltalake = { version = "0.20.1", features = ["datafusion", "s3", "azure", "gcs", "hdfs", "glue"] }
 
 
 ######

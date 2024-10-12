@@ -807,6 +807,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-glue"
+version = "1.65.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a540422054cf525835cca6700e37a555acc94b0e882dda44d689b010951554e"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "http 0.2.12",
+ "once_cell",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-sso"
 version = "1.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2504,6 +2526,7 @@ checksum = "0cdaf5eed6cf6be7d94ce89ee9d7325324fc7c6c0b1ca8b911b0a5d95f6b1af5"
 dependencies = [
  "deltalake-aws",
  "deltalake-azure",
+ "deltalake-catalog-glue",
  "deltalake-core",
  "deltalake-gcp",
  "deltalake-hdfs",
@@ -2554,6 +2577,19 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "deltalake-catalog-glue"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ccf7dbb5810204c68ea9d989f1c2d6be31e479d73bbadc6886ab7906acd81e03"
+dependencies = [
+ "async-trait",
+ "aws-config",
+ "aws-sdk-glue",
+ "deltalake-core",
+ "thiserror",
 ]
 
 [[package]]
