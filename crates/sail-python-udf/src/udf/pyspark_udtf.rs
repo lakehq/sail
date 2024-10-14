@@ -91,24 +91,28 @@ pub struct PySparkUDTF {
     deterministic: bool,
 }
 
+#[derive(PartialEq, PartialOrd)]
+struct PySparkUDTFOrd<'a> {
+    return_type: &'a DataType,
+    table_function_definition: &'a TableFunctionDefinition,
+    spark_udf_config: &'a SparkUdfConfig,
+    deterministic: &'a bool,
+}
+
+impl<'a> From<&'a PySparkUDTF> for PySparkUDTFOrd<'a> {
+    fn from(udtf: &'a PySparkUDTF) -> Self {
+        Self {
+            return_type: &udtf.return_type,
+            table_function_definition: &udtf.table_function_definition,
+            spark_udf_config: &udtf.spark_udf_config,
+            deterministic: &udtf.deterministic,
+        }
+    }
+}
+
 impl PartialOrd for PySparkUDTF {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.return_type.partial_cmp(&other.return_type) {
-            Some(Ordering::Equal) => match self
-                .table_function_definition
-                .partial_cmp(&other.table_function_definition)
-            {
-                Some(Ordering::Equal) => match self
-                    .spark_udf_config
-                    .partial_cmp(&other.spark_udf_config)
-                {
-                    Some(Ordering::Equal) => self.deterministic.partial_cmp(&other.deterministic),
-                    cmp => cmp,
-                },
-                cmp => cmp,
-            },
-            cmp => cmp,
-        }
+        PySparkUDTFOrd::from(self).partial_cmp(&other.into())
     }
 }
 

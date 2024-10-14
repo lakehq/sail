@@ -4,7 +4,8 @@ use std::sync::PoisonError;
 use arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use prost::{DecodeError, UnknownEnumValue};
-use pyo3::PyErr;
+use pyo3::prelude::PyTracebackMethods;
+use pyo3::{PyErr, Python};
 use sail_common::error::CommonError;
 use sail_execution::error::ExecutionError;
 use sail_plan::error::PlanError;
@@ -272,8 +273,16 @@ impl From<SparkError> for Status {
             ))
             | SparkError::DataFusionError(DataFusionError::External(e)) => {
                 if let Some(e) = e.downcast_ref::<PyErr>() {
-                    // TODO: get Python traceback
-                    SparkThrowable::PythonException(e.to_string()).into()
+                    let traceback =
+                        Python::with_gil(|py| e.traceback_bound(py).map(|t| t.format()));
+                    // The message must end with a newline character
+                    // since the PySpark unit tests expect it.
+                    let message = if let Some(Ok(traceback)) = traceback {
+                        format!("{traceback}\n{e}\n")
+                    } else {
+                        format!("{e}\n")
+                    };
+                    SparkThrowable::PythonException(message).into()
                 } else {
                     SparkThrowable::SparkRuntimeException(e.to_string()).into()
                 }

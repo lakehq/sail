@@ -84,12 +84,24 @@ pub(crate) struct RangeNode {
     schema: DFSchemaRef,
 }
 
+#[derive(PartialEq, PartialOrd)]
+struct RangeNodeOrd<'a> {
+    range: &'a Range,
+    num_partitions: usize,
+}
+
+impl<'a> From<&'a RangeNode> for RangeNodeOrd<'a> {
+    fn from(node: &'a RangeNode) -> Self {
+        Self {
+            range: &node.range,
+            num_partitions: node.num_partitions,
+        }
+    }
+}
+
 impl PartialOrd for RangeNode {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.num_partitions.partial_cmp(&other.num_partitions) {
-            Some(Ordering::Equal) => self.range.partial_cmp(&other.range),
-            cmp => cmp,
-        }
+        RangeNodeOrd::from(self).partial_cmp(&other.into())
     }
 }
 

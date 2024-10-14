@@ -1,3 +1,4 @@
+pub mod pyspark_map_iter_udf;
 pub mod pyspark_udaf;
 pub mod pyspark_udf;
 pub mod pyspark_udtf;

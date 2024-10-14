@@ -11,11 +11,12 @@ use datafusion::physical_expr::{Distribution, EquivalenceProperties, Partitionin
 use datafusion::physical_plan::{
     DisplayAs, ExecutionMode, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
+use datafusion_common::{exec_err, internal_datafusion_err, DataFusionError, Result};
 use futures::{Stream, StreamExt};
 use sail_common::utils::rename_physical_plan;
 
 use crate::extension::logical::ShowStringFormat;
+use crate::utils::ItemTaker;
 
 #[derive(Debug, Clone)]
 pub struct ShowStringExec {
@@ -108,16 +109,15 @@ impl ExecutionPlan for ShowStringExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let child = children.pop();
-        match (child, children.is_empty()) {
-            (Some(input), true) => Ok(Arc::new(Self {
-                input,
-                ..self.as_ref().clone()
-            })),
-            _ => internal_err!("ShowStringExec should have one child"),
-        }
+        let input = children
+            .one()
+            .map_err(|_| internal_datafusion_err!("ShowStringExec should have one child"))?;
+        Ok(Arc::new(Self {
+            input,
+            ..self.as_ref().clone()
+        }))
     }
 
     fn execute(

@@ -17,13 +17,25 @@ pub struct SchemaPivotNode {
     exprs: Vec<Expr>,
 }
 
+#[derive(PartialEq, PartialOrd)]
+struct SchemaPivotNodeOrd<'a> {
+    // names is part of schema so we skip that
+    input: &'a Arc<LogicalPlan>,
+    exprs: &'a Vec<Expr>,
+}
+
+impl<'a> From<&'a SchemaPivotNode> for SchemaPivotNodeOrd<'a> {
+    fn from(node: &'a SchemaPivotNode) -> Self {
+        Self {
+            input: &node.input,
+            exprs: &node.exprs,
+        }
+    }
+}
+
 impl PartialOrd for SchemaPivotNode {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        // names is part of schema so we skip that
-        match self.exprs.partial_cmp(&other.exprs) {
-            Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
-            cmp => cmp,
-        }
+        SchemaPivotNodeOrd::from(self).partial_cmp(&other.into())
     }
 }
 

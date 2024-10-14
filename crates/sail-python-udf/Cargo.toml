@@ -12,6 +12,7 @@ datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 pyo3 = { workspace = true }
 async-trait = { workspace = true }
+futures = { workspace = true }
 
 [lib]
 crate-type = ["cdylib", "rlib"]

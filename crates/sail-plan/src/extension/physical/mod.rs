@@ -1,3 +1,4 @@
+mod map_partitions;
 mod planner;
 mod range;
 mod schema_pivot;
