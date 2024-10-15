@@ -10,6 +10,7 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use deltalake::delta_datafusion::DeltaTableFactory;
 use sail_common::config::{ConfigKeyValue, SparkUdfConfig};
 use sail_common::spec;
 use sail_common::utils::rename_physical_plan;
@@ -37,6 +38,10 @@ use crate::spark::config::{
 const DEFAULT_SPARK_SCHEMA: &str = "default";
 const DEFAULT_SPARK_CATALOG: &str = "spark_catalog";
 
+use std::sync::Once;
+
+static REGISTER_DELTA_STORAGE_HANDLERS: Once = Once::new();
+
 pub(crate) struct Session {
     user_id: Option<String>,
     session_id: String,
@@ -61,6 +66,14 @@ impl Session {
     ) -> SparkResult<Self> {
         // TODO: support more systematic configuration
         // TODO: return error on invalid environment variables
+        // Register delta storage handlers for all supported object stores at most once per process.
+        REGISTER_DELTA_STORAGE_HANDLERS.call_once(|| {
+            /// TODO: Note to self, look into best place to put this before merging this PR!!
+            deltalake::aws::register_handlers(None);
+            deltalake::azure::register_handlers(None);
+            deltalake::gcp::register_handlers(None);
+            deltalake::hdfs::register_handlers(None);
+        });
         let config = SessionConfig::new()
             .with_create_default_catalog_and_schema(true)
             .with_default_catalog_and_schema(DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA)
@@ -95,12 +108,15 @@ impl Session {
             let config = RuntimeConfig::default().with_object_store_registry(Arc::new(registry));
             Arc::new(RuntimeEnv::new(config)?)
         };
-        let state = SessionStateBuilder::new()
+        let mut state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
             .with_default_features()
             .with_query_planner(new_query_planner())
             .build();
+        ["DELTA", "DELTATABLE"].into_iter().for_each(|key| {
+            state.table_factories_mut().insert(key.to_string(), Arc::new(DeltaTableFactory {}));
+        });
         let context = SessionContext::new_with_state(state);
 
         // TODO: This is a temp workaround to deregister all built-in functions that we define.
