@@ -5,11 +5,11 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::SessionConfig;
 
-use crate::distributed::driver::Driver;
+use crate::driver::DriverEngine;
 use crate::error::ExecutionResult;
 use crate::job::definition::JobDefinition;
 
-pub trait JobRunner {
+pub trait JobRunner: Send + Sync + 'static {
     fn execute(&self, job: JobDefinition) -> ExecutionResult<SendableRecordBatchStream>;
 }
 
@@ -23,6 +23,7 @@ impl LocalJobRunner {
 
 impl JobRunner for LocalJobRunner {
     fn execute(&self, job: JobDefinition) -> ExecutionResult<SendableRecordBatchStream> {
+        // TODO: construct task context from job definition
         let ctx = TaskContext::new(
             None,
             "default".to_string(),
@@ -37,13 +38,18 @@ impl JobRunner for LocalJobRunner {
 }
 
 pub struct ClusterJobRunner {
-    driver: Driver,
+    driver: DriverEngine,
 }
 
 impl ClusterJobRunner {
-    pub fn new() -> Self {
-        Self {
-            driver: Driver::new(),
-        }
+    pub async fn start() -> ExecutionResult<Self> {
+        let driver = DriverEngine::start().await?;
+        Ok(Self { driver })
+    }
+}
+
+impl JobRunner for ClusterJobRunner {
+    fn execute(&self, _job: JobDefinition) -> ExecutionResult<SendableRecordBatchStream> {
+        todo!()
     }
 }

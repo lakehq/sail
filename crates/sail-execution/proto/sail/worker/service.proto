@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package sail;
+package sail.worker;
 
 message LaunchTaskRequest {
   string task_id = 1;

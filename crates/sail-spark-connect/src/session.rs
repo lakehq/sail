@@ -13,6 +13,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use sail_common::config::{ConfigKeyValue, SparkUdfConfig};
 use sail_common::spec;
 use sail_common::utils::rename_physical_plan;
+use sail_execution::job::{ClusterJobRunner, JobRunner};
 use sail_plan::config::{PlanConfig, TimestampType};
 use sail_plan::formatter::DefaultPlanFormatter;
 use sail_plan::function::BUILT_IN_SCALAR_FUNCTIONS;
@@ -41,6 +42,7 @@ pub(crate) struct Session {
     user_id: Option<String>,
     session_id: String,
     context: SessionContext,
+    job_runner: Box<dyn JobRunner>,
     state: Mutex<SparkSessionState>,
 }
 
@@ -57,6 +59,7 @@ impl Session {
     pub(crate) fn try_new(
         user_id: Option<String>,
         session_id: String,
+        job_runner: Box<dyn JobRunner>,
         object_store_config: Arc<ObjectStoreConfig>,
     ) -> SparkResult<Self> {
         // TODO: support more systematic configuration
@@ -113,6 +116,7 @@ impl Session {
             user_id,
             session_id,
             context,
+            job_runner,
             state: Mutex::new(SparkSessionState::new()),
         })
     }
@@ -394,7 +398,7 @@ type SessionStore = HashMap<SessionKey, Arc<Session>>;
 
 #[derive(Debug)]
 pub struct SessionManager {
-    sessions: Mutex<SessionStore>,
+    sessions: tokio::sync::Mutex<SessionStore>,
     object_store_config: Arc<ObjectStoreConfig>,
 }
 
@@ -407,7 +411,7 @@ impl Default for SessionManager {
 impl SessionManager {
     pub fn new() -> Self {
         Self {
-            sessions: Mutex::new(SessionStore::new()),
+            sessions: tokio::sync::Mutex::new(SessionStore::new()),
             object_store_config: Arc::new(ObjectStoreConfig::default()),
         }
     }
@@ -417,17 +421,21 @@ impl SessionManager {
         self
     }
 
-    pub(crate) fn get_session(&self, key: SessionKey) -> SparkResult<Arc<Session>> {
+    pub(crate) async fn get_session(&self, key: SessionKey) -> SparkResult<Arc<Session>> {
         use std::collections::hash_map::Entry;
 
-        let mut sessions = self.sessions.lock()?;
+        let mut sessions = self.sessions.lock().await;
         let entry = sessions.entry(key);
         match entry {
             Entry::Occupied(o) => Ok(o.get().clone()),
             Entry::Vacant(v) => {
+                let job_runner = ClusterJobRunner::start()
+                    .await
+                    .map_err(|e| SparkError::internal(e.to_string()))?;
                 let session = Session::try_new(
                     v.key().user_id.clone(),
                     v.key().session_id.clone(),
+                    Box::new(job_runner),
                     Arc::clone(&self.object_store_config),
                 )?;
                 Ok(v.insert(Arc::new(session)).clone())
@@ -436,8 +444,8 @@ impl SessionManager {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn delete_session(&self, key: &SessionKey) -> SparkResult<()> {
-        self.sessions.lock()?.remove(key);
+    pub(crate) async fn delete_session(&self, key: &SessionKey) -> SparkResult<()> {
+        self.sessions.lock().await.remove(key);
         Ok(())
     }
 }

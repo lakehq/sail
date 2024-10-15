@@ -1,14 +1,20 @@
+use std::sync::{Arc, Mutex};
+
 use tonic::{Request, Response, Status};
 
-use crate::rpc::worker_service_server::WorkerService;
-use crate::rpc::{LaunchTaskRequest, LaunchTaskResponse, StopWorkerRequest, StopWorkerResponse};
+use crate::worker::rpc::worker_service_server::WorkerService;
+use crate::worker::rpc::{
+    LaunchTaskRequest, LaunchTaskResponse, StopWorkerRequest, StopWorkerResponse,
+};
+use crate::worker::state::WorkerState;
 
-#[derive(Debug)]
-pub(crate) struct WorkerServer {}
+pub(crate) struct WorkerServer {
+    state: Arc<Mutex<WorkerState>>,
+}
 
 impl WorkerServer {
-    pub fn new() -> Self {
-        Self {}
+    pub(super) fn new(state: Arc<Mutex<WorkerState>>) -> Self {
+        Self { state }
     }
 }
 

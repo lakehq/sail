@@ -4143,14 +4143,30 @@ name = "sail-execution"
 version = "0.1.4"
 dependencies = [
  "datafusion",
+ "log",
  "prost 0.13.3",
  "prost-build",
  "prost-types 0.13.3",
+ "sail-grpc",
  "thiserror",
  "tokio",
  "tonic",
  "tonic-build",
  "tonic-types",
+]
+
+[[package]]
+name = "sail-grpc"
+version = "0.1.4"
+dependencies = [
+ "sail-telemetry",
+ "tokio",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tonic-types",
+ "tower 0.5.1",
+ "tower-http",
 ]
 
 [[package]]
@@ -4265,6 +4281,8 @@ dependencies = [
  "quote",
  "regex",
  "sail-common",
+ "sail-execution",
+ "sail-grpc",
  "sail-plan",
  "sail-python-udf",
  "sail-sql",
@@ -4278,11 +4296,7 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-build",
- "tonic-health",
- "tonic-reflection",
  "tonic-types",
- "tower 0.5.1",
- "tower-http",
  "uuid",
 ]
 
