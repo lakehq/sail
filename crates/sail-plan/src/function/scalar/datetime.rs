@@ -183,6 +183,21 @@ fn to_timestamp(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanRes
     }
 }
 
+fn from_unixtime(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<Expr> {
+    if args.len() == 1 {
+        let arg = args.one()?;
+        Ok(expr_fn::from_unixtime(arg))
+    } else if args.len() == 2 {
+        return Err(PlanError::invalid(
+            "from_unixtime with format is not supported yet",
+        ));
+    } else {
+        return Err(PlanError::invalid(
+            "from_unixtime requires 1 or 2 arguments",
+        ));
+    }
+}
+
 // FIXME: Spark displays dates and timestamps according to the session time zone.
 //  We should be setting the DataFusion config `datafusion.execution.time_zone`
 //  and casting any datetime functions that don't use the DataFusion config.
@@ -237,7 +252,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("dayofweek", F::unknown("dayofweek")),
         ("dayofyear", F::unknown("dayofyear")),
         ("extract", F::binary(expr_fn::date_part)),
-        ("from_unixtime", F::unknown("from_unixtime")),
+        ("from_unixtime", F::custom(from_unixtime)),
         ("from_utc_timestamp", F::unknown("from_utc_timestamp")),
         ("hour", F::unknown("hour")),
         ("last_day", F::unknown("last_day")),
