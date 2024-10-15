@@ -142,7 +142,7 @@ impl<'a> CatalogManager<'a> {
                 schema,
                 name: table,
                 location: location.clone(),
-                file_type: file_format.clone(),
+                file_type: file_format.to_uppercase(),
                 table_partition_cols,
                 if_not_exists,
                 definition,
