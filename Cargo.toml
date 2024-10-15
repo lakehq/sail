@@ -57,7 +57,7 @@ url = "2.5.2"
 lexical-core = { version = "1.0.2", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 aws-config = "1.5.8"
 aws-credential-types = "1.2.1"
-clap = { version = "4.5.19", features = ["derive"] }
+clap = { version = "4.5.20", features = ["derive"] }
 num_enum = "0.7.3"
 log = "0.4.22"
 env_logger = "0.11.5"
