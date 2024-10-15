@@ -4117,6 +4117,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3cb5ba0dc43242ce17de99c180e96db90b235b8a9fdc9543c96d2209116bd9f"
 
 [[package]]
+name = "sail-cli"
+version = "0.1.4"
+dependencies = [
+ "clap",
+]
+
+[[package]]
 name = "sail-common"
 version = "0.1.4"
 dependencies = [
@@ -4190,6 +4197,7 @@ dependencies = [
  "futures",
  "log",
  "pyo3",
+ "sail-cli",
  "sail-common",
  "sail-spark-connect",
  "sail-telemetry",
