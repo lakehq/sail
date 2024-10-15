@@ -153,7 +153,7 @@ fn unix_timestamp(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanR
     if args.is_empty() {
         Ok(expr_fn::now())
     } else if args.len() == 1 {
-        Ok(expr_fn::to_date(args))
+        Ok(expr_fn::to_unixtime(args))
     } else if args.len() == 2 {
         let (expr, format) = args.two()?;
         let format = to_chrono_fmt(format)?;
