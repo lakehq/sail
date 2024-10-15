@@ -151,7 +151,10 @@ fn to_date(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<E
 
 fn unix_timestamp(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<Expr> {
     if args.is_empty() {
-        Ok(expr_fn::now())
+        Ok(Expr::Cast(expr::Cast {
+            expr: Box::new(expr_fn::now()),
+            data_type: DataType::Int64,
+        }))
     } else if args.len() == 1 {
         Ok(expr_fn::to_unixtime(args))
     } else if args.len() == 2 {
