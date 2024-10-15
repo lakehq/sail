@@ -76,6 +76,7 @@ hdfs-native-object-store = "0.12.1"
 datafusion = { version = "42.0.0", features = ["serde", "pyarrow", "avro"] }
 datafusion-common = { version = "42.0.0", features = ["object_store", "pyarrow", "avro"] }
 datafusion-expr = "42.0.0"
+datafusion-proto = "42.0.0"
 datafusion-functions-nested = "42.0.0"
 datafusion-functions-json = "0.42.0"
 datafusion-functions-extra = "0.2.0"

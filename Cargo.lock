@@ -4139,6 +4139,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-execution"
+version = "0.1.4"
+dependencies = [
+ "datafusion",
+ "prost 0.13.3",
+ "prost-build",
+ "prost-types 0.13.3",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "tonic-build",
+ "tonic-types",
+]
+
+[[package]]
 name = "sail-plan"
 version = "0.1.4"
 dependencies = [

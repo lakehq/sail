@@ -1,0 +1,17 @@
+[package]
+name = "sail-execution"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tonic-types = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+datafusion = { workspace = true }
+
+[build-dependencies]
+prost-build = { workspace = true }
+tonic-build = { workspace = true }

@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package sail;
+
+message LaunchTaskRequest {
+  string task_id = 1;
+  bytes plan = 2;
+}
+
+message LaunchTaskResponse {
+}
+
+message StopWorkerRequest {
+}
+
+message StopWorkerResponse {
+}
+
+service WorkerService {
+  rpc LaunchTask(LaunchTaskRequest) returns (LaunchTaskResponse) {}
+  rpc StopWorker(StopWorkerRequest) returns (StopWorkerResponse) {}
+}

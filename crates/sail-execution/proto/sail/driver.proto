@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package sail;
+
+message RegisterWorkerRequest {
+  string worker_id = 1;
+}
+
+message RegisterWorkerResponse {
+}
+
+service DriverService {
+  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse) {}
+}
