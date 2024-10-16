@@ -398,6 +398,9 @@ type SessionStore = HashMap<SessionKey, Arc<Session>>;
 
 #[derive(Debug)]
 pub struct SessionManager {
+    // We have to use the mutex from tokio since we need to hold the lock across `await`.
+    // The session contains IO resources (e.g. TCP connections) so that `async` calls can happen.
+    // This is more expensive than the mutex from std, but performance is not a concern here.
     sessions: tokio::sync::Mutex<SessionStore>,
     object_store_config: Arc<ObjectStoreConfig>,
 }

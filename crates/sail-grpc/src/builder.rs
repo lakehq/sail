@@ -67,7 +67,7 @@ impl<'b> ServerBuilder<'b> {
         }
     }
 
-    pub async fn add_service<S>(mut self, service: S, file_descriptor_set: &'b [u8]) -> Self
+    pub async fn add_service<S>(mut self, service: S, file_descriptor_set: Option<&'b [u8]>) -> Self
     where
         S: Service<Request<BoxBody>, Response = Response<BoxBody>, Error = Infallible>
             + NamedService
@@ -77,9 +77,11 @@ impl<'b> ServerBuilder<'b> {
         S::Future: Send + 'static,
     {
         self.health_reporter.set_serving::<S>().await;
-        self.reflection_server_builder = self
-            .reflection_server_builder
-            .register_encoded_file_descriptor_set(file_descriptor_set);
+        if let Some(file_descriptor_set) = file_descriptor_set {
+            self.reflection_server_builder = self
+                .reflection_server_builder
+                .register_encoded_file_descriptor_set(file_descriptor_set);
+        }
         self.router = self.router.add_service(service);
         self
     }

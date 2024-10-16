@@ -7,14 +7,14 @@ use crate::driver::rpc::driver_service_server::DriverService;
 use crate::driver::rpc::{RegisterWorkerRequest, RegisterWorkerResponse};
 use crate::driver::state::DriverState;
 use crate::error::ExecutionResult;
-use crate::worker::client::WorkerHandle;
+use crate::worker::WorkerHandle;
 
-pub(super) struct DriverServer {
+pub struct DriverServer {
     state: Arc<Mutex<DriverState>>,
 }
 
 impl DriverServer {
-    pub(super) fn new(state: Arc<Mutex<DriverState>>) -> Self {
+    pub fn new(state: Arc<Mutex<DriverState>>) -> Self {
         Self { state }
     }
 

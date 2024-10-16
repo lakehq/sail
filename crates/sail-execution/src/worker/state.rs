@@ -1,6 +1,6 @@
-use crate::driver::client::DriverHandle;
+use crate::driver::DriverHandle;
 
-pub(super) struct WorkerState {
+pub struct WorkerState {
     driver: DriverHandle,
 }
 

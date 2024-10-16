@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
+use datafusion::execution::SendableRecordBatchStream;
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
 
@@ -8,7 +9,8 @@ use crate::driver::rpc::driver_service_server::DriverServiceServer;
 use crate::driver::server::DriverServer;
 use crate::driver::state::DriverState;
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::worker::engine::WorkerEngine;
+use crate::job::JobDefinition;
+use crate::worker::WorkerEngine;
 
 pub struct DriverEngine {
     state: Arc<Mutex<DriverState>>,
@@ -52,8 +54,12 @@ impl DriverEngine {
                 e
             ))
         })?;
-        self.server_handle.await??;
+        _ = self.server_handle.await?;
         Ok(())
+    }
+
+    pub fn execute(&self, _job: JobDefinition) -> ExecutionResult<SendableRecordBatchStream> {
+        todo!()
     }
 }
 
@@ -72,7 +78,7 @@ where
         .send_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Zstd);
     sail_grpc::ServerBuilder::new("sail_driver", Default::default())
-        .add_service(service, crate::driver::rpc::FILE_DESCRIPTOR_SET)
+        .add_service(service, Some(crate::driver::rpc::FILE_DESCRIPTOR_SET))
         .await
         .serve(listener, signal)
         .await

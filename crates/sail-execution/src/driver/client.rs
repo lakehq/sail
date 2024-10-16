@@ -4,7 +4,7 @@ use crate::driver::rpc::driver_service_client::DriverServiceClient;
 use crate::driver::rpc::RegisterWorkerRequest;
 use crate::error::ExecutionResult;
 
-pub(crate) struct DriverHandle {
+pub struct DriverHandle {
     host: String,
     port: u16,
     client: DriverServiceClient<Channel>,

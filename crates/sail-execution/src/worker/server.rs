@@ -8,12 +8,12 @@ use crate::worker::rpc::{
 };
 use crate::worker::state::WorkerState;
 
-pub(crate) struct WorkerServer {
+pub struct WorkerServer {
     state: Arc<Mutex<WorkerState>>,
 }
 
 impl WorkerServer {
-    pub(super) fn new(state: Arc<Mutex<WorkerState>>) -> Self {
+    pub fn new(state: Arc<Mutex<WorkerState>>) -> Self {
         Self { state }
     }
 }
@@ -22,7 +22,7 @@ impl WorkerServer {
 impl WorkerService for WorkerServer {
     async fn launch_task(
         &self,
-        _request: Request<LaunchTaskRequest>,
+        request: Request<LaunchTaskRequest>,
     ) -> Result<Response<LaunchTaskResponse>, Status> {
         todo!()
     }

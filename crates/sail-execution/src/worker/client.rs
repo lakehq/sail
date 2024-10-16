@@ -3,7 +3,7 @@ use tonic::transport::Channel;
 use crate::error::ExecutionResult;
 use crate::worker::rpc::worker_service_client::WorkerServiceClient;
 
-pub(crate) struct WorkerHandle {
+pub struct WorkerHandle {
     id: String,
     host: String,
     port: u16,

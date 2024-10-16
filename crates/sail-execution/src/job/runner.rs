@@ -49,7 +49,7 @@ impl ClusterJobRunner {
 }
 
 impl JobRunner for ClusterJobRunner {
-    fn execute(&self, _job: JobDefinition) -> ExecutionResult<SendableRecordBatchStream> {
-        todo!()
+    fn execute(&self, job: JobDefinition) -> ExecutionResult<SendableRecordBatchStream> {
+        self.driver.execute(job)
     }
 }

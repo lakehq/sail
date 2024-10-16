@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::physical_plan::ExecutionPlan;
 
 pub struct JobDefinition {
-    pub(crate) plan: Arc<dyn ExecutionPlan>,
+    pub plan: Arc<dyn ExecutionPlan>,
 }
 
 impl JobDefinition {

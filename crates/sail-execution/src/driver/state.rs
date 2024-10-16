@@ -1,6 +1,6 @@
-use crate::worker::client::WorkerHandle;
+use crate::worker::WorkerHandle;
 
-pub(super) struct DriverState {
+pub struct DriverState {
     workers: Vec<WorkerHandle>,
 }
 

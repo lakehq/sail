@@ -30,7 +30,7 @@ where
         .send_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Zstd);
     sail_grpc::ServerBuilder::new("sail_spark_connect", Default::default())
-        .add_service(service, crate::spark::connect::FILE_DESCRIPTOR_SET)
+        .add_service(service, Some(crate::spark::connect::FILE_DESCRIPTOR_SET))
         .await
         .serve(listener, signal)
         .await

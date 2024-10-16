@@ -1,11 +1,13 @@
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
+use arrow_flight::flight_service_server::FlightServiceServer;
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
 
-use crate::driver::client::DriverHandle;
+use crate::driver::DriverHandle;
 use crate::error::{ExecutionError, ExecutionResult};
+use crate::worker::flight_server::WorkerFlightServer;
 use crate::worker::rpc::worker_service_server::WorkerServiceServer;
 use crate::worker::server::WorkerServer;
 use crate::worker::state::WorkerState;
@@ -50,7 +52,7 @@ impl WorkerEngine {
                 e
             ))
         })?;
-        self.server_handle.await??;
+        _ = self.server_handle.await?;
         Ok(())
     }
 }
@@ -63,14 +65,23 @@ async fn serve<F>(
 where
     F: Future<Output = ()>,
 {
-    let server = WorkerServer::new(state);
+    let server = WorkerServer::new(Arc::clone(&state));
     let service = WorkerServiceServer::new(server)
         .accept_compressed(CompressionEncoding::Gzip)
         .accept_compressed(CompressionEncoding::Zstd)
         .send_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Zstd);
+
+    let flight_server = WorkerFlightServer::new(state);
+    let flight_service = FlightServiceServer::new(flight_server)
+        .accept_compressed(CompressionEncoding::Gzip)
+        .accept_compressed(CompressionEncoding::Zstd)
+        .send_compressed(CompressionEncoding::Gzip)
+        .send_compressed(CompressionEncoding::Zstd);
     sail_grpc::ServerBuilder::new("sail_worker", Default::default())
-        .add_service(service, crate::worker::rpc::FILE_DESCRIPTOR_SET)
+        .add_service(service, Some(crate::worker::rpc::FILE_DESCRIPTOR_SET))
+        .await
+        .add_service(flight_service, None)
         .await
         .serve(listener, signal)
         .await
