@@ -638,7 +638,7 @@ impl PlanResolver<'_> {
         let candidates =
             self.resolve_expression_attribute_candidates(&name, plan_id, schema, state)?;
         if candidates.len() > 1 {
-            return plan_err!("ambiguous attribute: {:?}", name)?;
+            return plan_err!("ambiguous attribute: {name:?}")?;
         }
         if !candidates.is_empty() {
             let (name, _, column) = candidates.one()?;

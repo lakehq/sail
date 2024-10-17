@@ -771,13 +771,12 @@ impl PlanResolver<'_> {
                 schema,
             }));
         }
-        // FIXME: resolve using columns
         // TODO: add more validation logic here and in the plan optimizer
-        // See `LogicalPlanBuilder` for details about such logic.
+        //  See `LogicalPlanBuilder` for details about such logic.
         let (on, filter, join_constraint) = if join_condition.is_some() && using_columns.is_empty()
         {
             let condition = match join_condition {
-                Some(condition) => Some(self.resolve_expression(condition, &schema, state).await?),
+                Some(condition) => Some(self.resolve_expression(condition, &schema, state).await?.unalias_nested().data),
                 None => None,
             };
             (vec![], condition, plan::JoinConstraint::On)
@@ -807,6 +806,7 @@ impl PlanResolver<'_> {
                 "expecting either join condition or using columns",
             ));
         };
+        println!("CHECK HERE:\nOn: {on:?}\nFilter: {filter:?}\nJoin Constraint: {join_constraint:?}");
         Ok(LogicalPlan::Join(plan::Join {
             left: Arc::new(left),
             right: Arc::new(right),
