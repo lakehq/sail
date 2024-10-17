@@ -28,8 +28,8 @@ use datafusion_expr::utils::{
     find_aggregate_exprs,
 };
 use datafusion_expr::{
-    and, binary_expr, build_join_schema, col, lit, when, BinaryExpr, DmlStatement, ExprSchemable,
-    LogicalPlanBuilder, Operator, ScalarUDF, TryCast, WriteOp,
+    build_join_schema, col, lit, when, BinaryExpr, DmlStatement, ExprSchemable, LogicalPlanBuilder,
+    Operator, ScalarUDF, TryCast, WriteOp,
 };
 use sail_common::spec;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
@@ -789,32 +789,32 @@ impl PlanResolver<'_> {
         } else if join_condition.is_none() && !using_columns.is_empty() {
             let left_names = state.get_field_names(left.schema().inner())?;
             let right_names = state.get_field_names(right.schema().inner())?;
-
-            let mut condition: Option<Expr> = None;
-            for name in &using_columns {
-                let name: &str = name.into();
-                let left_idx = left_names
-                    .iter()
-                    .position(|n| n == name)
-                    .ok_or_else(|| PlanError::invalid(format!("left column not found: {name}")))?;
-                let right_idx = right_names
-                    .iter()
-                    .position(|n| n == name)
-                    .ok_or_else(|| PlanError::invalid(format!("right column not found: {name}")))?;
-                let left_column =
-                    Expr::Column(Column::from(left.schema().qualified_field(left_idx)));
-                let right_column =
-                    Expr::Column(Column::from(right.schema().qualified_field(right_idx)));
-                let expr = binary_expr(left_column, Operator::Eq, right_column);
-                match condition {
-                    None => condition = Some(expr),
-                    Some(filter_expr) => condition = Some(and(expr, filter_expr)),
-                }
-            }
-            let plan = LogicalPlanBuilder::from(left)
-                .join_on(right, join_type, condition)?
-                .build()?;
-            Ok(plan)
+            let on = using_columns
+                .into_iter()
+                .map(|name| {
+                    let name: &str = (&name).into();
+                    let left_idx = left_names.iter().position(|n| n == name).ok_or_else(|| {
+                        PlanError::invalid(format!("left column not found: {name}"))
+                    })?;
+                    let right_idx =
+                        right_names.iter().position(|n| n == name).ok_or_else(|| {
+                            PlanError::invalid(format!("right column not found: {name}"))
+                        })?;
+                    let left_column = Column::from(left.schema().qualified_field(left_idx));
+                    let right_column = Column::from(right.schema().qualified_field(right_idx));
+                    Ok((Expr::Column(left_column), Expr::Column(right_column)))
+                })
+                .collect::<PlanResult<Vec<(Expr, Expr)>>>()?;
+            Ok(LogicalPlan::Join(plan::Join {
+                left: Arc::new(left),
+                right: Arc::new(right),
+                on,
+                filter: None,
+                join_type,
+                join_constraint: plan::JoinConstraint::Using,
+                schema: join_schema,
+                null_equals_null: false,
+            }))
         } else {
             return Err(PlanError::invalid(
                 "expecting either join condition or using columns",
