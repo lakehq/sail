@@ -801,13 +801,11 @@ impl PlanResolver<'_> {
                     .iter()
                     .position(|n| n == name)
                     .ok_or_else(|| PlanError::invalid(format!("right column not found: {name}")))?;
-                let left_column = Column::from(left.schema().qualified_field(left_idx));
-                let right_column = Column::from(right.schema().qualified_field(right_idx));
-                let expr = binary_expr(
-                    Expr::Column(left_column),
-                    Operator::Eq,
-                    Expr::Column(right_column),
-                );
+                let left_column =
+                    Expr::Column(Column::from(left.schema().qualified_field(left_idx)));
+                let right_column =
+                    Expr::Column(Column::from(right.schema().qualified_field(right_idx)));
+                let expr = binary_expr(left_column, Operator::Eq, right_column);
                 match condition {
                     None => condition = Some(expr),
                     Some(filter_expr) => condition = Some(and(expr, filter_expr)),
