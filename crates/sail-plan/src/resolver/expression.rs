@@ -13,6 +13,7 @@ use datafusion_expr::expr::PlannedReplaceSelectItem;
 use datafusion_expr::{
     expr, expr_fn, window_frame, AggregateUDF, ExprSchemable, Operator, ScalarUDF,
 };
+use log::debug;
 use num_traits::Float;
 use sail_common::spec;
 use sail_common::spec::PySparkUdfType;
@@ -638,10 +639,11 @@ impl PlanResolver<'_> {
         let candidates =
             self.resolve_expression_attribute_candidates(&name, plan_id, schema, state)?;
         if candidates.len() > 1 {
-            return plan_err!("ambiguous attribute: {name:?}")?;
+            // FIXME: This is a temporary hack to handle ambiguous attributes.
+            debug!("ambiguous attribute: name: {name:?}, candidates: {candidates:?}");
         }
         if !candidates.is_empty() {
-            let (name, _, column) = candidates.one()?;
+            let ((name, _, column), _candidates) = candidates.at_least_one()?;
             return Ok(NamedExpr::new(vec![name], expr::Expr::Column(column)));
         }
         let candidates = if let Some(schema) = state.get_outer_query_schema().cloned() {

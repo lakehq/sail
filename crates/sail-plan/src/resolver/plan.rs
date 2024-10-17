@@ -775,13 +775,18 @@ impl PlanResolver<'_> {
         let (on, filter, join_constraint) = if join_condition.is_some() && using_columns.is_empty()
         {
             let condition = match join_condition {
-                Some(condition) => Some(self.resolve_expression(condition, &schema, state).await?.unalias_nested().data),
+                Some(condition) => Some(
+                    self.resolve_expression(condition, &schema, state)
+                        .await?
+                        .unalias_nested()
+                        .data,
+                ),
                 None => None,
             };
             (vec![], condition, plan::JoinConstraint::On)
         } else if join_condition.is_none() && !using_columns.is_empty() {
             let names = state.get_field_names(schema.inner())?;
-            let on = using_columns.clone()
+            let on = using_columns
                 .into_iter()
                 .map(|name| {
                     let name: &str = (&name).into();
