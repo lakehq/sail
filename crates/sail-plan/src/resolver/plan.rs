@@ -753,6 +753,8 @@ impl PlanResolver<'_> {
             right.schema(),
             &join_type,
         )?);
+        let get_fields = state.get_fields();
+        println!("CHECK HERE:\nbuild_join_schema: {schema}\nFields: {get_fields:?}");
         if is_cross_join {
             if join_condition.is_some() {
                 return Err(PlanError::invalid("cross join with join condition"));
@@ -780,13 +782,25 @@ impl PlanResolver<'_> {
             };
             (vec![], condition, plan::JoinConstraint::On)
         } else if join_condition.is_none() && !using_columns.is_empty() {
+            let names = state.get_field_names(schema.inner())?;
             let on = using_columns
                 .into_iter()
                 .map(|name| {
-                    let column = Expr::Column(Column::new_unqualified(name));
-                    (column.clone(), column)
+                    let name: &str = (&name).into();
+                    let pair: Vec<usize> = names
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, n)| n == &name)
+                        .map(|(idx, _)| idx)
+                        .collect();
+                    if pair.len() != 2 {
+                        return Err(PlanError::invalid(format!("column not found: {name}")));
+                    }
+                    let column1 = Expr::Column(Column::from(schema.qualified_field(pair[0])));
+                    let column2 = Expr::Column(Column::from(schema.qualified_field(pair[1])));
+                    Ok((column1, column2))
                 })
-                .collect();
+                .collect::<PlanResult<Vec<_>>>()?;
             (on, None, plan::JoinConstraint::Using)
         } else {
             return Err(PlanError::invalid(
