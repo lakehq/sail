@@ -4106,6 +4106,7 @@ dependencies = [
  "hdfs-native-object-store",
  "html-escape",
  "lazy_static",
+ "log",
  "num-traits",
  "object_store",
  "pyo3",

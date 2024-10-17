@@ -748,11 +748,12 @@ impl PlanResolver<'_> {
             // use inner join type to build the schema for cross join
             JoinType::Cross => (plan::JoinType::Inner, true),
         };
-        let schema = Arc::new(build_join_schema(
+        let join_schema = Arc::new(build_join_schema(
             left.schema(),
             right.schema(),
             &join_type,
         )?);
+
         if is_cross_join {
             if join_condition.is_some() {
                 return Err(PlanError::invalid("cross join with join condition"));
@@ -766,43 +767,59 @@ impl PlanResolver<'_> {
             return Ok(LogicalPlan::CrossJoin(plan::CrossJoin {
                 left: Arc::new(left),
                 right: Arc::new(right),
-                schema,
+                schema: join_schema,
             }));
         }
-        // FIXME: resolve using columns
         // TODO: add more validation logic here and in the plan optimizer
-        // See `LogicalPlanBuilder` for details about such logic.
-        let (on, filter, join_constraint) = if join_condition.is_some() && using_columns.is_empty()
-        {
+        //  See `LogicalPlanBuilder` for details about such logic.
+        if join_condition.is_some() && using_columns.is_empty() {
             let condition = match join_condition {
-                Some(condition) => Some(self.resolve_expression(condition, &schema, state).await?),
+                Some(condition) => Some(
+                    self.resolve_expression(condition, &join_schema, state)
+                        .await?
+                        .unalias_nested()
+                        .data,
+                ),
                 None => None,
             };
-            (vec![], condition, plan::JoinConstraint::On)
+            let plan = LogicalPlanBuilder::from(left)
+                .join_on(right, join_type, condition)?
+                .build()?;
+            Ok(plan)
         } else if join_condition.is_none() && !using_columns.is_empty() {
+            let left_names = state.get_field_names(left.schema().inner())?;
+            let right_names = state.get_field_names(right.schema().inner())?;
             let on = using_columns
                 .into_iter()
                 .map(|name| {
-                    let column = Expr::Column(Column::new_unqualified(name));
-                    (column.clone(), column)
+                    let name: &str = (&name).into();
+                    let left_idx = left_names.iter().position(|n| n == name).ok_or_else(|| {
+                        PlanError::invalid(format!("left column not found: {name}"))
+                    })?;
+                    let right_idx =
+                        right_names.iter().position(|n| n == name).ok_or_else(|| {
+                            PlanError::invalid(format!("right column not found: {name}"))
+                        })?;
+                    let left_column = Column::from(left.schema().qualified_field(left_idx));
+                    let right_column = Column::from(right.schema().qualified_field(right_idx));
+                    Ok((Expr::Column(left_column), Expr::Column(right_column)))
                 })
-                .collect();
-            (on, None, plan::JoinConstraint::Using)
+                .collect::<PlanResult<Vec<(Expr, Expr)>>>()?;
+            Ok(LogicalPlan::Join(plan::Join {
+                left: Arc::new(left),
+                right: Arc::new(right),
+                on,
+                filter: None,
+                join_type,
+                join_constraint: plan::JoinConstraint::Using,
+                schema: join_schema,
+                null_equals_null: false,
+            }))
         } else {
             return Err(PlanError::invalid(
                 "expecting either join condition or using columns",
             ));
-        };
-        Ok(LogicalPlan::Join(plan::Join {
-            left: Arc::new(left),
-            right: Arc::new(right),
-            on,
-            filter,
-            join_type,
-            join_constraint,
-            schema,
-            null_equals_null: false,
-        }))
+        }
     }
 
     async fn resolve_query_set_operation(

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
@@ -13,6 +13,7 @@ use datafusion_expr::expr::PlannedReplaceSelectItem;
 use datafusion_expr::{
     expr, expr_fn, window_frame, AggregateUDF, ExprSchemable, Operator, ScalarUDF,
 };
+use log::debug;
 use num_traits::Float;
 use sail_common::spec;
 use sail_common::spec::PySparkUdfType;
@@ -637,11 +638,12 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let candidates =
             self.resolve_expression_attribute_candidates(&name, plan_id, schema, state)?;
-        if candidates.len() > 1 {
-            return plan_err!("ambiguous attribute: {:?}", name)?;
-        }
         if !candidates.is_empty() {
-            let (name, _, column) = candidates.one()?;
+            if candidates.len() > 1 {
+                // FIXME: This is a temporary hack to handle ambiguous attributes.
+                debug!("ambiguous attribute: name: {name:?}, candidates: {candidates:?}");
+            }
+            let ((name, _, column), _candidates) = candidates.at_least_one()?;
             return Ok(NamedExpr::new(vec![name], expr::Expr::Column(column)));
         }
         let candidates = if let Some(schema) = state.get_outer_query_schema().cloned() {
@@ -650,7 +652,7 @@ impl PlanResolver<'_> {
             vec![]
         };
         if candidates.len() > 1 {
-            return plan_err!("ambiguous outer attribute: {:?}", name)?;
+            return plan_err!("ambiguous outer attribute: {name:?}")?;
         }
         if !candidates.is_empty() {
             let (name, dt, column) = candidates.one()?;
@@ -659,7 +661,7 @@ impl PlanResolver<'_> {
                 expr::Expr::OuterReferenceColumn(dt, column),
             ));
         }
-        plan_err!("cannot resolve attribute: {:?}", name)?
+        plan_err!("cannot resolve attribute: {name:?}")?
     }
 
     fn resolve_expression_attribute_candidates(
@@ -1061,12 +1063,13 @@ impl PlanResolver<'_> {
             .transpose()?;
         let except = wildcard_options
             .except_columns
-            .map(|mut x| {
+            .map(|x| {
                 let except = if x.len() > 1 {
-                    let first_element = x.pop().ok_or_else(|| {
+                    let mut deque = VecDeque::from(x);
+                    let first_element = deque.pop_front().ok_or_else(|| {
                         PlanError::invalid("except columns must have at least one column")
                     })?;
-                    let additional_elements = x.into_iter().map(df_ast::Ident::new).collect();
+                    let additional_elements = deque.into_iter().map(df_ast::Ident::new).collect();
                     df_ast::ExceptSelectItem {
                         first_element: df_ast::Ident::new(first_element),
                         additional_elements,
