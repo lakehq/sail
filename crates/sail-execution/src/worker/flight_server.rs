@@ -6,18 +6,20 @@ use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket,
 };
+use sail_server::actor::ActorHandle;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::worker::state::WorkerState;
+use crate::worker::WorkerActor;
 
 pub struct WorkerFlightServer {
-    state: Arc<Mutex<WorkerState>>,
+    handle: ActorHandle<WorkerActor>,
 }
 
 impl WorkerFlightServer {
-    pub fn new(state: Arc<Mutex<WorkerState>>) -> Self {
-        Self { state }
+    pub fn new(handle: ActorHandle<WorkerActor>) -> Self {
+        Self { handle }
     }
 }
 

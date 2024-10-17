@@ -4200,26 +4200,12 @@ dependencies = [
  "prost 0.13.3",
  "prost-build",
  "prost-types 0.13.3",
- "sail-grpc",
+ "sail-server",
  "thiserror",
  "tokio",
  "tonic",
  "tonic-build",
  "tonic-types",
-]
-
-[[package]]
-name = "sail-grpc"
-version = "0.1.4"
-dependencies = [
- "sail-telemetry",
- "tokio",
- "tonic",
- "tonic-health",
- "tonic-reflection",
- "tonic-types",
- "tower 0.5.1",
- "tower-http",
 ]
 
 [[package]]
@@ -4302,6 +4288,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-server"
+version = "0.1.4"
+dependencies = [
+ "sail-telemetry",
+ "tokio",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tonic-types",
+ "tower 0.5.1",
+ "tower-http",
+]
+
+[[package]]
 name = "sail-spark-connect"
 version = "0.1.4"
 dependencies = [
@@ -4335,9 +4335,9 @@ dependencies = [
  "regex",
  "sail-common",
  "sail-execution",
- "sail-grpc",
  "sail-plan",
  "sail-python-udf",
+ "sail-server",
  "sail-sql",
  "sail-telemetry",
  "serde",

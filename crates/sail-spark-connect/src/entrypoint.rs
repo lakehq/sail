@@ -1,6 +1,7 @@
 use std::future::Future;
 
 use sail_plan::object_store::{load_aws_config, ObjectStoreConfig};
+use sail_server::ServerBuilder;
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
 
@@ -12,10 +13,7 @@ use crate::spark::connect::spark_connect_service_server::SparkConnectServiceServ
 // https://github.com/apache/spark/blob/9cec3c4f7c1b467023f0eefff69e8b7c5105417d/python/pyspark/sql/connect/client/core.py#L126
 pub const GRPC_MAX_MESSAGE_LENGTH_DEFAULT: usize = 128 * 1024 * 1024;
 
-pub async fn serve<F>(
-    listener: TcpListener,
-    signal: Option<F>,
-) -> Result<(), Box<dyn std::error::Error>>
+pub async fn serve<F>(listener: TcpListener, signal: F) -> Result<(), Box<dyn std::error::Error>>
 where
     F: Future<Output = ()>,
 {
@@ -29,7 +27,7 @@ where
         .accept_compressed(CompressionEncoding::Zstd)
         .send_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Zstd);
-    sail_grpc::ServerBuilder::new("sail_spark_connect", Default::default())
+    ServerBuilder::new("sail_spark_connect", Default::default())
         .add_service(service, Some(crate::spark::connect::FILE_DESCRIPTOR_SET))
         .await
         .serve(listener, signal)

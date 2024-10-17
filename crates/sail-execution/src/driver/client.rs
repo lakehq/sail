@@ -3,31 +3,32 @@ use tonic::transport::Channel;
 use crate::driver::rpc::driver_service_client::DriverServiceClient;
 use crate::driver::rpc::RegisterWorkerRequest;
 use crate::error::ExecutionResult;
+use crate::id::WorkerId;
 
-pub struct DriverHandle {
-    host: String,
-    port: u16,
-    client: DriverServiceClient<Channel>,
+pub struct DriverClient {
+    inner: DriverServiceClient<Channel>,
 }
 
-impl DriverHandle {
-    pub async fn connect(host: String, port: u16) -> ExecutionResult<Self> {
-        let client = DriverServiceClient::connect(format!("http://{}:{}", host, port)).await?;
-        Ok(Self { host, port, client })
+impl DriverClient {
+    pub async fn connect(host: &str, port: u16, tls: bool) -> ExecutionResult<Self> {
+        let scheme = if tls { "https" } else { "http" };
+        let url = format!("{}://{}:{}", scheme, host, port);
+        let inner = DriverServiceClient::connect(url).await?;
+        Ok(Self { inner })
     }
 
     pub async fn register_worker(
         &mut self,
-        worker_id: &str,
-        host: &str,
+        worker_id: WorkerId,
+        host: String,
         port: u16,
     ) -> ExecutionResult<()> {
         let request = tonic::Request::new(RegisterWorkerRequest {
-            worker_id: worker_id.to_string(),
-            host: host.to_string(),
-            port: port as i32,
+            worker_id: worker_id.into(),
+            host,
+            port: port as u32,
         });
-        self.client.register_worker(request).await?;
+        self.inner.register_worker(request).await?;
         Ok(())
     }
 }

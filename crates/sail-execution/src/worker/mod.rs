@@ -1,6 +1,8 @@
+mod actor;
 mod client;
-mod engine;
+mod event;
 mod flight_server;
+mod options;
 mod server;
 mod state;
 
@@ -12,5 +14,7 @@ mod rpc {
         tonic::include_file_descriptor_set!("sail_worker_descriptor");
 }
 
-pub(crate) use client::WorkerHandle;
-pub use engine::WorkerEngine;
+pub(crate) use actor::WorkerActor;
+pub(crate) use client::WorkerClient;
+pub(crate) use event::WorkerEvent;
+pub(crate) use options::WorkerOptions;

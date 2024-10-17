@@ -27,7 +27,7 @@ impl SparkConnectServerState {
     /// released, and Python UDFs will be blocked when the server handles client requests.
     fn wait(self, shutdown: bool) -> PyResult<()> {
         if shutdown {
-            _ = self.shutdown.send(());
+            let _ = self.shutdown.send(());
         }
         self.handle.join().map_err(|e| {
             PyErr::new::<PyRuntimeError, _>(format!("failed to join the server thread: {:?}", e))
@@ -139,7 +139,7 @@ impl SparkConnectServer {
         rx: Receiver<()>,
     ) -> PyResult<()> {
         runtime
-            .block_on(async { serve(listener, Some(Self::shutdown(rx))).await })
+            .block_on(async { serve(listener, Self::shutdown(rx)).await })
             .map_err(|e| {
                 PyErr::new::<PyRuntimeError, _>(format!(
                     "failed to run the Spark Connect server: {:?}",

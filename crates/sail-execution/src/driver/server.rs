@@ -1,25 +1,19 @@
-use std::sync::{Arc, Mutex, MutexGuard};
-
-use log::info;
+use sail_server::actor::ActorHandle;
 use tonic::{Request, Response, Status};
 
+use crate::driver::actor::DriverActor;
 use crate::driver::rpc::driver_service_server::DriverService;
 use crate::driver::rpc::{RegisterWorkerRequest, RegisterWorkerResponse};
-use crate::driver::state::DriverState;
-use crate::error::ExecutionResult;
-use crate::worker::WorkerHandle;
+use crate::driver::DriverEvent;
+use crate::id::WorkerId;
 
 pub struct DriverServer {
-    state: Arc<Mutex<DriverState>>,
+    handle: ActorHandle<DriverActor>,
 }
 
 impl DriverServer {
-    pub fn new(state: Arc<Mutex<DriverState>>) -> Self {
-        Self { state }
-    }
-
-    fn state(&self) -> ExecutionResult<MutexGuard<'_, DriverState>> {
-        Ok(self.state.lock()?)
+    pub fn new(handle: ActorHandle<DriverActor>) -> Self {
+        Self { handle }
     }
 }
 
@@ -37,10 +31,12 @@ impl DriverService for DriverServer {
         let port = u16::try_from(port).map_err(|_| {
             Status::invalid_argument("port must be a valid 16-bit unsigned integer")
         })?;
-        info!("registering worker: {}", worker_id);
-        let handle = WorkerHandle::connect(worker_id, host, port).await?;
-        let mut state = self.state()?;
-        state.add_worker(handle);
+        let event = DriverEvent::RegisterWorker {
+            id: WorkerId::from(worker_id),
+            host,
+            port,
+        };
+        self.handle.send(event).await?;
         Ok(Response::new(RegisterWorkerResponse {}))
     }
 }

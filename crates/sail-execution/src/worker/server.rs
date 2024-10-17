@@ -1,20 +1,19 @@
-use std::sync::{Arc, Mutex};
-
+use sail_server::actor::ActorHandle;
 use tonic::{Request, Response, Status};
 
+use crate::worker::actor::WorkerActor;
 use crate::worker::rpc::worker_service_server::WorkerService;
 use crate::worker::rpc::{
     LaunchTaskRequest, LaunchTaskResponse, StopWorkerRequest, StopWorkerResponse,
 };
-use crate::worker::state::WorkerState;
 
 pub struct WorkerServer {
-    state: Arc<Mutex<WorkerState>>,
+    handle: ActorHandle<WorkerActor>,
 }
 
 impl WorkerServer {
-    pub fn new(state: Arc<Mutex<WorkerState>>) -> Self {
-        Self { state }
+    pub fn new(handle: ActorHandle<WorkerActor>) -> Self {
+        Self { handle }
     }
 }
 

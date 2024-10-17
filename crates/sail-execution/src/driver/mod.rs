@@ -1,5 +1,7 @@
+mod actor;
 mod client;
-mod engine;
+mod event;
+mod options;
 mod server;
 mod state;
 
@@ -11,5 +13,7 @@ mod rpc {
         tonic::include_file_descriptor_set!("sail_driver_descriptor");
 }
 
-pub(crate) use client::DriverHandle;
-pub use engine::DriverEngine;
+pub(crate) use actor::DriverActor;
+pub(crate) use client::DriverClient;
+pub(crate) use event::DriverEvent;
+pub(crate) use options::DriverOptions;

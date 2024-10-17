@@ -1,11 +1,7 @@
-use crate::driver::DriverHandle;
-
-pub struct WorkerState {
-    driver: DriverHandle,
-}
+pub struct WorkerState {}
 
 impl WorkerState {
-    pub fn new(driver: DriverHandle) -> Self {
-        Self { driver }
+    pub fn new() -> Self {
+        Self {}
     }
 }

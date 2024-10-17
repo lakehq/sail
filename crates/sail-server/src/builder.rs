@@ -92,7 +92,7 @@ impl<'b> ServerBuilder<'b> {
         // The TCP listener from the standard library does not work with graceful shutdown.
         // See also: https://github.com/hyperium/tonic/issues/1424
         listener: TcpListener,
-        signal: Option<F>,
+        signal: F,
     ) -> Result<(), Box<dyn std::error::Error>>
     where
         F: Future<Output = ()>,
@@ -104,16 +104,9 @@ impl<'b> ServerBuilder<'b> {
             TcpIncoming::from_listener(listener, self.options.nodelay, self.options.keepalive)
                 .map_err(|e| e as Box<dyn std::error::Error>)?;
 
-        match signal {
-            None => {
-                router.serve_with_incoming(incoming).await?;
-            }
-            Some(signal) => {
-                router
-                    .serve_with_incoming_shutdown(incoming, signal)
-                    .await?;
-            }
-        }
+        router
+            .serve_with_incoming_shutdown(incoming, signal)
+            .await?;
 
         Ok(())
     }

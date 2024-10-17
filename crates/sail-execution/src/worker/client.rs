@@ -3,21 +3,15 @@ use tonic::transport::Channel;
 use crate::error::ExecutionResult;
 use crate::worker::rpc::worker_service_client::WorkerServiceClient;
 
-pub struct WorkerHandle {
-    id: String,
-    host: String,
-    port: u16,
-    client: WorkerServiceClient<Channel>,
+pub struct WorkerClient {
+    inner: WorkerServiceClient<Channel>,
 }
 
-impl WorkerHandle {
-    pub async fn connect(id: String, host: String, port: u16) -> ExecutionResult<Self> {
-        let client = WorkerServiceClient::connect(format!("http://{}:{}", host, port)).await?;
-        Ok(Self {
-            id,
-            host,
-            port,
-            client,
-        })
+impl WorkerClient {
+    pub async fn connect(host: &str, port: u16, tls: bool) -> ExecutionResult<Self> {
+        let scheme = if tls { "https" } else { "http" };
+        let url = format!("{}://{}:{}", scheme, host, port);
+        let inner = WorkerServiceClient::connect(url).await?;
+        Ok(Self { inner })
     }
 }

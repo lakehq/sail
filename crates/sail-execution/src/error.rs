@@ -2,6 +2,7 @@ use std::sync::PoisonError;
 
 use datafusion::common::DataFusionError;
 use thiserror::Error;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinError;
 
 pub type ExecutionResult<T> = Result<T, ExecutionError>;
@@ -28,6 +29,12 @@ impl From<JoinError> for ExecutionError {
 
 impl<T> From<PoisonError<T>> for ExecutionError {
     fn from(error: PoisonError<T>) -> Self {
+        ExecutionError::InternalError(error.to_string())
+    }
+}
+
+impl<T> From<mpsc::error::SendError<T>> for ExecutionError {
+    fn from(error: mpsc::error::SendError<T>) -> Self {
         ExecutionError::InternalError(error.to_string())
     }
 }
