@@ -753,8 +753,7 @@ impl PlanResolver<'_> {
             right.schema(),
             &join_type,
         )?);
-        let get_fields = state.get_fields();
-        println!("CHECK HERE:\nbuild_join_schema: {schema}\nFields: {get_fields:?}");
+
         if is_cross_join {
             if join_condition.is_some() {
                 return Err(PlanError::invalid("cross join with join condition"));
@@ -782,7 +781,7 @@ impl PlanResolver<'_> {
             (vec![], condition, plan::JoinConstraint::On)
         } else if join_condition.is_none() && !using_columns.is_empty() {
             let names = state.get_field_names(schema.inner())?;
-            let on = using_columns
+            let on = using_columns.clone()
                 .into_iter()
                 .map(|name| {
                     let name: &str = (&name).into();
@@ -806,8 +805,7 @@ impl PlanResolver<'_> {
                 "expecting either join condition or using columns",
             ));
         };
-        println!("CHECK HERE:\nOn: {on:?}\nFilter: {filter:?}\nJoin Constraint: {join_constraint:?}");
-        Ok(LogicalPlan::Join(plan::Join {
+        let plan = LogicalPlan::Join(plan::Join {
             left: Arc::new(left),
             right: Arc::new(right),
             on,
@@ -816,7 +814,8 @@ impl PlanResolver<'_> {
             join_constraint,
             schema,
             null_equals_null: false,
-        }))
+        });
+        Ok(plan)
     }
 
     async fn resolve_query_set_operation(
