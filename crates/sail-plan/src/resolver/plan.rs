@@ -851,8 +851,11 @@ impl PlanResolver<'_> {
                     ) = left_names
                         .iter()
                         .enumerate()
-                        .map(
-                            |(left_idx, name)| match right_names.iter().position(|n| n == name) {
+                        .map(|(left_idx, left_name)| {
+                            match right_names
+                                .iter()
+                                .position(|right_name| left_name.eq_ignore_ascii_case(right_name))
+                            {
                                 Some(right_idx) => Ok((
                                     Expr::Column(Column::from(
                                         left.schema().qualified_field(left_idx),
@@ -866,13 +869,13 @@ impl PlanResolver<'_> {
                                         left.schema().qualified_field(left_idx),
                                     )),
                                     Expr::Literal(ScalarValue::Null)
-                                        .alias(state.register_field(name)),
+                                        .alias(state.register_field(left_name)),
                                 )),
                                 None => Err(PlanError::invalid(format!(
-                                    "right column not found: {name}"
+                                    "right column not found: {left_name}"
                                 ))),
-                            },
-                        )
+                            }
+                        })
                         .collect::<PlanResult<Vec<(Expr, Expr)>>>()?
                         .into_iter()
                         .unzip();
@@ -881,13 +884,17 @@ impl PlanResolver<'_> {
                             right_names
                                 .into_iter()
                                 .enumerate()
-                                .filter(|(_, name)| !left_names.contains(name))
-                                .map(|(idx, name)| {
+                                .filter(|(_, right_name)| {
+                                    !left_names
+                                        .iter()
+                                        .any(|left_name| left_name.eq_ignore_ascii_case(right_name))
+                                })
+                                .map(|(right_idx, right_name)| {
                                     (
                                         Expr::Literal(ScalarValue::Null)
-                                            .alias(state.register_field(name)),
+                                            .alias(state.register_field(right_name)),
                                         Expr::Column(Column::from(
-                                            right.schema().qualified_field(idx),
+                                            right.schema().qualified_field(right_idx),
                                         )),
                                     )
                                 })
