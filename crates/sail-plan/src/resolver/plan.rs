@@ -856,7 +856,7 @@ impl PlanResolver<'_> {
                                 Some(right_idx) => Ok((
                                     Expr::Column(Column::from(
                                         left.schema().qualified_field(left_idx),
-                                    )),
+                                    )).alias(name),
                                     Expr::Column(Column::from(
                                         right.schema().qualified_field(right_idx),
                                     )),
@@ -864,7 +864,7 @@ impl PlanResolver<'_> {
                                 None if allow_missing_columns => Ok((
                                     Expr::Column(Column::from(
                                         left.schema().qualified_field(left_idx),
-                                    )),
+                                    )).alias(name),
                                     Expr::Literal(ScalarValue::Null),
                                 )),
                                 None => Err(PlanError::invalid(format!(
