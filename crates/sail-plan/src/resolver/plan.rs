@@ -14,7 +14,6 @@ use datafusion::datasource::function::TableFunction;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::logical_expr::{logical_plan as plan, Expr, Extension, LogicalPlan, UNNAMED_TABLE};
-use datafusion::optimizer::analyzer::type_coercion::coerce_union_schema;
 use datafusion_common::config::{ConfigFileType, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter};
@@ -23,7 +22,7 @@ use datafusion_common::{
 };
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::{ScalarFunction, Sort};
-use datafusion_expr::expr_rewriter::{coerce_plan_expr_for_schema, normalize_col};
+use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::{
     columnize_expr, conjunction, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
     find_aggregate_exprs,
@@ -838,46 +837,74 @@ impl PlanResolver<'_> {
             by_name,
             allow_missing_columns,
         } = op;
-        // TODO: support set operation by name
         let left = self.resolve_query_plan(*left, state).await?;
         let right = self.resolve_query_plan(*right, state).await?;
         match set_op_type {
             SetOpType::Intersect => Ok(LogicalPlanBuilder::intersect(left, right, is_all)?),
             SetOpType::Union => {
-                let right = if by_name {
+                let (left, right) = if by_name {
                     let left_names = state.get_field_names(left.schema().inner())?;
                     let right_names = state.get_field_names(right.schema().inner())?;
-                    let mut right_reordered_columns = left_names
+                    let (mut left_reordered_columns, mut right_reordered_columns): (
+                        Vec<Expr>,
+                        Vec<Expr>,
+                    ) = left_names
                         .iter()
-                        .map(|name| match right_names.iter().position(|n| n == name) {
-                            Some(right_idx) => Ok(Expr::Column(Column::from(
-                                right.schema().qualified_field(right_idx),
-                            ))),
-                            None if allow_missing_columns => Ok(Expr::Literal(ScalarValue::Null)),
-                            None => Err(PlanError::invalid(format!(
-                                "right column not found: {name}"
-                            ))),
-                        })
-                        .collect::<PlanResult<Vec<Expr>>>()?;
+                        .enumerate()
+                        .map(
+                            |(left_idx, name)| match right_names.iter().position(|n| n == name) {
+                                Some(right_idx) => Ok((
+                                    Expr::Column(Column::from(
+                                        left.schema().qualified_field(left_idx),
+                                    )),
+                                    Expr::Column(Column::from(
+                                        right.schema().qualified_field(right_idx),
+                                    )),
+                                )),
+                                None if allow_missing_columns => Ok((
+                                    Expr::Column(Column::from(
+                                        left.schema().qualified_field(left_idx),
+                                    )),
+                                    Expr::Literal(ScalarValue::Null),
+                                )),
+                                None => Err(PlanError::invalid(format!(
+                                    "right column not found: {name}"
+                                ))),
+                            },
+                        )
+                        .collect::<PlanResult<Vec<(Expr, Expr)>>>()?
+                        .into_iter()
+                        .unzip();
                     if allow_missing_columns {
-                        let right_extra_columns = right_names
-                            .into_iter()
-                            .enumerate()
-                            .filter(|(_, name)| !left_names.contains(name))
-                            .map(|(idx, _)| {
-                                Expr::Column(Column::from(right.schema().qualified_field(idx)))
-                            })
-                            .collect::<Vec<Expr>>();
+                        let (left_extra_columns, right_extra_columns): (Vec<Expr>, Vec<Expr>) =
+                            right_names
+                                .into_iter()
+                                .enumerate()
+                                .filter(|(_, name)| !left_names.contains(name))
+                                .map(|(idx, _name)| {
+                                    let right_col =
+                                        Column::from(right.schema().qualified_field(idx));
+                                    (Expr::Literal(ScalarValue::Null), Expr::Column(right_col))
+                                })
+                                .collect::<Vec<(Expr, Expr)>>()
+                                .into_iter()
+                                .unzip();
                         right_reordered_columns.extend(right_extra_columns);
+                        left_reordered_columns.extend(left_extra_columns);
+                        (
+                            project(left, left_reordered_columns)?,
+                            project(right, right_reordered_columns)?,
+                        )
+                    } else {
+                        (left, project(right, right_reordered_columns)?)
                     }
-                    project(right, right_reordered_columns)?
                 } else {
-                    right
+                    (left, right)
                 };
                 let (left, right) = (Arc::new(left), Arc::new(right));
                 let left = if by_name && allow_missing_columns {
-                    let schema = Arc::new(coerce_union_schema(&[left.clone(), right.clone()])?);
-                    Arc::new(coerce_plan_expr_for_schema((*left).clone(), &schema)?)
+                    let names = state.register_fields(left.schema().inner());
+                    Arc::new(rename_logical_plan((*left).clone(), &names)?)
                 } else {
                     left
                 };
