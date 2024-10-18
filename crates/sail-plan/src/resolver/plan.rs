@@ -14,6 +14,7 @@ use datafusion::datasource::function::TableFunction;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::logical_expr::{logical_plan as plan, Expr, Extension, LogicalPlan, UNNAMED_TABLE};
+use datafusion::optimizer::analyzer::type_coercion::coerce_union_schema;
 use datafusion_common::config::{ConfigFileType, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter};
@@ -22,7 +23,7 @@ use datafusion_common::{
 };
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::{ScalarFunction, Sort};
-use datafusion_expr::expr_rewriter::normalize_col;
+use datafusion_expr::expr_rewriter::{coerce_plan_expr_for_schema, normalize_col};
 use datafusion_expr::utils::{
     columnize_expr, conjunction, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
     find_aggregate_exprs,
@@ -835,7 +836,7 @@ impl PlanResolver<'_> {
             set_op_type,
             is_all,
             by_name,
-            allow_missing_columns: _,
+            allow_missing_columns,
         } = op;
         // TODO: support set operation by name
         let left = self.resolve_query_plan(*left, state).await?;
@@ -846,24 +847,53 @@ impl PlanResolver<'_> {
                 let right = if by_name {
                     let left_names = state.get_field_names(left.schema().inner())?;
                     let right_names = state.get_field_names(right.schema().inner())?;
-                    let reordered_columns = left_names.into_iter().map(|name| {
-                        let right_idx =
-                            right_names.iter().position(|n| n == &name).ok_or_else(|| {
-                                PlanError::invalid(format!("right column not found: {name}"))
-                            })?;
-                        Ok(Expr::Column(Column::from(right.schema().qualified_field(right_idx))))
-                    })
-                    .collect::<PlanResult<Vec<Expr>>>()?;
-                    project(right, reordered_columns)?
+                    let mut right_reordered_columns = left_names
+                        .iter()
+                        .map(|name| match right_names.iter().position(|n| n == name) {
+                            Some(right_idx) => Ok(Expr::Column(Column::from(
+                                right.schema().qualified_field(right_idx),
+                            ))),
+                            None if allow_missing_columns => Ok(Expr::Literal(ScalarValue::Null)),
+                            None => Err(PlanError::invalid(format!(
+                                "right column not found: {name}"
+                            ))),
+                        })
+                        .collect::<PlanResult<Vec<Expr>>>()?;
+                    if allow_missing_columns {
+                        let right_extra_columns = right_names
+                            .into_iter()
+                            .enumerate()
+                            .filter(|(_, name)| !left_names.contains(name))
+                            .map(|(idx, _)| {
+                                Expr::Column(Column::from(right.schema().qualified_field(idx)))
+                            })
+                            .collect::<Vec<Expr>>();
+                        right_reordered_columns.extend(right_extra_columns);
+                    }
+                    project(right, right_reordered_columns)?
                 } else {
                     right
                 };
-                if is_all {
-                    Ok(LogicalPlanBuilder::from(left).union(right)?.build()?)
+                let (left, right) = (Arc::new(left), Arc::new(right));
+                let left = if by_name && allow_missing_columns {
+                    let schema = Arc::new(coerce_union_schema(&[left.clone(), right.clone()])?);
+                    Arc::new(coerce_plan_expr_for_schema((*left).clone(), &schema)?)
                 } else {
-                    Ok(LogicalPlanBuilder::from(left)
-                        .union_distinct(right)?
-                        .build()?)
+                    left
+                };
+                let union_schema = left.schema().clone();
+                if is_all {
+                    Ok(LogicalPlan::Union(plan::Union {
+                        inputs: vec![left, right],
+                        schema: union_schema,
+                    }))
+                } else {
+                    Ok(LogicalPlan::Distinct(plan::Distinct::All(Arc::new(
+                        LogicalPlan::Union(plan::Union {
+                            inputs: vec![left, right],
+                            schema: union_schema,
+                        }),
+                    ))))
                 }
             }
             SetOpType::Except => Ok(LogicalPlanBuilder::except(left, right, is_all)?),
