@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.5
+
+_October 17, 2024_
+
+- Expanded support for Spark SQL syntax and functions [#239](https://github.com/lakehq/sail/pull/239) and [#247](https://github.com/lakehq/sail/pull/247).
+  Added full parity and coverage for the following SQL functions:
+  `current_catalog`, `current_database`, `current_schema`, `hash`, `hex`, `unhex`, `xxhash64`, `unix_timestamp`.
+- Fix Joins [#250](https://github.com/lakehq/sail/pull/250).
+
 ## 0.1.4
 
 _October 03, 2024_
