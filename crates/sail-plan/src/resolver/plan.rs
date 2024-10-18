@@ -856,7 +856,8 @@ impl PlanResolver<'_> {
                                 Some(right_idx) => Ok((
                                     Expr::Column(Column::from(
                                         left.schema().qualified_field(left_idx),
-                                    )).alias(name),
+                                    ))
+                                    .alias(name),
                                     Expr::Column(Column::from(
                                         right.schema().qualified_field(right_idx),
                                     )),
@@ -864,7 +865,8 @@ impl PlanResolver<'_> {
                                 None if allow_missing_columns => Ok((
                                     Expr::Column(Column::from(
                                         left.schema().qualified_field(left_idx),
-                                    )).alias(name),
+                                    ))
+                                    .alias(name),
                                     Expr::Literal(ScalarValue::Null),
                                 )),
                                 None => Err(PlanError::invalid(format!(
@@ -881,10 +883,13 @@ impl PlanResolver<'_> {
                                 .into_iter()
                                 .enumerate()
                                 .filter(|(_, name)| !left_names.contains(name))
-                                .map(|(idx, _name)| {
+                                .map(|(idx, name)| {
                                     let right_col =
                                         Column::from(right.schema().qualified_field(idx));
-                                    (Expr::Literal(ScalarValue::Null), Expr::Column(right_col))
+                                    (
+                                        Expr::Literal(ScalarValue::Null).alias(&name),
+                                        Expr::Column(right_col),
+                                    )
                                 })
                                 .collect::<Vec<(Expr, Expr)>>()
                                 .into_iter()
