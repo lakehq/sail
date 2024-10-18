@@ -1,20 +1,26 @@
+use std::collections::HashMap;
+
+use datafusion::execution::SendableRecordBatchStream;
+use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use log::error;
 use sail_server::actor::{Actor, ActorAction, ActorHandle};
 
+use crate::codec::RemoteExecutionCodec;
 use crate::driver::DriverClient;
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::worker::actor::server::WorkerServerStatus;
+use crate::id::TaskId;
+use crate::rpc::ServerMonitor;
 use crate::worker::event::WorkerEvent;
 use crate::worker::options::WorkerOptions;
-use crate::worker::state::WorkerState;
 
 pub struct WorkerActor {
-    pub(super) state: WorkerState,
     options: WorkerOptions,
-    server: WorkerServerStatus,
-    driver_client_cache: Option<DriverClient>,
+    pub(super) server: ServerMonitor,
+    pub(super) driver_client_cache: Option<DriverClient>,
+    pub(super) task_streams: HashMap<(TaskId, usize), SendableRecordBatchStream>,
+    pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
 }
 
-#[tonic::async_trait]
 impl Actor for WorkerActor {
     type Message = WorkerEvent;
     type Options = WorkerOptions;
@@ -22,58 +28,52 @@ impl Actor for WorkerActor {
 
     fn new(options: WorkerOptions) -> Self {
         Self {
-            state: WorkerState::new(),
             options,
-            server: WorkerServerStatus::Stopped,
+            server: ServerMonitor::idle(),
             driver_client_cache: None,
+            task_streams: HashMap::new(),
+            physical_plan_codec: Box::new(RemoteExecutionCodec::new()),
         }
     }
 
-    async fn start(&mut self, handle: &ActorHandle<Self>) -> ExecutionResult<()> {
-        if matches!(self.server, WorkerServerStatus::Stopped) {
-            let addr = format!(
-                "{}:{}",
-                self.options.worker_listen_host, self.options.worker_listen_port
-            );
-            self.server = Self::start_server(handle.clone(), addr).await?;
-        }
-        Ok(())
+    fn start(&mut self, handle: &ActorHandle<Self>) -> ExecutionResult<()> {
+        self.start_server(handle)
     }
 
-    async fn receive(
+    fn receive(
         &mut self,
         message: Self::Message,
-        handle: &ActorHandle<Self>,
+        _handle: &ActorHandle<Self>,
     ) -> ExecutionResult<ActorAction> {
-        match message {
-            WorkerEvent::ServerReady { port } => self.handle_server_ready(port).await,
-            WorkerEvent::Shutdown => Ok(ActorAction::Stop),
+        let action = match &message {
+            WorkerEvent::Shutdown => ActorAction::Stop,
+            _ => ActorAction::Continue,
+        };
+        let out = match message {
+            WorkerEvent::ServerReady { port, signal } => self.handle_server_ready(port, signal),
+            WorkerEvent::RunTask {
+                task_id,
+                partition,
+                plan,
+            } => self.handle_run_task(task_id, partition, plan),
+            WorkerEvent::StopTask { task_id, partition } => {
+                self.handle_stop_task(task_id, partition)
+            }
+            WorkerEvent::Shutdown => Ok(()),
+        };
+        if let Err(e) = out {
+            let worker_id = self.options().worker_id;
+            error!("error processing worker {worker_id} event: {e}");
         }
+        Ok(action)
     }
 
-    async fn stop(self) -> ExecutionResult<()> {
-        match self.server {
-            WorkerServerStatus::Running { shutdown_signal } => {
-                let _ = shutdown_signal.send(());
-            }
-            WorkerServerStatus::Stopped => {}
-        }
-        Ok(())
+    fn stop(mut self) -> ExecutionResult<()> {
+        self.stop_server()
     }
 }
 
 impl WorkerActor {
-    pub(super) async fn driver_client(&mut self) -> ExecutionResult<&mut DriverClient> {
-        if self.driver_client_cache.is_none() {
-            let host = self.options.driver_host.clone();
-            let port = self.options.driver_port;
-            let client = DriverClient::connect(&host, port, self.options.enable_tls).await?;
-            Ok(self.driver_client_cache.insert(client))
-        } else {
-            Ok(self.driver_client_cache.as_mut().unwrap())
-        }
-    }
-
     pub(super) fn options(&self) -> &WorkerOptions {
         &self.options
     }

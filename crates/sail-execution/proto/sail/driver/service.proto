@@ -11,6 +11,25 @@ message RegisterWorkerRequest {
 message RegisterWorkerResponse {
 }
 
+message ReportTaskStatusRequest {
+  uint64 task_id = 2;
+  uint64 partition = 3;
+  TaskStatus status = 4;
+}
+
+enum TaskStatus {
+  TASK_STATUS_UNKNOWN = 0;
+  TASK_STATUS_PENDING = 1;
+  TASK_STATUS_RUNNING = 2;
+  TASK_STATUS_FINISHED = 3;
+  TASK_STATUS_FAILED = 4;
+  TASK_STATUS_CANCELED = 5;
+}
+
+message ReportTaskStatusResponse {
+}
+
 service DriverService {
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse) {}
+  rpc ReportTaskStatus(ReportTaskStatusRequest) returns (ReportTaskStatusResponse) {}
 }

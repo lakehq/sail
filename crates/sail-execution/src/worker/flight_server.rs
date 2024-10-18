@@ -1,5 +1,4 @@
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
 
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::{
@@ -10,7 +9,6 @@ use sail_server::actor::ActorHandle;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::worker::state::WorkerState;
 use crate::worker::WorkerActor;
 
 pub struct WorkerFlightServer {
@@ -70,7 +68,7 @@ impl FlightService for WorkerFlightServer {
 
     async fn do_get(
         &self,
-        request: Request<Ticket>,
+        _request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
         todo!()
     }

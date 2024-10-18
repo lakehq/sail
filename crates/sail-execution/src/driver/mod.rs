@@ -3,10 +3,10 @@ mod client;
 mod event;
 mod options;
 mod server;
-mod state;
+pub(crate) mod state;
 
 #[allow(clippy::all)]
-mod rpc {
+mod gen {
     tonic::include_proto!("sail.driver");
 
     pub const FILE_DESCRIPTOR_SET: &[u8] =

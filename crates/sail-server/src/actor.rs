@@ -2,20 +2,19 @@ use tokio::sync::{mpsc, watch};
 
 const ACTOR_CHANNEL_SIZE: usize = 8;
 
-#[tonic::async_trait]
 pub trait Actor: Sized + Send + 'static {
     type Message: Send + 'static;
     type Options;
     type Error: From<mpsc::error::SendError<Self::Message>>;
 
     fn new(options: Self::Options) -> Self;
-    async fn start(&mut self, handle: &ActorHandle<Self>) -> Result<(), Self::Error>;
-    async fn receive(
+    fn start(&mut self, handle: &ActorHandle<Self>) -> Result<(), Self::Error>;
+    fn receive(
         &mut self,
         message: Self::Message,
         handle: &ActorHandle<Self>,
     ) -> Result<ActorAction, Self::Error>;
-    async fn stop(self) -> Result<(), Self::Error>;
+    fn stop(self) -> Result<(), Self::Error>;
 }
 
 pub enum ActorAction {
@@ -55,9 +54,9 @@ impl<T: Actor> ActorHandle<T> {
         let handle = out.clone();
         tokio::spawn(async move {
             let _ = async {
-                actor.start(&handle).await?;
+                actor.start(&handle)?;
                 while let Some(message) = rx.recv().await {
-                    let action = actor.receive(message, &handle).await?;
+                    let action = actor.receive(message, &handle)?;
                     match action {
                         ActorAction::Continue => {}
                         ActorAction::Stop => {
@@ -65,7 +64,7 @@ impl<T: Actor> ActorHandle<T> {
                         }
                     }
                 }
-                actor.stop().await
+                actor.stop()
             }
             .await;
             let _ = stopped_tx.send(true);
@@ -115,7 +114,6 @@ mod tests {
         Stop,
     }
 
-    #[tonic::async_trait]
     impl Actor for TestActor {
         type Message = TestMessage;
         type Options = ();
@@ -125,11 +123,11 @@ mod tests {
             Self
         }
 
-        async fn start(&mut self, _: &ActorHandle<Self>) -> Result<(), Self::Error> {
+        fn start(&mut self, _: &ActorHandle<Self>) -> Result<(), Self::Error> {
             Ok(())
         }
 
-        async fn receive(
+        fn receive(
             &mut self,
             message: Self::Message,
             _: &ActorHandle<Self>,
@@ -143,7 +141,7 @@ mod tests {
             }
         }
 
-        async fn stop(self) -> Result<(), Self::Error> {
+        fn stop(self) -> Result<(), Self::Error> {
             Ok(())
         }
     }

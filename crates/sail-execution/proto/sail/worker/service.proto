@@ -2,12 +2,21 @@ syntax = "proto3";
 
 package sail.worker;
 
-message LaunchTaskRequest {
+message RunTaskRequest {
   uint64 task_id = 1;
-  bytes plan = 2;
+  uint64 partition = 2;
+  bytes plan = 3;
 }
 
-message LaunchTaskResponse {
+message RunTaskResponse {
+}
+
+message StopTaskRequest {
+  uint64 task_id = 1;
+  uint64 partition = 2;
+}
+
+message StopTaskResponse {
 }
 
 message StopWorkerRequest {
@@ -17,6 +26,7 @@ message StopWorkerResponse {
 }
 
 service WorkerService {
-  rpc LaunchTask(LaunchTaskRequest) returns (LaunchTaskResponse) {}
+  rpc RunTask(RunTaskRequest) returns (RunTaskResponse) {}
+  rpc StopTask(StopTaskRequest) returns (StopTaskResponse) {}
   rpc StopWorker(StopWorkerRequest) returns (StopWorkerResponse) {}
 }

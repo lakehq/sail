@@ -8,12 +8,11 @@ use arrow::array::RecordBatch;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use sail_common::config::{ConfigKeyValue, SparkUdfConfig};
 use sail_common::spec;
 use sail_common::utils::rename_physical_plan;
-use sail_execution::job::{ClusterJobRunner, JobRunner};
+use sail_execution::job::{ClusterJobRunner, JobDefinition, JobRunner};
 use sail_plan::config::{PlanConfig, TimestampType};
 use sail_plan::formatter::DefaultPlanFormatter;
 use sail_plan::function::BUILT_IN_SCALAR_FUNCTIONS;
@@ -267,7 +266,8 @@ impl Session {
                             (local_time_offset.abs() % 3600) / 60
                         )
                     };
-                    state.config_mut().options_mut().execution.time_zone = Some(offset_string);
+                    *(&mut state.config_mut().options_mut().execution.time_zone) =
+                        Some(offset_string);
                 }
                 state.config.set(key, value)?;
             } else {
@@ -353,7 +353,7 @@ impl Session {
         } else {
             plan
         };
-        Ok(execute_stream(plan, ctx.task_ctx())?)
+        Ok(self.job_runner.execute(JobDefinition { plan }).await?)
     }
 
     #[cfg(test)]
@@ -432,9 +432,8 @@ impl SessionManager {
         match entry {
             Entry::Occupied(o) => Ok(o.get().clone()),
             Entry::Vacant(v) => {
-                let job_runner = ClusterJobRunner::start()
-                    .await
-                    .map_err(|e| SparkError::internal(e.to_string()))?;
+                let job_runner =
+                    ClusterJobRunner::start().map_err(|e| SparkError::internal(e.to_string()))?;
                 let session = Session::try_new(
                     v.key().user_id.clone(),
                     v.key().session_id.clone(),

@@ -4,10 +4,9 @@ mod event;
 mod flight_server;
 mod options;
 mod server;
-mod state;
 
 #[allow(clippy::all)]
-mod rpc {
+mod gen {
     tonic::include_proto!("sail.worker");
 
     pub const FILE_DESCRIPTOR_SET: &[u8] =

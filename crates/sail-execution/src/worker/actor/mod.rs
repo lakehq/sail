@@ -1,5 +1,5 @@
 mod core;
 mod handler;
-mod server;
+mod rpc;
 
 pub(crate) use core::WorkerActor;

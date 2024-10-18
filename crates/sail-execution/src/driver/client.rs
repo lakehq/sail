@@ -1,24 +1,37 @@
 use tonic::transport::Channel;
 
-use crate::driver::rpc::driver_service_client::DriverServiceClient;
-use crate::driver::rpc::RegisterWorkerRequest;
+use crate::driver::gen;
+use crate::driver::gen::driver_service_client::DriverServiceClient;
+use crate::driver::gen::{
+    RegisterWorkerRequest, RegisterWorkerResponse, ReportTaskStatusRequest,
+    ReportTaskStatusResponse,
+};
+use crate::driver::state::TaskStatus;
 use crate::error::ExecutionResult;
-use crate::id::WorkerId;
+use crate::id::{TaskId, WorkerId};
+use crate::rpc::{ClientBuilder, ClientHandle, ClientOptions};
 
+#[derive(Clone)]
 pub struct DriverClient {
-    inner: DriverServiceClient<Channel>,
+    inner: ClientHandle<DriverServiceClient<Channel>>,
+}
+
+#[tonic::async_trait]
+impl ClientBuilder for DriverServiceClient<Channel> {
+    async fn connect(options: &ClientOptions) -> ExecutionResult<Self> {
+        Ok(DriverServiceClient::connect(options.to_url_string()).await?)
+    }
 }
 
 impl DriverClient {
-    pub async fn connect(host: &str, port: u16, tls: bool) -> ExecutionResult<Self> {
-        let scheme = if tls { "https" } else { "http" };
-        let url = format!("{}://{}:{}", scheme, host, port);
-        let inner = DriverServiceClient::connect(url).await?;
-        Ok(Self { inner })
+    pub fn new(options: ClientOptions) -> Self {
+        Self {
+            inner: ClientHandle::new(options),
+        }
     }
 
     pub async fn register_worker(
-        &mut self,
+        &self,
         worker_id: WorkerId,
         host: String,
         port: u16,
@@ -28,7 +41,24 @@ impl DriverClient {
             host,
             port: port as u32,
         });
-        self.inner.register_worker(request).await?;
+        let response = self.inner.lock().await?.register_worker(request).await?;
+        let RegisterWorkerResponse {} = response.into_inner();
+        Ok(())
+    }
+
+    pub async fn report_task_status(
+        &self,
+        task_id: TaskId,
+        partition: usize,
+        status: TaskStatus,
+    ) -> ExecutionResult<()> {
+        let request = tonic::Request::new(ReportTaskStatusRequest {
+            task_id: task_id.into(),
+            partition: partition as u64,
+            status: gen::TaskStatus::from(status) as i32,
+        });
+        let response = self.inner.lock().await?.report_task_status(request).await?;
+        let ReportTaskStatusResponse {} = response.into_inner();
         Ok(())
     }
 }

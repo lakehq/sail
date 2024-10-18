@@ -11,11 +11,13 @@ use datafusion::physical_plan::{
 };
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ShuffleReadExec {
     schema: SchemaRef,
     properties: PlanProperties,
 }
 
+#[allow(dead_code)]
 impl ShuffleReadExec {
     pub fn new(schema: SchemaRef, partitioning: Partitioning) -> Self {
         let properties = PlanProperties::new(
@@ -64,8 +66,8 @@ impl ExecutionPlan for ShuffleReadExec {
 
     fn execute(
         &self,
-        partition: usize,
-        context: Arc<TaskContext>,
+        _partition: usize,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         todo!()
     }

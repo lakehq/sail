@@ -6,6 +6,7 @@ use datafusion::common::DataFusionError;
 use prost::{DecodeError, UnknownEnumValue};
 use pyo3::PyErr;
 use sail_common::error::CommonError;
+use sail_execution::error::ExecutionError;
 use sail_plan::error::PlanError;
 use sail_sql::error::SqlError;
 use thiserror::Error;
@@ -102,6 +103,19 @@ impl From<PlanError> for SparkError {
             PlanError::NotSupported(message) => SparkError::NotSupported(message),
             PlanError::InternalError(message) => SparkError::InternalError(message),
             PlanError::NotImplemented(message) => SparkError::NotImplemented(message),
+        }
+    }
+}
+
+impl From<ExecutionError> for SparkError {
+    fn from(value: ExecutionError) -> Self {
+        match value {
+            ExecutionError::DataFusionError(e) => SparkError::DataFusionError(e),
+            ExecutionError::InvalidArgument(e) => SparkError::InvalidArgument(e),
+            ExecutionError::IoError(e) => SparkError::IoError(e),
+            ExecutionError::TonicTransportError(e) => SparkError::InternalError(e.to_string()),
+            ExecutionError::TonicStatusError(e) => SparkError::InternalError(e.to_string()),
+            ExecutionError::InternalError(e) => SparkError::InternalError(e),
         }
     }
 }

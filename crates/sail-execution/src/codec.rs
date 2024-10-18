@@ -7,21 +7,27 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 
 #[derive(Debug)]
-pub struct ExecutionCodec {}
+pub struct RemoteExecutionCodec {}
 
-impl PhysicalExtensionCodec for ExecutionCodec {
+impl RemoteExecutionCodec {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl PhysicalExtensionCodec for RemoteExecutionCodec {
     fn try_decode(
         &self,
-        buf: &[u8],
-        inputs: &[Arc<dyn ExecutionPlan>],
-        registry: &dyn FunctionRegistry,
+        _buf: &[u8],
+        _inputs: &[Arc<dyn ExecutionPlan>],
+        _registry: &dyn FunctionRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Err(DataFusionError::Internal(
             "unknown execution plan".to_string(),
         ))
     }
 
-    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
+    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, _buf: &mut Vec<u8>) -> Result<()> {
         Err(DataFusionError::Internal(format!(
             "unknown execution plan: {:?}",
             node

@@ -61,7 +61,7 @@ macro_rules! define_id_type {
 
         impl Display for $name {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}-{}", <Self as IdType>::name(), self.0)
+                write!(f, "{}", self.0)
             }
         }
     };

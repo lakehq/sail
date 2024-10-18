@@ -19,13 +19,8 @@ impl LocalWorkerManager {
     }
 }
 
-#[tonic::async_trait]
 impl WorkerManager for LocalWorkerManager {
-    async fn launch_worker(
-        &mut self,
-        id: WorkerId,
-        ctx: WorkerLaunchContext,
-    ) -> ExecutionResult<()> {
+    fn launch_worker(&mut self, id: WorkerId, ctx: WorkerLaunchContext) -> ExecutionResult<()> {
         let options = WorkerOptions {
             worker_id: id,
             enable_tls: false,
