@@ -6,6 +6,7 @@ mod tests {
     use arrow::error::ArrowError;
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use sail_common::tests::test_gold_set;
+    use sail_execution::job::LocalJobRunner;
     use sail_plan::object_store::ObjectStoreConfig;
     use serde::{Deserialize, Serialize};
 
@@ -51,6 +52,7 @@ mod tests {
         let session = Session::try_new(
             None,
             "test".to_string(),
+            Box::new(LocalJobRunner::new()),
             Arc::new(ObjectStoreConfig::default()),
         )?;
         Ok(test_gold_set(

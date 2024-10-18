@@ -5,23 +5,21 @@ edition = { workspace = true }
 
 [dependencies]
 sail-common = { path = "../sail-common" }
+sail-server = { path = "../sail-server" }
 sail-plan = { path = "../sail-plan" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-sql = { path = "../sail-sql" }
 sail-telemetry = { path = "../sail-telemetry" }
+sail-execution = { path = "../sail-execution" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
-tonic-reflection = { workspace = true }
-tonic-health = { workspace = true }
 tonic-types = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 pbjson = { workspace = true }
 pbjson-types = { workspace = true }
-tower = { workspace = true }
-tower-http = { workspace = true }
 uuid = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
