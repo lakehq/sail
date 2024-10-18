@@ -834,7 +834,7 @@ impl PlanResolver<'_> {
             right,
             set_op_type,
             is_all,
-            by_name: _,
+            by_name,
             allow_missing_columns: _,
         } = op;
         // TODO: support set operation by name
@@ -843,6 +843,21 @@ impl PlanResolver<'_> {
         match set_op_type {
             SetOpType::Intersect => Ok(LogicalPlanBuilder::intersect(left, right, is_all)?),
             SetOpType::Union => {
+                let right = if by_name {
+                    let left_names = state.get_field_names(left.schema().inner())?;
+                    let right_names = state.get_field_names(right.schema().inner())?;
+                    let reordered_columns = left_names.into_iter().map(|name| {
+                        let right_idx =
+                            right_names.iter().position(|n| n == &name).ok_or_else(|| {
+                                PlanError::invalid(format!("right column not found: {name}"))
+                            })?;
+                        Ok(Expr::Column(Column::from(right.schema().qualified_field(right_idx))))
+                    })
+                    .collect::<PlanResult<Vec<Expr>>>()?;
+                    project(right, reordered_columns)?
+                } else {
+                    right
+                };
                 if is_all {
                     Ok(LogicalPlanBuilder::from(left).union(right)?.build()?)
                 } else {
