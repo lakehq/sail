@@ -643,17 +643,8 @@ impl PlanResolver<'_> {
                 // FIXME: This is a temporary hack to handle ambiguous attributes.
                 debug!("ambiguous attribute: name: {name:?}, candidates: {candidates:?}");
             }
-            return if candidates.len() == 2 {
-                let ((name1, _, column1), (_name2, _, column2)) = candidates.two()?;
-                let expr = datafusion::functions::expr_fn::coalesce(vec![
-                    expr::Expr::Column(column1.clone()),
-                    expr::Expr::Column(column2.clone()),
-                ]);
-                Ok(NamedExpr::new(vec![name1], expr))
-            } else {
-                let ((name, _, column), _candidates) = candidates.at_least_one()?;
-                Ok(NamedExpr::new(vec![name], expr::Expr::Column(column)))
-            };
+            let ((name, _, column), _candidates) = candidates.at_least_one()?;
+            return Ok(NamedExpr::new(vec![name], expr::Expr::Column(column)));
         }
         let candidates = if let Some(schema) = state.get_outer_query_schema().cloned() {
             self.resolve_expression_attribute_candidates(&name, None, &schema, state)?
