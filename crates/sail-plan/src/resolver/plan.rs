@@ -856,8 +856,7 @@ impl PlanResolver<'_> {
                                 Some(right_idx) => Ok((
                                     Expr::Column(Column::from(
                                         left.schema().qualified_field(left_idx),
-                                    ))
-                                    .alias(name),
+                                    )),
                                     Expr::Column(Column::from(
                                         right.schema().qualified_field(right_idx),
                                     )),
@@ -865,9 +864,9 @@ impl PlanResolver<'_> {
                                 None if allow_missing_columns => Ok((
                                     Expr::Column(Column::from(
                                         left.schema().qualified_field(left_idx),
-                                    ))
-                                    .alias(name),
-                                    Expr::Literal(ScalarValue::Null),
+                                    )),
+                                    Expr::Literal(ScalarValue::Null)
+                                        .alias(state.register_field(name)),
                                 )),
                                 None => Err(PlanError::invalid(format!(
                                     "right column not found: {name}"
@@ -884,11 +883,12 @@ impl PlanResolver<'_> {
                                 .enumerate()
                                 .filter(|(_, name)| !left_names.contains(name))
                                 .map(|(idx, name)| {
-                                    let right_col =
-                                        Column::from(right.schema().qualified_field(idx));
                                     (
-                                        Expr::Literal(ScalarValue::Null).alias(&name),
-                                        Expr::Column(right_col),
+                                        Expr::Literal(ScalarValue::Null)
+                                            .alias(state.register_field(name)),
+                                        Expr::Column(Column::from(
+                                            right.schema().qualified_field(idx),
+                                        )),
                                     )
                                 })
                                 .collect::<Vec<(Expr, Expr)>>()
@@ -907,12 +907,6 @@ impl PlanResolver<'_> {
                     (left, right)
                 };
                 let (left, right) = (Arc::new(left), Arc::new(right));
-                let left = if by_name && allow_missing_columns {
-                    let names = state.register_fields(left.schema().inner());
-                    Arc::new(rename_logical_plan((*left).clone(), &names)?)
-                } else {
-                    left
-                };
                 let union_schema = left.schema().clone();
                 if is_all {
                     Ok(LogicalPlan::Union(plan::Union {
