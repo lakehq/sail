@@ -793,11 +793,16 @@ impl PlanResolver<'_> {
                 .into_iter()
                 .map(|name| {
                     let name: &str = (&name).into();
-                    let left_idx = left_names.iter().position(|n| n == name).ok_or_else(|| {
-                        PlanError::invalid(format!("left column not found: {name}"))
-                    })?;
-                    let right_idx =
-                        right_names.iter().position(|n| n == name).ok_or_else(|| {
+                    let left_idx = left_names
+                        .iter()
+                        .position(|left_name| left_name.eq_ignore_ascii_case(name))
+                        .ok_or_else(|| {
+                            PlanError::invalid(format!("left column not found: {name}"))
+                        })?;
+                    let right_idx = right_names
+                        .iter()
+                        .position(|right_name| right_name.eq_ignore_ascii_case(name))
+                        .ok_or_else(|| {
                             PlanError::invalid(format!("right column not found: {name}"))
                         })?;
                     let left_column = Column::from(left.schema().qualified_field(left_idx));
