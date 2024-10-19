@@ -793,11 +793,16 @@ impl PlanResolver<'_> {
                 .into_iter()
                 .map(|name| {
                     let name: &str = (&name).into();
-                    let left_idx = left_names.iter().position(|n| n == name).ok_or_else(|| {
-                        PlanError::invalid(format!("left column not found: {name}"))
-                    })?;
-                    let right_idx =
-                        right_names.iter().position(|n| n == name).ok_or_else(|| {
+                    let left_idx = left_names
+                        .iter()
+                        .position(|left_name| left_name.eq_ignore_ascii_case(name))
+                        .ok_or_else(|| {
+                            PlanError::invalid(format!("left column not found: {name}"))
+                        })?;
+                    let right_idx = right_names
+                        .iter()
+                        .position(|right_name| right_name.eq_ignore_ascii_case(name))
+                        .ok_or_else(|| {
                             PlanError::invalid(format!("right column not found: {name}"))
                         })?;
                     let left_column = Column::from(left.schema().qualified_field(left_idx));
@@ -834,21 +839,99 @@ impl PlanResolver<'_> {
             right,
             set_op_type,
             is_all,
-            by_name: _,
-            allow_missing_columns: _,
+            by_name,
+            allow_missing_columns,
         } = op;
-        // TODO: support set operation by name
         let left = self.resolve_query_plan(*left, state).await?;
         let right = self.resolve_query_plan(*right, state).await?;
         match set_op_type {
             SetOpType::Intersect => Ok(LogicalPlanBuilder::intersect(left, right, is_all)?),
             SetOpType::Union => {
-                if is_all {
-                    Ok(LogicalPlanBuilder::from(left).union(right)?.build()?)
+                let (left, right) = if by_name {
+                    let left_names = state.get_field_names(left.schema().inner())?;
+                    let right_names = state.get_field_names(right.schema().inner())?;
+                    let (mut left_reordered_columns, mut right_reordered_columns): (
+                        Vec<Expr>,
+                        Vec<Expr>,
+                    ) = left_names
+                        .iter()
+                        .enumerate()
+                        .map(|(left_idx, left_name)| {
+                            match right_names
+                                .iter()
+                                .position(|right_name| left_name.eq_ignore_ascii_case(right_name))
+                            {
+                                Some(right_idx) => Ok((
+                                    Expr::Column(Column::from(
+                                        left.schema().qualified_field(left_idx),
+                                    )),
+                                    Expr::Column(Column::from(
+                                        right.schema().qualified_field(right_idx),
+                                    )),
+                                )),
+                                None if allow_missing_columns => Ok((
+                                    Expr::Column(Column::from(
+                                        left.schema().qualified_field(left_idx),
+                                    )),
+                                    Expr::Literal(ScalarValue::Null)
+                                        .alias(state.register_field(left_name)),
+                                )),
+                                None => Err(PlanError::invalid(format!(
+                                    "right column not found: {left_name}"
+                                ))),
+                            }
+                        })
+                        .collect::<PlanResult<Vec<(Expr, Expr)>>>()?
+                        .into_iter()
+                        .unzip();
+                    if allow_missing_columns {
+                        let (left_extra_columns, right_extra_columns): (Vec<Expr>, Vec<Expr>) =
+                            right_names
+                                .into_iter()
+                                .enumerate()
+                                .filter(|(_, right_name)| {
+                                    !left_names
+                                        .iter()
+                                        .any(|left_name| left_name.eq_ignore_ascii_case(right_name))
+                                })
+                                .map(|(right_idx, right_name)| {
+                                    (
+                                        Expr::Literal(ScalarValue::Null)
+                                            .alias(state.register_field(right_name)),
+                                        Expr::Column(Column::from(
+                                            right.schema().qualified_field(right_idx),
+                                        )),
+                                    )
+                                })
+                                .collect::<Vec<(Expr, Expr)>>()
+                                .into_iter()
+                                .unzip();
+                        right_reordered_columns.extend(right_extra_columns);
+                        left_reordered_columns.extend(left_extra_columns);
+                        (
+                            project(left, left_reordered_columns)?,
+                            project(right, right_reordered_columns)?,
+                        )
+                    } else {
+                        (left, project(right, right_reordered_columns)?)
+                    }
                 } else {
-                    Ok(LogicalPlanBuilder::from(left)
-                        .union_distinct(right)?
-                        .build()?)
+                    (left, right)
+                };
+                let (left, right) = (Arc::new(left), Arc::new(right));
+                let union_schema = left.schema().clone();
+                if is_all {
+                    Ok(LogicalPlan::Union(plan::Union {
+                        inputs: vec![left, right],
+                        schema: union_schema,
+                    }))
+                } else {
+                    Ok(LogicalPlan::Distinct(plan::Distinct::All(Arc::new(
+                        LogicalPlan::Union(plan::Union {
+                            inputs: vec![left, right],
+                            schema: union_schema,
+                        }),
+                    ))))
                 }
             }
             SetOpType::Except => Ok(LogicalPlanBuilder::except(left, right, is_all)?),
