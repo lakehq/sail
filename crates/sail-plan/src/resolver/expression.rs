@@ -673,6 +673,13 @@ impl PlanResolver<'_> {
     ) -> PlanResult<Vec<(String, DataType, Column)>> {
         // TODO: handle qualifier and nested fields
         let name: Vec<String> = name.clone().into();
+        let name = if name.iter().any(|ident| ident.contains('.')) {
+            name.into_iter()
+                .flat_map(|n| n.split('.').map(String::from).collect::<Vec<String>>())
+                .collect()
+        } else {
+            name
+        };
         let first = name
             .first()
             .ok_or_else(|| PlanError::invalid(format!("empty attribute: {:?}", name)))?;

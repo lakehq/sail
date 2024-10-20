@@ -12,7 +12,13 @@ Currently, Sail features a drop-in replacement for Spark SQL and the Spark DataF
 Sail is available as a Python package on PyPI. You can install it using `pip`.
 
 ```bash
+# Quick install
 pip install pysail
+```
+
+```bash
+# Install from source for best performance
+env RUSTFLAGS="-C target-cpu=native" pip install pysail -v --no-binary pysail
 ```
 
 You can follow the [Getting Started](https://docs.lakesail.com/sail/latest/guide/getting-started/) guide to learn more about Sail.
