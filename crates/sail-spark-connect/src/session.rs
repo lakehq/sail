@@ -12,7 +12,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use sail_common::config::{ConfigKeyValue, SparkUdfConfig};
 use sail_common::spec;
 use sail_common::utils::rename_physical_plan;
-use sail_execution::job::{ClusterJobRunner, JobRunner};
+use sail_execution::job::{JobRunner, LocalJobRunner};
 use sail_plan::config::{PlanConfig, TimestampType};
 use sail_plan::formatter::DefaultPlanFormatter;
 use sail_plan::function::BUILT_IN_SCALAR_FUNCTIONS;
@@ -435,7 +435,9 @@ impl SessionManager {
             Entry::Occupied(o) => Ok(o.get().clone()),
             Entry::Vacant(v) => {
                 let context = Session::build_context(Arc::clone(&self.object_store_config))?;
-                let job_runner = ClusterJobRunner::start()?;
+                // TODO: use cluster job runner based on the configuration
+                // let job_runner = ClusterJobRunner::start()?;
+                let job_runner = LocalJobRunner::new(context.clone());
                 let session = Session::new(
                     v.key().user_id.clone(),
                     v.key().session_id.clone(),
