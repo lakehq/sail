@@ -18,6 +18,7 @@ pip install pysail
 
 ```bash
 # Install from source for best performance
+# rustup (https://rustup.rs/) and protoc are required
 env RUSTFLAGS="-C target-cpu=native" pip install pysail -v --no-binary pysail
 ```
 
