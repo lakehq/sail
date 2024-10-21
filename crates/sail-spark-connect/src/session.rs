@@ -12,7 +12,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use sail_common::config::{ConfigKeyValue, SparkUdfConfig};
 use sail_common::spec;
 use sail_common::utils::rename_physical_plan;
-use sail_execution::job::{ClusterJobRunner, JobDefinition, JobRunner};
+use sail_execution::job::{ClusterJobRunner, JobRunner};
 use sail_plan::config::{PlanConfig, TimestampType};
 use sail_plan::formatter::DefaultPlanFormatter;
 use sail_plan::function::BUILT_IN_SCALAR_FUNCTIONS;
@@ -55,12 +55,24 @@ impl Debug for Session {
 }
 
 impl Session {
-    pub(crate) fn try_new(
+    pub(crate) fn new(
         user_id: Option<String>,
         session_id: String,
         job_runner: Box<dyn JobRunner>,
+        context: SessionContext,
+    ) -> Self {
+        Self {
+            user_id,
+            session_id,
+            context,
+            job_runner,
+            state: Mutex::new(SparkSessionState::new()),
+        }
+    }
+
+    pub(crate) fn build_context(
         object_store_config: Arc<ObjectStoreConfig>,
-    ) -> SparkResult<Self> {
+    ) -> SparkResult<SessionContext> {
         // TODO: support more systematic configuration
         // TODO: return error on invalid environment variables
         let config = SessionConfig::new()
@@ -111,13 +123,7 @@ impl Session {
             context.deregister_udf(name);
         }
 
-        Ok(Self {
-            user_id,
-            session_id,
-            context,
-            job_runner,
-            state: Mutex::new(SparkSessionState::new()),
-        })
+        Ok(context)
     }
 
     pub(crate) fn session_id(&self) -> &str {
@@ -352,7 +358,7 @@ impl Session {
         } else {
             plan
         };
-        Ok(self.job_runner.execute(JobDefinition { plan }).await?)
+        Ok(self.job_runner.execute(plan).await?)
     }
 
     #[cfg(test)]
@@ -397,10 +403,7 @@ type SessionStore = HashMap<SessionKey, Arc<Session>>;
 
 #[derive(Debug)]
 pub struct SessionManager {
-    // We have to use the mutex from tokio since we need to hold the lock across `await`.
-    // The session contains IO resources (e.g. TCP connections) so that `async` calls can happen.
-    // This is more expensive than the mutex from std, but performance is not a concern here.
-    sessions: tokio::sync::Mutex<SessionStore>,
+    sessions: Mutex<SessionStore>,
     object_store_config: Arc<ObjectStoreConfig>,
 }
 
@@ -413,7 +416,7 @@ impl Default for SessionManager {
 impl SessionManager {
     pub fn new() -> Self {
         Self {
-            sessions: tokio::sync::Mutex::new(SessionStore::new()),
+            sessions: Mutex::new(SessionStore::new()),
             object_store_config: Arc::new(ObjectStoreConfig::default()),
         }
     }
@@ -423,30 +426,30 @@ impl SessionManager {
         self
     }
 
-    pub(crate) async fn get_session(&self, key: SessionKey) -> SparkResult<Arc<Session>> {
+    pub(crate) fn get_session(&self, key: SessionKey) -> SparkResult<Arc<Session>> {
         use std::collections::hash_map::Entry;
 
-        let mut sessions = self.sessions.lock().await;
+        let mut sessions = self.sessions.lock()?;
         let entry = sessions.entry(key);
         match entry {
             Entry::Occupied(o) => Ok(o.get().clone()),
             Entry::Vacant(v) => {
-                let job_runner =
-                    ClusterJobRunner::start().map_err(|e| SparkError::internal(e.to_string()))?;
-                let session = Session::try_new(
+                let context = Session::build_context(Arc::clone(&self.object_store_config))?;
+                let job_runner = ClusterJobRunner::start()?;
+                let session = Session::new(
                     v.key().user_id.clone(),
                     v.key().session_id.clone(),
                     Box::new(job_runner),
-                    Arc::clone(&self.object_store_config),
-                )?;
+                    context,
+                );
                 Ok(v.insert(Arc::new(session)).clone())
             }
         }
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn delete_session(&self, key: &SessionKey) -> SparkResult<()> {
-        self.sessions.lock().await.remove(key);
+    pub(crate) fn delete_session(&self, key: &SessionKey) -> SparkResult<()> {
+        self.sessions.lock()?.remove(key);
         Ok(())
     }
 }

@@ -67,7 +67,7 @@ impl Actor for DriverActor {
                 host,
                 port,
             } => self.handle_register_worker(worker_id, host, port),
-            DriverEvent::ExecuteJob { job, result } => self.handle_execute_job(job, result),
+            DriverEvent::ExecuteJob { plan, result } => self.handle_execute_job(plan, result),
             DriverEvent::TaskUpdated {
                 worker_id,
                 task_id,

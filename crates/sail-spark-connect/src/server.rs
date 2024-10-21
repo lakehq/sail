@@ -67,7 +67,7 @@ impl SparkConnectService for SparkConnectServer {
             tags: request.tags,
             reattachable: is_reattachable(&request.request_options),
         };
-        let session = self.session_manager.get_session(session_key).await?;
+        let session = self.session_manager.get_session(session_key)?;
         let Plan { op_type: op } = request.plan.required("plan")?;
         let op = op.required("plan op")?;
         let stream = match op {
@@ -138,7 +138,7 @@ impl SparkConnectService for SparkConnectServer {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
         };
-        let session = self.session_manager.get_session(session_key).await?;
+        let session = self.session_manager.get_session(session_key)?;
         let analyze = request.analyze.required("analyze")?;
         let result = match analyze {
             Analyze::Schema(schema) => {
@@ -212,7 +212,7 @@ impl SparkConnectService for SparkConnectServer {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
         };
-        let session = self.session_manager.get_session(session_key).await?;
+        let session = self.session_manager.get_session(session_key)?;
         let sc::config_request::Operation { op_type: op } =
             request.operation.required("operation")?;
         let op = op.required("operation type")?;
@@ -261,7 +261,7 @@ impl SparkConnectService for SparkConnectServer {
             user_id: first.user_context.map(|u| u.user_id),
             session_id: first.session_id.clone(),
         };
-        let session = self.session_manager.get_session(session_key).await?;
+        let session = self.session_manager.get_session(session_key)?;
         let payload = first.payload;
         let session_id = first.session_id;
         let stream = async_stream::try_stream! {
@@ -295,7 +295,7 @@ impl SparkConnectService for SparkConnectServer {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
         };
-        let session = self.session_manager.get_session(session_key).await?;
+        let session = self.session_manager.get_session(session_key)?;
         let statuses = service::handle_artifact_statuses(session, request.names).await?;
         let response = ArtifactStatusesResponse { statuses };
         debug!("{:?}", response);
@@ -312,7 +312,7 @@ impl SparkConnectService for SparkConnectServer {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
         };
-        let session = self.session_manager.get_session(session_key).await?;
+        let session = self.session_manager.get_session(session_key)?;
         let ids = match InterruptType::try_from(request.interrupt_type) {
             Ok(InterruptType::All) => Ok(service::handle_interrupt_all(session).await?),
             Ok(InterruptType::Tag) => {
@@ -353,7 +353,7 @@ impl SparkConnectService for SparkConnectServer {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
         };
-        let session = self.session_manager.get_session(session_key).await?;
+        let session = self.session_manager.get_session(session_key)?;
         let stream = service::handle_reattach_execute(
             session,
             request.operation_id,
@@ -373,7 +373,7 @@ impl SparkConnectService for SparkConnectServer {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
         };
-        let session = self.session_manager.get_session(session_key).await?;
+        let session = self.session_manager.get_session(session_key)?;
         let response_id = match request.release.required("release")? {
             Release::ReleaseAll(ReleaseAll {}) => None,
             Release::ReleaseUntil(ReleaseUntil { response_id }) => Some(response_id),

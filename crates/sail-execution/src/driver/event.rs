@@ -1,9 +1,11 @@
+use std::sync::Arc;
+
 use datafusion::execution::SendableRecordBatchStream;
+use datafusion::physical_plan::ExecutionPlan;
 use tokio::sync::oneshot;
 
 use crate::driver::state::TaskStatus;
 use crate::id::{TaskId, WorkerId};
-use crate::job::JobDefinition;
 
 pub enum DriverEvent {
     ServerReady {
@@ -18,7 +20,7 @@ pub enum DriverEvent {
         port: u16,
     },
     ExecuteJob {
-        job: JobDefinition,
+        plan: Arc<dyn ExecutionPlan>,
         result: oneshot::Sender<SendableRecordBatchStream>,
     },
     TaskUpdated {

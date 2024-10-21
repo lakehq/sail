@@ -1,34 +1,39 @@
 use std::sync::Arc;
 
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_plan::execute_stream;
+use datafusion::execution::SendableRecordBatchStream;
+use datafusion::physical_plan::{execute_stream, ExecutionPlan};
+use datafusion::prelude::SessionContext;
 use sail_server::actor::ActorHandle;
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverActor, DriverEvent, DriverOptions};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::job::definition::JobDefinition;
 
 #[tonic::async_trait]
 pub trait JobRunner: Send + Sync + 'static {
-    async fn execute(&self, job: JobDefinition) -> ExecutionResult<SendableRecordBatchStream>;
+    async fn execute(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> ExecutionResult<SendableRecordBatchStream>;
 }
 
-pub struct LocalJobRunner {}
+pub struct LocalJobRunner {
+    context: SessionContext,
+}
 
-#[allow(clippy::new_without_default)]
 impl LocalJobRunner {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(context: SessionContext) -> Self {
+        Self { context }
     }
 }
 
 #[tonic::async_trait]
 impl JobRunner for LocalJobRunner {
-    async fn execute(&self, job: JobDefinition) -> ExecutionResult<SendableRecordBatchStream> {
-        // TODO: construct task context from job definition
-        let ctx = TaskContext::default();
-        Ok(execute_stream(job.plan, Arc::new(ctx))?)
+    async fn execute(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> ExecutionResult<SendableRecordBatchStream> {
+        Ok(execute_stream(plan, self.context.task_ctx())?)
     }
 }
 
@@ -52,10 +57,13 @@ impl ClusterJobRunner {
 
 #[tonic::async_trait]
 impl JobRunner for ClusterJobRunner {
-    async fn execute(&self, job: JobDefinition) -> ExecutionResult<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> ExecutionResult<SendableRecordBatchStream> {
         let (tx, rx) = oneshot::channel();
         self.driver
-            .send(DriverEvent::ExecuteJob { job, result: tx })
+            .send(DriverEvent::ExecuteJob { plan, result: tx })
             .await?;
         let stream = rx.await.map_err(|_| {
             ExecutionError::InternalError("failed to create job stream".to_string())

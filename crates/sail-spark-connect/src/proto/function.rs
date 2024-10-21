@@ -49,12 +49,9 @@ mod tests {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        let session = Session::try_new(
-            None,
-            "test".to_string(),
-            Box::new(LocalJobRunner::new()),
-            Arc::new(ObjectStoreConfig::default()),
-        )?;
+        let context = Session::build_context(Arc::new(ObjectStoreConfig::default()))?;
+        let job_runner = Box::new(LocalJobRunner::new(context.clone()));
+        let session = Session::new(None, "test".to_string(), job_runner, context);
         Ok(test_gold_set(
             "tests/gold_data/function/*.json",
             |example: FunctionExample| -> SparkResult<String> {

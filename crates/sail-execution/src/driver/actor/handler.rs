@@ -16,7 +16,6 @@ use crate::driver::state::{
 };
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskId, WorkerId};
-use crate::job::JobDefinition;
 use crate::rpc::ServerMonitor;
 use crate::worker_manager::WorkerLaunchContext;
 
@@ -56,10 +55,9 @@ impl DriverActor {
 
     pub(super) fn handle_execute_job(
         &mut self,
-        job: JobDefinition,
+        plan: Arc<dyn ExecutionPlan>,
         result: oneshot::Sender<SendableRecordBatchStream>,
     ) -> ExecutionResult<()> {
-        let JobDefinition { plan } = job;
         let plan = match plan.output_partitioning().partition_count() {
             0 => {
                 let stream = Box::pin(EmptyRecordBatchStream::new(plan.schema()));
