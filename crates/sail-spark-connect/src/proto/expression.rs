@@ -36,15 +36,11 @@ impl TryFrom<Expression> for spec::Expr {
                 plan_id,
             }) => {
                 let name = if unparsed_identifier.contains('.') {
-                    let names: Vec<String> = unparsed_identifier
-                        .split('.')
-                        .map(|part| part.to_ascii_lowercase())
-                        .collect();
+                    let names: Vec<String> =
+                        unparsed_identifier.split('.').map(String::from).collect();
                     spec::ObjectName::from(names)
                 } else {
-                    spec::ObjectName::new_unqualified(
-                        unparsed_identifier.to_ascii_lowercase().into(),
-                    )
+                    spec::ObjectName::new_unqualified(unparsed_identifier.into())
                 };
                 Ok(spec::Expr::UnresolvedAttribute { name, plan_id })
             }
