@@ -69,15 +69,15 @@ impl DriverActor {
                 "worker not active: {id}"
             )));
         }
-        if !self.worker_client_cache.contains_key(&id) {
+        let enable_tls = self.options().enable_tls;
+        let client = self.worker_clients.entry(id).or_insert_with(|| {
             let options = ClientOptions {
-                enable_tls: self.options().enable_tls,
+                enable_tls,
                 host: worker.host.clone(),
                 port: worker.port,
             };
-            let client = WorkerClient::new(options);
-            self.worker_client_cache.insert(id, client);
-        }
-        Ok(self.worker_client_cache.get_mut(&id).unwrap())
+            WorkerClient::new(options)
+        });
+        Ok(client)
     }
 }

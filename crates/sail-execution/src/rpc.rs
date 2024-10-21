@@ -1,8 +1,12 @@
 use std::sync::Arc;
 
+use arrow_flight::flight_service_client::FlightServiceClient;
 use tokio::sync::{oneshot, Mutex, MutexGuard, OnceCell};
+use tonic::transport::Channel;
 
+use crate::driver::DriverServiceClient;
 use crate::error::ExecutionResult;
+use crate::worker::WorkerServiceClient;
 
 pub struct ServerMonitor {
     /// The shutdown signal to send to the server,
@@ -26,11 +30,8 @@ impl ServerMonitor {
     }
 
     pub fn stop(self) {
-        match self.signal {
-            Some(signal) => {
-                let _ = signal.send(());
-            }
-            None => {}
+        if let Some(signal) = self.signal {
+            let _ = signal.send(());
         }
     }
 }
@@ -41,6 +42,7 @@ impl Default for ServerMonitor {
     }
 }
 
+#[derive(Clone)]
 pub struct ClientOptions {
     pub enable_tls: bool,
     pub host: String,
@@ -58,6 +60,21 @@ impl ClientOptions {
 pub trait ClientBuilder: Sized {
     async fn connect(options: &ClientOptions) -> ExecutionResult<Self>;
 }
+
+macro_rules! impl_client_builder {
+    ($client_type:ty) => {
+        #[tonic::async_trait]
+        impl ClientBuilder for $client_type {
+            async fn connect(options: &ClientOptions) -> ExecutionResult<Self> {
+                Ok(<$client_type>::connect(options.to_url_string()).await?)
+            }
+        }
+    };
+}
+
+impl_client_builder!(DriverServiceClient<Channel>);
+impl_client_builder!(WorkerServiceClient<Channel>);
+impl_client_builder!(FlightServiceClient<Channel>);
 
 #[derive(Clone)]
 pub struct ClientHandle<T> {
@@ -79,7 +96,7 @@ impl<T: ClientBuilder> ClientHandle<T> {
     }
 
     async fn get(&self) -> ExecutionResult<&Mutex<T>> {
-        let options = self.options.clone();
+        let options = Arc::clone(&self.options);
         Ok(self
             .inner
             .get_or_try_init(|| Self::init(options))

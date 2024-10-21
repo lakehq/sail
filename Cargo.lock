@@ -4196,6 +4196,7 @@ dependencies = [
  "arrow-flight",
  "datafusion",
  "datafusion-proto",
+ "futures",
  "log",
  "prost 0.13.3",
  "prost-build",

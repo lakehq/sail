@@ -1,14 +1,22 @@
+use std::io::Cursor;
 use std::pin::Pin;
 
+use arrow_flight::encode::FlightDataEncoderBuilder;
+use arrow_flight::error::FlightError;
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket,
 };
+use futures::stream::TryStreamExt;
+use log::debug;
+use prost::Message;
 use sail_server::actor::ActorHandle;
+use tokio::sync::oneshot;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::worker::gen::TaskStreamTicket;
 use crate::worker::WorkerActor;
 
 pub struct WorkerFlightServer {
@@ -68,9 +76,31 @@ impl FlightService for WorkerFlightServer {
 
     async fn do_get(
         &self,
-        _request: Request<Ticket>,
+        request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
-        todo!()
+        let Ticket { ticket } = request.into_inner();
+        let ticket = {
+            let mut buf = Cursor::new(&ticket);
+            TaskStreamTicket::decode(&mut buf)
+                .map_err(|e| Status::invalid_argument(e.to_string()))?
+        };
+        debug!("{:?}", ticket);
+        let TaskStreamTicket { task_id, attempt } = ticket;
+        let (tx, rx) = oneshot::channel();
+        let event = crate::worker::WorkerEvent::FetchTaskStream {
+            task_id: task_id.into(),
+            attempt: attempt as usize,
+            result: tx,
+        };
+        self.handle.send(event).await?;
+        let stream = rx
+            .await
+            .map_err(|_| Status::internal("task stream not found"))?;
+        let stream = stream.map_err(|e| FlightError::from_external_error(Box::new(e)));
+        let stream = FlightDataEncoderBuilder::new()
+            .build(stream)
+            .map_err(|e| Status::from_error(Box::new(e)));
+        Ok(Response::new(Box::pin(stream) as Self::DoGetStream))
     }
 
     type DoPutStream = BoxedFlightStream<PutResult>;

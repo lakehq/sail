@@ -2,12 +2,11 @@ use std::sync::Arc;
 
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::execute_stream;
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use sail_server::actor::ActorHandle;
-use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
+use tokio::sync::oneshot;
 
 use crate::driver::{DriverActor, DriverEvent, DriverOptions};
-use crate::error::ExecutionResult;
+use crate::error::{ExecutionError, ExecutionResult};
 use crate::job::definition::JobDefinition;
 
 #[tonic::async_trait]
@@ -17,6 +16,7 @@ pub trait JobRunner: Send + Sync + 'static {
 
 pub struct LocalJobRunner {}
 
+#[allow(clippy::new_without_default)]
 impl LocalJobRunner {
     pub fn new() -> Self {
         Self {}
@@ -34,7 +34,6 @@ impl JobRunner for LocalJobRunner {
 
 pub struct ClusterJobRunner {
     driver: ActorHandle<DriverActor>,
-    buffer_size: usize,
 }
 
 impl ClusterJobRunner {
@@ -47,22 +46,20 @@ impl ClusterJobRunner {
             driver_external_port: None,
         };
         let driver = ActorHandle::new(options);
-        Ok(Self {
-            driver,
-            buffer_size: 16,
-        })
+        Ok(Self { driver })
     }
 }
 
 #[tonic::async_trait]
 impl JobRunner for ClusterJobRunner {
     async fn execute(&self, job: JobDefinition) -> ExecutionResult<SendableRecordBatchStream> {
-        let schema = job.plan.schema();
-        let (tx, rx) = tokio::sync::mpsc::channel(self.buffer_size);
+        let (tx, rx) = oneshot::channel();
         self.driver
-            .send(DriverEvent::ExecuteJob { job, channel: tx })
+            .send(DriverEvent::ExecuteJob { job, result: tx })
             .await?;
-        let stream = ReceiverStream::new(rx);
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+        let stream = rx.await.map_err(|_| {
+            ExecutionError::InternalError("failed to create job stream".to_string())
+        })?;
+        Ok(stream)
     }
 }

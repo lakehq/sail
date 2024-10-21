@@ -9,23 +9,18 @@ use crate::driver::gen::{
 use crate::driver::state::TaskStatus;
 use crate::error::ExecutionResult;
 use crate::id::{TaskId, WorkerId};
-use crate::rpc::{ClientBuilder, ClientHandle, ClientOptions};
+use crate::rpc::{ClientHandle, ClientOptions};
 
 #[derive(Clone)]
 pub struct DriverClient {
+    worker_id: WorkerId,
     inner: ClientHandle<DriverServiceClient<Channel>>,
 }
 
-#[tonic::async_trait]
-impl ClientBuilder for DriverServiceClient<Channel> {
-    async fn connect(options: &ClientOptions) -> ExecutionResult<Self> {
-        Ok(DriverServiceClient::connect(options.to_url_string()).await?)
-    }
-}
-
 impl DriverClient {
-    pub fn new(options: ClientOptions) -> Self {
+    pub fn new(worker_id: WorkerId, options: ClientOptions) -> Self {
         Self {
+            worker_id,
             inner: ClientHandle::new(options),
         }
     }
@@ -49,12 +44,11 @@ impl DriverClient {
     pub async fn report_task_status(
         &self,
         task_id: TaskId,
-        partition: usize,
         status: TaskStatus,
     ) -> ExecutionResult<()> {
         let request = tonic::Request::new(ReportTaskStatusRequest {
+            worker_id: self.worker_id.into(),
             task_id: task_id.into(),
-            partition: partition as u64,
             status: gen::TaskStatus::from(status) as i32,
         });
         let response = self.inner.lock().await?.report_task_status(request).await?;

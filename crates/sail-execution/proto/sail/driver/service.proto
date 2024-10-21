@@ -12,9 +12,9 @@ message RegisterWorkerResponse {
 }
 
 message ReportTaskStatusRequest {
+  uint64 worker_id = 1;
   uint64 task_id = 2;
-  uint64 partition = 3;
-  TaskStatus status = 4;
+  TaskStatus status = 3;
 }
 
 enum TaskStatus {

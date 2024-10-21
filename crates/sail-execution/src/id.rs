@@ -1,65 +1,55 @@
-use std::fmt::{Debug, Display};
 use std::marker::PhantomData;
 
 use crate::error::{ExecutionError, ExecutionResult};
 
-type IdValueType = u64;
-
-pub trait IdType: From<IdValueType> {
-    fn name() -> &'static str;
+pub trait IdValueType: Sized {
+    fn first() -> Self;
+    fn next(v: Self) -> ExecutionResult<Self>;
 }
 
-pub struct IdGenerator<T> {
-    next_id: IdValueType,
-    phantom: PhantomData<T>,
+macro_rules! impl_integer_id_value_type {
+    ($type:ty) => {
+        impl IdValueType for $type {
+            fn first() -> Self {
+                1
+            }
+
+            fn next(v: Self) -> ExecutionResult<Self> {
+                v.checked_add(1)
+                    .ok_or(ExecutionError::InternalError("ID overflow".to_string()))
+            }
+        }
+    };
 }
 
-impl<T: IdType> IdGenerator<T> {
-    pub fn new() -> Self {
-        Self {
-            next_id: 1,
-            phantom: PhantomData,
-        }
-    }
+impl_integer_id_value_type!(u64);
 
-    pub fn next(&mut self) -> ExecutionResult<T> {
-        if self.next_id == 0 {
-            Err(ExecutionError::InternalError(format!(
-                "{} ID overflow",
-                T::name()
-            )))
-        } else {
-            let id = self.next_id;
-            self.next_id += 1;
-            Ok(T::from(id))
-        }
-    }
+pub trait IdType: Sized {
+    type Value: IdValueType + From<Self> + Into<Self>;
 }
 
 macro_rules! define_id_type {
-    ($name:ident, $type_name:expr) => {
+    ($name:ident, $value_type:ty) => {
         #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-        pub struct $name(IdValueType);
+        pub struct $name($value_type);
 
-        impl From<IdValueType> for $name {
-            fn from(id: IdValueType) -> Self {
+        impl IdType for $name {
+            type Value = $value_type;
+        }
+
+        impl From<$value_type> for $name {
+            fn from(id: $value_type) -> Self {
                 Self(id)
             }
         }
 
-        impl From<$name> for IdValueType {
+        impl From<$name> for $value_type {
             fn from(id: $name) -> Self {
                 id.0
             }
         }
 
-        impl IdType for $name {
-            fn name() -> &'static str {
-                $type_name
-            }
-        }
-
-        impl Display for $name {
+        impl std::fmt::Display for $name {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(f, "{}", self.0)
             }
@@ -67,6 +57,29 @@ macro_rules! define_id_type {
     };
 }
 
-define_id_type!(JobId, "job");
-define_id_type!(TaskId, "task");
-define_id_type!(WorkerId, "worker");
+define_id_type!(JobId, u64);
+define_id_type!(TaskId, u64);
+define_id_type!(WorkerId, u64);
+
+pub struct IdGenerator<T: IdType> {
+    next_value: T::Value,
+    phantom: PhantomData<T>,
+}
+
+impl<T: IdType> IdGenerator<T>
+where
+    T::Value: Copy,
+{
+    pub fn new() -> Self {
+        Self {
+            next_value: T::Value::first(),
+            phantom: PhantomData,
+        }
+    }
+
+    pub fn next(&mut self) -> ExecutionResult<T> {
+        let value = self.next_value;
+        self.next_value = T::Value::next(value)?;
+        Ok(value.into())
+    }
+}

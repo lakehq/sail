@@ -1,3 +1,4 @@
+use log::debug;
 use sail_server::actor::ActorHandle;
 use tonic::{Request, Response, Status};
 
@@ -25,41 +26,53 @@ impl WorkerService for WorkerServer {
         &self,
         request: Request<RunTaskRequest>,
     ) -> Result<Response<RunTaskResponse>, Status> {
+        let request = request.into_inner();
+        debug!("{:?}", request);
         let RunTaskRequest {
             task_id,
+            attempt,
             partition,
             plan,
-        } = request.into_inner();
-        self.handle
-            .send(WorkerEvent::RunTask {
-                task_id: task_id.into(),
-                partition: partition as usize,
-                plan,
-            })
-            .await?;
-        Ok(Response::new(RunTaskResponse {}))
+        } = request;
+        let event = WorkerEvent::RunTask {
+            task_id: task_id.into(),
+            attempt: attempt as usize,
+            partition: partition as usize,
+            plan,
+        };
+        self.handle.send(event).await?;
+        let response = RunTaskResponse {};
+        debug!("{:?}", response);
+        Ok(Response::new(response))
     }
 
     async fn stop_task(
         &self,
         request: Request<StopTaskRequest>,
     ) -> Result<Response<StopTaskResponse>, Status> {
-        let StopTaskRequest { task_id, partition } = request.into_inner();
-        self.handle
-            .send(WorkerEvent::StopTask {
-                task_id: task_id.into(),
-                partition: partition as usize,
-            })
-            .await?;
-        Ok(Response::new(StopTaskResponse {}))
+        let request = request.into_inner();
+        debug!("{:?}", request);
+        let StopTaskRequest { task_id, attempt } = request;
+        let event = WorkerEvent::StopTask {
+            task_id: task_id.into(),
+            attempt: attempt as usize,
+        };
+        self.handle.send(event).await?;
+        let response = StopTaskResponse {};
+        debug!("{:?}", response);
+        Ok(Response::new(response))
     }
 
     async fn stop_worker(
         &self,
         request: Request<StopWorkerRequest>,
     ) -> Result<Response<StopWorkerResponse>, Status> {
-        let StopWorkerRequest {} = request.into_inner();
+        let request = request.into_inner();
+        debug!("{:?}", request);
+        let StopWorkerRequest {} = request;
         self.handle.send(WorkerEvent::Shutdown).await?;
-        Ok(Response::new(StopWorkerResponse {}))
+        let response = StopWorkerResponse {};
+        debug!("{:?}", response);
+        Ok(Response::new(response))
     }
 }

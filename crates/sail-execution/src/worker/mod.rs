@@ -16,4 +16,5 @@ mod gen {
 pub(crate) use actor::WorkerActor;
 pub(crate) use client::WorkerClient;
 pub(crate) use event::WorkerEvent;
+pub(crate) use gen::worker_service_client::WorkerServiceClient;
 pub(crate) use options::WorkerOptions;

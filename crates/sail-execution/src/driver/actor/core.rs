@@ -1,15 +1,16 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
+use datafusion::physical_plan::SendableRecordBatchStream;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use log::error;
 use sail_server::actor::{Actor, ActorAction, ActorHandle};
+use tokio::sync::oneshot;
 
 use crate::codec::RemoteExecutionCodec;
-use crate::driver::event::TaskChannel;
 use crate::driver::state::DriverState;
 use crate::driver::{DriverEvent, DriverOptions};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{IdGenerator, JobId, TaskId, WorkerId};
+use crate::id::{JobId, WorkerId};
 use crate::rpc::ServerMonitor;
 use crate::worker::WorkerClient;
 use crate::worker_manager::{LocalWorkerManager, WorkerManager};
@@ -19,13 +20,11 @@ pub struct DriverActor {
     pub(super) state: DriverState,
     pub(super) server: ServerMonitor,
     pub(super) server_listen_port: Option<u16>,
-    pub(super) job_id_generator: IdGenerator<JobId>,
-    pub(super) task_id_generator: IdGenerator<TaskId>,
-    pub(super) worker_id_generator: IdGenerator<WorkerId>,
     pub(super) worker_manager: Box<dyn WorkerManager>,
-    pub(super) worker_client_cache: HashMap<WorkerId, WorkerClient>,
+    pub(super) worker_clients: HashMap<WorkerId, WorkerClient>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
-    pub(super) task_channels: HashMap<TaskId, TaskChannel>,
+    pub(super) incoming_job_queue: VecDeque<(JobId, oneshot::Sender<SendableRecordBatchStream>)>,
+    pub(super) pending_jobs: HashMap<JobId, oneshot::Sender<SendableRecordBatchStream>>,
 }
 
 impl Actor for DriverActor {
@@ -40,13 +39,11 @@ impl Actor for DriverActor {
             state: DriverState::new(),
             server: ServerMonitor::idle(),
             server_listen_port: None,
-            job_id_generator: IdGenerator::new(),
-            task_id_generator: IdGenerator::new(),
-            worker_id_generator: IdGenerator::new(),
             worker_manager,
-            worker_client_cache: HashMap::new(),
+            worker_clients: HashMap::new(),
             physical_plan_codec: Box::new(RemoteExecutionCodec::new()),
-            task_channels: HashMap::new(),
+            incoming_job_queue: VecDeque::new(),
+            pending_jobs: HashMap::new(),
         }
     }
 
@@ -70,12 +67,12 @@ impl Actor for DriverActor {
                 host,
                 port,
             } => self.handle_register_worker(worker_id, host, port),
-            DriverEvent::ExecuteJob { job, channel } => self.handle_execute_job(job, channel),
+            DriverEvent::ExecuteJob { job, result } => self.handle_execute_job(job, result),
             DriverEvent::TaskUpdated {
+                worker_id,
                 task_id,
-                partition,
                 status,
-            } => self.handle_task_updated(task_id, partition, status),
+            } => self.handle_task_updated(worker_id, task_id, status),
             DriverEvent::Shutdown => Ok(()),
         };
         if let Err(e) = out {

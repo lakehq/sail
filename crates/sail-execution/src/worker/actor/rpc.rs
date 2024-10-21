@@ -6,9 +6,7 @@ use sail_server::ServerBuilder;
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tonic::codec::CompressionEncoding;
 
-use crate::driver::DriverClient;
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::rpc::ClientOptions;
 use crate::worker::actor::core::WorkerActor;
 use crate::worker::flight_server::WorkerFlightServer;
 use crate::worker::gen::worker_service_server::WorkerServiceServer;
@@ -73,19 +71,5 @@ impl WorkerActor {
             })
             .await
             .map_err(|e| ExecutionError::InternalError(e.to_string()))
-    }
-
-    pub(super) fn driver_client(&mut self) -> ExecutionResult<&DriverClient> {
-        if self.driver_client_cache.is_none() {
-            let options = ClientOptions {
-                enable_tls: self.options().enable_tls,
-                host: self.options().driver_host.clone(),
-                port: self.options().driver_port,
-            };
-            let client = DriverClient::new(options);
-            Ok(self.driver_client_cache.insert(client))
-        } else {
-            Ok(self.driver_client_cache.as_mut().unwrap())
-        }
     }
 }

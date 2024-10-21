@@ -149,7 +149,7 @@ mod tests {
     #[tokio::test]
     async fn test_actor_handle_send() {
         let handle = ActorHandle::<TestActor>::new(());
-        assert_eq!(handle.sender.is_closed(), false);
+        assert!(!handle.sender.is_closed());
         let (tx, rx) = oneshot::channel();
         let result = handle
             .send(TestMessage::Echo {

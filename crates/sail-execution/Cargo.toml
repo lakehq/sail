@@ -17,6 +17,7 @@ datafusion-proto = { workspace = true }
 arrow = { workspace = true }
 arrow-flight = { workspace = true }
 log = { workspace = true }
+futures = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

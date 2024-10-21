@@ -266,8 +266,7 @@ impl Session {
                             (local_time_offset.abs() % 3600) / 60
                         )
                     };
-                    *(&mut state.config_mut().options_mut().execution.time_zone) =
-                        Some(offset_string);
+                    state.config_mut().options_mut().execution.time_zone = Some(offset_string);
                 }
                 state.config.set(key, value)?;
             } else {

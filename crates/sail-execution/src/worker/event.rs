@@ -1,3 +1,4 @@
+use datafusion::execution::SendableRecordBatchStream;
 use tokio::sync::oneshot;
 
 use crate::id::TaskId;
@@ -11,12 +12,18 @@ pub enum WorkerEvent {
     },
     RunTask {
         task_id: TaskId,
-        partition: usize,
+        attempt: usize,
         plan: Vec<u8>,
+        partition: usize,
     },
     StopTask {
         task_id: TaskId,
-        partition: usize,
+        attempt: usize,
+    },
+    FetchTaskStream {
+        task_id: TaskId,
+        attempt: usize,
+        result: oneshot::Sender<SendableRecordBatchStream>,
     },
     Shutdown,
 }

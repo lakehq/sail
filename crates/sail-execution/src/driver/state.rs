@@ -4,13 +4,16 @@ use std::sync::Arc;
 use datafusion::physical_plan::ExecutionPlan;
 
 use crate::driver::gen;
-use crate::error::ExecutionError;
-use crate::id::{JobId, TaskId, WorkerId};
+use crate::error::{ExecutionError, ExecutionResult};
+use crate::id::{IdGenerator, JobId, TaskId, WorkerId};
 
 pub struct DriverState {
     workers: HashMap<WorkerId, WorkerDescriptor>,
     jobs: HashMap<JobId, JobDescriptor>,
-    tasks: HashMap<(TaskId, usize), TaskDescriptor>,
+    tasks: HashMap<TaskId, TaskDescriptor>,
+    pub(super) job_id_generator: IdGenerator<JobId>,
+    pub(super) task_id_generator: IdGenerator<TaskId>,
+    pub(super) worker_id_generator: IdGenerator<WorkerId>,
 }
 
 impl DriverState {
@@ -19,6 +22,9 @@ impl DriverState {
             workers: HashMap::new(),
             jobs: HashMap::new(),
             tasks: HashMap::new(),
+            job_id_generator: IdGenerator::new(),
+            task_id_generator: IdGenerator::new(),
+            worker_id_generator: IdGenerator::new(),
         }
     }
 
@@ -26,44 +32,42 @@ impl DriverState {
         self.workers.insert(worker_id, descriptor);
     }
 
-    pub fn add_job(&mut self, job_id: JobId, descriptor: JobDescriptor) {
-        self.jobs.insert(job_id, descriptor);
-    }
-
-    pub fn add_task(&mut self, task_id: TaskId, partition: usize, job_id: JobId) {
-        self.tasks.insert(
-            (task_id, partition),
-            TaskDescriptor {
-                job_id,
-                status: TaskStatus::Pending,
-            },
-        );
-    }
-
     pub fn get_worker(&self, worker_id: &WorkerId) -> Option<&WorkerDescriptor> {
         self.workers.get(worker_id)
     }
 
-    pub fn get_one_pending_task(&self) -> Option<(TaskId, usize)> {
-        self.tasks
-            .iter()
-            .find(|(_, desc)| matches!(desc.status, TaskStatus::Pending))
-            .map(|(key, _)| *key)
+    pub fn add_job(&mut self, job_id: JobId, descriptor: JobDescriptor) {
+        self.jobs.insert(job_id, descriptor);
     }
 
-    pub fn get_task_plan(&self, task_id: TaskId) -> Option<Arc<dyn ExecutionPlan>> {
-        self.tasks
-            .iter()
-            .find(|(key, _)| key.0 == task_id)
-            .and_then(|(_, desc)| self.jobs.get(&desc.job_id))
-            .map(|desc| desc.plan.clone())
+    pub fn get_job(&self, job_id: JobId) -> ExecutionResult<&JobDescriptor> {
+        self.jobs
+            .get(&job_id)
+            .ok_or_else(|| ExecutionError::InternalError(format!("job not found: {job_id}")))
     }
 
-    pub fn update_task(&mut self, task_id: TaskId, partition: usize, status: TaskStatus) {
-        use std::collections::hash_map::Entry;
-        if let Entry::Occupied(v) = self.tasks.entry((task_id, partition)) {
-            *(&mut v.into_mut().status) = status;
-        }
+    pub fn find_job_stage_by_task(&self, task_id: TaskId) -> ExecutionResult<&JobStage> {
+        let task = self.get_task(task_id)?;
+        let job = self.get_job(task.job_id)?;
+        job.stages.get(task.stage).ok_or_else(|| {
+            ExecutionError::InternalError(format!("job stage not found for task: {task_id}"))
+        })
+    }
+
+    pub fn add_task(&mut self, task_id: TaskId, descriptor: TaskDescriptor) {
+        self.tasks.insert(task_id, descriptor);
+    }
+
+    pub fn get_task(&self, task_id: TaskId) -> ExecutionResult<&TaskDescriptor> {
+        self.tasks
+            .get(&task_id)
+            .ok_or_else(|| ExecutionError::InternalError(format!("task not found: {task_id}")))
+    }
+
+    pub fn get_task_mut(&mut self, task_id: TaskId) -> ExecutionResult<&mut TaskDescriptor> {
+        self.tasks
+            .get_mut(&task_id)
+            .ok_or_else(|| ExecutionError::InternalError(format!("task not found: {task_id}")))
     }
 }
 
@@ -74,15 +78,35 @@ pub struct WorkerDescriptor {
 }
 
 pub struct JobDescriptor {
+    pub stages: Vec<JobStage>,
+}
+
+pub struct JobStage {
     pub plan: Arc<dyn ExecutionPlan>,
-    pub task_id: TaskId,
+    /// A list of task IDs for each partition of the stage.
+    pub tasks: Vec<TaskId>,
 }
 
 pub struct TaskDescriptor {
     pub job_id: JobId,
+    #[allow(dead_code)]
+    pub stage: usize,
+    #[allow(dead_code)]
+    pub partition: usize,
+    pub attempt: usize,
+    #[allow(dead_code)]
+    pub mode: TaskMode,
     pub status: TaskStatus,
 }
 
+#[derive(Clone, Copy)]
+pub enum TaskMode {
+    #[allow(dead_code)]
+    Blocking,
+    Pipelined,
+}
+
+#[derive(Clone, Copy)]
 pub enum TaskStatus {
     Pending,
     Running,

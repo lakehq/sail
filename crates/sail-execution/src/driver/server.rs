@@ -1,3 +1,4 @@
+use log::debug;
 use sail_server::actor::ActorHandle;
 use tonic::{Request, Response, Status};
 
@@ -27,11 +28,13 @@ impl DriverService for DriverServer {
         &self,
         request: Request<RegisterWorkerRequest>,
     ) -> Result<Response<RegisterWorkerResponse>, Status> {
+        let request = request.into_inner();
+        debug!("{:?}", request);
         let RegisterWorkerRequest {
             worker_id,
             host,
             port,
-        } = request.into_inner();
+        } = request;
         let port = u16::try_from(port).map_err(|_| {
             Status::invalid_argument("port must be a valid 16-bit unsigned integer")
         })?;
@@ -41,27 +44,33 @@ impl DriverService for DriverServer {
             port,
         };
         self.handle.send(event).await?;
-        Ok(Response::new(RegisterWorkerResponse {}))
+        let response = RegisterWorkerResponse {};
+        debug!("{:?}", response);
+        Ok(Response::new(response))
     }
 
     async fn report_task_status(
         &self,
         request: Request<ReportTaskStatusRequest>,
     ) -> Result<Response<ReportTaskStatusResponse>, Status> {
+        let request = request.into_inner();
+        debug!("{:?}", request);
         let ReportTaskStatusRequest {
+            worker_id,
             task_id,
-            partition,
             status,
-        } = request.into_inner();
+        } = request;
         let status = gen::TaskStatus::try_from(status)
             .map_err(ExecutionError::from)?
             .try_into()?;
         let event = DriverEvent::TaskUpdated {
+            worker_id: worker_id.into(),
             task_id: task_id.into(),
-            partition: partition as usize,
             status,
         };
         self.handle.send(event).await?;
-        Ok(Response::new(ReportTaskStatusResponse {}))
+        let response = ReportTaskStatusResponse {};
+        debug!("{:?}", response);
+        Ok(Response::new(response))
     }
 }

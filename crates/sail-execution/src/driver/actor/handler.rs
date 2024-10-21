@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::execution::SendableRecordBatchStream;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::{EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::info;
@@ -9,10 +11,11 @@ use prost::Message;
 use tokio::sync::oneshot;
 
 use crate::driver::actor::DriverActor;
-use crate::driver::event::TaskChannel;
-use crate::driver::state::{JobDescriptor, TaskStatus, WorkerDescriptor};
+use crate::driver::state::{
+    JobDescriptor, JobStage, TaskDescriptor, TaskMode, TaskStatus, WorkerDescriptor,
+};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{TaskId, WorkerId};
+use crate::id::{JobId, TaskId, WorkerId};
 use crate::job::JobDefinition;
 use crate::rpc::ServerMonitor;
 use crate::worker_manager::WorkerLaunchContext;
@@ -35,7 +38,7 @@ impl DriverActor {
         host: String,
         port: u16,
     ) -> ExecutionResult<()> {
-        info!("registering worker {worker_id} at {host}:{port}");
+        info!("worker {worker_id} is available at {host}:{port}");
         self.state.add_worker(
             worker_id,
             WorkerDescriptor {
@@ -44,32 +47,76 @@ impl DriverActor {
                 active: true,
             },
         );
-        self.schedule_task(worker_id)?;
+        if let Some((job_id, result)) = self.incoming_job_queue.pop_front() {
+            self.schedule_job(worker_id, job_id)?;
+            self.pending_jobs.insert(job_id, result);
+        }
         Ok(())
     }
 
     pub(super) fn handle_execute_job(
         &mut self,
         job: JobDefinition,
-        channel: TaskChannel,
+        result: oneshot::Sender<SendableRecordBatchStream>,
     ) -> ExecutionResult<()> {
         let JobDefinition { plan } = job;
-        let job_id = self.job_id_generator.next()?;
-        let task_id = self.task_id_generator.next()?;
-        self.state.add_job(job_id, JobDescriptor { task_id, plan });
-        self.state.add_task(task_id, 0, job_id);
-        self.task_channels.insert(task_id, channel);
+        let plan = match plan.output_partitioning().partition_count() {
+            0 => {
+                let stream = Box::pin(EmptyRecordBatchStream::new(plan.schema()));
+                let _ = result.send(stream);
+                return Ok(());
+            }
+            1 => plan,
+            2.. => Arc::new(CoalescePartitionsExec::new(Arc::clone(&plan))),
+        };
+        let job_id = self.state.job_id_generator.next()?;
+        let mut tasks = vec![];
+        for p in 0..plan.output_partitioning().partition_count() {
+            let task_id = self.state.task_id_generator.next()?;
+            self.state.add_task(
+                task_id,
+                TaskDescriptor {
+                    job_id,
+                    stage: 0,
+                    partition: p,
+                    attempt: 0,
+                    mode: TaskMode::Pipelined,
+                    status: TaskStatus::Pending,
+                },
+            );
+            tasks.push(task_id);
+        }
+        let descriptor = JobDescriptor {
+            stages: vec![JobStage { plan, tasks }],
+        };
+        self.state.add_job(job_id, descriptor);
+        self.incoming_job_queue.push_back((job_id, result));
+        // TODO: update worker launch logic
         self.launch_worker()?;
         Ok(())
     }
 
     pub(super) fn handle_task_updated(
         &mut self,
+        worker_id: WorkerId,
         task_id: TaskId,
-        partition: usize,
         status: TaskStatus,
     ) -> ExecutionResult<()> {
-        self.state.update_task(task_id, partition, status);
+        let task = self.state.get_task_mut(task_id)?;
+        task.status = status;
+        if matches!(task.status, TaskStatus::Running) {
+            if let Some(result) = self.pending_jobs.remove(&task.job_id) {
+                let attempt = task.attempt;
+                let stage = self.state.find_job_stage_by_task(task_id)?;
+                let schema = stage.plan.schema();
+                let client = self.worker_client(worker_id)?.clone();
+                tokio::spawn(async move {
+                    let stream = client.fetch_task_stream(task_id, attempt, schema).await?;
+                    let _ = result.send(stream);
+                    Ok::<_, ExecutionError>(())
+                });
+            }
+        }
         Ok(())
     }
 
@@ -77,7 +124,7 @@ impl DriverActor {
         let port = self
             .server_listen_port
             .ok_or_else(|| ExecutionError::InternalError("server port is not set".to_string()))?;
-        let id = self.worker_id_generator.next()?;
+        let id = self.state.worker_id_generator.next()?;
         let ctx = WorkerLaunchContext {
             driver_host: self.options().driver_external_host.to_string(),
             driver_port: self.options().driver_external_port.unwrap_or(port),
@@ -86,20 +133,19 @@ impl DriverActor {
         Ok(())
     }
 
-    fn schedule_task(&mut self, worker_id: WorkerId) -> ExecutionResult<()> {
-        if let Some((task_id, partition)) = self.state.get_one_pending_task() {
-            let _ = self
-                .state
-                .get_worker(&worker_id)
-                .ok_or_else(|| ExecutionError::InternalError("worker not found".to_string()))?;
-            let plan = self
-                .state
-                .get_task_plan(task_id)
-                .ok_or_else(|| ExecutionError::InternalError("task plan not found".to_string()))?;
-            let plan = self.encode_plan(plan)?;
-            let client = self.worker_client(worker_id)?.clone();
-            tokio::spawn(async move { client.run_task(task_id, partition, plan).await });
-        }
+    fn schedule_job(&mut self, worker_id: WorkerId, job_id: JobId) -> ExecutionResult<()> {
+        // TODO: create job stages and implement scheduling logic
+        let _ = self
+            .state
+            .get_worker(&worker_id)
+            .ok_or_else(|| ExecutionError::InternalError("worker not found".to_string()))?;
+        let stage = &self.state.get_job(job_id)?.stages[0];
+        let plan = self.encode_plan(Arc::clone(&stage.plan))?;
+        let task_id = stage.tasks[0];
+        let task = self.state.get_task(task_id)?;
+        let attempt = task.attempt;
+        let client = self.worker_client(worker_id)?.clone();
+        tokio::spawn(async move { client.run_task(task_id, attempt, plan, 0).await });
         Ok(())
     }
 

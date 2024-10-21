@@ -1,12 +1,9 @@
-use arrow::array::RecordBatch;
-use datafusion::common::DataFusionError;
-use tokio::sync::{mpsc, oneshot};
+use datafusion::execution::SendableRecordBatchStream;
+use tokio::sync::oneshot;
 
 use crate::driver::state::TaskStatus;
 use crate::id::{TaskId, WorkerId};
 use crate::job::JobDefinition;
-
-pub type TaskChannel = mpsc::Sender<Result<RecordBatch, DataFusionError>>;
 
 pub enum DriverEvent {
     ServerReady {
@@ -22,11 +19,11 @@ pub enum DriverEvent {
     },
     ExecuteJob {
         job: JobDefinition,
-        channel: TaskChannel,
+        result: oneshot::Sender<SendableRecordBatchStream>,
     },
     TaskUpdated {
+        worker_id: WorkerId,
         task_id: TaskId,
-        partition: usize,
         status: TaskStatus,
     },
     #[allow(dead_code)]
