@@ -1595,6 +1595,10 @@ impl PlanResolver<'_> {
             } else {
                 self.resolve_query_plan(query, state).await?
             };
+            let plan = LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
+                Arc::new(plan),
+                reference.clone(),
+            )?);
             state.insert_cte(reference, plan);
         }
         self.resolve_query_plan(input, state).await
