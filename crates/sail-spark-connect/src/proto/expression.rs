@@ -34,11 +34,15 @@ impl TryFrom<Expression> for spec::Expr {
             ExprType::UnresolvedAttribute(UnresolvedAttribute {
                 unparsed_identifier,
                 plan_id,
-            }) => Ok(spec::Expr::UnresolvedAttribute {
-                // FIXME: how should the identifier be parsed?
-                name: spec::ObjectName::new_unqualified(unparsed_identifier.into()),
-                plan_id,
-            }),
+            }) => {
+                // TODO: Revisit heuristic for parsing object names.
+                let name = if unparsed_identifier.contains('.') {
+                    parse_object_name(unparsed_identifier.as_str())?
+                } else {
+                    spec::ObjectName::new_unqualified(unparsed_identifier.into())
+                };
+                Ok(spec::Expr::UnresolvedAttribute { name, plan_id })
+            }
             ExprType::UnresolvedFunction(UnresolvedFunction {
                 function_name,
                 arguments,

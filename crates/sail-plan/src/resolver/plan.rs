@@ -2136,6 +2136,10 @@ impl PlanResolver<'_> {
             definition,
         } = definition;
         let input = self.resolve_query_plan(*input, state).await?;
+        let input = LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
+            Arc::new(input),
+            self.resolve_table_reference(&view)?,
+        )?);
         let fields = match columns {
             Some(columns) => columns.into_iter().map(String::from).collect(),
             None => state.get_field_names(input.schema().inner())?,

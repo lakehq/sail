@@ -696,9 +696,12 @@ impl PlanResolver<'_> {
             schema
                 .iter()
                 .filter_map(|(qualifier, field)| {
-                    if state.get_field_name(field.name()).is_ok_and(|f| f == last)
+                    if state
+                        .get_field_name(field.name())
+                        .is_ok_and(|f| f.eq_ignore_ascii_case(last))
                         && (name.len() == 1
-                            || name.len() == 2 && qualifier.is_some_and(|q| q.table() == first))
+                            || name.len() == 2
+                                && qualifier.is_some_and(|q| q.table().eq_ignore_ascii_case(first)))
                     {
                         Some((
                             last.clone(),
