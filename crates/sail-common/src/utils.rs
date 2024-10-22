@@ -67,7 +67,10 @@ pub fn rename_logical_plan(plan: LogicalPlan, names: &[String]) -> Result<Logica
         .columns()
         .into_iter()
         .zip(names.iter())
-        .map(|(column, name)| Expr::Column(column).alias(name))
+        .map(|(column, name)| {
+            let relation = column.relation.clone();
+            Expr::Column(column).alias_qualified(relation, name)
+        })
         .collect();
     // The logical plan schema requires field names to be unique.
     // To support duplicate field names, construct the physical plan directly.
