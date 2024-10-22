@@ -35,13 +35,7 @@ impl TryFrom<Expression> for spec::Expr {
                 unparsed_identifier,
                 plan_id,
             }) => {
-                let name = if unparsed_identifier.contains('.') {
-                    let names: Vec<String> =
-                        unparsed_identifier.split('.').map(String::from).collect();
-                    spec::ObjectName::from(names)
-                } else {
-                    spec::ObjectName::new_unqualified(unparsed_identifier.into())
-                };
+                let name = parse_object_name(unparsed_identifier.as_str())?;
                 Ok(spec::Expr::UnresolvedAttribute { name, plan_id })
             }
             ExprType::UnresolvedFunction(UnresolvedFunction {
