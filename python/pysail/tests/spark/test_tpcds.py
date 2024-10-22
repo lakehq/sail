@@ -34,10 +34,10 @@ def test_tpcds_query(spark, duck, query):
         sql = sql.strip()  # noqa: PLW2901
         if not sql:
             continue
-        actual = spark.sql(sql)
-        # DuckDB and Spark has different syntax for quoted identifiers.
-        #   DuckDB: SELECT 1 AS "v"
+        # Spark and DuckDB has different syntax for quoted identifiers.
         #   Spark: SELECT 1 AS `v`
+        #   DuckDB: SELECT 1 AS "v"
         # In TPC-DS, quoted identifiers are used when column names contain spaces.
+        actual = spark.sql(sql)
         expected = duck.sql(sql.replace("`", '"'))
         assert_frame_equal(actual.toPandas(), expected.df())
