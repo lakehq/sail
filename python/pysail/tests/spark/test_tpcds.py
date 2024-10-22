@@ -24,10 +24,10 @@ def data(spark, duck):
         spark.catalog.dropTempView(table)
 
 
-@pytest.mark.parametrize("query", [x + 1 for x in range(99)])
+@pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)])
 @pytest.mark.skip(reason="TPC-DS queries are not yet fully supported")
 def test_tpcds_query(spark, duck, query):
-    path = Path(__file__).parent.parent.parent / "data" / "tpcds" / "queries" / f"q{query}.sql"
+    path = Path(__file__).parent.parent.parent / "data" / "tpcds" / "queries" / f"{query}.sql"
     with open(path) as f:
         text = f.read()
     for sql in text.split(";"):
