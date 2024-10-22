@@ -1,0 +1,11 @@
+[package]
+name = "sail-cli"
+version = { workspace = true }
+edition = { workspace = true }
+
+[[bin]]
+name = "sail"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }

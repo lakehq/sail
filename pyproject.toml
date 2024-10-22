@@ -40,6 +40,9 @@ Documentation = "https://docs.lakesail.com/sail/latest/"
 Repository = "https://github.com/lakehq/sail"
 Issues = "https://github.com/lakehq/sail/issues"
 
+[project.scripts]
+sail = "pysail.cli:main"
+
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
