@@ -8,11 +8,11 @@ use arrow::array::RecordBatch;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use sail_common::config::{ConfigKeyValue, SparkUdfConfig};
 use sail_common::spec;
 use sail_common::utils::rename_physical_plan;
+use sail_execution::job::{JobRunner, LocalJobRunner};
 use sail_plan::config::{PlanConfig, TimestampType};
 use sail_plan::formatter::DefaultPlanFormatter;
 use sail_plan::function::BUILT_IN_SCALAR_FUNCTIONS;
@@ -41,6 +41,7 @@ pub(crate) struct Session {
     user_id: Option<String>,
     session_id: String,
     context: SessionContext,
+    job_runner: Box<dyn JobRunner>,
     state: Mutex<SparkSessionState>,
 }
 
@@ -54,11 +55,24 @@ impl Debug for Session {
 }
 
 impl Session {
-    pub(crate) fn try_new(
+    pub(crate) fn new(
         user_id: Option<String>,
         session_id: String,
+        job_runner: Box<dyn JobRunner>,
+        context: SessionContext,
+    ) -> Self {
+        Self {
+            user_id,
+            session_id,
+            context,
+            job_runner,
+            state: Mutex::new(SparkSessionState::new()),
+        }
+    }
+
+    pub(crate) fn build_context(
         object_store_config: Arc<ObjectStoreConfig>,
-    ) -> SparkResult<Self> {
+    ) -> SparkResult<SessionContext> {
         // TODO: support more systematic configuration
         // TODO: return error on invalid environment variables
         let config = SessionConfig::new()
@@ -109,12 +123,7 @@ impl Session {
             context.deregister_udf(name);
         }
 
-        Ok(Self {
-            user_id,
-            session_id,
-            context,
-            state: Mutex::new(SparkSessionState::new()),
-        })
+        Ok(context)
     }
 
     pub(crate) fn session_id(&self) -> &str {
@@ -349,7 +358,7 @@ impl Session {
         } else {
             plan
         };
-        Ok(execute_stream(plan, ctx.task_ctx())?)
+        Ok(self.job_runner.execute(plan).await?)
     }
 
     #[cfg(test)]
@@ -425,11 +434,16 @@ impl SessionManager {
         match entry {
             Entry::Occupied(o) => Ok(o.get().clone()),
             Entry::Vacant(v) => {
-                let session = Session::try_new(
+                let context = Session::build_context(Arc::clone(&self.object_store_config))?;
+                // TODO: use cluster job runner based on the configuration
+                // let job_runner = ClusterJobRunner::start()?;
+                let job_runner = LocalJobRunner::new(context.clone());
+                let session = Session::new(
                     v.key().user_id.clone(),
                     v.key().session_id.clone(),
-                    Arc::clone(&self.object_store_config),
-                )?;
+                    Box::new(job_runner),
+                    context,
+                );
                 Ok(v.insert(Arc::new(session)).clone())
             }
         }

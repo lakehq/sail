@@ -308,6 +308,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-flight"
+version = "53.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b915fb36d935b969894d7909ad417c67ddeadebbbd57c3c168edf64721a37d31"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-cast",
+ "arrow-ipc",
+ "arrow-schema",
+ "base64 0.22.1",
+ "bytes",
+ "futures",
+ "paste",
+ "prost 0.13.3",
+ "prost-types 0.13.3",
+ "tokio",
+ "tonic",
+]
+
+[[package]]
 name = "arrow-ipc"
 version = "53.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1800,6 +1821,35 @@ dependencies = [
  "pin-project-lite",
  "rand",
  "tokio",
+]
+
+[[package]]
+name = "datafusion-proto"
+version = "42.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "585357d621fa03ea85a7fefca79ebc5ef0ee13a7f82be0762a414879a4d190a7"
+dependencies = [
+ "arrow",
+ "chrono",
+ "datafusion",
+ "datafusion-common",
+ "datafusion-expr",
+ "datafusion-proto-common",
+ "object_store",
+ "prost 0.13.3",
+]
+
+[[package]]
+name = "datafusion-proto-common"
+version = "42.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4db6534382f92f528bdb5d925b4214c31ffd84fa7fe1eff3ed0d2f1286851ab8"
+dependencies = [
+ "arrow",
+ "chrono",
+ "datafusion-common",
+ "object_store",
+ "prost 0.13.3",
 ]
 
 [[package]]
@@ -4083,6 +4133,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-execution"
+version = "0.1.4"
+dependencies = [
+ "arrow",
+ "arrow-flight",
+ "datafusion",
+ "datafusion-proto",
+ "futures",
+ "log",
+ "prost 0.13.3",
+ "prost-build",
+ "prost-types 0.13.3",
+ "sail-server",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "tonic-build",
+ "tonic-types",
+]
+
+[[package]]
 name = "sail-plan"
 version = "0.1.6"
 dependencies = [
@@ -4163,6 +4234,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-server"
+version = "0.1.4"
+dependencies = [
+ "sail-telemetry",
+ "tokio",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tonic-types",
+ "tower 0.5.1",
+ "tower-http",
+]
+
+[[package]]
 name = "sail-spark-connect"
 version = "0.1.6"
 dependencies = [
@@ -4195,8 +4280,10 @@ dependencies = [
  "quote",
  "regex",
  "sail-common",
+ "sail-execution",
  "sail-plan",
  "sail-python-udf",
+ "sail-server",
  "sail-sql",
  "sail-telemetry",
  "serde",
@@ -4208,11 +4295,7 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-build",
- "tonic-health",
- "tonic-reflection",
  "tonic-types",
- "tower 0.5.1",
- "tower-http",
  "uuid",
 ]
 
