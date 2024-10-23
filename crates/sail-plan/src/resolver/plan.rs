@@ -1688,7 +1688,7 @@ impl PlanResolver<'_> {
             true => ShowStringStyle::Vertical,
             false => ShowStringStyle::Default,
         };
-        let format = ShowStringFormat::new("show_string".to_string(), style, truncate);
+        let format = ShowStringFormat::new(style, truncate);
         let names = state.get_field_names(input.schema().inner())?;
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(ShowStringNode::try_new(
@@ -1696,6 +1696,7 @@ impl PlanResolver<'_> {
                 names,
                 num_rows,
                 format,
+                "show_string".to_string(),
             )?),
         }))
     }
@@ -1711,8 +1712,7 @@ impl PlanResolver<'_> {
             truncate,
         } = html;
         let input = self.resolve_query_plan(*input, state).await?;
-        let format =
-            ShowStringFormat::new("html_string".to_string(), ShowStringStyle::Html, truncate);
+        let format = ShowStringFormat::new(ShowStringStyle::Html, truncate);
         let names = state.get_field_names(input.schema().inner())?;
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(ShowStringNode::try_new(
@@ -1720,6 +1720,7 @@ impl PlanResolver<'_> {
                 names,
                 num_rows,
                 format,
+                "html_string".to_string(),
             )?),
         }))
     }

@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use datafusion::physical_plan::SendableRecordBatchStream;
+use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use log::error;
 use sail_server::actor::{Actor, ActorAction, ActorHandle};
@@ -41,7 +42,7 @@ impl Actor for DriverActor {
             server_listen_port: None,
             worker_manager,
             worker_clients: HashMap::new(),
-            physical_plan_codec: Box::new(RemoteExecutionCodec::new()),
+            physical_plan_codec: Box::new(RemoteExecutionCodec::new(SessionContext::default())),
             incoming_job_queue: VecDeque::new(),
             pending_jobs: HashMap::new(),
         }

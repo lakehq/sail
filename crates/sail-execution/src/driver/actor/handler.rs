@@ -6,7 +6,7 @@ use datafusion::physical_plan::{EmptyRecordBatchStream, ExecutionPlan, Execution
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::info;
-use prost::bytes::{Bytes, BytesMut};
+use prost::bytes::BytesMut;
 use prost::Message;
 use tokio::sync::oneshot;
 
@@ -152,7 +152,6 @@ impl DriverActor {
             PhysicalPlanNode::try_from_physical_plan(plan, self.physical_plan_codec.as_ref())?;
         let mut buffer = BytesMut::new();
         plan.encode(&mut buffer)?;
-        let plan: Bytes = buffer.into();
-        Ok(plan.into())
+        Ok(buffer.freeze().into())
     }
 }

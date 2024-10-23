@@ -4134,7 +4134,7 @@ dependencies = [
 
 [[package]]
 name = "sail-execution"
-version = "0.1.4"
+version = "0.1.6"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -4145,6 +4145,7 @@ dependencies = [
  "prost 0.13.3",
  "prost-build",
  "prost-types 0.13.3",
+ "sail-plan",
  "sail-server",
  "thiserror",
  "tokio",
@@ -4235,7 +4236,7 @@ dependencies = [
 
 [[package]]
 name = "sail-server"
-version = "0.1.4"
+version = "0.1.6"
 dependencies = [
  "sail-telemetry",
  "tokio",

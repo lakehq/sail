@@ -18,11 +18,12 @@ use sail_common::utils::rename_physical_plan;
 use crate::extension::logical::ShowStringFormat;
 
 #[derive(Debug)]
-pub(crate) struct ShowStringExec {
+pub struct ShowStringExec {
     input: Arc<dyn ExecutionPlan>,
     names: Vec<String>,
     limit: usize,
     format: ShowStringFormat,
+    schema: SchemaRef,
     cache: PlanProperties,
 }
 
@@ -32,9 +33,10 @@ impl ShowStringExec {
         names: Vec<String>,
         limit: usize,
         format: ShowStringFormat,
+        schema: SchemaRef,
     ) -> Self {
         let cache = PlanProperties::new(
-            EquivalenceProperties::new(format.schema().clone()),
+            EquivalenceProperties::new(schema.clone()),
             Partitioning::UnknownPartitioning(1),
             ExecutionMode::Bounded,
         );
@@ -43,8 +45,25 @@ impl ShowStringExec {
             names,
             limit,
             format,
+            schema,
             cache,
         }
+    }
+
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+
+    pub fn names(&self) -> &[String] {
+        &self.names
+    }
+
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+
+    pub fn format(&self) -> &ShowStringFormat {
+        &self.format
     }
 }
 
@@ -99,6 +118,7 @@ impl ExecutionPlan for ShowStringExec {
             self.names.clone(),
             self.limit,
             self.format.clone(),
+            self.schema.clone(),
         )))
     }
 
@@ -119,6 +139,7 @@ impl ExecutionPlan for ShowStringExec {
             stream,
             self.limit,
             self.format.clone(),
+            self.schema.clone(),
         )))
     }
 }
@@ -128,6 +149,7 @@ struct ShowStringStream {
     limit: usize,
     format: ShowStringFormat,
     input_schema: SchemaRef,
+    output_schema: SchemaRef,
     data: Vec<RecordBatch>,
     has_more_data: bool,
 }
@@ -140,13 +162,19 @@ enum ShowStringState {
 }
 
 impl ShowStringStream {
-    pub fn new(input: SendableRecordBatchStream, limit: usize, format: ShowStringFormat) -> Self {
+    pub fn new(
+        input: SendableRecordBatchStream,
+        limit: usize,
+        format: ShowStringFormat,
+        schema: SchemaRef,
+    ) -> Self {
         let input_schema = input.schema();
         Self {
             input: Some(input),
             limit,
             format,
             input_schema,
+            output_schema: schema,
             data: vec![],
             has_more_data: false,
         }
@@ -156,7 +184,7 @@ impl ShowStringStream {
         let batch = concat_batches(&self.input_schema, &self.data)?;
         let table = self.format.show(&batch, self.has_more_data)?;
         let array = StringArray::from(vec![table]);
-        let batch = RecordBatch::try_new(self.format.schema(), vec![Arc::new(array)])?;
+        let batch = RecordBatch::try_new(self.output_schema.clone(), vec![Arc::new(array)])?;
         Ok(batch)
     }
 
@@ -220,6 +248,6 @@ impl Stream for ShowStringStream {
 
 impl RecordBatchStream for ShowStringStream {
     fn schema(&self) -> SchemaRef {
-        self.format.schema()
+        self.output_schema.clone()
     }
 }
