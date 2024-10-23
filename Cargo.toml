@@ -5,7 +5,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 
 [workspace.dependencies]
@@ -76,6 +76,7 @@ hdfs-native-object-store = "0.12.1"
 datafusion = { version = "42.0.0", features = ["serde", "pyarrow", "avro"] }
 datafusion-common = { version = "42.0.0", features = ["object_store", "pyarrow", "avro"] }
 datafusion-expr = "42.0.0"
+datafusion-proto = "42.0.0"
 datafusion-functions-nested = "42.0.0"
 datafusion-functions-json = "0.42.0"
 datafusion-functions-extra = "0.2.0"
@@ -87,6 +88,7 @@ arrow = { version = "53.0.0", features = ["ffi", "pyarrow"] }
 arrow-cast = { version = "53.0.0" }
 arrow-schema = { version = "53.0.0" }
 arrow-select = { version = "53.0.0" }
+arrow-flight = { version = "53.0.0" }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.11.0", features = ["aws", "gcp", "azure", "http"] }
 # We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.
