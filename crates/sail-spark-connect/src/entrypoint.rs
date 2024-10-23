@@ -21,7 +21,8 @@ where
     let session_manager = SessionManager::new().with_object_store_config(object_store_config);
     let server = SparkConnectServer::new(session_manager);
     let service = SparkConnectServiceServer::new(server)
-        .max_encoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
+        // The original Spark Connect server seems to have configuration for inbound (decoding) message size only.
+        // .max_encoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
         .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
         .accept_compressed(CompressionEncoding::Gzip)
         .accept_compressed(CompressionEncoding::Zstd)

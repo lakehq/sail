@@ -40,6 +40,7 @@ impl<'b> ServerBuilder<'b> {
     pub fn new(name: &'static str, options: ServerBuilderOptions) -> Self {
         let (health_reporter, health_server) = tonic_health::server::health_reporter();
 
+        // TODO: We may want to turn off reflection in production if it affects performance.
         let reflection_server_builder = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET);
 
