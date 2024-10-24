@@ -39,6 +39,8 @@ pub enum SparkError {
     NotSupported(String),
     #[error("internal error: {0}")]
     InternalError(String),
+    #[error("analysis error: {0}")]
+    AnalysisError(String),
 }
 
 impl SparkError {
@@ -103,6 +105,7 @@ impl From<PlanError> for SparkError {
             PlanError::NotSupported(message) => SparkError::NotSupported(message),
             PlanError::InternalError(message) => SparkError::InternalError(message),
             PlanError::NotImplemented(message) => SparkError::NotImplemented(message),
+            PlanError::AnalysisError(message) => SparkError::AnalysisError(message),
         }
     }
 }
@@ -321,6 +324,7 @@ impl From<SparkError> for Status {
             SparkError::NotImplemented(s) | SparkError::NotSupported(s) => {
                 SparkThrowable::UnsupportedOperationException(s).into()
             }
+            SparkError::AnalysisError(s) => SparkThrowable::AnalysisException(s).into(),
             e @ SparkError::SendError(_) => Status::cancelled(e.to_string()),
             e @ SparkError::InternalError(_) => Status::internal(e.to_string()),
         }

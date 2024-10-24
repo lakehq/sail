@@ -21,6 +21,8 @@ pub enum PlanError {
     NotSupported(String),
     #[error("internal error: {0}")]
     InternalError(String),
+    #[error("analysis error: {0}")]
+    AnalysisError(String),
 }
 
 impl PlanError {
