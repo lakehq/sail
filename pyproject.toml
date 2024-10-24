@@ -66,6 +66,7 @@ dependencies = [
     "pyarrow-hotfix>=0.4,<1",  # (required by Ibis PySpark)
     "rich>=12.4.4,<14",  # (required by Ibis PySpark)
     "pytest~=8.3",
+    "duckdb~=1.1",
 ]
 
 [tool.hatch.envs.default.overrides]
