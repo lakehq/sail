@@ -17,10 +17,8 @@ def data(sail, spark, duck):
     tables = list(duck.sql("SHOW TABLES").df()["name"])
     for table in tables:
         df = duck.sql(f"SELECT * FROM {table}").df()  # noqa: S608
-        df_sail = sail.createDataFrame(df)
-        df_sail.createOrReplaceTempView(table)
-        df_spark = spark.createDataFrame(df)
-        df_spark.createOrReplaceTempView(table)
+        sail.createDataFrame(df).createOrReplaceTempView(table)
+        spark.createDataFrame(df).createOrReplaceTempView(table)
     yield
     for table in tables:
         sail.catalog.dropTempView(table)
@@ -28,32 +26,32 @@ def data(sail, spark, duck):
 
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(22)])
-def test_tpch_query_success(sail, query):
-    path = Path(__file__).parent.parent.parent / "data" / "tpch" / "queries" / f"{query}.sql"
-    with open(path) as f:
-        text = f.read()
-    for sql in text.split(";"):
-        sql = sql.strip()  # noqa: PLW2901
-        if not sql:
-            continue
-        actual = sail.sql(sql.replace("create view", "create temp view"))
-        if "create view" in sql or "drop view" in sql:
-            continue
-        actual.toPandas()
+def test_tpch_query_execution(sail, query):
+    for sql in read_sql(query):
+        sail.sql(sql).toPandas()
 
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(22)])
-@pytest.mark.skip(reason="Don't have full parity with Spark yet")
+@pytest.mark.skip(reason="TPC-H queries do not have full parity with Spark yet")
 def test_tpch_query_spark_parity(sail, spark, query):
+    for sql in read_sql(query):
+        actual = sail.sql(sql)
+        expected = spark.sql(sql)
+        if is_ddl(sql):
+            continue
+        assert_frame_equal(actual.toPandas(), expected.toPandas())
+
+
+def read_sql(query):
     path = Path(__file__).parent.parent.parent / "data" / "tpch" / "queries" / f"{query}.sql"
     with open(path) as f:
         text = f.read()
     for sql in text.split(";"):
         sql = sql.strip()  # noqa: PLW2901
-        if not sql:
-            continue
-        actual = sail.sql(sql.replace("create view", "create temp view"))
-        expected = spark.sql(sql)
-        if "create view" in sql or "drop view" in sql:
-            continue
-        assert_frame_equal(actual.toPandas(), expected.toPandas())
+        sql = sql.replace("create view", "create temp view")  # noqa: PLW2901
+        if sql:
+            yield sql
+
+
+def is_ddl(sql):
+    return any(x in sql for x in ("create view", "create temp view", "drop view"))
