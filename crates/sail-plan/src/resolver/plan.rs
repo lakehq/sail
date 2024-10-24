@@ -280,11 +280,16 @@ impl PlanResolver<'_> {
             QueryNode::StatDescribe { .. } => {
                 return Err(PlanError::todo("describe"));
             }
-            QueryNode::StatCov { .. } => {
-                return Err(PlanError::todo("cov"));
+            QueryNode::StatCov {
+                input,
+                left_column,
+                right_column,
+            } => {
+                self.resolve_query_stat_cov(*input, left_column, right_column, state)
+                    .await?
             }
             QueryNode::StatCorr { .. } => {
-                return Err(PlanError::todo("corr"));
+                return Err(PlanError::todo("StatCorr"));
             }
             QueryNode::StatApproxQuantile { .. } => {
                 return Err(PlanError::todo("approx quantile"));
@@ -2579,6 +2584,10 @@ impl PlanResolver<'_> {
         Ok(LogicalPlan::Statement(statement))
     }
 
+    /// All resolved plans must have "resolved columns".
+    /// If you define new fields in the plan, register the field in the state and use the "resolved field name" to alias the newly created field.
+    /// If you fetch an existing field in the plan, you likely have the "unresolved" field name from the spec.
+    /// Convert the unresolved field name to the "resolved field name" using the state.
     fn verify_query_plan(&self, plan: &LogicalPlan, state: &PlanResolverState) -> PlanResult<()> {
         let invalid = plan
             .schema()
@@ -2647,6 +2656,39 @@ impl PlanResolver<'_> {
                 }
             })
             .collect()
+    }
+
+    async fn resolve_query_stat_cov(
+        &self,
+        input: spec::QueryPlan,
+        left_column: spec::Identifier,
+        right_column: spec::Identifier,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let input = self.resolve_query_plan(input, state).await?;
+        let covar_samp = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+            func: datafusion::functions_aggregate::covariance::covar_samp_udaf(),
+            args: vec![
+                Expr::Column(self.get_resolved_column(
+                    input.schema(),
+                    (&left_column).into(),
+                    state,
+                )?),
+                Expr::Column(self.get_resolved_column(
+                    input.schema(),
+                    (&right_column).into(),
+                    state,
+                )?),
+            ],
+            distinct: false,
+            filter: None,
+            order_by: None,
+            null_treatment: None,
+        })
+        .alias(state.register_field("cov"));
+        Ok(LogicalPlanBuilder::from(input)
+            .aggregate(Vec::<Expr>::new(), vec![covar_samp])?
+            .build()?)
     }
 
     fn rewrite_aggregate(

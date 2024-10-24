@@ -2,11 +2,13 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion::datasource::TableProvider;
-use datafusion_common::{DFSchema, SchemaReference, TableReference};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, SchemaReference, TableReference};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
     pub(super) fn resolve_schema_reference(
@@ -72,5 +74,43 @@ impl PlanResolver<'_> {
                 .collect::<PlanResult<Vec<_>>>()?;
             Ok(SchemaRef::new(Schema::new(Fields::from(fields))))
         }
+    }
+
+    #[allow(dead_code)]
+    pub(super) fn get_resolved_columns(
+        &self,
+        schema: &DFSchemaRef,
+        unresolved: Vec<&str>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<Column>> {
+        unresolved
+            .iter()
+            .map(|unresolved_name| self.get_resolved_column(schema, unresolved_name, state))
+            .collect::<PlanResult<Vec<Column>>>()
+    }
+
+    pub(super) fn get_resolved_column(
+        &self,
+        schema: &DFSchemaRef,
+        unresolved: &str,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Column> {
+        let cols = schema.columns();
+        let matches: Vec<_> = cols
+            .iter()
+            .filter(|column| {
+                state
+                    .get_field_name(column.name())
+                    .ok()
+                    .map_or(false, |n| n.eq_ignore_ascii_case(unresolved))
+            })
+            .collect();
+        if matches.len() != 1 {
+            return Err(PlanError::invalid(format!(
+                "Expected exactly one match for column: {unresolved:?}, found: {}",
+                matches.len()
+            )));
+        }
+        Ok(matches.one()?.clone())
     }
 }
