@@ -1,10 +1,11 @@
 use std::collections::HashMap;
+use std::mem;
 
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use log::error;
-use sail_server::actor::{Actor, ActorAction, ActorHandle};
+use sail_server::actor::{Actor, ActorAction, ActorContext};
 
 use crate::codec::RemoteExecutionCodec;
 use crate::driver::DriverClient;
@@ -47,40 +48,50 @@ impl Actor for WorkerActor {
         );
         Self {
             options,
-            server: ServerMonitor::idle(),
+            server: ServerMonitor::new(),
             driver_client,
             task_streams: HashMap::new(),
             physical_plan_codec: Box::new(RemoteExecutionCodec::new(SessionContext::default())),
         }
     }
 
-    fn start(&mut self, handle: &ActorHandle<Self>) -> ExecutionResult<()> {
-        self.start_server(handle)
+    fn start(&mut self, ctx: &mut ActorContext<Self>) -> ExecutionResult<()> {
+        let addr = (
+            self.options().worker_listen_host.clone(),
+            self.options().worker_listen_port,
+        );
+        let server = mem::take(&mut self.server);
+        self.server = server.start(Self::serve(ctx.handle().clone(), addr));
+        Ok(())
     }
 
     fn receive(
         &mut self,
+        ctx: &mut ActorContext<Self>,
         message: Self::Message,
-        _handle: &ActorHandle<Self>,
     ) -> ExecutionResult<ActorAction> {
         let action = match &message {
             WorkerEvent::Shutdown => ActorAction::Stop,
             _ => ActorAction::Continue,
         };
         let out = match message {
-            WorkerEvent::ServerReady { port, signal } => self.handle_server_ready(port, signal),
+            WorkerEvent::ServerReady { port, signal } => {
+                self.handle_server_ready(ctx, port, signal)
+            }
             WorkerEvent::RunTask {
                 task_id,
                 attempt,
                 plan,
                 partition,
-            } => self.handle_run_task(task_id, attempt, plan, partition),
-            WorkerEvent::StopTask { task_id, attempt } => self.handle_stop_task(task_id, attempt),
+            } => self.handle_run_task(ctx, task_id, attempt, plan, partition),
+            WorkerEvent::StopTask { task_id, attempt } => {
+                self.handle_stop_task(ctx, task_id, attempt)
+            }
             WorkerEvent::FetchTaskStream {
                 task_id,
                 attempt,
                 result,
-            } => self.handle_fetch_task_stream(task_id, attempt, result),
+            } => self.handle_fetch_task_stream(ctx, task_id, attempt, result),
             WorkerEvent::Shutdown => Ok(()),
         };
         if let Err(e) = out {
@@ -90,8 +101,9 @@ impl Actor for WorkerActor {
         Ok(action)
     }
 
-    fn stop(mut self) -> ExecutionResult<()> {
-        self.stop_server()
+    fn stop(self) -> ExecutionResult<()> {
+        self.server.stop();
+        Ok(())
     }
 }
 
