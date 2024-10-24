@@ -288,8 +288,14 @@ impl PlanResolver<'_> {
                 self.resolve_query_stat_cov(*input, left_column, right_column, state)
                     .await?
             }
-            QueryNode::StatCorr { .. } => {
-                return Err(PlanError::todo("StatCorr"));
+            QueryNode::StatCorr {
+                input,
+                left_column,
+                right_column,
+                method,
+            } => {
+                self.resolve_query_stat_corr(*input, left_column, right_column, method, state)
+                    .await?
             }
             QueryNode::StatApproxQuantile { .. } => {
                 return Err(PlanError::todo("approx quantile"));
@@ -2688,6 +2694,45 @@ impl PlanResolver<'_> {
         .alias(state.register_field("cov"));
         Ok(LogicalPlanBuilder::from(input)
             .aggregate(Vec::<Expr>::new(), vec![covar_samp])?
+            .build()?)
+    }
+
+    async fn resolve_query_stat_corr(
+        &self,
+        input: spec::QueryPlan,
+        left_column: spec::Identifier,
+        right_column: spec::Identifier,
+        method: String,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        if !method.eq_ignore_ascii_case("pearson") {
+            return Err(PlanError::unsupported(format!(
+                "Unsupported correlation method: {method}. Currently only Pearson is supported.",
+            )));
+        }
+        let input = self.resolve_query_plan(input, state).await?;
+        let corr = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+            func: datafusion::functions_aggregate::correlation::corr_udaf(),
+            args: vec![
+                Expr::Column(self.get_resolved_column(
+                    input.schema(),
+                    (&left_column).into(),
+                    state,
+                )?),
+                Expr::Column(self.get_resolved_column(
+                    input.schema(),
+                    (&right_column).into(),
+                    state,
+                )?),
+            ],
+            distinct: false,
+            filter: None,
+            order_by: None,
+            null_treatment: None,
+        })
+        .alias(state.register_field("corr"));
+        Ok(LogicalPlanBuilder::from(input)
+            .aggregate(Vec::<Expr>::new(), vec![corr])?
             .build()?)
     }
 
