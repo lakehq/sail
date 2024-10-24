@@ -1,18 +1,29 @@
+use log::error;
 use tokio::sync::{mpsc, watch};
+use tokio::task::{AbortHandle, JoinSet};
 
 const ACTOR_CHANNEL_SIZE: usize = 8;
 
 pub trait Actor: Sized + Send + 'static {
     type Message: Send + 'static;
     type Options;
-    type Error: From<mpsc::error::SendError<Self::Message>>;
+    type Error: From<mpsc::error::SendError<Self::Message>> + std::fmt::Display + Send;
 
     fn new(options: Self::Options) -> Self;
-    fn start(&mut self, handle: &ActorHandle<Self>) -> Result<(), Self::Error>;
+    fn start(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), Self::Error>;
+    /// Process one message and return the next action.
+    /// This method should only return errors when they are not recoverable.
+    /// In such a situation, the actor will be stopped.
+    /// If the actor can recover from the error, it should handle it inside the method
+    /// and return [Ok].
+    /// This method should not invoke any blocking functions, otherwise the actor event loop
+    /// would be blocked since all messages are processed sequentially in a single thread.
+    /// If the actor needs to perform async operations, it should spawn tasks via
+    /// [ActorContext::spawn].
     fn receive(
         &mut self,
+        ctx: &mut ActorContext<Self>,
         message: Self::Message,
-        handle: &ActorHandle<Self>,
     ) -> Result<ActorAction, Self::Error>;
     fn stop(self) -> Result<(), Self::Error>;
 }
@@ -22,18 +33,63 @@ pub enum ActorAction {
     Stop,
 }
 
-pub struct ActorHandle<T>
-where
-    T: Actor,
-{
+pub struct ActorContext<T: Actor> {
+    handle: ActorHandle<T>,
+    /// A set of tasks spawned by the actor when processing messages.
+    /// All these tasks will be aborted when the context is dropped.
+    tasks: JoinSet<Result<(), T::Error>>,
+}
+
+impl<T: Actor> ActorContext<T> {
+    pub fn new(handle: &ActorHandle<T>) -> Self {
+        Self {
+            handle: handle.clone(),
+            tasks: JoinSet::new(),
+        }
+    }
+
+    pub fn handle(&self) -> &ActorHandle<T> {
+        &self.handle
+    }
+
+    /// Spawn a task and save the handle in the context.
+    pub fn spawn(
+        &mut self,
+        task: impl std::future::Future<Output = Result<(), T::Error>> + Send + 'static,
+    ) -> AbortHandle {
+        self.tasks.spawn(task)
+    }
+
+    /// Join tasks that have completed and log errors.
+    /// When the actor expects to handle errors, it should add the logic
+    /// inside the task (e.g. sending itself a message on error).
+    /// Any unhandled errors will be logged here.
+    pub fn reap(&mut self) {
+        while let Some(result) = self.tasks.try_join_next() {
+            let result = match result {
+                Ok(x) => x,
+                Err(e) => {
+                    error!("failed to join task spawned by actor: {e}");
+                    continue;
+                }
+            };
+            match result {
+                Ok(()) => {}
+                Err(e) => {
+                    error!("actor task failed: {e}");
+                    continue;
+                }
+            }
+        }
+    }
+}
+
+pub struct ActorHandle<T: Actor> {
     sender: mpsc::Sender<T::Message>,
     stopped: watch::Receiver<bool>,
 }
 
-impl<T> Clone for ActorHandle<T>
-where
-    T: Actor,
-{
+impl<T: Actor> Clone for ActorHandle<T> {
     fn clone(&self) -> Self {
         Self {
             sender: self.sender.clone(),
@@ -44,32 +100,23 @@ where
 
 impl<T: Actor> ActorHandle<T> {
     pub fn new(options: T::Options) -> Self {
-        let (tx, mut rx) = mpsc::channel(ACTOR_CHANNEL_SIZE);
+        let (tx, rx) = mpsc::channel(ACTOR_CHANNEL_SIZE);
         let (stopped_tx, stopped_rx) = watch::channel::<bool>(false);
-        let mut actor = T::new(options);
-        let out = Self {
+        let handle = Self {
             sender: tx,
             stopped: stopped_rx,
         };
-        let handle = out.clone();
-        tokio::spawn(async move {
-            let _ = async {
-                actor.start(&handle)?;
-                while let Some(message) = rx.recv().await {
-                    let action = actor.receive(message, &handle)?;
-                    match action {
-                        ActorAction::Continue => {}
-                        ActorAction::Stop => {
-                            break;
-                        }
-                    }
-                }
-                actor.stop()
-            }
-            .await;
-            let _ = stopped_tx.send(true);
-        });
-        out
+        let runner = ActorRunner {
+            actor: T::new(options),
+            ctx: ActorContext::new(&handle),
+            receiver: rx,
+            stopped: stopped_tx,
+        };
+        // Currently we do not save the handle to the actor event loop task.
+        // So the actor runs "detached" and the event loop task will stop by itself
+        // when the stop action is taken.
+        tokio::spawn(runner.run());
+        handle
     }
 
     pub async fn send(&self, message: T::Message) -> Result<(), T::Error> {
@@ -83,6 +130,40 @@ impl<T: Actor> ActorHandle<T> {
     }
 }
 
+struct ActorRunner<T: Actor> {
+    actor: T,
+    ctx: ActorContext<T>,
+    receiver: mpsc::Receiver<T::Message>,
+    stopped: watch::Sender<bool>,
+}
+
+impl<T: Actor> ActorRunner<T> {
+    async fn run(mut self) {
+        let out = async {
+            self.actor.start(&mut self.ctx)?;
+            while let Some(message) = self.receiver.recv().await {
+                let action = self.actor.receive(&mut self.ctx, message)?;
+                match action {
+                    ActorAction::Continue => {}
+                    ActorAction::Stop => {
+                        break;
+                    }
+                }
+                self.ctx.reap();
+            }
+            self.actor.stop()
+        }
+        .await;
+        match out {
+            Ok(()) => {}
+            Err(e) => {
+                error!("actor failed: {e}");
+            }
+        }
+        let _ = self.stopped.send(true);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tokio::sync::{mpsc, oneshot, watch};
@@ -93,6 +174,12 @@ mod tests {
 
     #[derive(Clone)]
     struct TestError;
+
+    impl std::fmt::Display for TestError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "test error")
+        }
+    }
 
     impl<T> From<mpsc::error::SendError<T>> for TestError {
         fn from(_: mpsc::error::SendError<T>) -> Self {
@@ -123,14 +210,14 @@ mod tests {
             Self
         }
 
-        fn start(&mut self, _: &ActorHandle<Self>) -> Result<(), Self::Error> {
+        fn start(&mut self, _: &mut ActorContext<Self>) -> Result<(), Self::Error> {
             Ok(())
         }
 
         fn receive(
             &mut self,
+            _: &mut ActorContext<Self>,
             message: Self::Message,
-            _: &ActorHandle<Self>,
         ) -> Result<ActorAction, Self::Error> {
             match message {
                 TestMessage::Echo { value, reply } => {

@@ -1,5 +1,3 @@
-use std::mem;
-
 use arrow_flight::flight_service_server::FlightServiceServer;
 use sail_server::actor::ActorHandle;
 use sail_server::ServerBuilder;
@@ -14,28 +12,7 @@ use crate::worker::server::WorkerServer;
 use crate::worker::WorkerEvent;
 
 impl WorkerActor {
-    pub(super) fn start_server(
-        &mut self,
-        handle: &ActorHandle<WorkerActor>,
-    ) -> ExecutionResult<()> {
-        if self.server.is_running() {
-            return Ok(());
-        }
-        let addr = (
-            self.options().worker_listen_host.clone(),
-            self.options().worker_listen_port,
-        );
-        tokio::spawn(Self::serve(handle.clone(), addr));
-        Ok(())
-    }
-
-    pub(super) fn stop_server(&mut self) -> ExecutionResult<()> {
-        let server = mem::take(&mut self.server);
-        server.stop();
-        Ok(())
-    }
-
-    async fn serve(
+    pub(super) async fn serve(
         handle: ActorHandle<WorkerActor>,
         addr: impl ToSocketAddrs,
     ) -> ExecutionResult<()> {

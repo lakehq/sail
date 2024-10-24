@@ -1,5 +1,3 @@
-use std::mem;
-
 use sail_server::actor::ActorHandle;
 use sail_server::ServerBuilder;
 use tokio::net::{TcpListener, ToSocketAddrs};
@@ -15,26 +13,10 @@ use crate::rpc::ClientOptions;
 use crate::worker::WorkerClient;
 
 impl DriverActor {
-    pub(super) fn start_server(&mut self, handle: &ActorHandle<Self>) -> ExecutionResult<()> {
-        if self.server.is_running() {
-            return Ok(());
-        }
-        let addr = (
-            self.options().driver_listen_host.clone(),
-            self.options().driver_listen_port,
-        );
-        tokio::spawn(Self::serve(handle.clone(), addr));
-        Ok(())
-    }
-
-    pub(super) fn stop_server(&mut self) -> ExecutionResult<()> {
-        let server = mem::take(&mut self.server);
-        server.stop();
-        self.server_listen_port = None;
-        Ok(())
-    }
-
-    async fn serve(handle: ActorHandle<Self>, addr: impl ToSocketAddrs) -> ExecutionResult<()> {
+    pub(super) async fn serve(
+        handle: ActorHandle<Self>,
+        addr: impl ToSocketAddrs,
+    ) -> ExecutionResult<()> {
         let listener = TcpListener::bind(addr).await?;
         let port = listener.local_addr()?.port();
         let (tx, rx) = tokio::sync::oneshot::channel();
