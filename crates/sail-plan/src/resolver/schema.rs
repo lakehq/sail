@@ -89,12 +89,12 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<Column>>>()
     }
 
-    pub(super) fn get_resolved_column(
+    pub(super) fn maybe_get_resolved_column(
         &self,
         schema: &DFSchemaRef,
         unresolved: &str,
         state: &mut PlanResolverState,
-    ) -> PlanResult<Column> {
+    ) -> PlanResult<Option<Column>> {
         let cols = schema.columns();
         let matches: Vec<_> = cols
             .iter()
@@ -105,12 +105,32 @@ impl PlanResolver<'_> {
                     .map_or(false, |n| n.eq_ignore_ascii_case(unresolved))
             })
             .collect();
-        if matches.len() != 1 {
+        if matches.len() > 1 {
             return Err(PlanError::AnalysisError(format!(
                 "[AMBIGUOUS_REFERENCE] Reference `{unresolved}` is ambiguous, found: {} matches",
                 matches.len()
             )));
         }
-        Ok(matches.one()?.clone())
+        if matches.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(matches.one()?.clone()))
+        }
+    }
+
+    pub(super) fn get_resolved_column(
+        &self,
+        schema: &DFSchemaRef,
+        unresolved: &str,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Column> {
+        let resolved = self.maybe_get_resolved_column(schema, unresolved, state)?;
+        if let Some(column) = resolved {
+            Ok(column)
+        } else {
+            Err(PlanError::AnalysisError(format!(
+                "[AMBIGUOUS_REFERENCE] Reference `{unresolved}` is ambiguous, found: 0 matches"
+            )))
+        }
     }
 }

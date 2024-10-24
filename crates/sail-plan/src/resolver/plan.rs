@@ -1287,23 +1287,31 @@ impl PlanResolver<'_> {
         for col in columns {
             if let spec::Expr::UnresolvedAttribute { name, plan_id } = col {
                 let name: Vec<String> = name.into();
-                let name = if name.len() > 1 {
-                    // In `crates/sail-spark-connect/src/proto/expression`,
-                    // unparsed identifiers with periods are split into multiple strings for `UnresolvedAttribute`.
-                    // Recombine them, as column names can contain periods.
-                    name.join(".")
-                } else {
-                    name.one()
-                        .map_err(|_| PlanError::invalid("expecting a single column name to drop"))?
-                };
-                // Ensure there is only one column name.
-                // This applies only to columns given as expressions.
-                self.get_resolved_column(schema, &name, state)?;
                 if let Some(plan_id) = plan_id {
+                    let name = if name.len() > 1 {
+                        // In `crates/sail-spark-connect/src/proto/expression`,
+                        // unparsed identifiers with periods are split into multiple strings for `UnresolvedAttribute`.
+                        // Recombine them, as column names can contain periods.
+                        name.join(".")
+                    } else {
+                        name.one().map_err(|_| {
+                            PlanError::invalid("expecting a single column name to drop")
+                        })?
+                    };
                     let field = state
                         .get_resolved_field_name_in_plan(plan_id, &name)?
                         .clone();
                     excluded_fields.push(field)
+                } else {
+                    let name = name.last().ok_or_else(|| {
+                        PlanError::invalid("expecting at least one column name to drop")
+                    })?;
+                    // Ensure there is only one column name.
+                    // This applies only to columns given as expressions.
+                    let column = self.maybe_get_resolved_column(schema, name, state)?;
+                    if let Some(column) = column {
+                        excluded_fields.push(column.name().into());
+                    }
                 }
             } else {
                 return Err(PlanError::invalid("expecting column name to drop"));
