@@ -106,8 +106,8 @@ impl PlanResolver<'_> {
             })
             .collect();
         if matches.len() != 1 {
-            return Err(PlanError::invalid(format!(
-                "Expected exactly one match for column: {unresolved:?}, found: {}",
+            return Err(PlanError::AnalysisError(format!(
+                "[AMBIGUOUS_REFERENCE] Reference `{unresolved}` is ambiguous, found: {} matches",
                 matches.len()
             )));
         }

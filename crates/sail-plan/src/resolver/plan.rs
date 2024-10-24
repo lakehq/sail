@@ -765,7 +765,7 @@ impl PlanResolver<'_> {
             &join_type,
         )?);
 
-        if is_cross_join {
+        if is_cross_join || (join_condition.is_none() && using_columns.is_empty()) {
             if join_condition.is_some() {
                 return Err(PlanError::invalid("cross join with join condition"));
             }
@@ -1287,16 +1287,23 @@ impl PlanResolver<'_> {
         for col in columns {
             if let spec::Expr::UnresolvedAttribute { name, plan_id } = col {
                 let name: Vec<String> = name.into();
-                let name = name
-                    .one()
-                    .map_err(|_| PlanError::invalid("expecting a single column name to drop"))?;
+                let name = if name.len() > 1 {
+                    // In `crates/sail-spark-connect/src/proto/expression`,
+                    // unparsed identifiers with periods are split into multiple strings for `UnresolvedAttribute`.
+                    // Recombine them, as column names can contain periods.
+                    name.join(".")
+                } else {
+                    name.one()
+                        .map_err(|_| PlanError::invalid("expecting a single column name to drop"))?
+                };
+                // Ensure there is only one column name.
+                // This applies only to columns given as expressions.
+                self.get_resolved_column(schema, &name, state)?;
                 if let Some(plan_id) = plan_id {
                     let field = state
                         .get_resolved_field_name_in_plan(plan_id, &name)?
                         .clone();
                     excluded_fields.push(field)
-                } else {
-                    excluded_names.push(name);
                 }
             } else {
                 return Err(PlanError::invalid("expecting column name to drop"));
