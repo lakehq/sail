@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use datafusion::execution::SendableRecordBatchStream;
+use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use log::error;
 use sail_server::actor::{Actor, ActorAction, ActorHandle};
@@ -49,7 +50,7 @@ impl Actor for WorkerActor {
             server: ServerMonitor::idle(),
             driver_client,
             task_streams: HashMap::new(),
-            physical_plan_codec: Box::new(RemoteExecutionCodec::new()),
+            physical_plan_codec: Box::new(RemoteExecutionCodec::new(SessionContext::default())),
         }
     }
 

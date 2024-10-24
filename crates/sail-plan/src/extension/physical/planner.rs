@@ -39,6 +39,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     node.names().to_vec(),
                     node.limit(),
                     node.format().clone(),
+                    node.schema().inner().clone(),
                 ))
             } else if let Some(node) = node.as_any().downcast_ref::<SortWithinPartitionsNode>() {
                 let expr = create_physical_sort_exprs(

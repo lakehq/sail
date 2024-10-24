@@ -4,7 +4,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field};
 use comfy_table::{Cell, CellAlignment, ColumnConstraint, Table, Width};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
@@ -23,37 +23,34 @@ fn truncate_string(s: &str, n: usize) -> String {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub(crate) enum ShowStringStyle {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum ShowStringStyle {
     Default,
     Vertical,
     Html,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub(crate) struct ShowStringFormat {
+pub struct ShowStringFormat {
     style: ShowStringStyle,
     truncate: usize,
-    schema: SchemaRef,
 }
 
 impl ShowStringFormat {
-    pub fn new(name: String, style: ShowStringStyle, truncate: usize) -> Self {
-        let fields = vec![Field::new(name, DataType::Utf8, false)];
-        let schema = Arc::new(Schema::new(fields));
-        Self {
-            style,
-            truncate,
-            schema,
-        }
+    pub fn new(style: ShowStringStyle, truncate: usize) -> Self {
+        Self { style, truncate }
+    }
+
+    pub fn style(&self) -> ShowStringStyle {
+        self.style
+    }
+
+    pub fn truncate(&self) -> usize {
+        self.truncate
     }
 }
 
 impl ShowStringFormat {
-    pub fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-
     pub fn show(&self, batch: &RecordBatch, has_more: bool) -> Result<String> {
         match self.style {
             ShowStringStyle::Default => self.show_string(batch, has_more),
@@ -225,14 +222,16 @@ impl ShowStringNode {
         names: Vec<String>,
         limit: usize,
         format: ShowStringFormat,
+        output_name: String,
     ) -> Result<Self> {
+        let fields = vec![Field::new(output_name, DataType::Utf8, false)];
         Ok(Self {
             input,
             names,
             limit,
             format: format.clone(),
             schema: Arc::new(DFSchema::from_unqualified_fields(
-                format.schema().fields.clone(),
+                fields.into(),
                 HashMap::new(),
             )?),
         })

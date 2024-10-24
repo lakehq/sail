@@ -5,6 +5,7 @@ edition = { workspace = true }
 
 [dependencies]
 sail-server = { path = "../sail-server" }
+sail-plan = { path = "../sail-plan" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }

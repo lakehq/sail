@@ -15,7 +15,7 @@ use crate::extension::logical::Range;
 const RANGE_BATCH_SIZE: usize = 1024;
 
 #[derive(Debug)]
-pub(crate) struct RangeExec {
+pub struct RangeExec {
     range: Range,
     num_partitions: usize,
     schema: SchemaRef,
@@ -35,6 +35,14 @@ impl RangeExec {
             schema,
             cache,
         }
+    }
+
+    pub fn range(&self) -> &Range {
+        &self.range
+    }
+
+    pub fn num_partitions(&self) -> usize {
+        self.num_partitions
     }
 }
 

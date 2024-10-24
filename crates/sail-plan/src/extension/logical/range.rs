@@ -10,7 +10,7 @@ use datafusion_common::plan_err;
 use crate::utils::ItemTaker;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub(crate) struct Range {
+pub struct Range {
     pub start: i64,
     pub end: i64,
     pub step: i64,
@@ -53,7 +53,7 @@ impl IntoIterator for Range {
     }
 }
 
-pub(crate) struct RangeIterator {
+pub struct RangeIterator {
     range: Range,
     current: i64,
 }

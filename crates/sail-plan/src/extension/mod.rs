@@ -7,8 +7,8 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 
 pub(crate) mod function;
-pub(crate) mod logical;
-pub(crate) mod physical;
+pub mod logical;
+pub mod physical;
 pub(crate) mod source;
 
 pub(crate) struct ExtensionQueryPlanner {}
