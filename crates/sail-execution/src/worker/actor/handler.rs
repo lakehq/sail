@@ -1,3 +1,4 @@
+use std::mem;
 use std::sync::Arc;
 
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -6,33 +7,36 @@ use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::info;
 use prost::Message;
+use sail_server::actor::ActorContext;
 use tokio::sync::oneshot;
 
 use crate::driver::state::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::TaskId;
-use crate::rpc::ServerMonitor;
 use crate::worker::actor::core::WorkerActor;
 use crate::worker::actor::TaskAttempt;
 
 impl WorkerActor {
     pub(super) fn handle_server_ready(
         &mut self,
+        ctx: &mut ActorContext<Self>,
         port: u16,
         signal: oneshot::Sender<()>,
     ) -> ExecutionResult<()> {
         let worker_id = self.options().worker_id;
         info!("worker {worker_id} server is ready on port {port}");
-        self.server = ServerMonitor::running(signal);
+        let server = mem::take(&mut self.server);
+        self.server = server.ready(signal, port)?;
         let host = self.options().worker_external_host.clone();
         let port = self.options().worker_external_port.unwrap_or(port);
         let client = self.driver_client.clone();
-        tokio::spawn(async move { client.register_worker(worker_id, host, port).await });
+        ctx.spawn(async move { client.register_worker(worker_id, host, port).await });
         Ok(())
     }
 
     pub(super) fn handle_run_task(
         &mut self,
+        ctx: &mut ActorContext<Self>,
         task_id: TaskId,
         attempt: usize,
         plan: Vec<u8>,
@@ -56,12 +60,13 @@ impl WorkerActor {
             Err(_) => TaskStatus::Failed,
         };
         let client = self.driver_client.clone();
-        tokio::spawn(async move { client.report_task_status(task_id, status).await });
+        ctx.spawn(async move { client.report_task_status(task_id, status).await });
         Ok(())
     }
 
     pub(super) fn handle_stop_task(
         &mut self,
+        ctx: &mut ActorContext<Self>,
         task_id: TaskId,
         attempt: usize,
     ) -> ExecutionResult<()> {
@@ -69,12 +74,13 @@ impl WorkerActor {
             .remove(&TaskAttempt::new(task_id, attempt));
         let status = TaskStatus::Canceled;
         let client = self.driver_client.clone();
-        tokio::spawn(async move { client.report_task_status(task_id, status).await });
+        ctx.spawn(async move { client.report_task_status(task_id, status).await });
         Ok(())
     }
 
     pub(super) fn handle_fetch_task_stream(
         &mut self,
+        _ctx: &ActorContext<Self>,
         task_id: TaskId,
         attempt: usize,
         result: oneshot::Sender<SendableRecordBatchStream>,

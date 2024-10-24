@@ -1,44 +1,84 @@
+use std::future::Future;
 use std::sync::Arc;
 
 use arrow_flight::flight_service_client::FlightServiceClient;
 use tokio::sync::{oneshot, Mutex, MutexGuard, OnceCell};
+use tokio::task::JoinHandle;
 use tonic::transport::Channel;
 
 use crate::driver::DriverServiceClient;
-use crate::error::ExecutionResult;
+use crate::error::{ExecutionError, ExecutionResult};
 use crate::worker::WorkerServiceClient;
 
-pub struct ServerMonitor {
-    /// The shutdown signal to send to the server,
-    /// or `None` if the server is not running.
-    signal: Option<oneshot::Sender<()>>,
-}
-
-impl ServerMonitor {
-    pub fn idle() -> Self {
-        Self { signal: None }
-    }
-
-    pub fn running(signal: oneshot::Sender<()>) -> Self {
-        Self {
-            signal: Some(signal),
-        }
-    }
-
-    pub fn is_running(&self) -> bool {
-        self.signal.is_some()
-    }
-
-    pub fn stop(self) {
-        if let Some(signal) = self.signal {
-            let _ = signal.send(());
-        }
-    }
+pub enum ServerMonitor {
+    Stopped,
+    Pending {
+        handle: JoinHandle<ExecutionResult<()>>,
+    },
+    Running {
+        /// The shutdown signal to send to the server,
+        /// or `None` if the server is not running.
+        signal: oneshot::Sender<()>,
+        /// The join handle of the server task.
+        handle: JoinHandle<ExecutionResult<()>>,
+        /// The server port.
+        port: u16,
+    },
 }
 
 impl Default for ServerMonitor {
     fn default() -> Self {
-        Self::idle()
+        Self::new()
+    }
+}
+
+impl ServerMonitor {
+    pub fn new() -> Self {
+        Self::Stopped
+    }
+
+    pub fn start(self, f: impl Future<Output = ExecutionResult<()>> + Send + 'static) -> Self {
+        self.stop();
+        Self::Pending {
+            handle: tokio::spawn(f),
+        }
+    }
+
+    pub fn ready(self, signal: oneshot::Sender<()>, port: u16) -> ExecutionResult<Self> {
+        match self {
+            Self::Pending { handle } => Ok(Self::Running {
+                signal,
+                handle,
+                port,
+            }),
+            _ => Err(ExecutionError::InternalError(
+                "the server must be in pending state before it can be ready".to_string(),
+            )),
+        }
+    }
+
+    pub fn stop(self) {
+        match self {
+            Self::Stopped => {}
+            Self::Pending { handle } => {
+                handle.abort();
+            }
+            Self::Running {
+                signal,
+                handle,
+                port: _,
+            } => {
+                let _ = signal.send(());
+                let _ = tokio::runtime::Handle::current().block_on(handle);
+            }
+        }
+    }
+
+    pub fn port(&self) -> Option<u16> {
+        match self {
+            Self::Running { port, .. } => Some(*port),
+            _ => None,
+        }
     }
 }
 

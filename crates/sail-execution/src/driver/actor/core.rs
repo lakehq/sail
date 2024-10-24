@@ -1,10 +1,11 @@
 use std::collections::{HashMap, VecDeque};
+use std::mem;
 
 use datafusion::physical_plan::SendableRecordBatchStream;
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use log::error;
-use sail_server::actor::{Actor, ActorAction, ActorHandle};
+use sail_server::actor::{Actor, ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
 use crate::codec::RemoteExecutionCodec;
@@ -20,7 +21,6 @@ pub struct DriverActor {
     options: DriverOptions,
     pub(super) state: DriverState,
     pub(super) server: ServerMonitor,
-    pub(super) server_listen_port: Option<u16>,
     pub(super) worker_manager: Box<dyn WorkerManager>,
     pub(super) worker_clients: HashMap<WorkerId, WorkerClient>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
@@ -38,8 +38,7 @@ impl Actor for DriverActor {
         Self {
             options,
             state: DriverState::new(),
-            server: ServerMonitor::idle(),
-            server_listen_port: None,
+            server: ServerMonitor::new(),
             worker_manager,
             worker_clients: HashMap::new(),
             physical_plan_codec: Box::new(RemoteExecutionCodec::new(SessionContext::default())),
@@ -48,32 +47,40 @@ impl Actor for DriverActor {
         }
     }
 
-    fn start(&mut self, handle: &ActorHandle<Self>) -> ExecutionResult<()> {
-        self.start_server(handle)
+    fn start(&mut self, ctx: &mut ActorContext<Self>) -> ExecutionResult<()> {
+        let addr = (
+            self.options().driver_listen_host.clone(),
+            self.options().driver_listen_port,
+        );
+        let server = mem::take(&mut self.server);
+        self.server = server.start(Self::serve(ctx.handle().clone(), addr));
+        Ok(())
     }
 
     fn receive(
         &mut self,
+        ctx: &mut ActorContext<Self>,
         message: DriverEvent,
-        _handle: &ActorHandle<Self>,
     ) -> ExecutionResult<ActorAction> {
         let action = match &message {
             DriverEvent::Shutdown => ActorAction::Stop,
             _ => ActorAction::Continue,
         };
         let out = match message {
-            DriverEvent::ServerReady { port, signal } => self.handle_server_ready(port, signal),
+            DriverEvent::ServerReady { port, signal } => {
+                self.handle_server_ready(ctx, port, signal)
+            }
             DriverEvent::RegisterWorker {
                 worker_id,
                 host,
                 port,
-            } => self.handle_register_worker(worker_id, host, port),
-            DriverEvent::ExecuteJob { plan, result } => self.handle_execute_job(plan, result),
+            } => self.handle_register_worker(ctx, worker_id, host, port),
+            DriverEvent::ExecuteJob { plan, result } => self.handle_execute_job(ctx, plan, result),
             DriverEvent::TaskUpdated {
                 worker_id,
                 task_id,
                 status,
-            } => self.handle_task_updated(worker_id, task_id, status),
+            } => self.handle_task_updated(ctx, worker_id, task_id, status),
             DriverEvent::Shutdown => Ok(()),
         };
         if let Err(e) = out {
@@ -82,8 +89,9 @@ impl Actor for DriverActor {
         Ok(action)
     }
 
-    fn stop(mut self) -> ExecutionResult<()> {
-        self.stop_server()
+    fn stop(self) -> ExecutionResult<()> {
+        self.server.stop();
+        Ok(())
     }
 }
 

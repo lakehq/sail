@@ -1,3 +1,4 @@
+use std::mem;
 use std::sync::Arc;
 
 use datafusion::execution::SendableRecordBatchStream;
@@ -8,6 +9,7 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::info;
 use prost::bytes::BytesMut;
 use prost::Message;
+use sail_server::actor::ActorContext;
 use tokio::sync::oneshot;
 
 use crate::driver::actor::DriverActor;
@@ -16,23 +18,24 @@ use crate::driver::state::{
 };
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskId, WorkerId};
-use crate::rpc::ServerMonitor;
 use crate::worker_manager::WorkerLaunchContext;
 
 impl DriverActor {
     pub(super) fn handle_server_ready(
         &mut self,
+        _ctx: &mut ActorContext<Self>,
         port: u16,
         signal: oneshot::Sender<()>,
     ) -> ExecutionResult<()> {
-        self.server = ServerMonitor::running(signal);
-        self.server_listen_port = Some(port);
+        let server = mem::take(&mut self.server);
+        self.server = server.ready(signal, port)?;
         info!("driver server is ready on port {port}");
         Ok(())
     }
 
     pub(super) fn handle_register_worker(
         &mut self,
+        ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
         host: String,
         port: u16,
@@ -47,7 +50,7 @@ impl DriverActor {
             },
         );
         if let Some((job_id, result)) = self.incoming_job_queue.pop_front() {
-            self.schedule_job(worker_id, job_id)?;
+            self.schedule_job(ctx, worker_id, job_id)?;
             self.pending_jobs.insert(job_id, result);
         }
         Ok(())
@@ -55,6 +58,7 @@ impl DriverActor {
 
     pub(super) fn handle_execute_job(
         &mut self,
+        _ctx: &mut ActorContext<Self>,
         plan: Arc<dyn ExecutionPlan>,
         result: oneshot::Sender<SendableRecordBatchStream>,
     ) -> ExecutionResult<()> {
@@ -96,6 +100,7 @@ impl DriverActor {
 
     pub(super) fn handle_task_updated(
         &mut self,
+        ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
         task_id: TaskId,
         status: TaskStatus,
@@ -108,7 +113,7 @@ impl DriverActor {
                 let stage = self.state.find_job_stage_by_task(task_id)?;
                 let schema = stage.plan.schema();
                 let client = self.worker_client(worker_id)?.clone();
-                tokio::spawn(async move {
+                ctx.spawn(async move {
                     let stream = client.fetch_task_stream(task_id, attempt, schema).await?;
                     let _ = result.send(stream);
                     Ok::<_, ExecutionError>(())
@@ -120,8 +125,9 @@ impl DriverActor {
 
     fn launch_worker(&mut self) -> ExecutionResult<()> {
         let port = self
-            .server_listen_port
-            .ok_or_else(|| ExecutionError::InternalError("server port is not set".to_string()))?;
+            .server
+            .port()
+            .ok_or_else(|| ExecutionError::InternalError("server port is not known".to_string()))?;
         let id = self.state.worker_id_generator.next()?;
         let ctx = WorkerLaunchContext {
             driver_host: self.options().driver_external_host.to_string(),
@@ -131,7 +137,12 @@ impl DriverActor {
         Ok(())
     }
 
-    fn schedule_job(&mut self, worker_id: WorkerId, job_id: JobId) -> ExecutionResult<()> {
+    fn schedule_job(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+        job_id: JobId,
+    ) -> ExecutionResult<()> {
         // TODO: create job stages and implement scheduling logic
         let _ = self
             .state
@@ -143,7 +154,7 @@ impl DriverActor {
         let task = self.state.get_task(task_id)?;
         let attempt = task.attempt;
         let client = self.worker_client(worker_id)?.clone();
-        tokio::spawn(async move { client.run_task(task_id, attempt, plan, 0).await });
+        ctx.spawn(async move { client.run_task(task_id, attempt, plan, 0).await });
         Ok(())
     }
 
