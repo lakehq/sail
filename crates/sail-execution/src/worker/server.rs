@@ -2,6 +2,7 @@ use log::debug;
 use sail_server::actor::ActorHandle;
 use tonic::{Request, Response, Status};
 
+use crate::error::ExecutionError;
 use crate::worker::actor::WorkerActor;
 use crate::worker::gen::worker_service_server::WorkerService;
 use crate::worker::gen::{
@@ -40,7 +41,10 @@ impl WorkerService for WorkerServer {
             partition: partition as usize,
             plan,
         };
-        self.handle.send(event).await?;
+        self.handle
+            .send(event)
+            .await
+            .map_err(ExecutionError::from)?;
         let response = RunTaskResponse {};
         debug!("{:?}", response);
         Ok(Response::new(response))
@@ -57,7 +61,10 @@ impl WorkerService for WorkerServer {
             task_id: task_id.into(),
             attempt: attempt as usize,
         };
-        self.handle.send(event).await?;
+        self.handle
+            .send(event)
+            .await
+            .map_err(ExecutionError::from)?;
         let response = StopTaskResponse {};
         debug!("{:?}", response);
         Ok(Response::new(response))
@@ -70,7 +77,10 @@ impl WorkerService for WorkerServer {
         let request = request.into_inner();
         debug!("{:?}", request);
         let StopWorkerRequest {} = request;
-        self.handle.send(WorkerEvent::Shutdown).await?;
+        self.handle
+            .send(WorkerEvent::Shutdown)
+            .await
+            .map_err(ExecutionError::from)?;
         let response = StopWorkerResponse {};
         debug!("{:?}", response);
         Ok(Response::new(response))

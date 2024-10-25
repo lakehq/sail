@@ -5,9 +5,9 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
-use log::info;
+use log::{error, info};
 use prost::Message;
-use sail_server::actor::ActorContext;
+use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
 use crate::driver::state::TaskStatus;
@@ -15,6 +15,7 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::TaskId;
 use crate::worker::actor::core::WorkerActor;
 use crate::worker::actor::TaskAttempt;
+use crate::worker::WorkerEvent;
 
 impl WorkerActor {
     pub(super) fn handle_server_ready(
@@ -22,16 +23,25 @@ impl WorkerActor {
         ctx: &mut ActorContext<Self>,
         port: u16,
         signal: oneshot::Sender<()>,
-    ) -> ExecutionResult<()> {
+    ) -> ActorAction {
         let worker_id = self.options().worker_id;
         info!("worker {worker_id} server is ready on port {port}");
         let server = mem::take(&mut self.server);
-        self.server = server.ready(signal, port)?;
+        self.server = match server.ready(signal, port) {
+            Ok(x) => x,
+            Err(e) => return ActorAction::fail(e),
+        };
         let host = self.options().worker_external_host.clone();
         let port = self.options().worker_external_port.unwrap_or(port);
         let client = self.driver_client.clone();
-        ctx.spawn(async move { client.register_worker(worker_id, host, port).await });
-        Ok(())
+        let handle = ctx.handle().clone();
+        ctx.spawn(async move {
+            if let Err(e) = client.register_worker(worker_id, host, port).await {
+                error!("failed to register worker: {e}");
+                let _ = handle.send(WorkerEvent::Shutdown).await;
+            }
+        });
+        ActorAction::Continue
     }
 
     pub(super) fn handle_run_task(
@@ -41,8 +51,8 @@ impl WorkerActor {
         attempt: usize,
         plan: Vec<u8>,
         partition: usize,
-    ) -> ExecutionResult<()> {
-        let out: ExecutionResult<()> = {
+    ) -> ActorAction {
+        let mut execute = || -> ExecutionResult<()> {
             let ctx = self.session_context();
             let plan = PhysicalPlanNode::decode(plan.as_slice())?;
             let plan = plan.try_into_physical_plan(
@@ -55,13 +65,13 @@ impl WorkerActor {
                 .insert(TaskAttempt::new(task_id, attempt), stream);
             Ok(())
         };
-        let status = match out {
+
+        let status = match execute() {
             Ok(_) => TaskStatus::Running,
             Err(_) => TaskStatus::Failed,
         };
-        let client = self.driver_client.clone();
-        ctx.spawn(async move { client.report_task_status(task_id, status).await });
-        Ok(())
+        self.report_task_status(ctx, task_id, status);
+        ActorAction::Continue
     }
 
     pub(super) fn handle_stop_task(
@@ -69,13 +79,12 @@ impl WorkerActor {
         ctx: &mut ActorContext<Self>,
         task_id: TaskId,
         attempt: usize,
-    ) -> ExecutionResult<()> {
+    ) -> ActorAction {
         self.task_streams
             .remove(&TaskAttempt::new(task_id, attempt));
         let status = TaskStatus::Canceled;
-        let client = self.driver_client.clone();
-        ctx.spawn(async move { client.report_task_status(task_id, status).await });
-        Ok(())
+        self.report_task_status(ctx, task_id, status);
+        ActorAction::Continue
     }
 
     pub(super) fn handle_fetch_task_stream(
@@ -83,16 +92,30 @@ impl WorkerActor {
         _ctx: &ActorContext<Self>,
         task_id: TaskId,
         attempt: usize,
-        result: oneshot::Sender<SendableRecordBatchStream>,
-    ) -> ExecutionResult<()> {
+        result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
+    ) -> ActorAction {
         let key = TaskAttempt::new(task_id, attempt);
-        let stream = self.task_streams.remove(&key).ok_or_else(|| {
+        let out = self.task_streams.remove(&key).ok_or_else(|| {
             ExecutionError::InternalError(format!(
                 "task stream not found: {task_id} attempt {attempt}"
             ))
-        })?;
-        let _ = result.send(stream);
-        Ok(())
+        });
+        let _ = result.send(out);
+        ActorAction::Continue
+    }
+
+    fn report_task_status(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        task_id: TaskId,
+        status: TaskStatus,
+    ) {
+        let client = self.driver_client.clone();
+        ctx.spawn(async move {
+            if let Err(e) = client.report_task_status(task_id, status).await {
+                error!("failed to report task status: {e}");
+            }
+        });
     }
 
     fn session_context(&self) -> Arc<SessionContext> {

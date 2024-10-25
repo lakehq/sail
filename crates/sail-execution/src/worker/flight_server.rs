@@ -16,6 +16,7 @@ use tokio::sync::oneshot;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::error::ExecutionError;
 use crate::worker::gen::TaskStreamTicket;
 use crate::worker::WorkerActor;
 
@@ -92,10 +93,13 @@ impl FlightService for WorkerFlightServer {
             attempt: attempt as usize,
             result: tx,
         };
-        self.handle.send(event).await?;
+        self.handle
+            .send(event)
+            .await
+            .map_err(ExecutionError::from)?;
         let stream = rx
             .await
-            .map_err(|_| Status::internal("task stream not found"))?;
+            .map_err(|_| Status::internal("failed to receive task stream"))??;
         let stream = stream.map_err(|e| FlightError::from_external_error(Box::new(e)));
         let stream = FlightDataEncoderBuilder::new()
             .build(stream)
