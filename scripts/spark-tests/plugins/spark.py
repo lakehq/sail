@@ -266,7 +266,7 @@ def patch_pyspark_doctest_output_checker():
 
     class OutputChecker(_pytest.doctest.CHECKER_CLASS):
         def check_output(self, want: str, got: str, optionflags: int) -> bool:
-            if "pyspark.errors.exceptions" in want or "pyspark.errors.exceptions" in got:
+            if "pyspark.errors.exceptions" in want:
                 want = normalize_exception(want)
                 got = normalize_exception(got)
             if want.startswith("+"):
