@@ -15,10 +15,17 @@ pub enum DriverEvent {
         port: u16,
         signal: oneshot::Sender<()>,
     },
+    StartWorker {
+        worker_id: WorkerId,
+    },
     RegisterWorker {
         worker_id: WorkerId,
         host: String,
         port: u16,
+    },
+    #[allow(dead_code)]
+    StopWorker {
+        worker_id: WorkerId,
     },
     ExecuteJob {
         plan: Arc<dyn ExecutionPlan>,

@@ -48,6 +48,10 @@ impl DriverState {
         self.workers.get(worker_id)
     }
 
+    pub fn get_worker_mut(&mut self, worker_id: &WorkerId) -> Option<&mut WorkerDescriptor> {
+        self.workers.get_mut(worker_id)
+    }
+
     pub fn add_job(&mut self, job_id: JobId, descriptor: JobDescriptor) {
         self.jobs.insert(job_id, descriptor);
     }

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::{execute_stream, ExecutionPlan};
 use datafusion::prelude::SessionContext;
-use sail_server::actor::ActorHandle;
+use sail_server::actor::{ActorHandle, ActorSystem};
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverActor, DriverEvent, DriverOptions};
@@ -38,6 +38,8 @@ impl JobRunner for LocalJobRunner {
 }
 
 pub struct ClusterJobRunner {
+    #[allow(dead_code)]
+    system: ActorSystem,
     driver: ActorHandle<DriverActor>,
 }
 
@@ -50,8 +52,10 @@ impl ClusterJobRunner {
             driver_external_host: "127.0.0.1".to_string(),
             driver_external_port: None,
         };
-        let driver = ActorHandle::new(options);
-        Ok(Self { driver })
+        // TODO: share actor system across sessions
+        let mut system = ActorSystem::new();
+        let driver = system.spawn(options);
+        Ok(Self { system, driver })
     }
 }
 
