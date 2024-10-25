@@ -4,12 +4,10 @@ use std::mem;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
-use log::error;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 
 use crate::codec::RemoteExecutionCodec;
 use crate::driver::DriverClient;
-use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::TaskId;
 use crate::rpc::{ClientOptions, ServerMonitor};
 use crate::worker::event::WorkerEvent;
@@ -35,7 +33,6 @@ pub struct WorkerActor {
 impl Actor for WorkerActor {
     type Message = WorkerEvent;
     type Options = WorkerOptions;
-    type Error = ExecutionError;
 
     fn new(options: WorkerOptions) -> Self {
         let driver_client = DriverClient::new(
@@ -55,26 +52,17 @@ impl Actor for WorkerActor {
         }
     }
 
-    fn start(&mut self, ctx: &mut ActorContext<Self>) -> ExecutionResult<()> {
+    fn start(&mut self, ctx: &mut ActorContext<Self>) {
         let addr = (
             self.options().worker_listen_host.clone(),
             self.options().worker_listen_port,
         );
         let server = mem::take(&mut self.server);
         self.server = server.start(Self::serve(ctx.handle().clone(), addr));
-        Ok(())
     }
 
-    fn receive(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        message: Self::Message,
-    ) -> ExecutionResult<ActorAction> {
-        let action = match &message {
-            WorkerEvent::Shutdown => ActorAction::Stop,
-            _ => ActorAction::Continue,
-        };
-        let out = match message {
+    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
+        match message {
             WorkerEvent::ServerReady { port, signal } => {
                 self.handle_server_ready(ctx, port, signal)
             }
@@ -92,18 +80,12 @@ impl Actor for WorkerActor {
                 attempt,
                 result,
             } => self.handle_fetch_task_stream(ctx, task_id, attempt, result),
-            WorkerEvent::Shutdown => Ok(()),
-        };
-        if let Err(e) = out {
-            let worker_id = self.options().worker_id;
-            error!("error processing worker {worker_id} event: {e}");
+            WorkerEvent::Shutdown => ActorAction::Stop,
         }
-        Ok(action)
     }
 
-    fn stop(self) -> ExecutionResult<()> {
+    fn stop(self) {
         self.server.stop();
-        Ok(())
     }
 }
 

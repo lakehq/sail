@@ -5,6 +5,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use tokio::sync::oneshot;
 
 use crate::driver::state::TaskStatus;
+use crate::error::ExecutionResult;
 use crate::id::{TaskId, WorkerId};
 
 pub enum DriverEvent {
@@ -21,7 +22,7 @@ pub enum DriverEvent {
     },
     ExecuteJob {
         plan: Arc<dyn ExecutionPlan>,
-        result: oneshot::Sender<SendableRecordBatchStream>,
+        result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     },
     TaskUpdated {
         worker_id: WorkerId,

@@ -43,7 +43,10 @@ impl DriverService for DriverServer {
             host,
             port,
         };
-        self.handle.send(event).await?;
+        self.handle
+            .send(event)
+            .await
+            .map_err(ExecutionError::from)?;
         let response = RegisterWorkerResponse {};
         debug!("{:?}", response);
         Ok(Response::new(response))
@@ -68,7 +71,10 @@ impl DriverService for DriverServer {
             task_id: task_id.into(),
             status,
         };
-        self.handle.send(event).await?;
+        self.handle
+            .send(event)
+            .await
+            .map_err(ExecutionError::from)?;
         let response = ReportTaskStatusResponse {};
         debug!("{:?}", response);
         Ok(Response::new(response))
