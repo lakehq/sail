@@ -43,7 +43,7 @@ impl DriverActor {
         worker_id: WorkerId,
     ) -> ActorAction {
         let Some(port) = self.server.port() else {
-            return ActorAction::Fail("the driver server is not ready".to_string());
+            return ActorAction::fail("the driver server is not ready");
         };
         let options = WorkerLaunchOptions {
             driver_host: self.options().driver_external_host.to_string(),
@@ -76,7 +76,9 @@ impl DriverActor {
         );
         if let Some((job_id, result)) = self.incoming_job_queue.pop_front() {
             if let Err(e) = self.schedule_job(ctx, worker_id, job_id) {
-                return ActorAction::warn(e);
+                let message = e.to_string();
+                let _ = result.send(Err(e));
+                return ActorAction::warn(message);
             }
             self.pending_jobs.insert(job_id, result);
         }
@@ -136,6 +138,7 @@ impl DriverActor {
                     attempt: 0,
                     mode: TaskMode::Pipelined,
                     status: TaskStatus::Pending,
+                    messages: vec![],
                 },
             );
             tasks.push(task_id);
@@ -154,35 +157,51 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_task_updated(
+    pub(super) fn handle_update_task(
         &mut self,
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
         task_id: TaskId,
         status: TaskStatus,
+        message: Option<String>,
     ) -> ActorAction {
         let task = match self.state.get_task_mut(task_id) {
             Ok(x) => x,
             Err(e) => return ActorAction::warn(e),
         };
+        if let Some(message) = &message {
+            task.messages.push(message.clone());
+        }
         task.status = status;
-        if matches!(task.status, TaskStatus::Running) {
-            if let Some(result) = self.pending_jobs.remove(&task.job_id) {
-                let attempt = task.attempt;
-                let stage = match self.state.find_job_stage_by_task(task_id) {
-                    Ok(x) => x,
-                    Err(e) => return ActorAction::warn(e),
-                };
-                let schema = stage.plan.schema();
-                let client = match self.worker_client(worker_id) {
-                    Ok(x) => x.clone(),
-                    Err(e) => return ActorAction::warn(e),
-                };
-                ctx.spawn(async move {
-                    let out = client.fetch_task_stream(task_id, attempt, schema).await;
-                    let _ = result.send(out);
-                });
+        match task.status {
+            TaskStatus::Running => {
+                if let Some(result) = self.pending_jobs.remove(&task.job_id) {
+                    let attempt = task.attempt;
+                    let stage = match self.state.find_job_stage_by_task(task_id) {
+                        Ok(x) => x,
+                        Err(e) => return ActorAction::warn(e),
+                    };
+                    let schema = stage.plan.schema();
+                    let client = match self.worker_client(worker_id) {
+                        Ok(x) => x.clone(),
+                        Err(e) => return ActorAction::warn(e),
+                    };
+                    ctx.spawn(async move {
+                        let out = client.fetch_task_stream(task_id, attempt, schema).await;
+                        let _ = result.send(out);
+                    });
+                }
             }
+            TaskStatus::Failed => {
+                let job_id = task.job_id;
+                if let Some(result) = self.pending_jobs.remove(&job_id) {
+                    let _ = result.send(Err(ExecutionError::InternalError(format!(
+                        "task failed or canceled: {}",
+                        message.as_deref().unwrap_or("unknown reason")
+                    ))));
+                }
+            }
+            _ => {}
         }
         ActorAction::Continue
     }

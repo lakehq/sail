@@ -66,11 +66,14 @@ impl WorkerActor {
             Ok(())
         };
 
-        let status = match execute() {
-            Ok(_) => TaskStatus::Running,
-            Err(_) => TaskStatus::Failed,
+        let (status, message) = match execute() {
+            Ok(()) => (TaskStatus::Running, None),
+            Err(e) => {
+                error!("failed to run task: {e}");
+                (TaskStatus::Failed, Some(e.to_string()))
+            }
         };
-        self.report_task_status(ctx, task_id, status);
+        self.report_task_status(ctx, task_id, status, message);
         ActorAction::Continue
     }
 
@@ -83,7 +86,7 @@ impl WorkerActor {
         self.task_streams
             .remove(&TaskAttempt::new(task_id, attempt));
         let status = TaskStatus::Canceled;
-        self.report_task_status(ctx, task_id, status);
+        self.report_task_status(ctx, task_id, status, None);
         ActorAction::Continue
     }
 
@@ -109,10 +112,11 @@ impl WorkerActor {
         ctx: &mut ActorContext<Self>,
         task_id: TaskId,
         status: TaskStatus,
+        message: Option<String>,
     ) {
         let client = self.driver_client.clone();
         ctx.spawn(async move {
-            if let Err(e) = client.report_task_status(task_id, status).await {
+            if let Err(e) = client.report_task_status(task_id, status, message).await {
                 error!("failed to report task status: {e}");
             }
         });

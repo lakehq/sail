@@ -113,6 +113,7 @@ pub struct TaskDescriptor {
     #[allow(dead_code)]
     pub mode: TaskMode,
     pub status: TaskStatus,
+    pub messages: Vec<String>,
 }
 
 #[derive(Clone, Copy)]

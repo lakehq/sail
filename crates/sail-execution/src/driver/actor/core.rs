@@ -72,11 +72,12 @@ impl Actor for DriverActor {
             } => self.handle_register_worker(ctx, worker_id, host, port),
             DriverEvent::StopWorker { worker_id } => self.handle_stop_worker(ctx, worker_id),
             DriverEvent::ExecuteJob { plan, result } => self.handle_execute_job(ctx, plan, result),
-            DriverEvent::TaskUpdated {
+            DriverEvent::UpdateTask {
                 worker_id,
                 task_id,
                 status,
-            } => self.handle_task_updated(ctx, worker_id, task_id, status),
+                message,
+            } => self.handle_update_task(ctx, worker_id, task_id, status, message),
             DriverEvent::Shutdown => ActorAction::Stop,
         }
     }

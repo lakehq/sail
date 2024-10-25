@@ -15,6 +15,7 @@ message ReportTaskStatusRequest {
   uint64 worker_id = 1;
   uint64 task_id = 2;
   TaskStatus status = 3;
+  optional string message = 4;
 }
 
 enum TaskStatus {

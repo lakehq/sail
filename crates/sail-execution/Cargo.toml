@@ -4,6 +4,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+sail-common = { path = "../sail-common" }
 sail-server = { path = "../sail-server" }
 sail-plan = { path = "../sail-plan" }
 

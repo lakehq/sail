@@ -69,7 +69,8 @@ impl JobRunner for ClusterJobRunner {
         self.driver
             .send(DriverEvent::ExecuteJob { plan, result: tx })
             .await?;
-        rx.await
-            .map_err(|_| ExecutionError::InternalError("failed to create job stream".to_string()))?
+        rx.await.map_err(|e| {
+            ExecutionError::InternalError(format!("failed to create job stream: {e}"))
+        })?
     }
 }

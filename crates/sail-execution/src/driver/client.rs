@@ -45,11 +45,13 @@ impl DriverClient {
         &self,
         task_id: TaskId,
         status: TaskStatus,
+        message: Option<String>,
     ) -> ExecutionResult<()> {
         let request = tonic::Request::new(ReportTaskStatusRequest {
             worker_id: self.worker_id.into(),
             task_id: task_id.into(),
             status: gen::TaskStatus::from(status) as i32,
+            message,
         });
         let response = self.inner.lock().await?.report_task_status(request).await?;
         let ReportTaskStatusResponse {} = response.into_inner();

@@ -31,10 +31,11 @@ pub enum DriverEvent {
         plan: Arc<dyn ExecutionPlan>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     },
-    TaskUpdated {
+    UpdateTask {
         worker_id: WorkerId,
         task_id: TaskId,
         status: TaskStatus,
+        message: Option<String>,
     },
     #[allow(dead_code)]
     Shutdown,
