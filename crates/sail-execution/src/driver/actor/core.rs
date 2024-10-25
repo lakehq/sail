@@ -1,9 +1,11 @@
 use std::collections::{HashMap, VecDeque};
 use std::mem;
+use std::sync::Arc;
 
 use datafusion::physical_plan::SendableRecordBatchStream;
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use log::error;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
@@ -20,7 +22,7 @@ pub struct DriverActor {
     options: DriverOptions,
     pub(super) state: DriverState,
     pub(super) server: ServerMonitor,
-    pub(super) worker_manager: Box<dyn WorkerManager>,
+    pub(super) worker_manager: Arc<dyn WorkerManager>,
     pub(super) worker_clients: HashMap<WorkerId, WorkerClient>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
     pub(super) incoming_job_queue: VecDeque<(
@@ -36,12 +38,11 @@ impl Actor for DriverActor {
     type Options = DriverOptions;
 
     fn new(options: DriverOptions) -> Self {
-        let worker_manager = Box::new(LocalWorkerManager::new());
         Self {
             options,
             state: DriverState::new(),
             server: ServerMonitor::new(),
-            worker_manager,
+            worker_manager: Arc::new(LocalWorkerManager::new()),
             worker_clients: HashMap::new(),
             physical_plan_codec: Box::new(RemoteExecutionCodec::new(SessionContext::default())),
             incoming_job_queue: VecDeque::new(),
@@ -63,11 +64,13 @@ impl Actor for DriverActor {
             DriverEvent::ServerReady { port, signal } => {
                 self.handle_server_ready(ctx, port, signal)
             }
+            DriverEvent::StartWorker { worker_id } => self.handle_start_worker(ctx, worker_id),
             DriverEvent::RegisterWorker {
                 worker_id,
                 host,
                 port,
             } => self.handle_register_worker(ctx, worker_id, host, port),
+            DriverEvent::StopWorker { worker_id } => self.handle_stop_worker(ctx, worker_id),
             DriverEvent::ExecuteJob { plan, result } => self.handle_execute_job(ctx, plan, result),
             DriverEvent::TaskUpdated {
                 worker_id,
@@ -80,6 +83,11 @@ impl Actor for DriverActor {
 
     fn stop(self) {
         self.server.stop();
+        tokio::runtime::Handle::current().block_on(async {
+            if let Err(e) = self.worker_manager.stop_all_workers().await {
+                error!("encountered error while stopping workers: {e}");
+            }
+        });
     }
 }
 

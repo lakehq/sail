@@ -1,5 +1,5 @@
 use log::error;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
 
 const ACTOR_CHANNEL_SIZE: usize = 8;
@@ -57,6 +57,14 @@ impl<T: Actor> ActorContext<T> {
         &self.handle
     }
 
+    /// Spawn a task to send a message to the actor itself.
+    pub fn send(&mut self, message: T::Message) {
+        let handle = self.handle.clone();
+        self.spawn(async move {
+            let _ = handle.send(message).await;
+        });
+    }
+
     /// Spawn a task and save the handle in the context.
     /// The task should handle errors internally.
     pub fn spawn(
@@ -81,52 +89,69 @@ impl<T: Actor> ActorContext<T> {
     }
 }
 
+/// An actor system that manages a set of actors.
+/// All actors will be aborted when the system is dropped.
+pub struct ActorSystem {
+    tasks: JoinSet<()>,
+}
+
+impl Default for ActorSystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ActorSystem {
+    pub fn new() -> Self {
+        Self {
+            tasks: JoinSet::new(),
+        }
+    }
+
+    pub fn spawn<T: Actor>(&mut self, options: T::Options) -> ActorHandle<T> {
+        let (tx, rx) = mpsc::channel(ACTOR_CHANNEL_SIZE);
+        let handle = ActorHandle { sender: tx };
+        let runner = ActorRunner {
+            actor: T::new(options),
+            ctx: ActorContext::new(&handle),
+            receiver: rx,
+        };
+        self.tasks.spawn(runner.run());
+        handle
+    }
+
+    /// Wait for all the spawned actors to stop.
+    /// The system can still be used to spawn new actors after this method is called.
+    pub async fn join(&mut self) {
+        while let Some(result) = self.tasks.join_next().await {
+            match result {
+                Ok(()) => {}
+                Err(e) => {
+                    error!("failed to join task spawned by actor system: {e}");
+                }
+            }
+        }
+    }
+}
+
 pub struct ActorHandle<T: Actor> {
     sender: mpsc::Sender<T::Message>,
-    stopped: watch::Receiver<bool>,
 }
 
 impl<T: Actor> Clone for ActorHandle<T> {
     fn clone(&self) -> Self {
         Self {
             sender: self.sender.clone(),
-            stopped: self.stopped.clone(),
         }
     }
 }
 
 impl<T: Actor> ActorHandle<T> {
-    pub fn new(options: T::Options) -> Self {
-        let (tx, rx) = mpsc::channel(ACTOR_CHANNEL_SIZE);
-        let (stopped_tx, stopped_rx) = watch::channel::<bool>(false);
-        let handle = Self {
-            sender: tx,
-            stopped: stopped_rx,
-        };
-        let runner = ActorRunner {
-            actor: T::new(options),
-            ctx: ActorContext::new(&handle),
-            receiver: rx,
-            stopped: stopped_tx,
-        };
-        // Currently we do not save the handle to the actor event loop task.
-        // So the actor runs "detached" and the event loop task will stop by itself
-        // when the stop action is taken.
-        tokio::spawn(runner.run());
-        handle
-    }
-
     pub async fn send(
         &self,
         message: T::Message,
     ) -> Result<(), mpsc::error::SendError<T::Message>> {
         self.sender.send(message).await
-    }
-
-    pub async fn wait_for_stop(mut self) {
-        // We ignore the receiver error since the sender must have been dropped in this case,
-        // which means the actor has stopped.
-        let _ = self.stopped.wait_for(|x| *x).await;
     }
 }
 
@@ -134,7 +159,6 @@ struct ActorRunner<T: Actor> {
     actor: T,
     ctx: ActorContext<T>,
     receiver: mpsc::Receiver<T::Message>,
-    stopped: watch::Sender<bool>,
 }
 
 impl<T: Actor> ActorRunner<T> {
@@ -158,7 +182,6 @@ impl<T: Actor> ActorRunner<T> {
             self.ctx.reap();
         }
         self.actor.stop();
-        let _ = self.stopped.send(true);
     }
 }
 
@@ -203,7 +226,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_actor_handle_send() {
-        let handle = ActorHandle::<TestActor>::new(());
+        let mut system = ActorSystem::new();
+        let handle = system.spawn::<TestActor>(());
         assert!(!handle.sender.is_closed());
         let (tx, rx) = oneshot::channel();
         let result = handle
@@ -217,13 +241,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_actor_handle_wait_for_stop() {
-        let handle = ActorHandle::<TestActor>::new(());
+    async fn test_actor_handle_stop() {
+        let mut system = ActorSystem::new();
+        let handle = system.spawn::<TestActor>(());
         let result = handle.send(TestMessage::Stop).await;
         assert!(matches!(result, Ok(())));
-
-        handle.clone().wait_for_stop().await;
-        // Multiple handles should be able to wait for the actor to stop.
-        handle.wait_for_stop().await;
+        system.join().await;
     }
 }

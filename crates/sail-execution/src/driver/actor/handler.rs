@@ -16,9 +16,10 @@ use crate::driver::actor::DriverActor;
 use crate::driver::state::{
     JobDescriptor, JobStage, TaskDescriptor, TaskMode, TaskStatus, WorkerDescriptor,
 };
+use crate::driver::DriverEvent;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskId, WorkerId};
-use crate::worker_manager::WorkerLaunchContext;
+use crate::worker_manager::WorkerLaunchOptions;
 
 impl DriverActor {
     pub(super) fn handle_server_ready(
@@ -33,6 +34,27 @@ impl DriverActor {
             Err(e) => return ActorAction::fail(e),
         };
         info!("driver server is ready on port {port}");
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_start_worker(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+    ) -> ActorAction {
+        let Some(port) = self.server.port() else {
+            return ActorAction::Fail("the driver server is not ready".to_string());
+        };
+        let options = WorkerLaunchOptions {
+            driver_host: self.options().driver_external_host.to_string(),
+            driver_port: self.options().driver_external_port.unwrap_or(port),
+        };
+        let worker_manager = Arc::clone(&self.worker_manager);
+        ctx.spawn(async move {
+            if let Err(e) = worker_manager.start_worker(worker_id, options).await {
+                error!("failed to start worker {worker_id}: {e}");
+            }
+        });
         ActorAction::Continue
     }
 
@@ -61,9 +83,28 @@ impl DriverActor {
         ActorAction::Continue
     }
 
+    pub(super) fn handle_stop_worker(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+    ) -> ActorAction {
+        if let Some(worker) = self.state.get_worker_mut(&worker_id) {
+            if worker.active {
+                worker.active = false;
+                let worker_manager = Arc::clone(&self.worker_manager);
+                ctx.spawn(async move {
+                    if let Err(e) = worker_manager.stop_worker(worker_id).await {
+                        error!("failed to stop worker {worker_id}: {e}");
+                    }
+                });
+            }
+        }
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_execute_job(
         &mut self,
-        _ctx: &mut ActorContext<Self>,
+        ctx: &mut ActorContext<Self>,
         plan: Arc<dyn ExecutionPlan>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     ) -> ActorAction {
@@ -105,9 +146,11 @@ impl DriverActor {
         self.state.add_job(job_id, descriptor);
         self.incoming_job_queue.push_back((job_id, result));
         // TODO: update worker launch logic
-        if let Err(e) = self.launch_worker() {
-            return ActorAction::warn(e);
-        }
+        let worker_id = match self.state.next_worker_id() {
+            Ok(x) => x,
+            Err(e) => return ActorAction::fail(e),
+        };
+        ctx.send(DriverEvent::StartWorker { worker_id });
         ActorAction::Continue
     }
 
@@ -142,20 +185,6 @@ impl DriverActor {
             }
         }
         ActorAction::Continue
-    }
-
-    fn launch_worker(&mut self) -> ExecutionResult<()> {
-        let port = self
-            .server
-            .port()
-            .ok_or_else(|| ExecutionError::InternalError("server port is not known".to_string()))?;
-        let id = self.state.next_worker_id()?;
-        let ctx = WorkerLaunchContext {
-            driver_host: self.options().driver_external_host.to_string(),
-            driver_port: self.options().driver_external_port.unwrap_or(port),
-        };
-        self.worker_manager.launch_worker(id, ctx)?;
-        Ok(())
     }
 
     fn schedule_job(
