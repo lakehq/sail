@@ -960,11 +960,7 @@ impl PlanResolver<'_> {
         let schema = input.schema();
         let expr = self.resolve_sort_orders(order, true, schema, state).await?;
         if is_global {
-            Ok(LogicalPlan::Sort(plan::Sort {
-                expr,
-                input: Arc::new(input),
-                fetch: None,
-            }))
+            Ok(LogicalPlanBuilder::from(input).sort(expr)?.build()?)
         } else {
             Ok(LogicalPlan::Extension(Extension {
                 node: Arc::new(SortWithinPartitionsNode::new(Arc::new(input), expr, None)),
