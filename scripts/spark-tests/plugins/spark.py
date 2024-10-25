@@ -245,6 +245,15 @@ def normalize_show_string(s: str) -> str:
     return "\n".join(lines[:3] + sorted(lines[3:last]) + lines[last:])
 
 
+def normalize_exception(s: str) -> str:
+    """
+    Normalize the PySpark exception string to ensure consistent matching in doctests.
+    This function captures "pyspark.errors.exceptions.something.AnyException"
+    and reduces it to just "AnyException".
+    """
+    return re.sub(r"pyspark\.errors\.exceptions\.[a-zA-Z_]+\.(\w+)", r"\1", s)
+
+
 def patch_pyspark_doctest_output_checker():
     import _pytest.doctest
 
@@ -257,6 +266,9 @@ def patch_pyspark_doctest_output_checker():
 
     class OutputChecker(_pytest.doctest.CHECKER_CLASS):
         def check_output(self, want: str, got: str, optionflags: int) -> bool:
+            if "pyspark.errors.exceptions" in want or "pyspark.errors.exceptions" in got:
+                want = normalize_exception(want)
+                got = normalize_exception(got)
             if want.startswith("+"):
                 want = normalize_show_string(want)
                 got = normalize_show_string(got)
