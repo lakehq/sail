@@ -957,14 +957,57 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
-        let schema = input.schema();
-        let expr = self.resolve_sort_orders(order, true, schema, state).await?;
+        let sorts = self
+            .resolve_query_sort_orders_by_plan(&input, &order, state)
+            .await?;
         if is_global {
-            Ok(LogicalPlanBuilder::from(input).sort(expr)?.build()?)
+            Ok(LogicalPlanBuilder::from(input).sort(sorts)?.build()?)
         } else {
             Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(SortWithinPartitionsNode::new(Arc::new(input), expr, None)),
+                node: Arc::new(SortWithinPartitionsNode::new(Arc::new(input), sorts, None)),
             }))
+        }
+    }
+
+    async fn resolve_query_sort_orders_by_plan(
+        &self,
+        plan: &LogicalPlan,
+        sorts: &[spec::SortOrder],
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<Sort>> {
+        let mut results: Vec<Sort> = Vec::with_capacity(sorts.len());
+        for sort in sorts {
+            let expr = self
+                .resolve_query_sort_order_by_plan(plan, sort, state)
+                .await?;
+            results.push(expr);
+        }
+        Ok(results)
+    }
+
+    async fn resolve_query_sort_order_by_plan(
+        &self,
+        plan: &LogicalPlan,
+        sort: &spec::SortOrder,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Sort> {
+        let sort_expr = self
+            .resolve_sort_order(sort.clone(), true, plan.schema(), state)
+            .await;
+        match sort_expr {
+            Ok(sort_expr) => Ok(sort_expr),
+            Err(_) => {
+                let mut sorts = Vec::with_capacity(plan.inputs().len());
+                for input_plan in plan.inputs() {
+                    let sort_expr = Box::pin(async {
+                        self.resolve_query_sort_order_by_plan(input_plan, sort, state)
+                            .await
+                    })
+                    .await?;
+                    sorts.push(sort_expr);
+                }
+                Ok(sorts.one()?)
+            }
         }
     }
 

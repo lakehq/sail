@@ -13,23 +13,27 @@ def duck():
 
 
 @pytest.fixture(scope="module", autouse=True)
-def data(sail, spark, duck):
+def data(sail, spark, duck):  # noqa
     tables = list(duck.sql("SHOW TABLES").df()["name"])
     for table in tables:
         df = duck.sql(f"SELECT * FROM {table}").df()  # noqa: S608
         sail.createDataFrame(df).createOrReplaceTempView(table)
-        spark.createDataFrame(df).createOrReplaceTempView(table)
+        # spark.createDataFrame(df).createOrReplaceTempView(table)
     yield
     for table in tables:
         sail.catalog.dropTempView(table)
-        spark.catalog.dropTempView(table)
+        # spark.catalog.dropTempView(table)
 
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)])
 @pytest.mark.skip(reason="TPC-DS queries are not yet fully supported")
 def test_tpcds_query_execution(sail, query):
     for sql in read_sql(query):
-        sail.sql(sql).toPandas()
+        try:
+            sail.sql(sql).toPandas()
+        except Exception as e:
+            err = f"Error executing query {query} with error: {e}\n SQL: {sql}"
+            raise Exception(err) from e  # noqa
 
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)])

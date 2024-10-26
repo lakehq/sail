@@ -6,7 +6,7 @@ use datafusion_common::{Column, DFSchema, DFSchemaRef, SchemaReference, TableRef
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
+use crate::resolver::state::{FieldName, PlanResolverState};
 use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
@@ -132,5 +132,47 @@ impl PlanResolver<'_> {
                 "[AMBIGUOUS_REFERENCE] Reference `{unresolved}` is ambiguous, found: 0 matches"
             )))
         }
+    }
+
+    #[allow(dead_code)]
+    pub(super) fn get_unresolved_field_index(
+        &self,
+        field_names: &[FieldName],
+        unresolved: &str,
+    ) -> PlanResult<usize> {
+        let idx = field_names
+            .iter()
+            .position(|field_name| field_name.eq_ignore_ascii_case(unresolved))
+            .ok_or_else(|| {
+                PlanError::AnalysisError(format!(
+                    "[AMBIGUOUS_REFERENCE] Reference `{unresolved}` is ambiguous, found: 0 matches"
+                ))
+            })?;
+        Ok(idx)
+    }
+
+    #[allow(dead_code)]
+    pub(super) fn get_unresolved_schema_index(
+        &self,
+        schema: &DFSchemaRef,
+        unresolved: &str,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<usize> {
+        let field_names = state.get_field_names(schema.inner())?;
+        self.get_unresolved_field_index(&field_names, unresolved)
+    }
+
+    #[allow(dead_code)]
+    pub(super) fn get_unresolved_schema_indices(
+        &self,
+        schema: &DFSchemaRef,
+        unresolved: Vec<&str>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<usize>> {
+        let field_names = state.get_field_names(schema.inner())?;
+        unresolved
+            .into_iter()
+            .map(|unresolved_name| self.get_unresolved_field_index(&field_names, unresolved_name))
+            .collect::<PlanResult<Vec<usize>>>()
     }
 }
