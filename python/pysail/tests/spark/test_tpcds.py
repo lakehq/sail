@@ -13,7 +13,7 @@ def duck():
 
 
 @pytest.fixture(scope="module", autouse=True)
-def data(sail, spark, duck):  # noqa
+def data(sail, spark, duck):  # noqa: ARG001
     tables = list(duck.sql("SHOW TABLES").df()["name"])
     for table in tables:
         df = duck.sql(f"SELECT * FROM {table}").df()  # noqa: S608
@@ -26,19 +26,53 @@ def data(sail, spark, duck):  # noqa
 
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)])
-@pytest.mark.skip(reason="TPC-DS queries are not yet fully supported")
-def test_tpcds_query_execution(sail, query):
+def test_derived_tpcds_query_execution(sail, query):
+    # Skip unsupported queries to ensure continued support for the supported ones.
+    skip = {
+        "q10",
+        "q12",
+        "q16",
+        "q20",
+        "q23",
+        "q27",
+        "q32",
+        "q35",
+        "q36",
+        "q39",
+        "q41",
+        "q45",
+        "q47",
+        "q51",
+        "q53",
+        "q57",
+        "q63",
+        "q66",
+        "q70",
+        "q72",
+        "q84",
+        "q86",
+        "q89",
+        "q90",
+        "q91",
+        "q92",
+        "q94",
+        "q95",
+        "q98",
+    }
+    if query in skip:
+        pytest.skip(f"Derived TPC-DS queries are not yet fully supported Skipping unsupported query: {query}")
+
     for sql in read_sql(query):
         try:
             sail.sql(sql).toPandas()
         except Exception as e:
             err = f"Error executing query {query} with error: {e}\n SQL: {sql}"
-            raise Exception(err) from e  # noqa
+            raise Exception(err) from e  # noqa: TRY002
 
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)])
-@pytest.mark.skip(reason="TPC-DS queries do not have full parity with Spark yet")
-def test_tpcds_query_spark_parity(sail, spark, query):
+@pytest.mark.skip(reason="Derived TPC-DS queries do not have full parity with Spark yet")
+def test_derived_tpcds_query_spark_parity(sail, spark, query):
     for sql in read_sql(query):
         actual = sail.sql(sql)
         expected = spark.sql(sql)

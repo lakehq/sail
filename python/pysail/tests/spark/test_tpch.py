@@ -26,14 +26,14 @@ def data(sail, spark, duck):
 
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(22)])
-def test_tpch_query_execution(sail, query):
+def test_derived_tpch_query_execution(sail, query):
     for sql in read_sql(query):
         sail.sql(sql).toPandas()
 
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(22)])
-@pytest.mark.skip(reason="TPC-H queries do not have full parity with Spark yet")
-def test_tpch_query_spark_parity(sail, spark, query):
+@pytest.mark.skip(reason="Derived TPC-H queries do not have full parity with Spark yet")
+def test_derived_tpch_query_spark_parity(sail, spark, query):
     for sql in read_sql(query):
         actual = sail.sql(sql)
         expected = spark.sql(sql)
