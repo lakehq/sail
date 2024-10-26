@@ -985,6 +985,7 @@ impl PlanResolver<'_> {
         Ok(results)
     }
 
+    #[async_recursion]
     async fn resolve_query_sort_order_by_plan(
         &self,
         plan: &LogicalPlan,
@@ -999,11 +1000,9 @@ impl PlanResolver<'_> {
             Err(_) => {
                 let mut sorts = Vec::with_capacity(plan.inputs().len());
                 for input_plan in plan.inputs() {
-                    let sort_expr = Box::pin(async {
-                        self.resolve_query_sort_order_by_plan(input_plan, sort, state)
-                            .await
-                    })
-                    .await?;
+                    let sort_expr = self
+                        .resolve_query_sort_order_by_plan(input_plan, sort, state)
+                        .await?;
                     sorts.push(sort_expr);
                 }
                 if sorts.len() != 1 {
