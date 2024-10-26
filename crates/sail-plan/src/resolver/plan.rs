@@ -1006,7 +1006,14 @@ impl PlanResolver<'_> {
                     .await?;
                     sorts.push(sort_expr);
                 }
-                Ok(sorts.one()?)
+                if sorts.len() != 1 {
+                    Err(PlanError::invalid(format!(
+                        "Expected one sort expression, found: {}. Sorts: {sorts:?}",
+                        sorts.len()
+                    )))
+                } else {
+                    Ok(sorts.one()?)
+                }
             }
         }
     }
