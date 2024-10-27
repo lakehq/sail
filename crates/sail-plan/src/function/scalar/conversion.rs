@@ -11,7 +11,7 @@ pub(super) fn list_built_in_conversion_functions() -> Vec<(&'static str, Functio
         ("binary", F::cast(DataType::Binary)),
         ("boolean", F::cast(DataType::Boolean)),
         ("cast", F::unknown("cast")),
-        ("date", F::var_arg(expr_fn::to_date)),
+        ("date", F::cast(DataType::Date32)),
         ("decimal", F::cast(DataType::Decimal128(10, 0))),
         ("double", F::cast(DataType::Float64)),
         ("float", F::cast(DataType::Float32)),
