@@ -16,7 +16,7 @@ def duck():
 def data(sail, spark, duck):  # noqa: ARG001
     tables = list(duck.sql("SHOW TABLES").df()["name"])
     for table in tables:
-        df = duck.sql(f"SELECT * FROM {table}").df()  # noqa: S608
+        df = duck.sql(f"SELECT * FROM {table}").arrow().to_pandas()  # noqa: S608
         sail.createDataFrame(df).createOrReplaceTempView(table)
         # spark.createDataFrame(df).createOrReplaceTempView(table)
     yield
