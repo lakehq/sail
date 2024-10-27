@@ -49,7 +49,6 @@ def test_derived_tpcds_query_execution(sail, query):
         "q72",
         "q86",
         "q89",
-        "q90",
         "q91",
         "q92",
         "q94",
