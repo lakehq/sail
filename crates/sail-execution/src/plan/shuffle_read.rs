@@ -10,22 +10,68 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProperties,
 };
 
+use crate::id::JobId;
+use crate::stream::ChannelName;
+
+#[derive(Debug, Clone)]
+pub enum ShuffleReadLocation {
+    ThisWorker {
+        channel: ChannelName,
+    },
+    OtherWorker {
+        host: String,
+        port: u16,
+        channel: ChannelName,
+    },
+    Remote {
+        uri: String,
+    },
+}
+
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct ShuffleReadExec {
-    schema: SchemaRef,
+    job_id: JobId,
+    /// The stage to read from.
+    stage: usize,
+    /// For each output partition, a list of locations to read from.
+    locations: Vec<Vec<ShuffleReadLocation>>,
     properties: PlanProperties,
 }
 
-#[allow(dead_code)]
 impl ShuffleReadExec {
-    pub fn new(schema: SchemaRef, partitioning: Partitioning) -> Self {
+    pub fn new(job_id: JobId, stage: usize, schema: SchemaRef, partitioning: Partitioning) -> Self {
+        let partition_count = partitioning.partition_count();
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             partitioning,
             ExecutionMode::Unbounded,
         );
-        Self { schema, properties }
+        Self {
+            job_id,
+            stage,
+            locations: vec![vec![]; partition_count],
+            properties,
+        }
+    }
+
+    pub fn job_id(&self) -> JobId {
+        self.job_id
+    }
+
+    pub fn stage(&self) -> usize {
+        self.stage
+    }
+
+    pub fn partitioning(&self) -> &Partitioning {
+        self.properties.output_partitioning()
+    }
+
+    pub fn locations(&self) -> &[Vec<ShuffleReadLocation>] {
+        &self.locations
+    }
+
+    pub fn with_locations(self, locations: Vec<Vec<ShuffleReadLocation>>) -> Self {
+        Self { locations, ..self }
     }
 }
 

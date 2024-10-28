@@ -24,7 +24,7 @@ pub struct ShowStringExec {
     limit: usize,
     format: ShowStringFormat,
     schema: SchemaRef,
-    cache: PlanProperties,
+    properties: PlanProperties,
 }
 
 impl ShowStringExec {
@@ -35,7 +35,7 @@ impl ShowStringExec {
         format: ShowStringFormat,
         schema: SchemaRef,
     ) -> Self {
-        let cache = PlanProperties::new(
+        let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             Partitioning::UnknownPartitioning(1),
             ExecutionMode::Bounded,
@@ -46,7 +46,7 @@ impl ShowStringExec {
             limit,
             format,
             schema,
-            cache,
+            properties,
         }
     }
 
@@ -87,7 +87,7 @@ impl ExecutionPlan for ShowStringExec {
     }
 
     fn properties(&self) -> &PlanProperties {
-        &self.cache
+        &self.properties
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

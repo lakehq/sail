@@ -12,7 +12,9 @@ use prost::Message;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
+use crate::driver::actor::core::JobSubscriber;
 use crate::driver::actor::DriverActor;
+use crate::driver::planner::JobGraph;
 use crate::driver::state::{
     JobDescriptor, JobStage, TaskDescriptor, TaskMode, TaskStatus, WorkerDescriptor,
 };
@@ -74,13 +76,18 @@ impl DriverActor {
                 active: true,
             },
         );
-        if let Some((job_id, result)) = self.incoming_job_queue.pop_front() {
+        while let Some(job_id) = self.incoming_jobs.pop_front() {
+            let subscriber = match self.job_subscribers.remove(&job_id) {
+                Some(x) => x,
+                None => continue,
+            };
             if let Err(e) = self.schedule_job(ctx, worker_id, job_id) {
                 let message = e.to_string();
-                let _ = result.send(Err(e));
+                let _ = subscriber.result.send(Err(e));
                 return ActorAction::warn(message);
             }
-            self.pending_jobs.insert(job_id, result);
+            self.job_subscribers.insert(job_id, subscriber);
+            break;
         }
         ActorAction::Continue
     }
@@ -117,12 +124,15 @@ impl DriverActor {
                 return ActorAction::Continue;
             }
             1 => plan,
+            // TODO: move this to planner
             2.. => Arc::new(CoalescePartitionsExec::new(Arc::clone(&plan))),
         };
         let job_id = match self.state.next_job_id() {
             Ok(x) => x,
             Err(e) => return ActorAction::fail(e),
         };
+        let graph = JobGraph::try_new(job_id, Arc::clone(&plan)).unwrap();
+        println!("{graph}");
         let mut tasks = vec![];
         for p in 0..plan.output_partitioning().partition_count() {
             let task_id = match self.state.next_task_id() {
@@ -147,7 +157,9 @@ impl DriverActor {
             stages: vec![JobStage { plan, tasks }],
         };
         self.state.add_job(job_id, descriptor);
-        self.incoming_job_queue.push_back((job_id, result));
+        self.incoming_jobs.push_back(job_id);
+        self.job_subscribers
+            .insert(job_id, JobSubscriber { result });
         // TODO: update worker launch logic
         let worker_id = match self.state.next_worker_id() {
             Ok(x) => x,
@@ -175,7 +187,7 @@ impl DriverActor {
         task.status = status;
         match task.status {
             TaskStatus::Running => {
-                if let Some(result) = self.pending_jobs.remove(&task.job_id) {
+                if let Some(subscriber) = self.job_subscribers.remove(&task.job_id) {
                     let attempt = task.attempt;
                     let stage = match self.state.find_job_stage_by_task(task_id) {
                         Ok(x) => x,
@@ -188,17 +200,19 @@ impl DriverActor {
                     };
                     ctx.spawn(async move {
                         let out = client.fetch_task_stream(task_id, attempt, schema).await;
-                        let _ = result.send(out);
+                        let _ = subscriber.result.send(out);
                     });
                 }
             }
             TaskStatus::Failed => {
                 let job_id = task.job_id;
-                if let Some(result) = self.pending_jobs.remove(&job_id) {
-                    let _ = result.send(Err(ExecutionError::InternalError(format!(
-                        "task failed or canceled: {}",
-                        message.as_deref().unwrap_or("unknown reason")
-                    ))));
+                if let Some(subscriber) = self.job_subscribers.remove(&job_id) {
+                    let _ = subscriber
+                        .result
+                        .send(Err(ExecutionError::InternalError(format!(
+                            "task failed or canceled: {}",
+                            message.as_deref().unwrap_or("unknown reason")
+                        ))));
                 }
             }
             _ => {}

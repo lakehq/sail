@@ -13,6 +13,8 @@ message ExtendedPhysicalPlanNode {
   oneof NodeKind {
     RangeExecNode range = 1;
     ShowStringExecNode show_string = 2;
+    ShuffleReadExecNode shuffle_read = 3;
+    ShuffleWriteExecNode shuffle_write = 4;
     // TODO: This can be removed once it is supported by DataFusion.
     MemoryExecNode memory = 101;
   }
@@ -51,4 +53,70 @@ message MemoryExecNode {
 
 message PhysicalProjection {
   repeated uint64 columns = 1;
+}
+
+message ShuffleReadExecNode {
+  uint64 job_id = 1;
+  uint64 stage = 2;
+  bytes schema = 3;
+  bytes partitioning = 4;
+  repeated ShuffleReadLocationList locations = 5;
+}
+
+message ShuffleReadLocationList {
+  repeated ShuffleReadLocation locations = 1;
+}
+
+message ShuffleReadLocation {
+  oneof Location {
+    ShuffleReadLocationThisWorker this_worker = 1;
+    ShuffleReadLocationOtherWorker other_worker = 2;
+    ShuffleReadLocationRemote remote = 3;
+  }
+}
+
+message ShuffleReadLocationThisWorker {
+  string channel = 1;
+}
+
+message ShuffleReadLocationOtherWorker {
+  string host = 1;
+  uint32 port = 2;
+  string channel = 3;
+}
+
+message ShuffleReadLocationRemote {
+  string uri = 1;
+}
+
+message ShuffleWriteExecNode {
+  uint64 job_id = 1;
+  uint64 stage = 2;
+  bytes plan = 3;
+  bytes partitioning = 4;
+  repeated ShuffleWriteLocationList locations = 5;
+}
+
+message ShuffleWriteLocationList {
+  repeated ShuffleWriteLocation locations = 1;
+}
+
+message ShuffleWriteLocation {
+  oneof Location {
+    ShuffleWriteLocationMemory memory = 1;
+    ShuffleWriteLocationDisk disk = 2;
+    ShuffleWriteLocationRemote remote = 3;
+  }
+}
+
+message ShuffleWriteLocationMemory {
+  string channel = 1;
+}
+
+message ShuffleWriteLocationDisk {
+  string channel = 1;
+}
+
+message ShuffleWriteLocationRemote {
+  string uri = 1;
 }

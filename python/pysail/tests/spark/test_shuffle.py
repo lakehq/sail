@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
-from pyspark import Row
 from pandas.testing import assert_frame_equal
+from pyspark import Row
 
 
 @pytest.fixture(scope="module", autouse=True)

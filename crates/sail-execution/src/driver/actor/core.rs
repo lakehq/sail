@@ -25,12 +25,8 @@ pub struct DriverActor {
     pub(super) worker_manager: Arc<dyn WorkerManager>,
     pub(super) worker_clients: HashMap<WorkerId, WorkerClient>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
-    pub(super) incoming_job_queue: VecDeque<(
-        JobId,
-        oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
-    )>,
-    pub(super) pending_jobs:
-        HashMap<JobId, oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>>,
+    pub(super) incoming_jobs: VecDeque<JobId>,
+    pub(super) job_subscribers: HashMap<JobId, JobSubscriber>,
 }
 
 impl Actor for DriverActor {
@@ -45,8 +41,8 @@ impl Actor for DriverActor {
             worker_manager: Arc::new(LocalWorkerManager::new()),
             worker_clients: HashMap::new(),
             physical_plan_codec: Box::new(RemoteExecutionCodec::new(SessionContext::default())),
-            incoming_job_queue: VecDeque::new(),
-            pending_jobs: HashMap::new(),
+            incoming_jobs: VecDeque::new(),
+            job_subscribers: HashMap::new(),
         }
     }
 
@@ -96,4 +92,8 @@ impl DriverActor {
     pub(super) fn options(&self) -> &DriverOptions {
         &self.options
     }
+}
+
+pub(super) struct JobSubscriber {
+    pub result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
 }
