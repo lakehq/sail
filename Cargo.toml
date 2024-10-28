@@ -9,7 +9,7 @@ version = "0.1.6"
 edition = "2021"
 
 [workspace.dependencies]
-thiserror = { version = "1.0.64" }
+thiserror = { version = "1.0.65" }
 tokio = { version = "1.38.1", features = ["full"] }
 tokio-stream = "0.1.16"
 tonic = { version = "0.12.3", features = ["tls", "tls-roots", "gzip", "zstd"] }
@@ -34,16 +34,16 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_bytes = "0.11"
 monostate = "0.1"
-regex = "1.10"
+regex = "1.11"
 glob = "0.3"
 chrono = "0.4"
 chrono-tz = "0.10.0"
 futures = "0.3"
 comfy-table = "7.1"
 html-escape = "0.2"
-syn = "2.0.82"
+syn = "2.0.85"
 quote = "1.0.37"
-prettyplease = "0.2.24"
+prettyplease = "0.2.25"
 phf = { version = "0.11.2", features = ["macros"] }
 ryu = "1.0.18"
 either = "1.12.0"
@@ -55,17 +55,17 @@ rand_chacha = "0.3.1"
 rand_distr = "0.4.3"
 url = "2.5.2"
 lexical-core = { version = "1.0.2", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
-aws-config = "1.5.8"
+aws-config = "1.5.9"
 aws-credential-types = "1.2.1"
 clap = { version = "4.5.20", features = ["derive"] }
 num_enum = "0.7.3"
 log = "0.4.22"
 env_logger = "0.11.5"
 
-fastrace = { version = "0.7.3", features = ["enable"] }
-fastrace-opentelemetry = "0.7.3"
-opentelemetry = "0.25.0"
-opentelemetry_sdk = "0.25.0"
+fastrace = { version = "0.7.4", features = ["enable"] }
+fastrace-opentelemetry = "0.7.4"
+opentelemetry = "0.26.0"
+opentelemetry_sdk = "0.26.0"
 opentelemetry-otlp = { version = "0.25.0", features = ["tls", "tls-roots"] }
 hdfs-native-object-store = "0.12.1"
 
