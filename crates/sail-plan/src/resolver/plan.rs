@@ -2750,138 +2750,137 @@ impl PlanResolver<'_> {
             )?
         };
 
-        let count = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
-            func: count_udaf(),
-            args: columns.iter().map(|x| Expr::Column(x.clone())).collect(),
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
-        })
-        .alias(state.register_field("count"));
-        let mean = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
-            func: avg_udaf(),
-            args: columns
-                .iter()
-                .filter_map(|x| {
-                    let field = input.schema().field_from_column(x).ok()?;
-                    if field.data_type().is_numeric() {
-                        Some(Expr::Column(x.clone()))
-                    } else {
-                        None
-                    }
-                })
-                .collect(),
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
-        })
-        .alias(state.register_field("mean"));
-        let stddev = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
-            func: stddev_udaf(),
-            args: columns
-                .iter()
-                .filter_map(|x| {
-                    let field = input.schema().field_from_column(x).ok()?;
-                    if field.data_type().is_numeric() {
-                        Some(Expr::Column(x.clone()))
-                    } else {
-                        None
-                    }
-                })
-                .collect(),
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
-        })
-        .alias(state.register_field("stddev"));
-        let min = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
-            func: min_udaf(),
-            args: columns.iter().map(|x| Expr::Column(x.clone())).collect(),
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
-        })
-        .alias(state.register_field("min"));
-        let max = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
-            func: max_udaf(),
-            args: columns.iter().map(|x| Expr::Column(x.clone())).collect(),
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
-        })
-        .alias(state.register_field("max"));
+        let mut all_aggregates = Vec::new();
+        for column in &columns {
+            let count = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+                func: count_udaf(),
+                args: vec![Expr::Column(column.clone())],
+                distinct: false,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            })
+            .alias(state.register_field(&format!("count_{}", column.name())));
+            all_aggregates.push(count);
+
+            if let Ok(field) = input.schema().field_from_column(column) {
+                if field.data_type().is_numeric() {
+                    let mean = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+                        func: avg_udaf(),
+                        args: vec![Expr::Column(column.clone())],
+                        distinct: false,
+                        filter: None,
+                        order_by: None,
+                        null_treatment: None,
+                    })
+                    .alias(state.register_field(&format!("mean_{}", column.name())));
+                    all_aggregates.push(mean);
+
+                    let stddev =
+                        Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+                            func: stddev_udaf(),
+                            args: vec![Expr::Column(column.clone())],
+                            distinct: false,
+                            filter: None,
+                            order_by: None,
+                            null_treatment: None,
+                        })
+                        .alias(state.register_field(&format!("stddev_{}", column.name())));
+                    all_aggregates.push(stddev);
+                }
+            }
+
+            let min = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+                func: min_udaf(),
+                args: vec![Expr::Column(column.clone())],
+                distinct: false,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            })
+            .alias(state.register_field(&format!("min_{}", column.name())));
+            all_aggregates.push(min);
+
+            let max = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+                func: max_udaf(),
+                args: vec![Expr::Column(column.clone())],
+                distinct: false,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            })
+            .alias(state.register_field(&format!("max_{}", column.name())));
+            all_aggregates.push(max);
+        }
 
         let stats_plan = LogicalPlanBuilder::from(input)
-            .aggregate(Vec::<Expr>::new(), vec![count, mean, stddev, min, max])?
+            .aggregate(Vec::<Expr>::new(), all_aggregates)?
             .build()?;
 
         let summary_column = state.register_field("summary");
         let create_stat_row =
-            |stat_name: &str, stat_expr: Expr, column: &Column| -> PlanResult<LogicalPlan> {
-                let column_name = column.name().to_string();
-                let plan = LogicalPlanBuilder::from(stats_plan.clone())
-                    .project(vec![
+            |stat_name: &str, stats_by_column: Vec<(String, Expr)>| -> PlanResult<LogicalPlan> {
+                let mut projections =
+                    vec![
                         Expr::Literal(ScalarValue::Utf8(Some(stat_name.to_string())))
                             .alias(&summary_column),
-                        stat_expr.alias(&column_name),
-                    ])?
+                    ];
+                for (col_name, expr) in stats_by_column {
+                    projections.push(expr.alias(&col_name));
+                }
+                let plan = LogicalPlanBuilder::from(stats_plan.clone())
+                    .project(projections)?
                     .build()?;
                 Ok(plan)
             };
 
         let mut union_plan = None;
-        for column in columns {
-            let column_stats = vec![
-                (
-                    "count",
-                    Expr::Column(self.get_resolved_column(
-                        stats_plan.schema(),
-                        "count".into(),
-                        state,
-                    )?),
-                ),
-                (
-                    "mean",
-                    Expr::Column(self.get_resolved_column(
-                        stats_plan.schema(),
-                        "mean".into(),
-                        state,
-                    )?),
-                ),
-                (
-                    "stddev",
-                    Expr::Column(self.get_resolved_column(
-                        stats_plan.schema(),
-                        "stddev".into(),
-                        state,
-                    )?),
-                ),
-                (
-                    "min",
-                    Expr::Column(self.get_resolved_column(
-                        stats_plan.schema(),
-                        "min".into(),
-                        state,
-                    )?),
-                ),
-                (
-                    "max",
-                    Expr::Column(self.get_resolved_column(
-                        stats_plan.schema(),
-                        "max".into(),
-                        state,
-                    )?),
-                ),
-            ];
+        let stat_types = vec!["count", "mean", "stddev", "min", "max"];
+        for stat_type in stat_types {
+            let mut stats_by_column = Vec::new();
 
-            for (stat_name, stat_expr) in column_stats {
-                let stat_row = create_stat_row(stat_name, stat_expr, &column)?;
+            for column in &columns {
+                let column_name = column.name().to_string();
+                let stat_expr = match stat_type {
+                    "count" => Some(Expr::Column(self.get_resolved_column(
+                        stats_plan.schema(),
+                        &format!("count_{}", column_name),
+                        state,
+                    )?)),
+                    "mean" => self
+                        .maybe_get_resolved_column(
+                            stats_plan.schema(),
+                            &format!("mean_{}", column_name),
+                            state,
+                        )?
+                        .map(Expr::Column),
+                    "stddev" => self
+                        .maybe_get_resolved_column(
+                            stats_plan.schema(),
+                            &format!("stddev_{}", column_name),
+                            state,
+                        )?
+                        .map(Expr::Column),
+                    "min" => Some(Expr::Column(self.get_resolved_column(
+                        stats_plan.schema(),
+                        &format!("min_{}", column_name),
+                        state,
+                    )?)),
+                    "max" => Some(Expr::Column(self.get_resolved_column(
+                        stats_plan.schema(),
+                        &format!("max_{}", column_name),
+                        state,
+                    )?)),
+                    _ => None,
+                };
 
+                if let Some(expr) = stat_expr {
+                    stats_by_column.push((column_name, expr));
+                }
+            }
+
+            if !stats_by_column.is_empty() {
+                let stat_row = create_stat_row(stat_type, stats_by_column)?;
                 union_plan = Some(match union_plan {
                     Some(plan) => LogicalPlanBuilder::from(plan).union(stat_row)?.build()?,
                     None => stat_row,
