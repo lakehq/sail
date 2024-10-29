@@ -76,7 +76,6 @@ impl PlanResolver<'_> {
         }
     }
 
-    #[allow(dead_code)]
     pub(super) fn get_resolved_columns(
         &self,
         schema: &DFSchemaRef,
