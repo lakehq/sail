@@ -1604,15 +1604,29 @@ impl PlanResolver<'_> {
         let expr = self.resolve_expression(expr, schema, state).await?;
         let low = self.resolve_expression(low, schema, state).await?;
         let high = self.resolve_expression(high, schema, state).await?;
-        Ok(NamedExpr::new(
-            vec!["between".to_string()],
-            expr::Expr::Between(expr::Between::new(
-                Box::new(expr),
-                negated,
-                Box::new(low),
-                Box::new(high),
-            )),
-        ))
+
+        // DataFusion's BETWEEN operator has a bug, so we construct the expression manually.
+        let greater_eq = expr::Expr::BinaryExpr(expr::BinaryExpr::new(
+            Box::new(expr.clone()),
+            Operator::GtEq,
+            Box::new(low),
+        ));
+        let less_eq = expr::Expr::BinaryExpr(expr::BinaryExpr::new(
+            Box::new(expr),
+            Operator::LtEq,
+            Box::new(high),
+        ));
+        let between_expr = expr::Expr::BinaryExpr(expr::BinaryExpr::new(
+            Box::new(greater_eq),
+            Operator::And,
+            Box::new(less_eq),
+        ));
+        let between_expr = if negated {
+            expr::Expr::Not(Box::new(between_expr))
+        } else {
+            between_expr
+        };
+        Ok(NamedExpr::new(vec!["between".to_string()], between_expr))
     }
 
     async fn resolve_expression_is_distinct_from(

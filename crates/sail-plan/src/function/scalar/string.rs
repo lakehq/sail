@@ -132,6 +132,20 @@ fn replace(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanRe
     Err(PlanError::invalid("replace requires 2 or 3 arguments"))
 }
 
+fn upper(expr: expr::Expr) -> expr::Expr {
+    // FIXME: Create UDF for upper to properly determine datatype
+    let expr = match expr {
+        expr::Expr::Literal(ScalarValue::Utf8(_))
+        | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
+        | expr::Expr::Literal(ScalarValue::Utf8View(_)) => expr,
+        _ => expr::Expr::Cast(expr::Cast {
+            expr: Box::new(expr),
+            data_type: DataType::Utf8,
+        }),
+    };
+    expr_fn::upper(expr)
+}
+
 pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -198,9 +212,9 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("trim", F::var_arg(expr_fn::trim)),
         ("try_to_binary", F::unknown("try_to_binary")),
         ("try_to_number", F::unknown("try_to_number")),
-        ("ucase", F::unary(expr_fn::upper)),
+        ("ucase", F::unary(upper)),
         ("unbase64", F::unary(unbase64)),
-        ("upper", F::unary(expr_fn::upper)),
+        ("upper", F::unary(upper)),
         ("strpos", F::binary(expr_fn::strpos)),
     ]
 }
