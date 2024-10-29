@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 /// An opaque channel name that can be used to identify a channel
 /// for streaming data between workers. It can also be used to determine
 /// the file path when persisting stream data in the worker's local storage.
@@ -21,5 +23,11 @@ impl From<String> for ChannelName {
 impl From<ChannelName> for String {
     fn from(channel: ChannelName) -> String {
         channel.0
+    }
+}
+
+impl Display for ChannelName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }

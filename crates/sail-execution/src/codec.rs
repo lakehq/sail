@@ -20,9 +20,8 @@ use sail_plan::extension::physical::{RangeExec, ShowStringExec};
 
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::ExtendedPhysicalPlanNode;
-use crate::plan::{
-    gen, ShuffleReadExec, ShuffleReadLocation, ShuffleWriteExec, ShuffleWriteLocation,
-};
+use crate::plan::{gen, ShuffleReadExec, ShuffleWriteExec};
+use crate::stream::{TaskReadLocation, TaskWriteLocation};
 
 pub struct RemoteExecutionCodec {
     context: SessionContext,
@@ -96,7 +95,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     self.try_decode_partitioning(&partitioning, registry, &schema)?;
                 let locations = locations
                     .into_iter()
-                    .map(|x| self.try_decode_shuffle_read_location_list(x))
+                    .map(|x| self.try_decode_task_read_location_list(x))
                     .collect::<Result<_>>()?;
                 let node =
                     ShuffleReadExec::new(job_id.into(), stage as usize, schema, partitioning);
@@ -115,7 +114,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     self.try_decode_partitioning(&partitioning, registry, &plan.schema())?;
                 let locations = locations
                     .into_iter()
-                    .map(|x| self.try_decode_shuffle_write_location_list(x))
+                    .map(|x| self.try_decode_task_write_location_list(x))
                     .collect::<Result<_>>()?;
                 let node = ShuffleWriteExec::new(job_id.into(), stage as usize, plan, partitioning);
                 let node = node.with_locations(locations);
@@ -175,7 +174,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let locations = shuffle_read
                 .locations()
                 .iter()
-                .map(|x| self.try_encode_shuffle_read_location_list(x))
+                .map(|x| self.try_encode_task_read_location_list(x))
                 .collect::<Result<_>>()?;
             NodeKind::ShuffleRead(gen::ShuffleReadExecNode {
                 job_id: shuffle_read.job_id().into(),
@@ -189,7 +188,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let locations = shuffle_write
                 .locations()
                 .iter()
-                .map(|x| self.try_encode_shuffle_write_location_list(x))
+                .map(|x| self.try_encode_task_write_location_list(x))
                 .collect::<Result<_>>()?;
             NodeKind::ShuffleWrite(gen::ShuffleWriteExecNode {
                 job_id: shuffle_write.job_id().into(),
@@ -290,165 +289,143 @@ impl RemoteExecutionCodec {
         self.try_encode_message(partitioning)
     }
 
-    fn try_decode_shuffle_read_location(
+    fn try_decode_task_read_location(
         &self,
-        location: gen::ShuffleReadLocation,
-    ) -> Result<ShuffleReadLocation> {
-        let gen::ShuffleReadLocation { location } = location;
+        location: gen::TaskReadLocation,
+    ) -> Result<TaskReadLocation> {
+        let gen::TaskReadLocation { location } = location;
         let location = match location {
-            Some(gen::shuffle_read_location::Location::ThisWorker(
-                gen::ShuffleReadLocationThisWorker { channel },
-            )) => ShuffleReadLocation::ThisWorker {
+            Some(gen::task_read_location::Location::Worker(gen::TaskReadLocationWorker {
+                worker_id,
+                channel,
+            })) => TaskReadLocation::Worker {
+                worker_id: worker_id.into(),
                 channel: channel.into(),
             },
-            Some(gen::shuffle_read_location::Location::OtherWorker(
-                gen::ShuffleReadLocationOtherWorker {
-                    host,
-                    port,
-                    channel,
-                },
-            )) => ShuffleReadLocation::OtherWorker {
-                host,
-                port: u16::try_from(port)
-                    .map_err(|_| plan_datafusion_err!("failed to decode port: {port:?}"))?,
-                channel: channel.into(),
-            },
-            Some(gen::shuffle_read_location::Location::Remote(
-                gen::ShuffleReadLocationRemote { uri },
-            )) => ShuffleReadLocation::Remote { uri },
+            Some(gen::task_read_location::Location::Remote(gen::TaskReadLocationRemote {
+                uri,
+            })) => TaskReadLocation::Remote { uri },
             None => return plan_err!("no shuffle read location found"),
         };
         Ok(location)
     }
 
-    fn try_encode_shuffle_read_location(
+    fn try_encode_task_read_location(
         &self,
-        location: &ShuffleReadLocation,
-    ) -> Result<gen::ShuffleReadLocation> {
+        location: &TaskReadLocation,
+    ) -> Result<gen::TaskReadLocation> {
         let location = match location {
-            ShuffleReadLocation::ThisWorker { channel } => gen::ShuffleReadLocation {
-                location: Some(gen::shuffle_read_location::Location::ThisWorker(
-                    gen::ShuffleReadLocationThisWorker {
+            TaskReadLocation::Worker { worker_id, channel } => gen::TaskReadLocation {
+                location: Some(gen::task_read_location::Location::Worker(
+                    gen::TaskReadLocationWorker {
+                        worker_id: (*worker_id).into(),
                         channel: channel.clone().into(),
                     },
                 )),
             },
-            ShuffleReadLocation::OtherWorker {
-                host,
-                port,
-                channel,
-            } => gen::ShuffleReadLocation {
-                location: Some(gen::shuffle_read_location::Location::OtherWorker(
-                    gen::ShuffleReadLocationOtherWorker {
-                        host: host.clone(),
-                        port: *port as u32,
-                        channel: channel.clone().into(),
-                    },
-                )),
-            },
-            ShuffleReadLocation::Remote { uri } => gen::ShuffleReadLocation {
-                location: Some(gen::shuffle_read_location::Location::Remote(
-                    gen::ShuffleReadLocationRemote { uri: uri.clone() },
+            TaskReadLocation::Remote { uri } => gen::TaskReadLocation {
+                location: Some(gen::task_read_location::Location::Remote(
+                    gen::TaskReadLocationRemote { uri: uri.clone() },
                 )),
             },
         };
         Ok(location)
     }
 
-    fn try_decode_shuffle_read_location_list(
+    fn try_decode_task_read_location_list(
         &self,
-        locations: gen::ShuffleReadLocationList,
-    ) -> Result<Vec<ShuffleReadLocation>> {
-        let gen::ShuffleReadLocationList { locations } = locations;
+        locations: gen::TaskReadLocationList,
+    ) -> Result<Vec<TaskReadLocation>> {
+        let gen::TaskReadLocationList { locations } = locations;
         locations
             .into_iter()
-            .map(|location| self.try_decode_shuffle_read_location(location))
+            .map(|location| self.try_decode_task_read_location(location))
             .collect()
     }
 
-    fn try_encode_shuffle_read_location_list(
+    fn try_encode_task_read_location_list(
         &self,
-        locations: &[ShuffleReadLocation],
-    ) -> Result<gen::ShuffleReadLocationList> {
+        locations: &[TaskReadLocation],
+    ) -> Result<gen::TaskReadLocationList> {
         let locations = locations
             .iter()
-            .map(|location| self.try_encode_shuffle_read_location(location))
+            .map(|location| self.try_encode_task_read_location(location))
             .collect::<Result<_>>()?;
-        Ok(gen::ShuffleReadLocationList { locations })
+        Ok(gen::TaskReadLocationList { locations })
     }
 
-    fn try_decode_shuffle_write_location(
+    fn try_decode_task_write_location(
         &self,
-        location: gen::ShuffleWriteLocation,
-    ) -> Result<ShuffleWriteLocation> {
-        let gen::ShuffleWriteLocation { location } = location;
+        location: gen::TaskWriteLocation,
+    ) -> Result<TaskWriteLocation> {
+        let gen::TaskWriteLocation { location } = location;
         let location = match location {
-            Some(gen::shuffle_write_location::Location::Memory(
-                gen::ShuffleWriteLocationMemory { channel },
-            )) => ShuffleWriteLocation::Memory {
-                channel: channel.into(),
-            },
-            Some(gen::shuffle_write_location::Location::Disk(gen::ShuffleWriteLocationDisk {
+            Some(gen::task_write_location::Location::Memory(gen::TaskWriteLocationMemory {
                 channel,
-            })) => ShuffleWriteLocation::Disk {
+            })) => TaskWriteLocation::Memory {
                 channel: channel.into(),
             },
-            Some(gen::shuffle_write_location::Location::Remote(
-                gen::ShuffleWriteLocationRemote { uri },
-            )) => ShuffleWriteLocation::Remote { uri },
+            Some(gen::task_write_location::Location::Disk(gen::TaskWriteLocationDisk {
+                channel,
+            })) => TaskWriteLocation::Disk {
+                channel: channel.into(),
+            },
+            Some(gen::task_write_location::Location::Remote(gen::TaskWriteLocationRemote {
+                uri,
+            })) => TaskWriteLocation::Remote { uri },
             None => return plan_err!("no shuffle write location found"),
         };
         Ok(location)
     }
 
-    fn try_encode_shuffle_write_location(
+    fn try_encode_task_write_location(
         &self,
-        location: &ShuffleWriteLocation,
-    ) -> Result<gen::ShuffleWriteLocation> {
+        location: &TaskWriteLocation,
+    ) -> Result<gen::TaskWriteLocation> {
         let location = match location {
-            ShuffleWriteLocation::Memory { channel } => gen::ShuffleWriteLocation {
-                location: Some(gen::shuffle_write_location::Location::Memory(
-                    gen::ShuffleWriteLocationMemory {
+            TaskWriteLocation::Memory { channel } => gen::TaskWriteLocation {
+                location: Some(gen::task_write_location::Location::Memory(
+                    gen::TaskWriteLocationMemory {
                         channel: channel.clone().into(),
                     },
                 )),
             },
-            ShuffleWriteLocation::Disk { channel } => gen::ShuffleWriteLocation {
-                location: Some(gen::shuffle_write_location::Location::Disk(
-                    gen::ShuffleWriteLocationDisk {
+            TaskWriteLocation::Disk { channel } => gen::TaskWriteLocation {
+                location: Some(gen::task_write_location::Location::Disk(
+                    gen::TaskWriteLocationDisk {
                         channel: channel.clone().into(),
                     },
                 )),
             },
-            ShuffleWriteLocation::Remote { uri } => gen::ShuffleWriteLocation {
-                location: Some(gen::shuffle_write_location::Location::Remote(
-                    gen::ShuffleWriteLocationRemote { uri: uri.clone() },
+            TaskWriteLocation::Remote { uri } => gen::TaskWriteLocation {
+                location: Some(gen::task_write_location::Location::Remote(
+                    gen::TaskWriteLocationRemote { uri: uri.clone() },
                 )),
             },
         };
         Ok(location)
     }
 
-    fn try_decode_shuffle_write_location_list(
+    fn try_decode_task_write_location_list(
         &self,
-        locations: gen::ShuffleWriteLocationList,
-    ) -> Result<Vec<ShuffleWriteLocation>> {
-        let gen::ShuffleWriteLocationList { locations } = locations;
+        locations: gen::TaskWriteLocationList,
+    ) -> Result<Vec<TaskWriteLocation>> {
+        let gen::TaskWriteLocationList { locations } = locations;
         locations
             .into_iter()
-            .map(|location| self.try_decode_shuffle_write_location(location))
+            .map(|location| self.try_decode_task_write_location(location))
             .collect()
     }
 
-    fn try_encode_shuffle_write_location_list(
+    fn try_encode_task_write_location_list(
         &self,
-        locations: &[ShuffleWriteLocation],
-    ) -> Result<gen::ShuffleWriteLocationList> {
+        locations: &[TaskWriteLocation],
+    ) -> Result<gen::TaskWriteLocationList> {
         let locations = locations
             .iter()
-            .map(|location| self.try_encode_shuffle_write_location(location))
+            .map(|location| self.try_encode_task_write_location(location))
             .collect::<Result<_>>()?;
-        Ok(gen::ShuffleWriteLocationList { locations })
+        Ok(gen::TaskWriteLocationList { locations })
     }
 
     fn try_decode_message<M>(&self, buf: &[u8]) -> Result<M>

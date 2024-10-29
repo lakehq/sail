@@ -20,7 +20,7 @@ pub struct JobGraph {
 
 impl Display for JobGraph {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        writeln!(f, "= JobGraph =")?;
+        writeln!(f, "= JobGraph {} =", self.job_id)?;
         for (i, stage) in self.stages.iter().enumerate() {
             let displayable = DisplayableExecutionPlan::new(stage.as_ref());
             writeln!(f, "== Stage {i} ==")?;
@@ -36,16 +36,13 @@ impl JobGraph {
             job_id,
             stages: vec![],
         };
-        let root = build_job_graph(plan, &mut graph)?;
-        // TODO: Should we coalesce partitions here?
-        //   This would make the final stage run in a single task.
-        let root = if root.properties().output_partitioning().partition_count() > 1 {
-            Arc::new(CoalescePartitionsExec::new(root))
-        } else {
-            root
-        };
-        graph.stages.push(root);
+        let last = build_job_graph(plan, &mut graph)?;
+        graph.stages.push(last);
         Ok(graph)
+    }
+
+    pub fn stages(&self) -> &[Arc<dyn ExecutionPlan>] {
+        &self.stages
     }
 }
 
@@ -63,6 +60,7 @@ fn build_job_graph(
     let plan = if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
         match repartition.partitioning() {
             Partitioning::UnknownPartitioning(_) | Partitioning::RoundRobinBatch(_) => {
+                // TODO: should we shuffle here?
                 get_one_child_plan(&plan)?
             }
             partitioning => {

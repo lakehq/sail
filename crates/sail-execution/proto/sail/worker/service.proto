@@ -3,8 +3,7 @@ syntax = "proto3";
 package sail.worker;
 
 message TaskStreamTicket {
-  uint64 task_id = 1;
-  uint64 attempt = 2;
+  string channel = 1;
 }
 
 message RunTaskRequest {
@@ -12,6 +11,7 @@ message RunTaskRequest {
   uint64 attempt = 2;
   bytes plan = 3;
   uint64 partition = 4;
+  optional string channel = 5;
 }
 
 message RunTaskResponse {

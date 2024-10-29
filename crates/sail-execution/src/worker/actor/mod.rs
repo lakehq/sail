@@ -1,6 +1,6 @@
 mod core;
 mod handler;
 mod rpc;
+mod shuffle;
 
-pub(super) use core::TaskAttempt;
 pub(crate) use core::WorkerActor;

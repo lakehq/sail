@@ -34,12 +34,14 @@ impl WorkerService for WorkerServer {
             attempt,
             partition,
             plan,
+            channel,
         } = request;
         let event = WorkerEvent::RunTask {
             task_id: task_id.into(),
             attempt: attempt as usize,
             partition: partition as usize,
             plan,
+            channel: channel.map(|x| x.into()),
         };
         self.handle
             .send(event)

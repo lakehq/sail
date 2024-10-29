@@ -59,17 +59,17 @@ impl DriverService for DriverServer {
         let request = request.into_inner();
         debug!("{:?}", request);
         let ReportTaskStatusRequest {
-            worker_id,
             task_id,
             status,
+            attempt,
             message,
         } = request;
         let status = gen::TaskStatus::try_from(status)
             .map_err(ExecutionError::from)?
             .try_into()?;
         let event = DriverEvent::UpdateTask {
-            worker_id: worker_id.into(),
             task_id: task_id.into(),
+            attempt: attempt as usize,
             status,
             message,
         };

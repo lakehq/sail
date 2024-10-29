@@ -2,10 +2,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::physical_plan::ExecutionPlan;
+use log::warn;
 
 use crate::driver::gen;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{IdGenerator, JobId, TaskId, WorkerId};
+use crate::stream::ChannelName;
 
 pub struct DriverState {
     workers: HashMap<WorkerId, WorkerDescriptor>,
@@ -44,53 +46,64 @@ impl DriverState {
         self.workers.insert(worker_id, descriptor);
     }
 
-    pub fn get_worker(&self, worker_id: &WorkerId) -> Option<&WorkerDescriptor> {
-        self.workers.get(worker_id)
+    pub fn get_worker(&self, worker_id: WorkerId) -> Option<&WorkerDescriptor> {
+        self.workers.get(&worker_id)
     }
 
-    pub fn get_worker_mut(&mut self, worker_id: &WorkerId) -> Option<&mut WorkerDescriptor> {
-        self.workers.get_mut(worker_id)
+    pub fn update_worker_status(&mut self, worker_id: WorkerId, status: WorkerStatus) {
+        let Some(worker) = self.workers.get_mut(&worker_id) else {
+            warn!("worker {worker_id} not found");
+            return;
+        };
+        worker.status = status;
     }
 
     pub fn add_job(&mut self, job_id: JobId, descriptor: JobDescriptor) {
         self.jobs.insert(job_id, descriptor);
     }
 
-    pub fn get_job(&self, job_id: JobId) -> ExecutionResult<&JobDescriptor> {
-        self.jobs
-            .get(&job_id)
-            .ok_or_else(|| ExecutionError::InternalError(format!("job not found: {job_id}")))
-    }
-
-    pub fn find_job_stage_by_task(&self, task_id: TaskId) -> ExecutionResult<&JobStage> {
-        let task = self.get_task(task_id)?;
-        let job = self.get_job(task.job_id)?;
-        job.stages.get(task.stage).ok_or_else(|| {
-            ExecutionError::InternalError(format!("job stage not found for task: {task_id}"))
-        })
+    pub fn get_job(&self, job_id: JobId) -> Option<&JobDescriptor> {
+        self.jobs.get(&job_id)
     }
 
     pub fn add_task(&mut self, task_id: TaskId, descriptor: TaskDescriptor) {
         self.tasks.insert(task_id, descriptor);
     }
 
-    pub fn get_task(&self, task_id: TaskId) -> ExecutionResult<&TaskDescriptor> {
-        self.tasks
-            .get(&task_id)
-            .ok_or_else(|| ExecutionError::InternalError(format!("task not found: {task_id}")))
+    pub fn get_task(&self, task_id: TaskId) -> Option<&TaskDescriptor> {
+        self.tasks.get(&task_id)
     }
 
-    pub fn get_task_mut(&mut self, task_id: TaskId) -> ExecutionResult<&mut TaskDescriptor> {
-        self.tasks
-            .get_mut(&task_id)
-            .ok_or_else(|| ExecutionError::InternalError(format!("task not found: {task_id}")))
+    pub fn update_task_status(
+        &mut self,
+        task_id: TaskId,
+        attempt: usize,
+        status: TaskStatus,
+        message: Option<String>,
+    ) {
+        let Some(task) = self.tasks.get_mut(&task_id) else {
+            warn!("task {task_id} not found");
+            return;
+        };
+        if task.attempt != attempt {
+            warn!("task {task_id} attempt {attempt} is stale");
+            return;
+        }
+        if let Some(message) = message {
+            task.messages.push(message);
+        }
+        task.status = status;
     }
 }
 
 pub struct WorkerDescriptor {
-    pub host: String,
-    pub port: u16,
-    pub active: bool,
+    pub status: WorkerStatus,
+}
+
+pub enum WorkerStatus {
+    Pending,
+    Running { host: String, port: u16 },
+    Stopped,
 }
 
 pub struct JobDescriptor {
@@ -110,10 +123,16 @@ pub struct TaskDescriptor {
     #[allow(dead_code)]
     pub partition: usize,
     pub attempt: usize,
+    /// The worker ID for the current task attempt.
+    pub worker_id: WorkerId,
     #[allow(dead_code)]
     pub mode: TaskMode,
     pub status: TaskStatus,
     pub messages: Vec<String>,
+    /// An optional channel for writing task output.
+    /// This is used for sending the last stage output
+    /// from the worker to the driver.
+    pub channel: Option<ChannelName>,
 }
 
 #[derive(Clone, Copy)]

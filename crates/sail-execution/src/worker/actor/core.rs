@@ -8,25 +8,19 @@ use sail_server::actor::{Actor, ActorAction, ActorContext};
 
 use crate::codec::RemoteExecutionCodec;
 use crate::driver::DriverClient;
-use crate::id::TaskId;
+use crate::id::WorkerId;
 use crate::rpc::{ClientOptions, ServerMonitor};
+use crate::stream::ChannelName;
 use crate::worker::event::WorkerEvent;
 use crate::worker::options::WorkerOptions;
-
-#[derive(Eq, Hash, PartialEq)]
-pub struct TaskAttempt(TaskId, usize);
-
-impl TaskAttempt {
-    pub fn new(task_id: TaskId, attempt: usize) -> Self {
-        Self(task_id, attempt)
-    }
-}
+use crate::worker::WorkerClient;
 
 pub struct WorkerActor {
     options: WorkerOptions,
     pub(super) server: ServerMonitor,
     pub(super) driver_client: DriverClient,
-    pub(super) task_streams: HashMap<TaskAttempt, SendableRecordBatchStream>,
+    pub(super) worker_clients: HashMap<WorkerId, WorkerClient>,
+    pub(super) memory_streams: HashMap<ChannelName, SendableRecordBatchStream>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
 }
 
@@ -35,19 +29,17 @@ impl Actor for WorkerActor {
     type Options = WorkerOptions;
 
     fn new(options: WorkerOptions) -> Self {
-        let driver_client = DriverClient::new(
-            options.worker_id,
-            ClientOptions {
-                enable_tls: options.enable_tls,
-                host: options.driver_host.clone(),
-                port: options.driver_port,
-            },
-        );
+        let driver_client = DriverClient::new(ClientOptions {
+            enable_tls: options.enable_tls,
+            host: options.driver_host.clone(),
+            port: options.driver_port,
+        });
         Self {
             options,
             server: ServerMonitor::new(),
             driver_client,
-            task_streams: HashMap::new(),
+            worker_clients: HashMap::new(),
+            memory_streams: HashMap::new(),
             physical_plan_codec: Box::new(RemoteExecutionCodec::new(SessionContext::default())),
         }
     }
@@ -71,15 +63,27 @@ impl Actor for WorkerActor {
                 attempt,
                 plan,
                 partition,
-            } => self.handle_run_task(ctx, task_id, attempt, plan, partition),
+                channel,
+            } => self.handle_run_task(ctx, task_id, attempt, plan, partition, channel),
             WorkerEvent::StopTask { task_id, attempt } => {
                 self.handle_stop_task(ctx, task_id, attempt)
             }
-            WorkerEvent::FetchTaskStream {
-                task_id,
-                attempt,
+            WorkerEvent::CreateMemoryTaskStream {
+                channel,
+                schema,
                 result,
-            } => self.handle_fetch_task_stream(ctx, task_id, attempt, result),
+            } => self.handle_create_memory_task_stream(ctx, channel, schema, result),
+            WorkerEvent::FetchThisWorkerTaskStream { channel, result } => {
+                self.handle_fetch_this_worker_task_stream(ctx, channel, result)
+            }
+            WorkerEvent::FetchOtherWorkerTaskStream {
+                worker_id,
+                channel,
+                schema,
+                result,
+            } => {
+                self.handle_fetch_other_worker_task_stream(ctx, worker_id, channel, schema, result)
+            }
             WorkerEvent::Shutdown => ActorAction::Stop,
         }
     }

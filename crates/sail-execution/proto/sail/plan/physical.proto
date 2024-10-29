@@ -60,32 +60,26 @@ message ShuffleReadExecNode {
   uint64 stage = 2;
   bytes schema = 3;
   bytes partitioning = 4;
-  repeated ShuffleReadLocationList locations = 5;
+  repeated TaskReadLocationList locations = 5;
 }
 
-message ShuffleReadLocationList {
-  repeated ShuffleReadLocation locations = 1;
+message TaskReadLocationList {
+  repeated TaskReadLocation locations = 1;
 }
 
-message ShuffleReadLocation {
+message TaskReadLocation {
   oneof Location {
-    ShuffleReadLocationThisWorker this_worker = 1;
-    ShuffleReadLocationOtherWorker other_worker = 2;
-    ShuffleReadLocationRemote remote = 3;
+    TaskReadLocationWorker worker = 1;
+    TaskReadLocationRemote remote = 2;
   }
 }
 
-message ShuffleReadLocationThisWorker {
-  string channel = 1;
+message TaskReadLocationWorker {
+  uint64 worker_id = 1;
+  string channel = 2;
 }
 
-message ShuffleReadLocationOtherWorker {
-  string host = 1;
-  uint32 port = 2;
-  string channel = 3;
-}
-
-message ShuffleReadLocationRemote {
+message TaskReadLocationRemote {
   string uri = 1;
 }
 
@@ -94,29 +88,29 @@ message ShuffleWriteExecNode {
   uint64 stage = 2;
   bytes plan = 3;
   bytes partitioning = 4;
-  repeated ShuffleWriteLocationList locations = 5;
+  repeated TaskWriteLocationList locations = 5;
 }
 
-message ShuffleWriteLocationList {
-  repeated ShuffleWriteLocation locations = 1;
+message TaskWriteLocationList {
+  repeated TaskWriteLocation locations = 1;
 }
 
-message ShuffleWriteLocation {
+message TaskWriteLocation {
   oneof Location {
-    ShuffleWriteLocationMemory memory = 1;
-    ShuffleWriteLocationDisk disk = 2;
-    ShuffleWriteLocationRemote remote = 3;
+    TaskWriteLocationMemory memory = 1;
+    TaskWriteLocationDisk disk = 2;
+    TaskWriteLocationRemote remote = 3;
   }
 }
 
-message ShuffleWriteLocationMemory {
+message TaskWriteLocationMemory {
   string channel = 1;
 }
 
-message ShuffleWriteLocationDisk {
+message TaskWriteLocationDisk {
   string channel = 1;
 }
 
-message ShuffleWriteLocationRemote {
+message TaskWriteLocationRemote {
   string uri = 1;
 }

@@ -2,8 +2,7 @@ use std::mem;
 use std::sync::Arc;
 
 use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::{EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties};
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::{error, info};
@@ -16,7 +15,7 @@ use crate::driver::actor::core::JobSubscriber;
 use crate::driver::actor::DriverActor;
 use crate::driver::planner::JobGraph;
 use crate::driver::state::{
-    JobDescriptor, JobStage, TaskDescriptor, TaskMode, TaskStatus, WorkerDescriptor,
+    JobDescriptor, JobStage, TaskDescriptor, TaskMode, TaskStatus, WorkerStatus,
 };
 use crate::driver::DriverEvent;
 use crate::error::{ExecutionError, ExecutionResult};
@@ -68,27 +67,9 @@ impl DriverActor {
         port: u16,
     ) -> ActorAction {
         info!("worker {worker_id} is available at {host}:{port}");
-        self.state.add_worker(
-            worker_id,
-            WorkerDescriptor {
-                host,
-                port,
-                active: true,
-            },
-        );
-        while let Some(job_id) = self.incoming_jobs.pop_front() {
-            let subscriber = match self.job_subscribers.remove(&job_id) {
-                Some(x) => x,
-                None => continue,
-            };
-            if let Err(e) = self.schedule_job(ctx, worker_id, job_id) {
-                let message = e.to_string();
-                let _ = subscriber.result.send(Err(e));
-                return ActorAction::warn(message);
-            }
-            self.job_subscribers.insert(job_id, subscriber);
-            break;
-        }
+        let status = WorkerStatus::Running { host, port };
+        self.state.update_worker_status(worker_id, status);
+        self.schedule_tasks(ctx);
         ActorAction::Continue
     }
 
@@ -97,16 +78,18 @@ impl DriverActor {
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
     ) -> ActorAction {
-        if let Some(worker) = self.state.get_worker_mut(&worker_id) {
-            if worker.active {
-                worker.active = false;
-                let worker_manager = Arc::clone(&self.worker_manager);
-                ctx.spawn(async move {
-                    if let Err(e) = worker_manager.stop_worker(worker_id).await {
-                        error!("failed to stop worker {worker_id}: {e}");
-                    }
-                });
-            }
+        let Some(worker) = self.state.get_worker(worker_id) else {
+            return ActorAction::Continue;
+        };
+        if matches!(worker.status, WorkerStatus::Running { .. }) {
+            self.state
+                .update_worker_status(worker_id, WorkerStatus::Stopped);
+            let worker_manager = Arc::clone(&self.worker_manager);
+            ctx.spawn(async move {
+                if let Err(e) = worker_manager.stop_worker(worker_id).await {
+                    error!("failed to stop worker {worker_id}: {e}");
+                }
+            });
         }
         ActorAction::Continue
     }
@@ -117,91 +100,45 @@ impl DriverActor {
         plan: Arc<dyn ExecutionPlan>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     ) -> ActorAction {
-        let plan = match plan.output_partitioning().partition_count() {
-            0 => {
-                let stream = Box::pin(EmptyRecordBatchStream::new(plan.schema()));
-                let _ = result.send(Ok(stream));
-                return ActorAction::Continue;
+        match self.accept_job(ctx, plan) {
+            Ok(job_id) => {
+                self.job_subscribers
+                    .insert(job_id, JobSubscriber { result });
             }
-            1 => plan,
-            // TODO: move this to planner
-            2.. => Arc::new(CoalescePartitionsExec::new(Arc::clone(&plan))),
-        };
-        let job_id = match self.state.next_job_id() {
-            Ok(x) => x,
-            Err(e) => return ActorAction::fail(e),
-        };
-        let graph = JobGraph::try_new(job_id, Arc::clone(&plan)).unwrap();
-        println!("{graph}");
-        let mut tasks = vec![];
-        for p in 0..plan.output_partitioning().partition_count() {
-            let task_id = match self.state.next_task_id() {
-                Ok(x) => x,
-                Err(e) => return ActorAction::fail(e),
-            };
-            self.state.add_task(
-                task_id,
-                TaskDescriptor {
-                    job_id,
-                    stage: 0,
-                    partition: p,
-                    attempt: 0,
-                    mode: TaskMode::Pipelined,
-                    status: TaskStatus::Pending,
-                    messages: vec![],
-                },
-            );
-            tasks.push(task_id);
+            Err(e) => {
+                let _ = result.send(Err(e));
+            }
         }
-        let descriptor = JobDescriptor {
-            stages: vec![JobStage { plan, tasks }],
-        };
-        self.state.add_job(job_id, descriptor);
-        self.incoming_jobs.push_back(job_id);
-        self.job_subscribers
-            .insert(job_id, JobSubscriber { result });
-        // TODO: update worker launch logic
-        let worker_id = match self.state.next_worker_id() {
-            Ok(x) => x,
-            Err(e) => return ActorAction::fail(e),
-        };
-        ctx.send(DriverEvent::StartWorker { worker_id });
         ActorAction::Continue
     }
 
     pub(super) fn handle_update_task(
         &mut self,
-        ctx: &mut ActorContext<Self>,
-        worker_id: WorkerId,
+        _ctx: &mut ActorContext<Self>,
         task_id: TaskId,
+        attempt: usize,
         status: TaskStatus,
         message: Option<String>,
     ) -> ActorAction {
-        let task = match self.state.get_task_mut(task_id) {
-            Ok(x) => x,
-            Err(e) => return ActorAction::warn(e),
+        self.state
+            .update_task_status(task_id, attempt, status, message.clone());
+        let Some(task) = self.state.get_task(task_id) else {
+            return ActorAction::warn(format!("task {task_id} not found"));
         };
-        if let Some(message) = &message {
-            task.messages.push(message.clone());
-        }
-        task.status = status;
-        match task.status {
+        match status {
             TaskStatus::Running => {
-                if let Some(subscriber) = self.job_subscribers.remove(&task.job_id) {
-                    let attempt = task.attempt;
-                    let stage = match self.state.find_job_stage_by_task(task_id) {
-                        Ok(x) => x,
-                        Err(e) => return ActorAction::warn(e),
-                    };
-                    let schema = stage.plan.schema();
-                    let client = match self.worker_client(worker_id) {
-                        Ok(x) => x.clone(),
-                        Err(e) => return ActorAction::warn(e),
-                    };
-                    ctx.spawn(async move {
-                        let out = client.fetch_task_stream(task_id, attempt, schema).await;
-                        let _ = subscriber.result.send(out);
-                    });
+                // TODO: collect task output from the last stage
+                if let Some(_subscriber) = self.job_subscribers.remove(&task.job_id) {
+                    // let client = match self.worker_client(task.worker_id) {
+                    //     Ok(x) => x.clone(),
+                    //     Err(e) => return ActorAction::warn(e),
+                    // };
+                    // if let Some(channel) = task.channel.clone() {
+                    //     ctx.spawn(async move {
+                    //         let out = client.fetch_task_stream(channel, schema).await;
+                    //         let _ = subscriber.result.send(out);
+                    //     });
+                    // }
                 }
             }
             TaskStatus::Failed => {
@@ -210,36 +147,130 @@ impl DriverActor {
                     let _ = subscriber
                         .result
                         .send(Err(ExecutionError::InternalError(format!(
-                            "task failed or canceled: {}",
+                            "task failed: {}",
                             message.as_deref().unwrap_or("unknown reason")
                         ))));
                 }
+                // TODO: support task retry
+                // TODO: fail all tasks in the job after the maximum attempt
             }
             _ => {}
         }
         ActorAction::Continue
     }
 
-    fn schedule_job(
+    fn accept_job(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        worker_id: WorkerId,
-        job_id: JobId,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> ExecutionResult<JobId> {
+        let job_id = self.state.next_job_id()?;
+        let graph = JobGraph::try_new(job_id, plan)?;
+        // We start a fixed number of workers for each job for now.
+        // TODO: implement worker reuse logic
+        let worker_ids = self.start_workers(ctx, 4)?;
+        let mut worker_id_selector = worker_ids.iter().cycle();
+        let mut stages = vec![];
+        for stage in graph.stages() {
+            let mut tasks = vec![];
+            for p in 0..stage.output_partitioning().partition_count() {
+                let task_id = self.state.next_task_id()?;
+                self.state.add_task(
+                    task_id,
+                    TaskDescriptor {
+                        job_id,
+                        stage: 0,
+                        partition: p,
+                        attempt: 0,
+                        worker_id: *worker_id_selector.next().unwrap(),
+                        mode: TaskMode::Pipelined,
+                        status: TaskStatus::Pending,
+                        messages: vec![],
+                        channel: None,
+                    },
+                );
+                tasks.push(task_id);
+            }
+            stages.push(JobStage {
+                plan: Arc::clone(stage),
+                tasks,
+            })
+        }
+        let descriptor = JobDescriptor { stages };
+        self.state.add_job(job_id, descriptor);
+        Ok(job_id)
+    }
+
+    fn start_workers(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        count: usize,
+    ) -> ExecutionResult<Vec<WorkerId>> {
+        let worker_ids = (0..count)
+            .map(|_| self.state.next_worker_id())
+            .collect::<ExecutionResult<Vec<_>>>()?;
+        for x in worker_ids.iter() {
+            ctx.send(DriverEvent::StartWorker { worker_id: *x });
+        }
+        Ok(worker_ids)
+    }
+
+    fn schedule_tasks(&mut self, ctx: &mut ActorContext<Self>) {
+        // TODO: find tasks that can be scheduled
+        let task_ids = vec![];
+        for (task_id, attempt) in task_ids {
+            if let Err(e) = self.schedule_task(ctx, task_id) {
+                ctx.send(DriverEvent::UpdateTask {
+                    task_id,
+                    attempt,
+                    status: TaskStatus::Failed,
+                    message: Some(e.to_string()),
+                });
+            }
+        }
+    }
+
+    fn schedule_task(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        task_id: TaskId,
     ) -> ExecutionResult<()> {
-        // TODO: create job stages and implement scheduling logic
-        let _ = self
+        let task = self
             .state
-            .get_worker(&worker_id)
-            .ok_or_else(|| ExecutionError::InternalError("worker not found".to_string()))?;
-        let stage = &self.state.get_job(job_id)?.stages[0];
+            .get_task(task_id)
+            .ok_or_else(|| ExecutionError::InternalError(format!("task {task_id} not found")))?;
+        let job = self.state.get_job(task.job_id).ok_or_else(|| {
+            ExecutionError::InternalError(format!(
+                "job {} not found for task {}",
+                task.job_id, task_id
+            ))
+        })?;
+        let stage = job.stages.get(task.stage).ok_or_else(|| {
+            ExecutionError::InternalError(format!(
+                "stage {} not found for job {} and task {}",
+                task.stage, task.job_id, task_id
+            ))
+        })?;
+        // TODO: rewrite the plan for shuffle read and write
         let plan = self.encode_plan(Arc::clone(&stage.plan))?;
-        let task_id = stage.tasks[0];
-        let task = self.state.get_task(task_id)?;
         let attempt = task.attempt;
-        let client = self.worker_client(worker_id)?.clone();
+        let partition = task.partition;
+        let channel = task.channel.clone();
+        let client = self.worker_client(task.worker_id)?.clone();
+        let handle = ctx.handle().clone();
         ctx.spawn(async move {
-            if let Err(e) = client.run_task(task_id, attempt, plan, 0).await {
-                error!("failed to run task {task_id} on worker {worker_id}: {e}");
+            if let Err(e) = client
+                .run_task(task_id, attempt, plan, partition, channel)
+                .await
+            {
+                let _ = handle
+                    .send(DriverEvent::UpdateTask {
+                        task_id,
+                        attempt,
+                        status: TaskStatus::Failed,
+                        message: Some(e.to_string()),
+                    })
+                    .await;
             }
         });
         Ok(())

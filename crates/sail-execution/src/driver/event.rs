@@ -32,8 +32,8 @@ pub enum DriverEvent {
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     },
     UpdateTask {
-        worker_id: WorkerId,
         task_id: TaskId,
+        attempt: usize,
         status: TaskStatus,
         message: Option<String>,
     },

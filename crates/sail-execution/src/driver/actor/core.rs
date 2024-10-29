@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
 
@@ -25,7 +25,6 @@ pub struct DriverActor {
     pub(super) worker_manager: Arc<dyn WorkerManager>,
     pub(super) worker_clients: HashMap<WorkerId, WorkerClient>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
-    pub(super) incoming_jobs: VecDeque<JobId>,
     pub(super) job_subscribers: HashMap<JobId, JobSubscriber>,
 }
 
@@ -41,7 +40,6 @@ impl Actor for DriverActor {
             worker_manager: Arc::new(LocalWorkerManager::new()),
             worker_clients: HashMap::new(),
             physical_plan_codec: Box::new(RemoteExecutionCodec::new(SessionContext::default())),
-            incoming_jobs: VecDeque::new(),
             job_subscribers: HashMap::new(),
         }
     }
@@ -69,11 +67,11 @@ impl Actor for DriverActor {
             DriverEvent::StopWorker { worker_id } => self.handle_stop_worker(ctx, worker_id),
             DriverEvent::ExecuteJob { plan, result } => self.handle_execute_job(ctx, plan, result),
             DriverEvent::UpdateTask {
-                worker_id,
                 task_id,
+                attempt,
                 status,
                 message,
-            } => self.handle_update_task(ctx, worker_id, task_id, status, message),
+            } => self.handle_update_task(ctx, task_id, attempt, status, message),
             DriverEvent::Shutdown => ActorAction::Stop,
         }
     }

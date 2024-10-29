@@ -86,11 +86,10 @@ impl FlightService for WorkerFlightServer {
                 .map_err(|e| Status::invalid_argument(e.to_string()))?
         };
         debug!("{:?}", ticket);
-        let TaskStreamTicket { task_id, attempt } = ticket;
+        let TaskStreamTicket { channel } = ticket;
         let (tx, rx) = oneshot::channel();
-        let event = crate::worker::WorkerEvent::FetchTaskStream {
-            task_id: task_id.into(),
-            attempt: attempt as usize,
+        let event = crate::worker::WorkerEvent::FetchThisWorkerTaskStream {
+            channel: channel.into(),
             result: tx,
         };
         self.handle

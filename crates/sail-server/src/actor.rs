@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use log::error;
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
@@ -136,6 +138,12 @@ impl ActorSystem {
 
 pub struct ActorHandle<T: Actor> {
     sender: mpsc::Sender<T::Message>,
+}
+
+impl<T: Actor> Debug for ActorHandle<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActorHandle").finish()
+    }
 }
 
 impl<T: Actor> Clone for ActorHandle<T> {

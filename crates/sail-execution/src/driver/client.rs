@@ -13,14 +13,12 @@ use crate::rpc::{ClientHandle, ClientOptions};
 
 #[derive(Clone)]
 pub struct DriverClient {
-    worker_id: WorkerId,
     inner: ClientHandle<DriverServiceClient<Channel>>,
 }
 
 impl DriverClient {
-    pub fn new(worker_id: WorkerId, options: ClientOptions) -> Self {
+    pub fn new(options: ClientOptions) -> Self {
         Self {
-            worker_id,
             inner: ClientHandle::new(options),
         }
     }
@@ -44,12 +42,13 @@ impl DriverClient {
     pub async fn report_task_status(
         &self,
         task_id: TaskId,
+        attempt: usize,
         status: TaskStatus,
         message: Option<String>,
     ) -> ExecutionResult<()> {
         let request = tonic::Request::new(ReportTaskStatusRequest {
-            worker_id: self.worker_id.into(),
             task_id: task_id.into(),
+            attempt: attempt as u64,
             status: gen::TaskStatus::from(status) as i32,
             message,
         });

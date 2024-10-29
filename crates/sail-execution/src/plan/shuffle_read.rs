@@ -3,30 +3,18 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
-use datafusion::common::{DataFusionError, Result};
+use datafusion::common::{exec_datafusion_err, DataFusionError, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProperties,
 };
+use futures::future::try_join_all;
+use futures::TryStreamExt;
 
 use crate::id::JobId;
-use crate::stream::ChannelName;
-
-#[derive(Debug, Clone)]
-pub enum ShuffleReadLocation {
-    ThisWorker {
-        channel: ChannelName,
-    },
-    OtherWorker {
-        host: String,
-        port: u16,
-        channel: ChannelName,
-    },
-    Remote {
-        uri: String,
-    },
-}
+use crate::stream::{MergedRecordBatchStream, TaskReadLocation, TaskStreamReader};
 
 #[derive(Debug)]
 pub struct ShuffleReadExec {
@@ -34,8 +22,9 @@ pub struct ShuffleReadExec {
     /// The stage to read from.
     stage: usize,
     /// For each output partition, a list of locations to read from.
-    locations: Vec<Vec<ShuffleReadLocation>>,
+    locations: Vec<Vec<TaskReadLocation>>,
     properties: PlanProperties,
+    reader: Option<Arc<dyn TaskStreamReader>>,
 }
 
 impl ShuffleReadExec {
@@ -51,6 +40,7 @@ impl ShuffleReadExec {
             stage,
             locations: vec![vec![]; partition_count],
             properties,
+            reader: None,
         }
     }
 
@@ -66,11 +56,11 @@ impl ShuffleReadExec {
         self.properties.output_partitioning()
     }
 
-    pub fn locations(&self) -> &[Vec<ShuffleReadLocation>] {
+    pub fn locations(&self) -> &[Vec<TaskReadLocation>] {
         &self.locations
     }
 
-    pub fn with_locations(self, locations: Vec<Vec<ShuffleReadLocation>>) -> Self {
+    pub fn with_locations(self, locations: Vec<Vec<TaskReadLocation>>) -> Self {
         Self { locations, ..self }
     }
 }
@@ -112,9 +102,42 @@ impl ExecutionPlan for ShuffleReadExec {
 
     fn execute(
         &self,
-        _partition: usize,
+        partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        todo!()
+        let locations = self
+            .locations
+            .get(partition)
+            .ok_or_else(|| {
+                exec_datafusion_err!("read locations for partition {partition} not found")
+            })?
+            .clone();
+        let reader = self
+            .reader
+            .as_ref()
+            .ok_or_else(|| exec_datafusion_err!("reader not set for ShuffleReadExec"))?
+            .clone();
+        let output_schema = self.schema();
+        let output =
+            futures::stream::once(
+                async move { shuffle_read(reader, &locations, output_schema).await },
+            )
+            .try_flatten();
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema(),
+            output,
+        )))
     }
+}
+
+async fn shuffle_read(
+    reader: Arc<dyn TaskStreamReader>,
+    locations: &[TaskReadLocation],
+    schema: SchemaRef,
+) -> Result<SendableRecordBatchStream> {
+    let futures = locations
+        .iter()
+        .map(|location| reader.open(location, schema.clone()));
+    let streams = try_join_all(futures).await?;
+    Ok(Box::pin(MergedRecordBatchStream::new(schema, streams)))
 }
