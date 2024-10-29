@@ -6,19 +6,20 @@ use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
-use log::info;
+use log::{error, info};
 use prost::bytes::BytesMut;
 use prost::Message;
-use sail_server::actor::ActorContext;
+use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
 use crate::driver::actor::DriverActor;
 use crate::driver::state::{
     JobDescriptor, JobStage, TaskDescriptor, TaskMode, TaskStatus, WorkerDescriptor,
 };
+use crate::driver::DriverEvent;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskId, WorkerId};
-use crate::worker_manager::WorkerLaunchContext;
+use crate::worker_manager::WorkerLaunchOptions;
 
 impl DriverActor {
     pub(super) fn handle_server_ready(
@@ -26,11 +27,35 @@ impl DriverActor {
         _ctx: &mut ActorContext<Self>,
         port: u16,
         signal: oneshot::Sender<()>,
-    ) -> ExecutionResult<()> {
+    ) -> ActorAction {
         let server = mem::take(&mut self.server);
-        self.server = server.ready(signal, port)?;
+        self.server = match server.ready(signal, port) {
+            Ok(x) => x,
+            Err(e) => return ActorAction::fail(e),
+        };
         info!("driver server is ready on port {port}");
-        Ok(())
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_start_worker(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+    ) -> ActorAction {
+        let Some(port) = self.server.port() else {
+            return ActorAction::Fail("the driver server is not ready".to_string());
+        };
+        let options = WorkerLaunchOptions {
+            driver_host: self.options().driver_external_host.to_string(),
+            driver_port: self.options().driver_external_port.unwrap_or(port),
+        };
+        let worker_manager = Arc::clone(&self.worker_manager);
+        ctx.spawn(async move {
+            if let Err(e) = worker_manager.start_worker(worker_id, options).await {
+                error!("failed to start worker {worker_id}: {e}");
+            }
+        });
+        ActorAction::Continue
     }
 
     pub(super) fn handle_register_worker(
@@ -39,7 +64,7 @@ impl DriverActor {
         worker_id: WorkerId,
         host: String,
         port: u16,
-    ) -> ExecutionResult<()> {
+    ) -> ActorAction {
         info!("worker {worker_id} is available at {host}:{port}");
         self.state.add_worker(
             worker_id,
@@ -50,31 +75,58 @@ impl DriverActor {
             },
         );
         if let Some((job_id, result)) = self.incoming_job_queue.pop_front() {
-            self.schedule_job(ctx, worker_id, job_id)?;
+            if let Err(e) = self.schedule_job(ctx, worker_id, job_id) {
+                return ActorAction::warn(e);
+            }
             self.pending_jobs.insert(job_id, result);
         }
-        Ok(())
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_stop_worker(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+    ) -> ActorAction {
+        if let Some(worker) = self.state.get_worker_mut(&worker_id) {
+            if worker.active {
+                worker.active = false;
+                let worker_manager = Arc::clone(&self.worker_manager);
+                ctx.spawn(async move {
+                    if let Err(e) = worker_manager.stop_worker(worker_id).await {
+                        error!("failed to stop worker {worker_id}: {e}");
+                    }
+                });
+            }
+        }
+        ActorAction::Continue
     }
 
     pub(super) fn handle_execute_job(
         &mut self,
-        _ctx: &mut ActorContext<Self>,
+        ctx: &mut ActorContext<Self>,
         plan: Arc<dyn ExecutionPlan>,
-        result: oneshot::Sender<SendableRecordBatchStream>,
-    ) -> ExecutionResult<()> {
+        result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
+    ) -> ActorAction {
         let plan = match plan.output_partitioning().partition_count() {
             0 => {
                 let stream = Box::pin(EmptyRecordBatchStream::new(plan.schema()));
-                let _ = result.send(stream);
-                return Ok(());
+                let _ = result.send(Ok(stream));
+                return ActorAction::Continue;
             }
             1 => plan,
             2.. => Arc::new(CoalescePartitionsExec::new(Arc::clone(&plan))),
         };
-        let job_id = self.state.job_id_generator.next()?;
+        let job_id = match self.state.next_job_id() {
+            Ok(x) => x,
+            Err(e) => return ActorAction::fail(e),
+        };
         let mut tasks = vec![];
         for p in 0..plan.output_partitioning().partition_count() {
-            let task_id = self.state.task_id_generator.next()?;
+            let task_id = match self.state.next_task_id() {
+                Ok(x) => x,
+                Err(e) => return ActorAction::fail(e),
+            };
             self.state.add_task(
                 task_id,
                 TaskDescriptor {
@@ -94,8 +146,12 @@ impl DriverActor {
         self.state.add_job(job_id, descriptor);
         self.incoming_job_queue.push_back((job_id, result));
         // TODO: update worker launch logic
-        self.launch_worker()?;
-        Ok(())
+        let worker_id = match self.state.next_worker_id() {
+            Ok(x) => x,
+            Err(e) => return ActorAction::fail(e),
+        };
+        ctx.send(DriverEvent::StartWorker { worker_id });
+        ActorAction::Continue
     }
 
     pub(super) fn handle_task_updated(
@@ -104,37 +160,31 @@ impl DriverActor {
         worker_id: WorkerId,
         task_id: TaskId,
         status: TaskStatus,
-    ) -> ExecutionResult<()> {
-        let task = self.state.get_task_mut(task_id)?;
+    ) -> ActorAction {
+        let task = match self.state.get_task_mut(task_id) {
+            Ok(x) => x,
+            Err(e) => return ActorAction::warn(e),
+        };
         task.status = status;
         if matches!(task.status, TaskStatus::Running) {
             if let Some(result) = self.pending_jobs.remove(&task.job_id) {
                 let attempt = task.attempt;
-                let stage = self.state.find_job_stage_by_task(task_id)?;
+                let stage = match self.state.find_job_stage_by_task(task_id) {
+                    Ok(x) => x,
+                    Err(e) => return ActorAction::warn(e),
+                };
                 let schema = stage.plan.schema();
-                let client = self.worker_client(worker_id)?.clone();
+                let client = match self.worker_client(worker_id) {
+                    Ok(x) => x.clone(),
+                    Err(e) => return ActorAction::warn(e),
+                };
                 ctx.spawn(async move {
-                    let stream = client.fetch_task_stream(task_id, attempt, schema).await?;
-                    let _ = result.send(stream);
-                    Ok::<_, ExecutionError>(())
+                    let out = client.fetch_task_stream(task_id, attempt, schema).await;
+                    let _ = result.send(out);
                 });
             }
         }
-        Ok(())
-    }
-
-    fn launch_worker(&mut self) -> ExecutionResult<()> {
-        let port = self
-            .server
-            .port()
-            .ok_or_else(|| ExecutionError::InternalError("server port is not known".to_string()))?;
-        let id = self.state.worker_id_generator.next()?;
-        let ctx = WorkerLaunchContext {
-            driver_host: self.options().driver_external_host.to_string(),
-            driver_port: self.options().driver_external_port.unwrap_or(port),
-        };
-        self.worker_manager.launch_worker(id, ctx)?;
-        Ok(())
+        ActorAction::Continue
     }
 
     fn schedule_job(
@@ -154,7 +204,11 @@ impl DriverActor {
         let task = self.state.get_task(task_id)?;
         let attempt = task.attempt;
         let client = self.worker_client(worker_id)?.clone();
-        ctx.spawn(async move { client.run_task(task_id, attempt, plan, 0).await });
+        ctx.spawn(async move {
+            if let Err(e) = client.run_task(task_id, attempt, plan, 0).await {
+                error!("failed to run task {task_id} on worker {worker_id}: {e}");
+            }
+        });
         Ok(())
     }
 

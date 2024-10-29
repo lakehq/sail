@@ -11,9 +11,9 @@ pub struct DriverState {
     workers: HashMap<WorkerId, WorkerDescriptor>,
     jobs: HashMap<JobId, JobDescriptor>,
     tasks: HashMap<TaskId, TaskDescriptor>,
-    pub(super) job_id_generator: IdGenerator<JobId>,
-    pub(super) task_id_generator: IdGenerator<TaskId>,
-    pub(super) worker_id_generator: IdGenerator<WorkerId>,
+    job_id_generator: IdGenerator<JobId>,
+    task_id_generator: IdGenerator<TaskId>,
+    worker_id_generator: IdGenerator<WorkerId>,
 }
 
 impl DriverState {
@@ -28,12 +28,28 @@ impl DriverState {
         }
     }
 
+    pub fn next_job_id(&mut self) -> ExecutionResult<JobId> {
+        self.job_id_generator.next()
+    }
+
+    pub fn next_task_id(&mut self) -> ExecutionResult<TaskId> {
+        self.task_id_generator.next()
+    }
+
+    pub fn next_worker_id(&mut self) -> ExecutionResult<WorkerId> {
+        self.worker_id_generator.next()
+    }
+
     pub fn add_worker(&mut self, worker_id: WorkerId, descriptor: WorkerDescriptor) {
         self.workers.insert(worker_id, descriptor);
     }
 
     pub fn get_worker(&self, worker_id: &WorkerId) -> Option<&WorkerDescriptor> {
         self.workers.get(worker_id)
+    }
+
+    pub fn get_worker_mut(&mut self, worker_id: &WorkerId) -> Option<&mut WorkerDescriptor> {
+        self.workers.get_mut(worker_id)
     }
 
     pub fn add_job(&mut self, job_id: JobId, descriptor: JobDescriptor) {
