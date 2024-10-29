@@ -253,8 +253,12 @@ def normalize_summary_df_show_string(s: str) -> str:
     s = s.replace("3.1722757341273704", "3.1722757341273695")
     # For these next four, Spark uses approx percentiles in df.summary() which are not exact.
     # We adjust the values to match the expected output.
-    s = s.replace("|    75%|  13|              44.1|            150.5|", "|    75%|  12|             43.15|           148.45|")
-    s = s.replace("|    25%|  11|              37.8|            142.2|", "|    25%|  11|            38.425|          142.225|")
+    s = s.replace(
+        "|    75%|  13|              44.1|            150.5|", "|    75%|  12|             43.15|           148.45|"
+    )
+    s = s.replace(
+        "|    25%|  11|              37.8|            142.2|", "|    25%|  11|            38.425|          142.225|"
+    )
     if "|    75%| 13|  44.1| 150.5|" in s and "|    25%| 11|  37.8| 142.2|" in s:
         s = s.replace("|    75%| 13|  44.1| 150.5|", "|    75%| 12| 43.15| 148.45|")
         s = s.replace("|    25%| 11|  37.8| 142.2|", "|    25%| 11|38.425|142.225|")
@@ -262,6 +266,7 @@ def normalize_summary_df_show_string(s: str) -> str:
         s = s.replace("+-------+---+------+------+", "+-------+---+------+-------+")
         s = s.replace("|summary|age|weight|height|", "|summary|age|weight| height|")
     return s
+
 
 def patch_pyspark_doctest_output_checker():
     import _pytest.doctest
