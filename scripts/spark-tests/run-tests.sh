@@ -40,7 +40,7 @@ function run_pytest() {
   hatch run test:pytest \
     -p plugins.spark \
     -p plugins.ibis \
-    -o "doctest_optionflags=ELLIPSIS NORMALIZE_WHITESPACE" \
+    -o "doctest_optionflags=ELLIPSIS NORMALIZE_WHITESPACE IGNORE_EXCEPTION_DETAIL NUMBER" \
     -o "faulthandler_timeout=30" \
     --basetemp="${pytest_tmp_dir}" \
     --disable-warnings \

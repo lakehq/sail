@@ -2731,13 +2731,10 @@ impl PlanResolver<'_> {
         columns: Vec<spec::Identifier>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        use datafusion::functions_aggregate::{
-            average::avg_udaf,
-            count::count_udaf,
-            min_max::{max_udaf, min_udaf},
-            stddev::stddev_udaf,
-        };
-        // use datafusion_expr::expr::Cast;
+        use datafusion::functions_aggregate::average::avg_udaf;
+        use datafusion::functions_aggregate::count::count_udaf;
+        use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
+        use datafusion::functions_aggregate::stddev::stddev_udaf;
 
         let input = self.resolve_query_plan(input, state).await?;
         let columns: Vec<Column> = if columns.is_empty() {
@@ -2760,7 +2757,7 @@ impl PlanResolver<'_> {
                 order_by: None,
                 null_treatment: None,
             })
-            .alias(state.register_field(&format!("count_{}", column.name())));
+            .alias(state.register_field(format!("count_{}", column.name())));
             all_aggregates.push(count);
 
             if let Ok(field) = input.schema().field_from_column(column) {
@@ -2773,7 +2770,7 @@ impl PlanResolver<'_> {
                         order_by: None,
                         null_treatment: None,
                     })
-                    .alias(state.register_field(&format!("mean_{}", column.name())));
+                    .alias(state.register_field(format!("mean_{}", column.name())));
                     all_aggregates.push(mean);
 
                     let stddev =
@@ -2785,7 +2782,7 @@ impl PlanResolver<'_> {
                             order_by: None,
                             null_treatment: None,
                         })
-                        .alias(state.register_field(&format!("stddev_{}", column.name())));
+                        .alias(state.register_field(format!("stddev_{}", column.name())));
                     all_aggregates.push(stddev);
                 }
             }
@@ -2798,7 +2795,7 @@ impl PlanResolver<'_> {
                 order_by: None,
                 null_treatment: None,
             })
-            .alias(state.register_field(&format!("min_{}", column.name())));
+            .alias(state.register_field(format!("min_{}", column.name())));
             all_aggregates.push(min);
 
             let max = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
@@ -2809,7 +2806,7 @@ impl PlanResolver<'_> {
                 order_by: None,
                 null_treatment: None,
             })
-            .alias(state.register_field(&format!("max_{}", column.name())));
+            .alias(state.register_field(format!("max_{}", column.name())));
             all_aggregates.push(max);
         }
 
@@ -2820,15 +2817,17 @@ impl PlanResolver<'_> {
         let summary_column = state.register_field("summary");
         let create_stat_row =
             |stat_name: &str, stats_by_column: Vec<(String, Expr)>| -> PlanResult<LogicalPlan> {
+                let stats_plan_clone = stats_plan.clone();
                 let mut projections =
                     vec![
                         Expr::Literal(ScalarValue::Utf8(Some(stat_name.to_string())))
                             .alias(&summary_column),
                     ];
                 for (col_name, expr) in stats_by_column {
+                    let expr = expr.cast_to(&adt::DataType::Utf8, stats_plan_clone.schema())?;
                     projections.push(expr.alias(&col_name));
                 }
-                let plan = LogicalPlanBuilder::from(stats_plan.clone())
+                let plan = LogicalPlanBuilder::from(stats_plan_clone)
                     .project(projections)?
                     .build()?;
                 Ok(plan)
@@ -2838,7 +2837,6 @@ impl PlanResolver<'_> {
         let stat_types = vec!["count", "mean", "stddev", "min", "max"];
         for stat_type in stat_types {
             let mut stats_by_column = Vec::new();
-
             for column in &columns {
                 let column_name = column.name().to_string();
                 let stat_expr = match stat_type {
@@ -2887,7 +2885,7 @@ impl PlanResolver<'_> {
                 });
             }
         }
-        Ok(union_plan.ok_or_else(|| PlanError::internal("No statistics found"))?)
+        union_plan.ok_or_else(|| PlanError::internal("No describe statistics generated"))
     }
 
     async fn resolve_query_stat_cov(
