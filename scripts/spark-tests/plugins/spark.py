@@ -220,8 +220,8 @@ def add_pyspark_test_markers(items: list[pytest.Item]):
 
 
 def normalize_show_string(s: str) -> str:
-    """Normalize the PySpark `show()` output with a canonical row order.
-    We split the table into lines and sort rows after the header.
+    """Normalize the PySpark `show()` output with canonical row and column order.
+    We split the table into lines, identify columns, and sort both rows and columns
     If the table is invalid, we return the original string.
     """
 
@@ -232,6 +232,7 @@ def normalize_show_string(s: str) -> str:
         return s
     if lines[2] != lines[0]:
         return s
+
     # We need to find the last table line, since there may be other content
     # (such as empty lines) after the table.
     last = 0
@@ -242,7 +243,39 @@ def normalize_show_string(s: str) -> str:
     if last == 0:
         return s
 
-    return "\n".join(lines[:3] + sorted(lines[3:last]) + lines[last:])
+    def split_row(row: str) -> list[str]:
+        """Split a table row into columns, preserving whitespace."""
+        # Skip first and last '|' characters
+        return [col.strip() for col in row[1:-1].split("|")]
+
+    def join_row(columns: list[str], widths: list[int]) -> str:
+        """Join columns back into a row with proper spacing."""
+        parts = [f"|{col:>{width}}" for col, width in zip(columns, widths)]
+        return "".join(parts) + "|"
+
+    header_row = split_row(lines[1])
+    data_rows = [split_row(line) for line in lines[3:last]]
+
+    col_indices = sorted(range(len(header_row)), key=lambda i: header_row[i])
+    header_row = [header_row[i] for i in col_indices]
+    data_rows = [[row[i] for i in col_indices] for row in data_rows]
+
+    data_rows.sort()
+
+    widths = [max([len(header_row[i])] + [len(row[i]) for row in data_rows]) for i in range(len(header_row))]
+
+    separator = "+" + "+".join("-" * width for width in widths) + "+"
+
+    result = (
+        [separator, join_row(header_row, widths), separator]
+        + [join_row(row, widths) for row in data_rows]
+        + [separator]
+    )
+
+    if last < len(lines):
+        result.extend(lines[last + 1 :])
+
+    return "\n".join(result)
 
 
 def normalize_summary_df_show_string(s: str) -> str:
