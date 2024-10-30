@@ -70,7 +70,7 @@ impl TaskStreamMonitor {
             task_id,
             attempt,
             status: TaskStatus::Canceled,
-            message: None,
+            message: Some(format!("task {task_id} attempt {attempt} canceled")),
         }
     }
 

@@ -1,15 +1,20 @@
 use std::mem;
 use std::sync::Arc;
 
+use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
+use futures::future::try_join_all;
+use futures::TryStreamExt;
 use log::{error, info, warn};
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_server::actor::{ActorAction, ActorContext};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
+use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
 use crate::driver::actor::output::JobOutput;
 use crate::driver::actor::DriverActor;
@@ -20,6 +25,7 @@ use crate::driver::state::{
 use crate::driver::DriverEvent;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskAttempt, TaskId, WorkerId};
+use crate::stream::MergedRecordBatchStream;
 use crate::worker_manager::WorkerLaunchOptions;
 
 impl DriverActor {
@@ -186,7 +192,7 @@ impl DriverActor {
                         mode: TaskMode::Pipelined,
                         status: TaskStatus::Pending,
                         messages: vec![],
-                        channel: None,
+                        channel: None, // FIXME
                     },
                 );
                 tasks.push(task_id);
@@ -295,17 +301,107 @@ impl DriverActor {
 
     fn rewrite_shuffle(
         &self,
-        plan: Arc<dyn ExecutionPlan>,
-        partition: usize,
+        _plan: Arc<dyn ExecutionPlan>,
+        _partition: usize,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
         todo!()
     }
 
     fn try_update_job_output(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
-        todo!()
+        let Some(output) = self.job_outputs.remove(&job_id) else {
+            return;
+        };
+        match output {
+            JobOutput::Pending { result } => {
+                if let Some(stream) = self.try_build_job_output(job_id) {
+                    let stream = match stream {
+                        Ok(x) => x,
+                        Err(e) => {
+                            let reason = e.to_string();
+                            let _ = result.send(Err(e));
+                            self.stop_job(ctx, job_id, reason);
+                            return;
+                        }
+                    };
+                    let (sender, receiver) = mpsc::channel(self.options().job_output_buffer);
+                    let receiver_stream = Box::pin(RecordBatchStreamAdapter::new(
+                        stream.schema(),
+                        ReceiverStream::new(receiver),
+                    ));
+                    if result.send(Ok(receiver_stream)).is_err() {
+                        self.stop_job(ctx, job_id, "job output receiver dropped".to_string());
+                        return;
+                    }
+                    self.job_outputs
+                        .insert(job_id, JobOutput::run(ctx, job_id, stream, sender));
+                } else {
+                    self.job_outputs
+                        .insert(job_id, JobOutput::Pending { result });
+                }
+            }
+            JobOutput::Running { .. } => {}
+        }
+    }
+
+    fn try_build_job_output(
+        &mut self,
+        job_id: JobId,
+    ) -> Option<ExecutionResult<SendableRecordBatchStream>> {
+        let Some(job) = self.state.get_job(job_id) else {
+            return Some(Err(ExecutionError::InternalError(format!(
+                "job {job_id} not found"
+            ))));
+        };
+        let Some(last_stage) = job.stages.last() else {
+            return Some(Err(ExecutionError::InternalError(format!(
+                "last stage not found for job {job_id}"
+            ))));
+        };
+        let schema = last_stage.plan.schema();
+        let channels = last_stage
+            .tasks
+            .iter()
+            .map(|task_id| {
+                self.state.get_task(*task_id).and_then(|task| {
+                    matches!(task.status, TaskStatus::Running | TaskStatus::Succeeded)
+                        .then(|| (*task_id, task.channel.clone(), task.worker_id))
+                })
+            })
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .map(|(task_id, channel, worker_id)| {
+                let channel = channel.ok_or_else(|| {
+                    ExecutionError::InternalError(format!("task channel is not set: {task_id}"))
+                })?;
+                let client = self.worker_client(worker_id)?.clone();
+                Ok((channel, client))
+            })
+            .collect::<ExecutionResult<Vec<_>>>();
+        let channels = match channels {
+            Ok(x) => x,
+            Err(e) => return Some(Err(e)),
+        };
+        let output_schema = schema.clone();
+        let output = futures::stream::once(async move {
+            let futures = channels.into_iter().map(|(channel, client)| {
+                let channel_schema = schema.clone();
+                async move { client.fetch_task_stream(channel, channel_schema).await }
+            });
+            let streams = try_join_all(futures)
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            Ok(Box::pin(MergedRecordBatchStream::new(schema, streams)))
+                as Result<_, DataFusionError>
+        })
+        .try_flatten();
+        let stream = Box::pin(RecordBatchStreamAdapter::new(output_schema, output));
+        Some(Ok(stream))
     }
 
     fn stop_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId, reason: String) {
+        if let Some(output) = self.job_outputs.remove(&job_id) {
+            output.fail(reason);
+        }
         let tasks = self
             .state
             .find_running_tasks_for_job(job_id)

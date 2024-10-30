@@ -6,4 +6,5 @@ pub struct DriverOptions {
     pub driver_external_port: Option<u16>,
     // TODO: support dynamic worker allocation
     pub worker_count_per_job: usize,
+    pub job_output_buffer: usize,
 }
