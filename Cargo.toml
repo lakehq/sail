@@ -61,12 +61,11 @@ clap = { version = "4.5.20", features = ["derive"] }
 num_enum = "0.7.3"
 log = "0.4.22"
 env_logger = "0.11.5"
-
-fastrace = { version = "0.7.3", features = ["enable"] }
-fastrace-opentelemetry = "0.7.3"
-opentelemetry = "0.25.0"
-opentelemetry_sdk = "0.25.0"
-opentelemetry-otlp = { version = "0.25.0", features = ["tls", "tls-roots"] }
+fastrace = { version = "0.7.4", features = ["enable"] }
+fastrace-opentelemetry = "0.7.4"
+opentelemetry = "0.26.0"
+opentelemetry_sdk = "0.26.0"
+opentelemetry-otlp = { version = "0.26.0", features = ["tls", "tls-roots"] }
 hdfs-native-object-store = "0.12.1"
 
 
