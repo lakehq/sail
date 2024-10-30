@@ -3,8 +3,10 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
@@ -17,9 +19,12 @@ use tonic::codegen::tokio_stream::StreamExt;
 
 use crate::driver::state::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{TaskId, WorkerId};
+use crate::id::{TaskAttempt, TaskId, WorkerId};
+use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::ChannelName;
 use crate::worker::actor::core::WorkerActor;
+use crate::worker::actor::monitor::TaskStreamMonitor;
+use crate::worker::actor::shuffle::{WorkerTaskStreamReader, WorkerTaskStreamWriter};
 use crate::worker::WorkerEvent;
 
 impl WorkerActor {
@@ -58,41 +63,70 @@ impl WorkerActor {
         partition: usize,
         channel: Option<ChannelName>,
     ) -> ActorAction {
-        let execute = || -> ExecutionResult<()> {
-            let ctx = self.session_context();
-            let plan = PhysicalPlanNode::decode(plan.as_slice())?;
-            let plan = plan.try_into_physical_plan(
-                ctx.as_ref(),
-                &ctx.runtime_env(),
-                self.physical_plan_codec.as_ref(),
-            )?;
-            // TODO: monitor the stream and update task status
-            let stream = plan.execute(partition, self.task_context())?;
-            if let Some(channel) = channel {
-                self.memory_streams.insert(channel, stream);
-            }
-            Ok(())
-        };
-
-        let (status, message) = match execute() {
-            Ok(()) => (TaskStatus::Running, None),
+        let stream = match self.execute_plan(ctx, plan, partition) {
+            Ok(x) => x,
             Err(e) => {
-                error!("failed to run task: {e}");
-                (TaskStatus::Failed, Some(e.to_string()))
+                let event = WorkerEvent::ReportTaskStatus {
+                    task_id,
+                    attempt,
+                    status: TaskStatus::Failed,
+                    message: Some(e.to_string()),
+                };
+                ctx.send(event);
+                return ActorAction::Continue;
             }
         };
-        self.report_task_status(ctx, task_id, attempt, status, message);
+        let handle = ctx.handle().clone();
+        let (tx, rx) = oneshot::channel();
+        self.task_signals
+            .insert(TaskAttempt::new(task_id, attempt), tx);
+        let monitor = if let Some(channel) = channel {
+            let (sender, receiver) = mpsc::channel(self.options().memory_stream_buffer);
+            self.memory_streams.insert(
+                channel,
+                Box::pin(RecordBatchStreamAdapter::new(
+                    stream.schema(),
+                    ReceiverStream::new(receiver),
+                )),
+            );
+            TaskStreamMonitor::new(handle, task_id, attempt, stream, Some(sender), rx)
+        } else {
+            TaskStreamMonitor::new(handle, task_id, attempt, stream, None, rx)
+        };
+        ctx.spawn(monitor.run());
         ActorAction::Continue
     }
 
     pub(super) fn handle_stop_task(
         &mut self,
-        ctx: &mut ActorContext<Self>,
+        _ctx: &mut ActorContext<Self>,
         task_id: TaskId,
         attempt: usize,
     ) -> ActorAction {
-        let status = TaskStatus::Canceled;
-        self.report_task_status(ctx, task_id, attempt, status, None);
+        let key = TaskAttempt::new(task_id, attempt);
+        if let Some(signal) = self.task_signals.remove(&key) {
+            let _ = signal.send(());
+        }
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_report_task_status(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        task_id: TaskId,
+        attempt: usize,
+        status: TaskStatus,
+        message: Option<String>,
+    ) -> ActorAction {
+        let client = self.driver_client.clone();
+        ctx.spawn(async move {
+            if let Err(e) = client
+                .report_task_status(task_id, attempt, status, message)
+                .await
+            {
+                error!("failed to report task status: {e}");
+            }
+        });
         ActorAction::Continue
     }
 
@@ -127,40 +161,24 @@ impl WorkerActor {
         &mut self,
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
+        host: String,
+        port: u16,
         channel: ChannelName,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     ) -> ActorAction {
-        let client = self.worker_clients.get(&worker_id).cloned();
+        let client = match self.worker_client(worker_id, host, port) {
+            Ok(x) => x.clone(),
+            Err(e) => {
+                let _ = result.send(Err(e));
+                return ActorAction::Continue;
+            }
+        };
         ctx.spawn(async move {
-            let stream = match client {
-                Some(client) => client.fetch_task_stream(channel, schema).await,
-                None => Err(ExecutionError::InternalError(format!(
-                    "worker not found: {worker_id}"
-                ))),
-            };
-            let _ = result.send(stream);
+            let out = client.fetch_task_stream(channel, schema).await;
+            let _ = result.send(out);
         });
         ActorAction::Continue
-    }
-
-    fn report_task_status(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        task_id: TaskId,
-        attempt: usize,
-        status: TaskStatus,
-        message: Option<String>,
-    ) {
-        let client = self.driver_client.clone();
-        ctx.spawn(async move {
-            if let Err(e) = client
-                .report_task_status(task_id, attempt, status, message)
-                .await
-            {
-                error!("failed to report task status: {e}");
-            }
-        });
     }
 
     fn session_context(&self) -> Arc<SessionContext> {
@@ -169,5 +187,46 @@ impl WorkerActor {
 
     fn task_context(&self) -> Arc<TaskContext> {
         Arc::new(TaskContext::default())
+    }
+
+    fn execute_plan(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        plan: Vec<u8>,
+        partition: usize,
+    ) -> ExecutionResult<SendableRecordBatchStream> {
+        let session_ctx = self.session_context();
+        let plan = PhysicalPlanNode::decode(plan.as_slice())?;
+        let plan = plan.try_into_physical_plan(
+            session_ctx.as_ref(),
+            &session_ctx.runtime_env(),
+            self.physical_plan_codec.as_ref(),
+        )?;
+        let plan = self.rewrite_shuffle(ctx, plan)?;
+        let stream = plan.execute(partition, self.task_context())?;
+        Ok(stream)
+    }
+
+    fn rewrite_shuffle(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+        let worker_id = self.options().worker_id;
+        let handle = ctx.handle();
+        let result = plan.transform(move |node| {
+            if let Some(shuffle) = node.as_any().downcast_ref::<ShuffleReadExec>() {
+                let reader = WorkerTaskStreamReader::new(worker_id, handle.clone());
+                let shuffle = shuffle.clone().with_reader(Some(Arc::new(reader)));
+                Ok(Transformed::yes(Arc::new(shuffle)))
+            } else if let Some(shuffle) = node.as_any().downcast_ref::<ShuffleWriteExec>() {
+                let writer = WorkerTaskStreamWriter::new(worker_id, handle.clone());
+                let shuffle = shuffle.clone().with_writer(Some(Arc::new(writer)));
+                Ok(Transformed::yes(Arc::new(shuffle)))
+            } else {
+                Ok(Transformed::no(node))
+            }
+        });
+        Ok(result.data()?)
     }
 }

@@ -94,9 +94,68 @@ impl DriverState {
         }
         task.status = status;
     }
+
+    pub fn find_schedulable_tasks_for_job(&self, job_id: JobId) -> Vec<(TaskId, &TaskDescriptor)> {
+        let Some(job) = self.jobs.get(&job_id) else {
+            return vec![];
+        };
+        for stage in &job.stages {
+            let Some(tasks) = stage
+                .tasks
+                .iter()
+                .map(|task_id| self.tasks.get(task_id).map(|task| (*task_id, task)))
+                .collect::<Option<Vec<_>>>()
+            else {
+                return vec![];
+            };
+            if tasks
+                .iter()
+                .all(|(_, task)| matches!(task.status, TaskStatus::Running | TaskStatus::Succeeded))
+            {
+                continue;
+            }
+            if tasks
+                .iter()
+                .any(|(_, task)| matches!(task.status, TaskStatus::Failed | TaskStatus::Canceled))
+            {
+                return vec![];
+            }
+            return tasks
+                .into_iter()
+                .filter(|(_, task)| matches!(task.status, TaskStatus::Pending))
+                .collect();
+        }
+        vec![]
+    }
+
+    pub fn find_running_tasks_for_job(&self, job_id: JobId) -> Vec<(TaskId, &TaskDescriptor)> {
+        let Some(job) = self.jobs.get(&job_id) else {
+            return vec![];
+        };
+        job.stages
+            .iter()
+            .flat_map(|stage| {
+                stage
+                    .tasks
+                    .iter()
+                    .filter_map(|task_id| self.tasks.get(task_id).map(|task| (*task_id, task)))
+                    .filter(|(_, task)| matches!(task.status, TaskStatus::Running))
+            })
+            .collect()
+    }
+
+    pub fn find_workers_for_job(&self, job_id: JobId) -> Vec<(WorkerId, &WorkerDescriptor)> {
+        self.workers
+            .iter()
+            .filter(|(_, worker)| worker.job_id == job_id)
+            .map(|(&worker_id, worker)| (worker_id, worker))
+            .collect()
+    }
 }
 
 pub struct WorkerDescriptor {
+    // TODO: support worker reuse
+    pub job_id: JobId,
     pub status: WorkerStatus,
 }
 
@@ -146,9 +205,18 @@ pub enum TaskMode {
 pub enum TaskStatus {
     Pending,
     Running,
-    Finished,
+    Succeeded,
     Failed,
     Canceled,
+}
+
+impl TaskStatus {
+    pub fn completed(&self) -> bool {
+        match self {
+            TaskStatus::Succeeded | TaskStatus::Failed | TaskStatus::Canceled => true,
+            TaskStatus::Pending | TaskStatus::Running => false,
+        }
+    }
 }
 
 impl TryFrom<gen::TaskStatus> for TaskStatus {
@@ -161,7 +229,7 @@ impl TryFrom<gen::TaskStatus> for TaskStatus {
             )),
             gen::TaskStatus::Pending => Ok(Self::Pending),
             gen::TaskStatus::Running => Ok(Self::Running),
-            gen::TaskStatus::Finished => Ok(Self::Finished),
+            gen::TaskStatus::Succeeded => Ok(Self::Succeeded),
             gen::TaskStatus::Failed => Ok(Self::Failed),
             gen::TaskStatus::Canceled => Ok(Self::Canceled),
         }
@@ -173,7 +241,7 @@ impl From<TaskStatus> for gen::TaskStatus {
         match value {
             TaskStatus::Pending => gen::TaskStatus::Pending,
             TaskStatus::Running => gen::TaskStatus::Running,
-            TaskStatus::Finished => gen::TaskStatus::Finished,
+            TaskStatus::Succeeded => gen::TaskStatus::Succeeded,
             TaskStatus::Failed => gen::TaskStatus::Failed,
             TaskStatus::Canceled => gen::TaskStatus::Canceled,
         }

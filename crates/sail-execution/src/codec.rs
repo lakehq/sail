@@ -297,9 +297,14 @@ impl RemoteExecutionCodec {
         let location = match location {
             Some(gen::task_read_location::Location::Worker(gen::TaskReadLocationWorker {
                 worker_id,
+                host,
+                port,
                 channel,
             })) => TaskReadLocation::Worker {
                 worker_id: worker_id.into(),
+                host,
+                port: u16::try_from(port)
+                    .map_err(|_| plan_datafusion_err!("invalid port: {port}"))?,
                 channel: channel.into(),
             },
             Some(gen::task_read_location::Location::Remote(gen::TaskReadLocationRemote {
@@ -315,10 +320,17 @@ impl RemoteExecutionCodec {
         location: &TaskReadLocation,
     ) -> Result<gen::TaskReadLocation> {
         let location = match location {
-            TaskReadLocation::Worker { worker_id, channel } => gen::TaskReadLocation {
+            TaskReadLocation::Worker {
+                worker_id,
+                host,
+                port,
+                channel,
+            } => gen::TaskReadLocation {
                 location: Some(gen::task_read_location::Location::Worker(
                     gen::TaskReadLocationWorker {
                         worker_id: (*worker_id).into(),
+                        host: host.clone(),
+                        port: *port as u32,
                         channel: channel.clone().into(),
                     },
                 )),

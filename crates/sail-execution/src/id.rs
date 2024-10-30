@@ -83,3 +83,15 @@ where
         Ok(value.into())
     }
 }
+
+#[derive(Eq, Hash, PartialEq)]
+pub struct TaskAttempt {
+    pub task_id: TaskId,
+    pub attempt: usize,
+}
+
+impl TaskAttempt {
+    pub fn new(task_id: TaskId, attempt: usize) -> Self {
+        Self { task_id, attempt }
+    }
+}

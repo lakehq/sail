@@ -6,7 +6,7 @@ use tokio::sync::oneshot;
 
 use crate::driver::state::TaskStatus;
 use crate::error::ExecutionResult;
-use crate::id::{TaskId, WorkerId};
+use crate::id::{JobId, TaskId, WorkerId};
 
 pub enum DriverEvent {
     ServerReady {
@@ -30,6 +30,9 @@ pub enum DriverEvent {
     ExecuteJob {
         plan: Arc<dyn ExecutionPlan>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
+    },
+    RemoveJobOutput {
+        job_id: JobId,
     },
     UpdateTask {
         task_id: TaskId,

@@ -3,6 +3,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion::execution::SendableRecordBatchStream;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::driver::state::TaskStatus;
 use crate::error::ExecutionResult;
 use crate::id::{TaskId, WorkerId};
 use crate::stream::ChannelName;
@@ -25,6 +26,12 @@ pub enum WorkerEvent {
         task_id: TaskId,
         attempt: usize,
     },
+    ReportTaskStatus {
+        task_id: TaskId,
+        attempt: usize,
+        status: TaskStatus,
+        message: Option<String>,
+    },
     CreateMemoryTaskStream {
         channel: ChannelName,
         schema: SchemaRef,
@@ -36,6 +43,8 @@ pub enum WorkerEvent {
     },
     FetchOtherWorkerTaskStream {
         worker_id: WorkerId,
+        host: String,
+        port: u16,
         channel: ChannelName,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,

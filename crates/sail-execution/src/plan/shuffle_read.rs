@@ -16,7 +16,7 @@ use futures::TryStreamExt;
 use crate::id::JobId;
 use crate::stream::{MergedRecordBatchStream, TaskReadLocation, TaskStreamReader};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ShuffleReadExec {
     job_id: JobId,
     /// The stage to read from.
@@ -62,6 +62,10 @@ impl ShuffleReadExec {
 
     pub fn with_locations(self, locations: Vec<Vec<TaskReadLocation>>) -> Self {
         Self { locations, ..self }
+    }
+
+    pub fn with_reader(self, reader: Option<Arc<dyn TaskStreamReader>>) -> Self {
+        Self { reader, ..self }
     }
 }
 

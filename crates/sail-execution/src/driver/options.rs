@@ -4,4 +4,6 @@ pub struct DriverOptions {
     pub driver_listen_port: u16,
     pub driver_external_host: String,
     pub driver_external_port: Option<u16>,
+    // TODO: support dynamic worker allocation
+    pub worker_count_per_job: usize,
 }

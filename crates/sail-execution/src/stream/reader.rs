@@ -11,6 +11,8 @@ use crate::stream::ChannelName;
 pub enum TaskReadLocation {
     Worker {
         worker_id: WorkerId,
+        host: String,
+        port: u16,
         channel: ChannelName,
     },
     Remote {

@@ -13,7 +13,9 @@ use crate::id::TaskId;
 use crate::rpc::{ClientHandle, ClientOptions};
 use crate::stream::ChannelName;
 use crate::worker::gen::worker_service_client::WorkerServiceClient;
-use crate::worker::gen::{RunTaskRequest, RunTaskResponse, TaskStreamTicket};
+use crate::worker::gen::{
+    RunTaskRequest, RunTaskResponse, StopTaskRequest, StopTaskResponse, TaskStreamTicket,
+};
 
 #[derive(Clone)]
 pub struct WorkerClient {
@@ -49,6 +51,16 @@ impl WorkerClient {
         };
         let response = self.client.lock().await?.run_task(request).await?;
         let RunTaskResponse {} = response.into_inner();
+        Ok(())
+    }
+
+    pub async fn stop_task(&self, task_id: TaskId, attempt: usize) -> ExecutionResult<()> {
+        let request = StopTaskRequest {
+            task_id: task_id.into(),
+            attempt: attempt as u64,
+        };
+        let response = self.client.lock().await?.stop_task(request).await?;
+        let StopTaskResponse {} = response.into_inner();
         Ok(())
     }
 

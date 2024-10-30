@@ -32,7 +32,12 @@ impl TaskStreamReader for WorkerTaskStreamReader {
     ) -> Result<SendableRecordBatchStream> {
         let (tx, rx) = oneshot::channel();
         let event = match location {
-            TaskReadLocation::Worker { worker_id, channel } => {
+            TaskReadLocation::Worker {
+                worker_id,
+                host,
+                port,
+                channel,
+            } => {
                 if *worker_id == self.worker_id {
                     WorkerEvent::FetchThisWorkerTaskStream {
                         channel: channel.clone(),
@@ -41,6 +46,8 @@ impl TaskStreamReader for WorkerTaskStreamReader {
                 } else {
                     WorkerEvent::FetchOtherWorkerTaskStream {
                         worker_id: *worker_id,
+                        host: host.clone(),
+                        port: *port,
                         channel: channel.clone(),
                         schema,
                         result: tx,
@@ -61,6 +68,7 @@ impl TaskStreamReader for WorkerTaskStreamReader {
 
 #[derive(Debug)]
 pub(super) struct WorkerTaskStreamWriter {
+    #[allow(dead_code)]
     worker_id: WorkerId,
     handle: ActorHandle<WorkerActor>,
 }

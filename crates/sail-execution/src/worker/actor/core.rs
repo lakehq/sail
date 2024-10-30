@@ -5,10 +5,11 @@ use datafusion::execution::SendableRecordBatchStream;
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
+use tokio::sync::oneshot;
 
 use crate::codec::RemoteExecutionCodec;
 use crate::driver::DriverClient;
-use crate::id::WorkerId;
+use crate::id::{TaskAttempt, WorkerId};
 use crate::rpc::{ClientOptions, ServerMonitor};
 use crate::stream::ChannelName;
 use crate::worker::event::WorkerEvent;
@@ -20,6 +21,7 @@ pub struct WorkerActor {
     pub(super) server: ServerMonitor,
     pub(super) driver_client: DriverClient,
     pub(super) worker_clients: HashMap<WorkerId, WorkerClient>,
+    pub(super) task_signals: HashMap<TaskAttempt, oneshot::Sender<()>>,
     pub(super) memory_streams: HashMap<ChannelName, SendableRecordBatchStream>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
 }
@@ -39,6 +41,7 @@ impl Actor for WorkerActor {
             server: ServerMonitor::new(),
             driver_client,
             worker_clients: HashMap::new(),
+            task_signals: HashMap::new(),
             memory_streams: HashMap::new(),
             physical_plan_codec: Box::new(RemoteExecutionCodec::new(SessionContext::default())),
         }
@@ -68,6 +71,12 @@ impl Actor for WorkerActor {
             WorkerEvent::StopTask { task_id, attempt } => {
                 self.handle_stop_task(ctx, task_id, attempt)
             }
+            WorkerEvent::ReportTaskStatus {
+                task_id,
+                attempt,
+                status,
+                message,
+            } => self.handle_report_task_status(ctx, task_id, attempt, status, message),
             WorkerEvent::CreateMemoryTaskStream {
                 channel,
                 schema,
@@ -78,12 +87,14 @@ impl Actor for WorkerActor {
             }
             WorkerEvent::FetchOtherWorkerTaskStream {
                 worker_id,
+                host,
+                port,
                 channel,
                 schema,
                 result,
-            } => {
-                self.handle_fetch_other_worker_task_stream(ctx, worker_id, channel, schema, result)
-            }
+            } => self.handle_fetch_other_worker_task_stream(
+                ctx, worker_id, host, port, channel, schema, result,
+            ),
             WorkerEvent::Shutdown => ActorAction::Stop,
         }
     }

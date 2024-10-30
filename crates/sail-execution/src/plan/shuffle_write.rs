@@ -19,7 +19,7 @@ use futures::StreamExt;
 use crate::id::JobId;
 use crate::stream::{TaskStreamWriter, TaskWriteLocation};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ShuffleWriteExec {
     job_id: JobId,
     /// The stage that this execution plan is part of.
@@ -77,6 +77,10 @@ impl ShuffleWriteExec {
 
     pub fn with_locations(self, locations: Vec<Vec<TaskWriteLocation>>) -> Self {
         Self { locations, ..self }
+    }
+
+    pub fn with_writer(self, writer: Option<Arc<dyn TaskStreamWriter>>) -> Self {
+        Self { writer, ..self }
     }
 }
 

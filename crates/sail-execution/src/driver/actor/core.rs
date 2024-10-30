@@ -2,17 +2,15 @@ use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
 
-use datafusion::physical_plan::SendableRecordBatchStream;
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use log::error;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
-use tokio::sync::oneshot;
 
 use crate::codec::RemoteExecutionCodec;
+use crate::driver::actor::output::JobOutput;
 use crate::driver::state::DriverState;
 use crate::driver::{DriverEvent, DriverOptions};
-use crate::error::ExecutionResult;
 use crate::id::{JobId, WorkerId};
 use crate::rpc::ServerMonitor;
 use crate::worker::WorkerClient;
@@ -25,7 +23,7 @@ pub struct DriverActor {
     pub(super) worker_manager: Arc<dyn WorkerManager>,
     pub(super) worker_clients: HashMap<WorkerId, WorkerClient>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
-    pub(super) job_subscribers: HashMap<JobId, JobSubscriber>,
+    pub(super) job_outputs: HashMap<JobId, JobOutput>,
 }
 
 impl Actor for DriverActor {
@@ -40,7 +38,7 @@ impl Actor for DriverActor {
             worker_manager: Arc::new(LocalWorkerManager::new()),
             worker_clients: HashMap::new(),
             physical_plan_codec: Box::new(RemoteExecutionCodec::new(SessionContext::default())),
-            job_subscribers: HashMap::new(),
+            job_outputs: HashMap::new(),
         }
     }
 
@@ -66,6 +64,7 @@ impl Actor for DriverActor {
             } => self.handle_register_worker(ctx, worker_id, host, port),
             DriverEvent::StopWorker { worker_id } => self.handle_stop_worker(ctx, worker_id),
             DriverEvent::ExecuteJob { plan, result } => self.handle_execute_job(ctx, plan, result),
+            DriverEvent::RemoveJobOutput { job_id } => self.handle_remove_job_output(ctx, job_id),
             DriverEvent::UpdateTask {
                 task_id,
                 attempt,
@@ -90,8 +89,4 @@ impl DriverActor {
     pub(super) fn options(&self) -> &DriverOptions {
         &self.options
     }
-}
-
-pub(super) struct JobSubscriber {
-    pub result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
 }

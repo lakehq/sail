@@ -5,11 +5,13 @@ use tokio::net::{TcpListener, ToSocketAddrs};
 use tonic::codec::CompressionEncoding;
 
 use crate::error::{ExecutionError, ExecutionResult};
+use crate::id::WorkerId;
+use crate::rpc::ClientOptions;
 use crate::worker::actor::core::WorkerActor;
 use crate::worker::flight_server::WorkerFlightServer;
 use crate::worker::gen::worker_service_server::WorkerServiceServer;
 use crate::worker::server::WorkerServer;
-use crate::worker::WorkerEvent;
+use crate::worker::{WorkerClient, WorkerEvent};
 
 impl WorkerActor {
     pub(super) async fn serve(
@@ -48,5 +50,23 @@ impl WorkerActor {
             })
             .await
             .map_err(|e| ExecutionError::InternalError(e.to_string()))
+    }
+
+    pub(super) fn worker_client(
+        &mut self,
+        id: WorkerId,
+        host: String,
+        port: u16,
+    ) -> ExecutionResult<&WorkerClient> {
+        let enable_tls = self.options().enable_tls;
+        let client = self.worker_clients.entry(id).or_insert_with(|| {
+            let options = ClientOptions {
+                enable_tls,
+                host,
+                port,
+            };
+            WorkerClient::new(options)
+        });
+        Ok(client)
     }
 }

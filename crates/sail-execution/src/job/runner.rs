@@ -51,6 +51,7 @@ impl ClusterJobRunner {
             driver_listen_port: 0,
             driver_external_host: "127.0.0.1".to_string(),
             driver_external_port: None,
+            worker_count_per_job: 4,
         };
         // TODO: share actor system across sessions
         let mut system = ActorSystem::new();
