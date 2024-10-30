@@ -10,7 +10,7 @@ edition = "2021"
 
 [workspace.dependencies]
 thiserror = { version = "1.0.64" }
-tokio = { version = "1.38.1", features = ["full"] }
+tokio = { version = "1.41.0", features = ["full"] }
 tokio-stream = "0.1.16"
 tonic = { version = "0.12.3", features = ["tls", "tls-roots", "gzip", "zstd"] }
 tonic-build = "0.12.3"
@@ -48,14 +48,14 @@ phf = { version = "0.11.2", features = ["macros"] }
 ryu = "1.0.18"
 either = "1.12.0"
 num-traits = "0.2.19"
-serde_arrow = { version = "0.12.1", features = ["arrow-53"] }
+serde_arrow = { version = "0.12.2", features = ["arrow-53"] }
 mimalloc = { version = "0.1.43", features = ["local_dynamic_tls"] }
 rand = "0.8.5"
 rand_chacha = "0.3.1"
 rand_distr = "0.4.3"
 url = "2.5.2"
 lexical-core = { version = "1.0.2", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
-aws-config = "1.5.8"
+aws-config = "1.5.9"
 aws-credential-types = "1.2.1"
 clap = { version = "4.5.20", features = ["derive"] }
 num_enum = "0.7.3"
