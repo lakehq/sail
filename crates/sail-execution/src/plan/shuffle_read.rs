@@ -3,7 +3,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
-use datafusion::common::{exec_datafusion_err, DataFusionError, Result};
+use datafusion::common::{exec_datafusion_err, internal_err, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -13,12 +13,11 @@ use datafusion::physical_plan::{
 use futures::future::try_join_all;
 use futures::TryStreamExt;
 
-use crate::id::JobId;
+use crate::plan::write_list_of_lists;
 use crate::stream::{MergedRecordBatchStream, TaskReadLocation, TaskStreamReader};
 
 #[derive(Debug, Clone)]
 pub struct ShuffleReadExec {
-    job_id: JobId,
     /// The stage to read from.
     stage: usize,
     /// For each output partition, a list of locations to read from.
@@ -28,7 +27,7 @@ pub struct ShuffleReadExec {
 }
 
 impl ShuffleReadExec {
-    pub fn new(job_id: JobId, stage: usize, schema: SchemaRef, partitioning: Partitioning) -> Self {
+    pub fn new(stage: usize, schema: SchemaRef, partitioning: Partitioning) -> Self {
         let partition_count = partitioning.partition_count();
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
@@ -36,16 +35,11 @@ impl ShuffleReadExec {
             ExecutionMode::Unbounded,
         );
         Self {
-            job_id,
             stage,
             locations: vec![vec![]; partition_count],
             properties,
             reader: None,
         }
-    }
-
-    pub fn job_id(&self) -> JobId {
-        self.job_id
     }
 
     pub fn stage(&self) -> usize {
@@ -71,7 +65,13 @@ impl ShuffleReadExec {
 
 impl DisplayAs for ShuffleReadExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "ShuffleReadExec")
+        write!(
+            f,
+            "ShuffleReadExec: stage={}, partitioning={}, locations=",
+            self.stage,
+            self.properties.output_partitioning()
+        )?;
+        write_list_of_lists(f, &self.locations)
     }
 }
 
@@ -97,9 +97,7 @@ impl ExecutionPlan for ShuffleReadExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if !children.is_empty() {
-            return Err(DataFusionError::Internal(
-                "ShuffleReadExec does not accept children".to_string(),
-            ));
+            return internal_err!("ShuffleReadExec does not accept children");
         }
         Ok(self)
     }

@@ -56,11 +56,10 @@ message PhysicalProjection {
 }
 
 message ShuffleReadExecNode {
-  uint64 job_id = 1;
-  uint64 stage = 2;
-  bytes schema = 3;
-  bytes partitioning = 4;
-  repeated TaskReadLocationList locations = 5;
+  uint64 stage = 1;
+  bytes schema = 2;
+  bytes partitioning = 3;
+  repeated TaskReadLocationList locations = 4;
 }
 
 message TaskReadLocationList {
@@ -86,11 +85,10 @@ message TaskReadLocationRemote {
 }
 
 message ShuffleWriteExecNode {
-  uint64 job_id = 1;
-  uint64 stage = 2;
-  bytes plan = 3;
-  bytes partitioning = 4;
-  repeated TaskWriteLocationList locations = 5;
+  uint64 stage = 1;
+  bytes plan = 2;
+  bytes partitioning = 3;
+  repeated TaskWriteLocationList locations = 4;
 }
 
 message TaskWriteLocationList {

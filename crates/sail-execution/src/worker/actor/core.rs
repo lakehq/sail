@@ -26,6 +26,7 @@ pub struct WorkerActor {
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
 }
 
+#[tonic::async_trait]
 impl Actor for WorkerActor {
     type Message = WorkerEvent;
     type Options = WorkerOptions;
@@ -47,13 +48,13 @@ impl Actor for WorkerActor {
         }
     }
 
-    fn start(&mut self, ctx: &mut ActorContext<Self>) {
+    async fn start(&mut self, ctx: &mut ActorContext<Self>) {
         let addr = (
             self.options().worker_listen_host.clone(),
             self.options().worker_listen_port,
         );
         let server = mem::take(&mut self.server);
-        self.server = server.start(Self::serve(ctx.handle().clone(), addr));
+        self.server = server.start(Self::serve(ctx.handle().clone(), addr)).await;
     }
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
@@ -99,8 +100,8 @@ impl Actor for WorkerActor {
         }
     }
 
-    fn stop(self) {
-        self.server.stop();
+    async fn stop(self) {
+        self.server.stop().await;
     }
 }
 

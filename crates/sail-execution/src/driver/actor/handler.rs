@@ -1,6 +1,8 @@
 use std::mem;
 use std::sync::Arc;
 
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion::common::{exec_datafusion_err, exec_err};
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -25,7 +27,8 @@ use crate::driver::state::{
 use crate::driver::DriverEvent;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskAttempt, TaskId, WorkerId};
-use crate::stream::MergedRecordBatchStream;
+use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
+use crate::stream::{MergedRecordBatchStream, TaskReadLocation, TaskWriteLocation};
 use crate::worker_manager::WorkerLaunchOptions;
 
 impl DriverActor {
@@ -162,7 +165,10 @@ impl DriverActor {
                 );
                 self.stop_job(ctx, job_id, reason);
             }
-            TaskStatus::Pending | TaskStatus::Succeeded | TaskStatus::Canceled => {}
+            TaskStatus::Created
+            | TaskStatus::Scheduled
+            | TaskStatus::Succeeded
+            | TaskStatus::Canceled => {}
         }
         ActorAction::Continue
     }
@@ -173,26 +179,33 @@ impl DriverActor {
         plan: Arc<dyn ExecutionPlan>,
     ) -> ExecutionResult<JobId> {
         let job_id = self.state.next_job_id()?;
-        let graph = JobGraph::try_new(job_id, plan)?;
+        let graph = JobGraph::try_new(plan)?;
         let worker_ids = self.start_workers_for_job(ctx, job_id)?;
         let mut worker_id_selector = worker_ids.iter().cycle();
         let mut stages = vec![];
-        for stage in graph.stages() {
+        for (s, stage) in graph.stages().iter().enumerate() {
+            let last = s == graph.stages().len() - 1;
             let mut tasks = vec![];
             for p in 0..stage.output_partitioning().partition_count() {
                 let task_id = self.state.next_task_id()?;
+                let attempt = 0;
+                let channel = if last {
+                    Some(format!("job-{job_id}/task-{task_id}/attempt-{attempt}").into())
+                } else {
+                    None
+                };
                 self.state.add_task(
                     task_id,
                     TaskDescriptor {
                         job_id,
-                        stage: 0,
+                        stage: s,
                         partition: p,
-                        attempt: 0,
+                        attempt,
                         worker_id: *worker_id_selector.next().unwrap(),
                         mode: TaskMode::Pipelined,
-                        status: TaskStatus::Pending,
+                        status: TaskStatus::Created,
                         messages: vec![],
-                        channel: None, // FIXME
+                        channel,
                     },
                 );
                 tasks.push(task_id);
@@ -234,12 +247,14 @@ impl DriverActor {
             .map(|(task_id, task)| TaskAttempt::new(task_id, task.attempt))
             .collect::<Vec<_>>();
         for TaskAttempt { task_id, attempt } in tasks {
+            self.state
+                .update_task_status(task_id, attempt, TaskStatus::Scheduled, None);
             if let Err(e) = self.schedule_task(ctx, task_id) {
                 ctx.send(DriverEvent::UpdateTask {
                     task_id,
                     attempt,
                     status: TaskStatus::Failed,
-                    message: Some(e.to_string()),
+                    message: Some(format!("failed to schedule task: {e}")),
                 });
             }
         }
@@ -269,7 +284,7 @@ impl DriverActor {
         let attempt = task.attempt;
         let partition = task.partition;
         let channel = task.channel.clone();
-        let plan = self.rewrite_shuffle(stage.plan.clone(), partition)?;
+        let plan = self.rewrite_shuffle(task.job_id, job, stage.plan.clone(), partition)?;
         let plan = self.encode_plan(plan)?;
         let client = self.worker_client(task.worker_id)?.clone();
         let handle = ctx.handle().clone();
@@ -283,7 +298,7 @@ impl DriverActor {
                         task_id,
                         attempt,
                         status: TaskStatus::Failed,
-                        message: Some(e.to_string()),
+                        message: Some(format!("failed to run task via the worker client: {e}")),
                     })
                     .await;
             }
@@ -301,10 +316,66 @@ impl DriverActor {
 
     fn rewrite_shuffle(
         &self,
-        _plan: Arc<dyn ExecutionPlan>,
-        _partition: usize,
+        job_id: JobId,
+        job: &JobDescriptor,
+        plan: Arc<dyn ExecutionPlan>,
+        partition: usize,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-        todo!()
+        let result = plan.transform(|node| {
+            if let Some(shuffle) = node.as_any().downcast_ref::<ShuffleReadExec>() {
+                let mut locations = shuffle.locations().to_vec();
+                locations[partition] = job.stages[shuffle.stage()]
+                    .tasks
+                    .iter()
+                    .map(|task_id| {
+                        let task = self
+                            .state
+                            .get_task(*task_id)
+                            .ok_or_else(|| exec_datafusion_err!("task {task_id} not found"))?;
+                        let worker_id = task.worker_id;
+                        let worker = self
+                            .state
+                            .get_worker(worker_id)
+                            .ok_or_else(|| exec_datafusion_err!("worker {worker_id} not found"))?;
+                        let (host, port) = match &worker.status {
+                            WorkerStatus::Running { host, port } => (host.clone(), *port),
+                            _ => return exec_err!("worker {worker_id} is not running"),
+                        };
+                        let attempt = task.attempt;
+                        Ok(TaskReadLocation::Worker {
+                            worker_id,
+                            host,
+                            port,
+                            channel: format!("job-{job_id}/task-{task_id}/attempt-{attempt}/partition-{partition}")
+                                .into(),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, DataFusionError>>()?;
+                let shuffle = shuffle.clone().with_locations(locations);
+                Ok(Transformed::yes(Arc::new(shuffle)))
+            } else if let Some(shuffle) = node.as_any().downcast_ref::<ShuffleWriteExec>() {
+                let mut locations = shuffle.locations().to_vec();
+                let task_id = job.stages[shuffle.stage()].tasks[partition];
+                let task = self
+                    .state
+                    .get_task(task_id)
+                    .ok_or_else(|| exec_datafusion_err!("task {task_id} not found"))?;
+                let attempt = task.attempt;
+                locations[partition] = (0..shuffle.shuffle_partitioning().partition_count())
+                    .map(|p| {
+                        TaskWriteLocation::Memory {
+                            channel: format!("job-{job_id}/task-{task_id}/attempt-{attempt}/partition-{p}")
+                                .into(),
+                        }
+                    })
+                    .collect();
+                let shuffle = shuffle.clone().with_locations(locations);
+                Ok(Transformed::yes(Arc::new(shuffle)))
+            } else {
+                Ok(Transformed::no(node))
+            }
+        });
+        Ok(result.data()?)
     }
 
     fn try_update_job_output(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {

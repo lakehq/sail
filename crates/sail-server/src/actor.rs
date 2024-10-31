@@ -6,12 +6,13 @@ use tokio::task::{AbortHandle, JoinSet};
 
 const ACTOR_CHANNEL_SIZE: usize = 8;
 
+#[tonic::async_trait]
 pub trait Actor: Sized + Send + 'static {
     type Message: Send + 'static;
     type Options;
 
     fn new(options: Self::Options) -> Self;
-    fn start(&mut self, ctx: &mut ActorContext<Self>);
+    async fn start(&mut self, ctx: &mut ActorContext<Self>);
     /// Process one message and return the next action.
     /// This method should handle errors internally (e.g. by sending itself an error message
     /// for further processing).
@@ -20,7 +21,7 @@ pub trait Actor: Sized + Send + 'static {
     /// If the actor needs to perform async operations, it should spawn tasks via
     /// [ActorContext::spawn].
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction;
-    fn stop(self);
+    async fn stop(self);
 }
 
 pub enum ActorAction {
@@ -171,7 +172,7 @@ struct ActorRunner<T: Actor> {
 
 impl<T: Actor> ActorRunner<T> {
     async fn run(mut self) {
-        self.actor.start(&mut self.ctx);
+        self.actor.start(&mut self.ctx).await;
         while let Some(message) = self.receiver.recv().await {
             let action = self.actor.receive(&mut self.ctx, message);
             match action {
@@ -189,7 +190,7 @@ impl<T: Actor> ActorRunner<T> {
             }
             self.ctx.reap();
         }
-        self.actor.stop();
+        self.actor.stop().await;
     }
 }
 
@@ -209,6 +210,7 @@ mod tests {
         Stop,
     }
 
+    #[tonic::async_trait]
     impl Actor for TestActor {
         type Message = TestMessage;
         type Options = ();
@@ -217,7 +219,7 @@ mod tests {
             Self
         }
 
-        fn start(&mut self, _: &mut ActorContext<Self>) {}
+        async fn start(&mut self, _: &mut ActorContext<Self>) {}
 
         fn receive(&mut self, _: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
             match message {
@@ -229,7 +231,7 @@ mod tests {
             }
         }
 
-        fn stop(self) {}
+        async fn stop(self) {}
     }
 
     #[tokio::test]

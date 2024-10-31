@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use datafusion::common::{exec_datafusion_err, exec_err, DataFusionError, Result};
+use datafusion::common::{exec_datafusion_err, exec_err, plan_err, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::repartition::BatchPartitioner;
@@ -16,15 +16,18 @@ use datafusion::physical_plan::{
 use futures::future::try_join_all;
 use futures::StreamExt;
 
-use crate::id::JobId;
+use crate::plan::write_list_of_lists;
 use crate::stream::{TaskStreamWriter, TaskWriteLocation};
 
 #[derive(Debug, Clone)]
 pub struct ShuffleWriteExec {
-    job_id: JobId,
     /// The stage that this execution plan is part of.
     stage: usize,
     plan: Arc<dyn ExecutionPlan>,
+    /// The partitioning scheme for the shuffle output.
+    /// The partition count for the shuffle output can be different from the
+    /// partition count of the input plan.
+    shuffle_partitioning: Partitioning,
     /// For each input partition, a list of locations to write to.
     locations: Vec<Vec<TaskWriteLocation>>,
     properties: PlanProperties,
@@ -32,31 +35,28 @@ pub struct ShuffleWriteExec {
 }
 
 impl ShuffleWriteExec {
-    pub fn new(
-        job_id: JobId,
-        stage: usize,
-        plan: Arc<dyn ExecutionPlan>,
-        partitioning: Partitioning,
-    ) -> Self {
-        let input_partition_count = plan.output_partitioning().partition_count();
+    pub fn new(stage: usize, plan: Arc<dyn ExecutionPlan>, partitioning: Partitioning) -> Self {
+        let input_partitioning = plan.output_partitioning().clone();
+        let input_partition_count = input_partitioning.partition_count();
         let properties = PlanProperties::new(
             EquivalenceProperties::new(plan.schema()),
-            partitioning,
+            // The shuffle write plan has the same partitioning as the input plan.
+            // For each partition that are executed, the data is further partitioned according to
+            // the shuffle partitioning, resulting in multiple output streams.
+            // These output streams are written to locations managed by the worker,
+            // while the return value of `.execute()` is always an empty stream.
+            input_partitioning,
             ExecutionMode::Unbounded,
         );
         let locations = vec![vec![]; input_partition_count];
         Self {
-            job_id,
             stage,
             plan,
+            shuffle_partitioning: partitioning,
             locations,
             properties,
             writer: None,
         }
-    }
-
-    pub fn job_id(&self) -> JobId {
-        self.job_id
     }
 
     pub fn stage(&self) -> usize {
@@ -67,8 +67,8 @@ impl ShuffleWriteExec {
         &self.plan
     }
 
-    pub fn partitioning(&self) -> &Partitioning {
-        self.properties.output_partitioning()
+    pub fn shuffle_partitioning(&self) -> &Partitioning {
+        &self.shuffle_partitioning
     }
 
     pub fn locations(&self) -> &[Vec<TaskWriteLocation>] {
@@ -86,7 +86,12 @@ impl ShuffleWriteExec {
 
 impl DisplayAs for ShuffleWriteExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "ShuffleWriteExec")
+        write!(
+            f,
+            "ShuffleWriteExec: stage={}, partitioning={}, locations=",
+            self.stage, self.shuffle_partitioning,
+        )?;
+        write_list_of_lists(f, &self.locations)
     }
 }
 
@@ -113,15 +118,11 @@ impl ExecutionPlan for ShuffleWriteExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let child = children.pop();
         match (child, children.is_empty()) {
-            (Some(child), true) => Ok(Arc::new(Self::new(
-                self.job_id,
-                self.stage,
-                child,
-                self.properties.partitioning.clone(),
-            ))),
-            _ => Err(DataFusionError::Internal(
-                "ShuffleWriteExec does not accept children".to_string(),
-            )),
+            (Some(plan), true) => Ok(Arc::new(Self {
+                plan,
+                ..self.as_ref().clone()
+            })),
+            _ => plan_err!("ShuffleWriteExec should have one child"),
         }
     }
 
@@ -142,17 +143,17 @@ impl ExecutionPlan for ShuffleWriteExec {
             .as_ref()
             .ok_or_else(|| exec_datafusion_err!("writer not set"))?
             .clone();
-        let partitioning = self.properties.output_partitioning().clone();
-        if partitioning.partition_count() != locations.len() {
+        if self.shuffle_partitioning.partition_count() != locations.len() {
             return exec_err!(
-                "partition count mismatch: partitioning has {} partitions, but {} locations were provided",
-                partitioning.partition_count(),
+                "partition count mismatch: shuffle partitioning has {} partitions, but {} locations were provided",
+                self.shuffle_partitioning.partition_count(),
                 locations.len()
             );
         }
         let stream = self.plan.execute(partition, context)?;
         // TODO: support metrics in batch partitioner
-        let partitioner = BatchPartitioner::try_new(partitioning, Default::default())?;
+        let partitioner =
+            BatchPartitioner::try_new(self.shuffle_partitioning.clone(), Default::default())?;
         let output_schema = Arc::new(Schema::empty());
         let output_data = RecordBatch::new_empty(output_schema.clone());
         let output = futures::stream::once(async move {

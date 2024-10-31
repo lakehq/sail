@@ -26,6 +26,7 @@ pub struct DriverActor {
     pub(super) job_outputs: HashMap<JobId, JobOutput>,
 }
 
+#[tonic::async_trait]
 impl Actor for DriverActor {
     type Message = DriverEvent;
     type Options = DriverOptions;
@@ -42,13 +43,13 @@ impl Actor for DriverActor {
         }
     }
 
-    fn start(&mut self, ctx: &mut ActorContext<Self>) {
+    async fn start(&mut self, ctx: &mut ActorContext<Self>) {
         let addr = (
             self.options().driver_listen_host.clone(),
             self.options().driver_listen_port,
         );
         let server = mem::take(&mut self.server);
-        self.server = server.start(Self::serve(ctx.handle().clone(), addr));
+        self.server = server.start(Self::serve(ctx.handle().clone(), addr)).await;
     }
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: DriverEvent) -> ActorAction {
@@ -75,13 +76,11 @@ impl Actor for DriverActor {
         }
     }
 
-    fn stop(self) {
-        self.server.stop();
-        tokio::runtime::Handle::current().block_on(async {
-            if let Err(e) = self.worker_manager.stop_all_workers().await {
-                error!("encountered error while stopping workers: {e}");
-            }
-        });
+    async fn stop(self) {
+        self.server.stop().await;
+        if let Err(e) = self.worker_manager.stop_all_workers().await {
+            error!("encountered error while stopping workers: {e}");
+        }
     }
 }
 

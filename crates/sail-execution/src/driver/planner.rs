@@ -10,17 +10,15 @@ use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMerge
 use datafusion::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::JobId;
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
 
 pub struct JobGraph {
-    job_id: JobId,
     stages: Vec<Arc<dyn ExecutionPlan>>,
 }
 
 impl Display for JobGraph {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        writeln!(f, "= JobGraph {} =", self.job_id)?;
+        writeln!(f, "= JobGraph =")?;
         for (i, stage) in self.stages.iter().enumerate() {
             let displayable = DisplayableExecutionPlan::new(stage.as_ref());
             writeln!(f, "== Stage {i} ==")?;
@@ -31,11 +29,8 @@ impl Display for JobGraph {
 }
 
 impl JobGraph {
-    pub fn try_new(job_id: JobId, plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Self> {
-        let mut graph = Self {
-            job_id,
-            stages: vec![],
-        };
+    pub fn try_new(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Self> {
+        let mut graph = Self { stages: vec![] };
         let last = build_job_graph(plan, &mut graph)?;
         graph.stages.push(last);
         Ok(graph)
@@ -78,7 +73,7 @@ fn build_job_graph(
             .is_some()
     {
         let child = get_one_child_plan(&plan)?;
-        let partitioning = plan.properties().output_partitioning();
+        let partitioning = child.properties().output_partitioning();
         let child = create_shuffle(&child, graph, partitioning.clone())?;
         with_new_children_if_necessary(plan, vec![child])?
     } else {
@@ -106,7 +101,6 @@ fn create_shuffle(
     let stage = graph.stages.len();
 
     let writer = Arc::new(ShuffleWriteExec::new(
-        graph.job_id,
         stage,
         plan.clone(),
         partitioning.clone(),
@@ -114,7 +108,6 @@ fn create_shuffle(
     graph.stages.push(writer);
 
     Ok(Arc::new(ShuffleReadExec::new(
-        graph.job_id,
         stage,
         plan.schema(),
         partitioning,

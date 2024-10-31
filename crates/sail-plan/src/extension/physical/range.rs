@@ -14,7 +14,7 @@ use crate::extension::logical::Range;
 
 const RANGE_BATCH_SIZE: usize = 1024;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RangeExec {
     range: Range,
     num_partitions: usize,

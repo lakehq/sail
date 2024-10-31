@@ -83,7 +83,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 )))
             }
             NodeKind::ShuffleRead(gen::ShuffleReadExecNode {
-                job_id,
                 stage,
                 schema,
                 partitioning,
@@ -97,13 +96,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .into_iter()
                     .map(|x| self.try_decode_task_read_location_list(x))
                     .collect::<Result<_>>()?;
-                let node =
-                    ShuffleReadExec::new(job_id.into(), stage as usize, schema, partitioning);
+                let node = ShuffleReadExec::new(stage as usize, schema, partitioning);
                 let node = node.with_locations(locations);
                 Ok(Arc::new(node))
             }
             NodeKind::ShuffleWrite(gen::ShuffleWriteExecNode {
-                job_id,
                 stage,
                 plan,
                 partitioning,
@@ -116,7 +113,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .into_iter()
                     .map(|x| self.try_decode_task_write_location_list(x))
                     .collect::<Result<_>>()?;
-                let node = ShuffleWriteExec::new(job_id.into(), stage as usize, plan, partitioning);
+                let node = ShuffleWriteExec::new(stage as usize, plan, partitioning);
                 let node = node.with_locations(locations);
                 Ok(Arc::new(node))
             }
@@ -177,21 +174,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .map(|x| self.try_encode_task_read_location_list(x))
                 .collect::<Result<_>>()?;
             NodeKind::ShuffleRead(gen::ShuffleReadExecNode {
-                job_id: shuffle_read.job_id().into(),
                 stage: shuffle_read.stage() as u64,
                 schema,
                 partitioning,
                 locations,
             })
         } else if let Some(shuffle_write) = node.as_any().downcast_ref::<ShuffleWriteExec>() {
-            let partitioning = self.try_encode_partitioning(shuffle_write.partitioning())?;
+            let partitioning =
+                self.try_encode_partitioning(shuffle_write.shuffle_partitioning())?;
             let locations = shuffle_write
                 .locations()
                 .iter()
                 .map(|x| self.try_encode_task_write_location_list(x))
                 .collect::<Result<_>>()?;
             NodeKind::ShuffleWrite(gen::ShuffleWriteExecNode {
-                job_id: shuffle_write.job_id().into(),
                 stage: shuffle_write.stage() as u64,
                 plan: self.try_encode_plan(shuffle_write.plan().clone())?,
                 partitioning,

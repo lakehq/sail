@@ -5,7 +5,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use log::warn;
 
 use crate::driver::gen;
-use crate::error::{ExecutionError, ExecutionResult};
+use crate::error::ExecutionResult;
 use crate::id::{IdGenerator, JobId, TaskId, WorkerId};
 use crate::stream::ChannelName;
 
@@ -122,7 +122,12 @@ impl DriverState {
             }
             return tasks
                 .into_iter()
-                .filter(|(_, task)| matches!(task.status, TaskStatus::Pending))
+                .filter(|(_, task)| {
+                    matches!(task.status, TaskStatus::Created)
+                        && self.get_worker(task.worker_id).is_some_and(|worker| {
+                            matches!(worker.status, WorkerStatus::Running { .. })
+                        })
+                })
                 .collect();
         }
         vec![]
@@ -203,7 +208,8 @@ pub enum TaskMode {
 
 #[derive(Clone, Copy)]
 pub enum TaskStatus {
-    Pending,
+    Created,
+    Scheduled,
     Running,
     Succeeded,
     Failed,
@@ -214,24 +220,20 @@ impl TaskStatus {
     pub fn completed(&self) -> bool {
         match self {
             TaskStatus::Succeeded | TaskStatus::Failed | TaskStatus::Canceled => true,
-            TaskStatus::Pending | TaskStatus::Running => false,
+            TaskStatus::Created | TaskStatus::Scheduled | TaskStatus::Running => false,
         }
     }
 }
 
-impl TryFrom<gen::TaskStatus> for TaskStatus {
-    type Error = ExecutionError;
-
-    fn try_from(value: gen::TaskStatus) -> Result<Self, Self::Error> {
+impl From<gen::TaskStatus> for TaskStatus {
+    fn from(value: gen::TaskStatus) -> Self {
         match value {
-            gen::TaskStatus::Unknown => Err(ExecutionError::InvalidArgument(
-                "unknown task status".to_string(),
-            )),
-            gen::TaskStatus::Pending => Ok(Self::Pending),
-            gen::TaskStatus::Running => Ok(Self::Running),
-            gen::TaskStatus::Succeeded => Ok(Self::Succeeded),
-            gen::TaskStatus::Failed => Ok(Self::Failed),
-            gen::TaskStatus::Canceled => Ok(Self::Canceled),
+            gen::TaskStatus::Created => Self::Created,
+            gen::TaskStatus::Scheduled => Self::Scheduled,
+            gen::TaskStatus::Running => Self::Running,
+            gen::TaskStatus::Succeeded => Self::Succeeded,
+            gen::TaskStatus::Failed => Self::Failed,
+            gen::TaskStatus::Canceled => Self::Canceled,
         }
     }
 }
@@ -239,7 +241,8 @@ impl TryFrom<gen::TaskStatus> for TaskStatus {
 impl From<TaskStatus> for gen::TaskStatus {
     fn from(value: TaskStatus) -> Self {
         match value {
-            TaskStatus::Pending => gen::TaskStatus::Pending,
+            TaskStatus::Created => gen::TaskStatus::Created,
+            TaskStatus::Scheduled => gen::TaskStatus::Scheduled,
             TaskStatus::Running => gen::TaskStatus::Running,
             TaskStatus::Succeeded => gen::TaskStatus::Succeeded,
             TaskStatus::Failed => gen::TaskStatus::Failed,

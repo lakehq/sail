@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::io::Write;
 
 use arrow::array::RecordBatch;
@@ -14,6 +14,16 @@ pub enum TaskWriteLocation {
     Memory { channel: ChannelName },
     Disk { channel: ChannelName },
     Remote { uri: String },
+}
+
+impl Display for TaskWriteLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            TaskWriteLocation::Memory { channel } => write!(f, "Memory({})", channel),
+            TaskWriteLocation::Disk { channel } => write!(f, "Disk({})", channel),
+            TaskWriteLocation::Remote { uri } => write!(f, "Remote({})", uri),
+        }
+    }
 }
 
 #[tonic::async_trait]

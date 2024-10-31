@@ -70,7 +70,7 @@ impl WorkerActor {
                     task_id,
                     attempt,
                     status: TaskStatus::Failed,
-                    message: Some(e.to_string()),
+                    message: Some(format!("failed to execute plan: {e}")),
                 };
                 ctx.send(event);
                 return ActorAction::Continue;

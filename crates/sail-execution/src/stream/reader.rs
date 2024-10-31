@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 
 use arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
@@ -18,6 +18,20 @@ pub enum TaskReadLocation {
     Remote {
         uri: String,
     },
+}
+
+impl Display for TaskReadLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            TaskReadLocation::Worker {
+                worker_id,
+                host,
+                port,
+                channel,
+            } => write!(f, "Worker({}, {}:{}, {})", worker_id, host, port, channel),
+            TaskReadLocation::Remote { uri } => write!(f, "Remote({})", uri),
+        }
+    }
 }
 
 #[tonic::async_trait]

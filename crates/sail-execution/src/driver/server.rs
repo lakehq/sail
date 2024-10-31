@@ -64,13 +64,11 @@ impl DriverService for DriverServer {
             attempt,
             message,
         } = request;
-        let status = gen::TaskStatus::try_from(status)
-            .map_err(ExecutionError::from)?
-            .try_into()?;
+        let status = gen::TaskStatus::try_from(status).map_err(ExecutionError::from)?;
         let event = DriverEvent::UpdateTask {
             task_id: task_id.into(),
             attempt: attempt as usize,
-            status,
+            status: status.into(),
             message,
         };
         self.handle
