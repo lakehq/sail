@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
-use log::error;
+use log::{debug, error};
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 
 use crate::codec::RemoteExecutionCodec;
@@ -79,6 +79,7 @@ impl Actor for DriverActor {
 
     async fn stop(self) {
         self.server.stop().await;
+        debug!("driver server has stopped");
         if let Err(e) = self.worker_manager.stop_all_workers().await {
             error!("encountered error while stopping workers: {e}");
         }

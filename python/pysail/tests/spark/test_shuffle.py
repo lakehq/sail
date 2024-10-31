@@ -35,12 +35,12 @@ def test_join_group_by(sail):
     #   https://datafusion.apache.org/ballista/contributors-guide/architecture.html
     actual = sail.sql(
         """
-        SELECT customer.id AS id, SUM(order.amount) AS total
+        SELECT customer.name AS name, SUM(order.amount) AS total
         FROM customer
         JOIN order ON customer.id = order.customer_id
-        GROUP BY customer.id
+        GROUP BY customer.name
         ORDER BY total DESC
         """
     ).toPandas()
-    expected = pd.DataFrame({"id": [2, 1], "total": [500, 100]})
+    expected = pd.DataFrame({"name": ["Bob", "Alice"], "total": [500, 100]})
     assert_frame_equal(actual, expected)

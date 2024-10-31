@@ -4,6 +4,7 @@ use std::mem;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use log::debug;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
@@ -106,6 +107,7 @@ impl Actor for WorkerActor {
 
     async fn stop(self) {
         self.server.stop().await;
+        debug!("worker {} server has stopped", self.options.worker_id);
     }
 }
 

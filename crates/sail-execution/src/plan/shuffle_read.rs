@@ -12,6 +12,7 @@ use datafusion::physical_plan::{
 };
 use futures::future::try_join_all;
 use futures::TryStreamExt;
+use log::warn;
 
 use crate::plan::write_list_of_lists;
 use crate::stream::{MergedRecordBatchStream, TaskReadLocation, TaskStreamReader};
@@ -114,6 +115,10 @@ impl ExecutionPlan for ShuffleReadExec {
                 exec_datafusion_err!("read locations for partition {partition} not found")
             })?
             .clone();
+        if locations.is_empty() {
+            let stage = self.stage;
+            warn!("empty read locations for stage {stage} partition {partition}");
+        }
         let reader = self
             .reader
             .as_ref()

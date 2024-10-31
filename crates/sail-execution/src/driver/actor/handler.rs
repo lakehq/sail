@@ -288,7 +288,7 @@ impl DriverActor {
         let attempt = task.attempt;
         let partition = task.partition;
         let channel = task.channel.clone();
-        let plan = self.rewrite_shuffle(task.job_id, job, stage.plan.clone(), partition)?;
+        let plan = self.rewrite_shuffle(task.job_id, job, stage.plan.clone())?;
         let plan = self.encode_plan(plan)?;
         let client = self.worker_client(task.worker_id)?.clone();
         let handle = ctx.handle().clone();
@@ -324,56 +324,64 @@ impl DriverActor {
         job_id: JobId,
         job: &JobDescriptor,
         plan: Arc<dyn ExecutionPlan>,
-        partition: usize,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+        // TODO: This can be expensive. We may want to cache the result
+        //   when the task attempt is the same.
         let result = plan.transform(|node| {
             if let Some(shuffle) = node.as_any().downcast_ref::<ShuffleReadExec>() {
-                let mut locations = shuffle.locations().to_vec();
-                locations[partition] = job.stages[shuffle.stage()]
-                    .tasks
-                    .iter()
-                    .map(|task_id| {
-                        let task = self
-                            .state
-                            .get_task(*task_id)
-                            .ok_or_else(|| exec_datafusion_err!("task {task_id} not found"))?;
-                        let worker_id = task.worker_id;
-                        let worker = self
-                            .state
-                            .get_worker(worker_id)
-                            .ok_or_else(|| exec_datafusion_err!("worker {worker_id} not found"))?;
-                        let (host, port) = match &worker.status {
-                            WorkerStatus::Running { host, port } => (host.clone(), *port),
-                            _ => return exec_err!("worker {worker_id} is not running"),
-                        };
-                        let attempt = task.attempt;
-                        Ok(TaskReadLocation::Worker {
-                            worker_id,
-                            host,
-                            port,
-                            channel: format!("job-{job_id}/task-{task_id}/attempt-{attempt}/partition-{partition}")
-                                .into(),
-                        })
+                let locations = (0..shuffle.locations().len())
+                    .map(|partition| {
+                        job.stages[shuffle.stage()]
+                            .tasks
+                            .iter()
+                            .map(|task_id| {
+                                let task = self
+                                    .state
+                                    .get_task(*task_id)
+                                    .ok_or_else(|| exec_datafusion_err!("task {task_id} not found"))?;
+                                let worker_id = task.worker_id;
+                                let worker = self
+                                    .state
+                                    .get_worker(worker_id)
+                                    .ok_or_else(|| exec_datafusion_err!("worker {worker_id} not found"))?;
+                                let (host, port) = match &worker.status {
+                                    WorkerStatus::Running { host, port } => (host.clone(), *port),
+                                    _ => return exec_err!("worker {worker_id} is not running"),
+                                };
+                                let attempt = task.attempt;
+                                Ok(TaskReadLocation::Worker {
+                                    worker_id,
+                                    host,
+                                    port,
+                                    channel: format!("job-{job_id}/task-{task_id}/attempt-{attempt}/partition-{partition}")
+                                        .into(),
+                                })
+                            })
+                            .collect::<Result<Vec<_>, DataFusionError>>()
                     })
                     .collect::<Result<Vec<_>, DataFusionError>>()?;
                 let shuffle = shuffle.clone().with_locations(locations);
                 Ok(Transformed::yes(Arc::new(shuffle)))
             } else if let Some(shuffle) = node.as_any().downcast_ref::<ShuffleWriteExec>() {
-                let mut locations = shuffle.locations().to_vec();
-                let task_id = job.stages[shuffle.stage()].tasks[partition];
-                let task = self
-                    .state
-                    .get_task(task_id)
-                    .ok_or_else(|| exec_datafusion_err!("task {task_id} not found"))?;
-                let attempt = task.attempt;
-                locations[partition] = (0..shuffle.shuffle_partitioning().partition_count())
-                    .map(|p| {
-                        TaskWriteLocation::Memory {
-                            channel: format!("job-{job_id}/task-{task_id}/attempt-{attempt}/partition-{p}")
-                                .into(),
-                        }
+                let locations = (0..shuffle.locations().len())
+                    .map(|partition| {
+                        let task_id = job.stages[shuffle.stage()].tasks[partition];
+                        let task = self
+                            .state
+                            .get_task(task_id)
+                            .ok_or_else(|| exec_datafusion_err!("task {task_id} not found"))?;
+                        let attempt = task.attempt;
+                        let locations = (0..shuffle.shuffle_partitioning().partition_count())
+                            .map(|p| {
+                                TaskWriteLocation::Memory {
+                                    channel: format!("job-{job_id}/task-{task_id}/attempt-{attempt}/partition-{p}")
+                                        .into(),
+                                }
+                            })
+                            .collect();
+                        Ok(locations)
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>, DataFusionError>>()?;
                 let shuffle = shuffle.clone().with_locations(locations);
                 Ok(Transformed::yes(Arc::new(shuffle)))
             } else {

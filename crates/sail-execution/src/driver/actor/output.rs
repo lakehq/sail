@@ -2,6 +2,7 @@ use arrow::array::RecordBatch;
 use datafusion::common::{exec_err, Result};
 use datafusion::execution::SendableRecordBatchStream;
 use futures::StreamExt;
+use log::error;
 use sail_server::actor::{ActorContext, ActorHandle};
 use tokio::sync::{mpsc, oneshot};
 
@@ -42,7 +43,9 @@ impl JobOutput {
             _ = Self::read(stream, sender.clone()) => {},
             _ = Self::stop(signal, sender) => {},
         }
-        let _ = handle.send(DriverEvent::RemoveJobOutput { job_id }).await;
+        if let Err(e) = handle.send(DriverEvent::RemoveJobOutput { job_id }).await {
+            error!("failed to remove job output: {e}");
+        }
     }
 
     async fn read(
@@ -50,7 +53,8 @@ impl JobOutput {
         sender: mpsc::Sender<Result<RecordBatch>>,
     ) {
         while let Some(batch) = stream.next().await {
-            if sender.send(batch).await.is_err() {
+            if let Err(e) = sender.send(batch).await {
+                error!("failed to send job output record batch: {e}");
                 break;
             }
         }
@@ -58,7 +62,9 @@ impl JobOutput {
 
     async fn stop(signal: oneshot::Receiver<String>, sender: mpsc::Sender<Result<RecordBatch>>) {
         if let Ok(reason) = signal.await {
-            let _ = sender.send(exec_err!("{reason}")).await;
+            if let Err(e) = sender.send(exec_err!("{reason}")).await {
+                error!("failed to send job output stop signal: {e}");
+            }
         }
     }
 
