@@ -17,7 +17,7 @@ use crate::worker::gen::{
     RunTaskRequest, RunTaskResponse, StopTaskRequest, StopTaskResponse, TaskStreamTicket,
 };
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct WorkerClient {
     client: ClientHandle<WorkerServiceClient<Channel>>,
     flight_client: ClientHandle<FlightServiceClient<Channel>>,

@@ -39,6 +39,9 @@ pub enum DriverEvent {
         attempt: usize,
         status: TaskStatus,
         message: Option<String>,
+        /// The sequence number from the worker,
+        /// or [None] if it is a forced update within the driver.
+        sequence: Option<u64>,
     },
     #[allow(dead_code)]
     Shutdown,

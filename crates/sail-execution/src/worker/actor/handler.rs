@@ -118,10 +118,12 @@ impl WorkerActor {
         status: TaskStatus,
         message: Option<String>,
     ) -> ActorAction {
+        let sequence = self.sequence;
+        self.sequence += 1;
         let client = self.driver_client.clone();
         ctx.spawn(async move {
             if let Err(e) = client
-                .report_task_status(task_id, attempt, status, message)
+                .report_task_status(task_id, attempt, status, message, sequence)
                 .await
             {
                 error!("failed to report task status: {e}");

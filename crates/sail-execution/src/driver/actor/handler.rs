@@ -143,15 +143,20 @@ impl DriverActor {
         attempt: usize,
         status: TaskStatus,
         message: Option<String>,
+        sequence: Option<u64>,
     ) -> ActorAction {
         self.state
-            .update_task_status(task_id, attempt, status, message.clone());
+            .update_task_status(task_id, attempt, status, message.clone(), sequence);
         let Some(task) = self.state.get_task(task_id) else {
             return ActorAction::warn(format!("task {task_id} not found"));
         };
+        if sequence.is_some_and(|s| task.sequence != s) {
+            // The task status update is outdated, so we skip the remaining logic.
+            return ActorAction::Continue;
+        }
         let job_id = task.job_id;
-        match status {
-            TaskStatus::Running => {
+        match task.status {
+            TaskStatus::Running | TaskStatus::Succeeded => {
                 self.schedule_tasks_for_job(ctx, job_id);
                 self.try_update_job_output(ctx, job_id);
             }
@@ -165,10 +170,7 @@ impl DriverActor {
                 );
                 self.stop_job(ctx, job_id, reason);
             }
-            TaskStatus::Created
-            | TaskStatus::Scheduled
-            | TaskStatus::Succeeded
-            | TaskStatus::Canceled => {}
+            TaskStatus::Created | TaskStatus::Scheduled | TaskStatus::Canceled => {}
         }
         ActorAction::Continue
     }
@@ -205,6 +207,7 @@ impl DriverActor {
                         mode: TaskMode::Pipelined,
                         status: TaskStatus::Created,
                         messages: vec![],
+                        sequence: 0,
                         channel,
                     },
                 );
@@ -248,13 +251,14 @@ impl DriverActor {
             .collect::<Vec<_>>();
         for TaskAttempt { task_id, attempt } in tasks {
             self.state
-                .update_task_status(task_id, attempt, TaskStatus::Scheduled, None);
+                .update_task_status(task_id, attempt, TaskStatus::Scheduled, None, None);
             if let Err(e) = self.schedule_task(ctx, task_id) {
                 ctx.send(DriverEvent::UpdateTask {
                     task_id,
                     attempt,
                     status: TaskStatus::Failed,
                     message: Some(format!("failed to schedule task: {e}")),
+                    sequence: None,
                 });
             }
         }
@@ -299,6 +303,7 @@ impl DriverActor {
                         attempt,
                         status: TaskStatus::Failed,
                         message: Some(format!("failed to run task via the worker client: {e}")),
+                        sequence: None,
                     })
                     .await;
             }
@@ -410,7 +415,9 @@ impl DriverActor {
                         .insert(job_id, JobOutput::Pending { result });
                 }
             }
-            JobOutput::Running { .. } => {}
+            x @ JobOutput::Running { .. } => {
+                self.job_outputs.insert(job_id, x);
+            }
         }
     }
 

@@ -71,7 +71,8 @@ impl Actor for DriverActor {
                 attempt,
                 status,
                 message,
-            } => self.handle_update_task(ctx, task_id, attempt, status, message),
+                sequence,
+            } => self.handle_update_task(ctx, task_id, attempt, status, message, sequence),
             DriverEvent::Shutdown => ActorAction::Stop,
         }
     }

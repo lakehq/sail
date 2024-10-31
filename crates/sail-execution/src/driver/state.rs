@@ -9,6 +9,7 @@ use crate::error::ExecutionResult;
 use crate::id::{IdGenerator, JobId, TaskId, WorkerId};
 use crate::stream::ChannelName;
 
+#[derive(Debug)]
 pub struct DriverState {
     workers: HashMap<WorkerId, WorkerDescriptor>,
     jobs: HashMap<JobId, JobDescriptor>,
@@ -80,6 +81,7 @@ impl DriverState {
         attempt: usize,
         status: TaskStatus,
         message: Option<String>,
+        sequence: Option<u64>,
     ) {
         let Some(task) = self.tasks.get_mut(&task_id) else {
             warn!("task {task_id} not found");
@@ -88,6 +90,14 @@ impl DriverState {
         if task.attempt != attempt {
             warn!("task {task_id} attempt {attempt} is stale");
             return;
+        }
+        if let Some(sequence) = sequence {
+            if task.sequence >= sequence {
+                warn!("task {task_id} sequence {sequence} is stale");
+                return;
+            } else {
+                task.sequence = sequence;
+            }
         }
         if let Some(message) = message {
             task.messages.push(message);
@@ -158,28 +168,33 @@ impl DriverState {
     }
 }
 
+#[derive(Debug)]
 pub struct WorkerDescriptor {
     // TODO: support worker reuse
     pub job_id: JobId,
     pub status: WorkerStatus,
 }
 
+#[derive(Debug)]
 pub enum WorkerStatus {
     Pending,
     Running { host: String, port: u16 },
     Stopped,
 }
 
+#[derive(Debug)]
 pub struct JobDescriptor {
     pub stages: Vec<JobStage>,
 }
 
+#[derive(Debug)]
 pub struct JobStage {
     pub plan: Arc<dyn ExecutionPlan>,
     /// A list of task IDs for each partition of the stage.
     pub tasks: Vec<TaskId>,
 }
 
+#[derive(Debug)]
 pub struct TaskDescriptor {
     pub job_id: JobId,
     #[allow(dead_code)]
@@ -193,20 +208,23 @@ pub struct TaskDescriptor {
     pub mode: TaskMode,
     pub status: TaskStatus,
     pub messages: Vec<String>,
+    /// The sequence number corresponding to the last task status update from the worker.
+    // TODO: clear the sequence number when assigning the task to a different worker.
+    pub sequence: u64,
     /// An optional channel for writing task output.
     /// This is used for sending the last stage output
     /// from the worker to the driver.
     pub channel: Option<ChannelName>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum TaskMode {
     #[allow(dead_code)]
     Blocking,
     Pipelined,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum TaskStatus {
     Created,
     Scheduled,

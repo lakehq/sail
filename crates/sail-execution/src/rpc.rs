@@ -85,7 +85,7 @@ impl ServerMonitor {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ClientOptions {
     pub enable_tls: bool,
     pub host: String,
@@ -119,7 +119,7 @@ impl_client_builder!(DriverServiceClient<Channel>);
 impl_client_builder!(WorkerServiceClient<Channel>);
 impl_client_builder!(FlightServiceClient<Channel>);
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ClientHandle<T> {
     options: Arc<ClientOptions>,
     inner: OnceCell<Arc<Mutex<T>>>,

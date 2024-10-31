@@ -61,6 +61,7 @@ define_id_type!(JobId, u64);
 define_id_type!(TaskId, u64);
 define_id_type!(WorkerId, u64);
 
+#[derive(Debug)]
 pub struct IdGenerator<T: IdType> {
     next_value: T::Value,
     phantom: PhantomData<T>,

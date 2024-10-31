@@ -16,6 +16,7 @@ message ReportTaskStatusRequest {
   TaskStatus status = 2;
   uint64 attempt = 3;
   optional string message = 4;
+  uint64 sequence = 101;
 }
 
 enum TaskStatus {

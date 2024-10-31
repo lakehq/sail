@@ -24,6 +24,9 @@ pub struct WorkerActor {
     pub(super) task_signals: HashMap<TaskAttempt, oneshot::Sender<()>>,
     pub(super) memory_streams: HashMap<ChannelName, SendableRecordBatchStream>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
+    /// An increasing sequence number for ordered events.
+    /// The sequence number must be non-zero.
+    pub(super) sequence: u64,
 }
 
 #[tonic::async_trait]
@@ -45,6 +48,7 @@ impl Actor for WorkerActor {
             task_signals: HashMap::new(),
             memory_streams: HashMap::new(),
             physical_plan_codec: Box::new(RemoteExecutionCodec::new(SessionContext::default())),
+            sequence: 42,
         }
     }
 

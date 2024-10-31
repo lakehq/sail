@@ -63,6 +63,7 @@ impl DriverService for DriverServer {
             status,
             attempt,
             message,
+            sequence,
         } = request;
         let status = gen::TaskStatus::try_from(status).map_err(ExecutionError::from)?;
         let event = DriverEvent::UpdateTask {
@@ -70,6 +71,7 @@ impl DriverService for DriverServer {
             attempt: attempt as usize,
             status: status.into(),
             message,
+            sequence: Some(sequence),
         };
         self.handle
             .send(event)
