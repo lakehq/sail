@@ -112,6 +112,20 @@ fn rint(expr: expr::Expr) -> expr::Expr {
     })
 }
 
+fn spark_ln(expr: expr::Expr) -> expr::Expr {
+    expr::Expr::Case(expr::Case {
+        expr: None,
+        when_then_expr: vec![(
+            Box::new(
+                expr.clone()
+                    .eq(expr::Expr::Literal(ScalarValue::Int64(Some(0)))),
+            ),
+            Box::new(expr::Expr::Literal(ScalarValue::Null)),
+        )],
+        else_expr: Some(Box::new(expr_fn::ln(expr))),
+    })
+}
+
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -150,7 +164,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("hex", F::udf(SparkHex::new())),
         ("hypot", F::binary(hypot)),
         ("least", F::udf(least_greatest::Least::new())),
-        ("ln", F::unary(expr_fn::ln)),
+        ("ln", F::unary(spark_ln)),
         ("log", F::binary(expr_fn::log)),
         ("log10", F::unary(expr_fn::log10)),
         ("log1p", F::unary(log1p)),
