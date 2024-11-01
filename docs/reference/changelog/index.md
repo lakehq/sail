@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.7
+
+## _November 1, 2024_
+
+- Expanded support for Spark DataFrame functions ([#268](https://github.com/lakehq/sail/pull/268) and [#261](https://github.com/lakehq/sail/pull/261)).
+  Added full parity and coverage for the following DataFrame and SQL functions.
+  - `DataFrame.summary`
+  - `DataFrame.describe`
+  - `DataFrame.corr`
+  - `DataFrame.cov`
+  - `DataFrame.stat`
+  - `DataFrame.drop`
+  - `corr`
+  - `regr_avgx`
+- Fixed most issues with `ORDER BY` in the derived TPC-DS benchmark, bringing total coverage to 74 out of the 99 queries ([#261](https://github.com/lakehq/sail/pull/261)).
+
+We also made significant changes to the Sail internals to support **distributed processing**. We are targeting the 0.2.0 release in the next few weeks for an MVP (minimum viable product) of this exciting feature. Please stay tuned! If you are interested in the ongoing work, you can follow [#246](https://github.com/lakehq/sail/issues/246) in our GitHub repository to get the latest updates!
+
 ## 0.1.6
 
 _October 23, 2024_
