@@ -126,7 +126,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let schema = Arc::new((&schema).try_into()?);
                 let partitions = partitions
                     .into_iter()
-                    .map(read_record_batches)
+                    .map(|x| read_record_batches(&x))
                     .collect::<Result<Vec<_>>>()?;
                 let projection =
                     projection.map(|x| x.columns.into_iter().map(|c| c as usize).collect());
