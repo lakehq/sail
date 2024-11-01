@@ -6,6 +6,7 @@ use tonic::codec::CompressionEncoding;
 use crate::driver::actor::core::DriverActor;
 use crate::driver::gen::driver_service_server::DriverServiceServer;
 use crate::driver::server::DriverServer;
+use crate::driver::state::WorkerStatus;
 use crate::driver::DriverEvent;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::WorkerId;
@@ -44,19 +45,22 @@ impl DriverActor {
     pub(super) fn worker_client(&mut self, id: WorkerId) -> ExecutionResult<&WorkerClient> {
         let worker = self
             .state
-            .get_worker(&id)
+            .get_worker(id)
             .ok_or_else(|| ExecutionError::InternalError(format!("worker not found: {id}")))?;
-        if !worker.active {
-            return Err(ExecutionError::InternalError(format!(
-                "worker not active: {id}"
-            )));
-        }
+        let (host, port) = match &worker.status {
+            WorkerStatus::Running { host, port, .. } => (host.clone(), *port),
+            _ => {
+                return Err(ExecutionError::InternalError(format!(
+                    "worker not active: {id}"
+                )))
+            }
+        };
         let enable_tls = self.options().enable_tls;
         let client = self.worker_clients.entry(id).or_insert_with(|| {
             let options = ClientOptions {
                 enable_tls,
-                host: worker.host.clone(),
-                port: worker.port,
+                host,
+                port,
             };
             WorkerClient::new(options)
         });

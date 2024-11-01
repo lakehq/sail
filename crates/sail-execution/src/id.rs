@@ -61,6 +61,7 @@ define_id_type!(JobId, u64);
 define_id_type!(TaskId, u64);
 define_id_type!(WorkerId, u64);
 
+#[derive(Debug)]
 pub struct IdGenerator<T: IdType> {
     next_value: T::Value,
     phantom: PhantomData<T>,
@@ -81,5 +82,17 @@ where
         let value = self.next_value;
         self.next_value = T::Value::next(value)?;
         Ok(value.into())
+    }
+}
+
+#[derive(Eq, Hash, PartialEq)]
+pub struct TaskAttempt {
+    pub task_id: TaskId,
+    pub attempt: usize,
+}
+
+impl TaskAttempt {
+    pub fn new(task_id: TaskId, attempt: usize) -> Self {
+        Self { task_id, attempt }
     }
 }

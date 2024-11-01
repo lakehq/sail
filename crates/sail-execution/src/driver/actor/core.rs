@@ -1,18 +1,16 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
 
-use datafusion::physical_plan::SendableRecordBatchStream;
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
-use log::error;
+use log::{debug, error};
 use sail_server::actor::{Actor, ActorAction, ActorContext};
-use tokio::sync::oneshot;
 
 use crate::codec::RemoteExecutionCodec;
+use crate::driver::actor::output::JobOutput;
 use crate::driver::state::DriverState;
 use crate::driver::{DriverEvent, DriverOptions};
-use crate::error::ExecutionResult;
 use crate::id::{JobId, WorkerId};
 use crate::rpc::ServerMonitor;
 use crate::worker::WorkerClient;
@@ -25,14 +23,10 @@ pub struct DriverActor {
     pub(super) worker_manager: Arc<dyn WorkerManager>,
     pub(super) worker_clients: HashMap<WorkerId, WorkerClient>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
-    pub(super) incoming_job_queue: VecDeque<(
-        JobId,
-        oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
-    )>,
-    pub(super) pending_jobs:
-        HashMap<JobId, oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>>,
+    pub(super) job_outputs: HashMap<JobId, JobOutput>,
 }
 
+#[tonic::async_trait]
 impl Actor for DriverActor {
     type Message = DriverEvent;
     type Options = DriverOptions;
@@ -45,18 +39,17 @@ impl Actor for DriverActor {
             worker_manager: Arc::new(LocalWorkerManager::new()),
             worker_clients: HashMap::new(),
             physical_plan_codec: Box::new(RemoteExecutionCodec::new(SessionContext::default())),
-            incoming_job_queue: VecDeque::new(),
-            pending_jobs: HashMap::new(),
+            job_outputs: HashMap::new(),
         }
     }
 
-    fn start(&mut self, ctx: &mut ActorContext<Self>) {
+    async fn start(&mut self, ctx: &mut ActorContext<Self>) {
         let addr = (
             self.options().driver_listen_host.clone(),
             self.options().driver_listen_port,
         );
         let server = mem::take(&mut self.server);
-        self.server = server.start(Self::serve(ctx.handle().clone(), addr));
+        self.server = server.start(Self::serve(ctx.handle().clone(), addr)).await;
     }
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: DriverEvent) -> ActorAction {
@@ -72,22 +65,24 @@ impl Actor for DriverActor {
             } => self.handle_register_worker(ctx, worker_id, host, port),
             DriverEvent::StopWorker { worker_id } => self.handle_stop_worker(ctx, worker_id),
             DriverEvent::ExecuteJob { plan, result } => self.handle_execute_job(ctx, plan, result),
-            DriverEvent::TaskUpdated {
-                worker_id,
+            DriverEvent::RemoveJobOutput { job_id } => self.handle_remove_job_output(ctx, job_id),
+            DriverEvent::UpdateTask {
                 task_id,
+                attempt,
                 status,
-            } => self.handle_task_updated(ctx, worker_id, task_id, status),
+                message,
+                sequence,
+            } => self.handle_update_task(ctx, task_id, attempt, status, message, sequence),
             DriverEvent::Shutdown => ActorAction::Stop,
         }
     }
 
-    fn stop(self) {
-        self.server.stop();
-        tokio::runtime::Handle::current().block_on(async {
-            if let Err(e) = self.worker_manager.stop_all_workers().await {
-                error!("encountered error while stopping workers: {e}");
-            }
-        });
+    async fn stop(self) {
+        self.server.stop().await;
+        debug!("driver server has stopped");
+        if let Err(e) = self.worker_manager.stop_all_workers().await {
+            error!("encountered error while stopping workers: {e}");
+        }
     }
 }
 

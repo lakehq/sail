@@ -2,6 +2,7 @@ mod actor;
 mod client;
 mod event;
 mod options;
+mod planner;
 mod server;
 pub(crate) mod state;
 

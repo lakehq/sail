@@ -4,6 +4,7 @@ use std::sync::Arc;
 use arrow::array::RecordBatch;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::ipc::reader::StreamReader;
+use arrow::ipc::writer::StreamWriter;
 use arrow_cast::cast;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::PhysicalExpr;
@@ -35,6 +36,16 @@ pub fn read_record_batches(data: &[u8]) -> Result<Vec<RecordBatch>> {
         batches.push(batch?);
     }
     Ok(batches)
+}
+
+pub fn write_record_batches(batches: &[RecordBatch], schema: &Schema) -> Result<Vec<u8>> {
+    let mut output = Vec::new();
+    let mut writer = StreamWriter::try_new(&mut output, schema)?;
+    for batch in batches {
+        writer.write(batch)?;
+    }
+    writer.finish()?;
+    Ok(output)
 }
 
 pub fn rename_schema(schema: &SchemaRef, names: &[String]) -> Result<SchemaRef> {

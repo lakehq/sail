@@ -1,8 +1,12 @@
+use arrow::array::RecordBatch;
+use arrow::datatypes::SchemaRef;
 use datafusion::execution::SendableRecordBatchStream;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
+use crate::driver::state::TaskStatus;
 use crate::error::ExecutionResult;
-use crate::id::TaskId;
+use crate::id::{TaskId, WorkerId};
+use crate::stream::ChannelName;
 
 pub enum WorkerEvent {
     ServerReady {
@@ -16,14 +20,33 @@ pub enum WorkerEvent {
         attempt: usize,
         plan: Vec<u8>,
         partition: usize,
+        channel: Option<ChannelName>,
     },
     StopTask {
         task_id: TaskId,
         attempt: usize,
     },
-    FetchTaskStream {
+    ReportTaskStatus {
         task_id: TaskId,
         attempt: usize,
+        status: TaskStatus,
+        message: Option<String>,
+    },
+    CreateMemoryTaskStream {
+        channel: ChannelName,
+        schema: SchemaRef,
+        result: oneshot::Sender<ExecutionResult<mpsc::Sender<RecordBatch>>>,
+    },
+    FetchThisWorkerTaskStream {
+        channel: ChannelName,
+        result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
+    },
+    FetchOtherWorkerTaskStream {
+        worker_id: WorkerId,
+        host: String,
+        port: u16,
+        channel: ChannelName,
+        schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     },
     Shutdown,

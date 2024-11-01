@@ -12,16 +12,18 @@ message RegisterWorkerResponse {
 }
 
 message ReportTaskStatusRequest {
-  uint64 worker_id = 1;
-  uint64 task_id = 2;
-  TaskStatus status = 3;
+  uint64 task_id = 1;
+  TaskStatus status = 2;
+  uint64 attempt = 3;
+  optional string message = 4;
+  uint64 sequence = 101;
 }
 
 enum TaskStatus {
-  TASK_STATUS_UNKNOWN = 0;
-  TASK_STATUS_PENDING = 1;
+  TASK_STATUS_CREATED = 0;
+  TASK_STATUS_SCHEDULED = 1;
   TASK_STATUS_RUNNING = 2;
-  TASK_STATUS_FINISHED = 3;
+  TASK_STATUS_SUCCEEDED = 3;
   TASK_STATUS_FAILED = 4;
   TASK_STATUS_CANCELED = 5;
 }

@@ -1,24 +1,35 @@
 use std::mem;
 use std::sync::Arc;
 
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion::common::{exec_datafusion_err, exec_err};
+use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::{EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties};
+use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
-use log::{error, info};
+use futures::future::try_join_all;
+use futures::TryStreamExt;
+use log::{debug, error, info, warn};
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_server::actor::{ActorAction, ActorContext};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
+use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
+use crate::driver::actor::output::JobOutput;
 use crate::driver::actor::DriverActor;
+use crate::driver::planner::JobGraph;
 use crate::driver::state::{
-    JobDescriptor, JobStage, TaskDescriptor, TaskMode, TaskStatus, WorkerDescriptor,
+    JobDescriptor, JobStage, TaskDescriptor, TaskMode, TaskStatus, WorkerDescriptor, WorkerStatus,
 };
 use crate::driver::DriverEvent;
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskId, WorkerId};
+use crate::id::{JobId, TaskAttempt, TaskId, WorkerId};
+use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
+use crate::stream::{MergedRecordBatchStream, TaskReadLocation, TaskWriteLocation};
 use crate::worker_manager::WorkerLaunchOptions;
 
 impl DriverActor {
@@ -43,7 +54,7 @@ impl DriverActor {
         worker_id: WorkerId,
     ) -> ActorAction {
         let Some(port) = self.server.port() else {
-            return ActorAction::Fail("the driver server is not ready".to_string());
+            return ActorAction::fail("the driver server is not ready");
         };
         let options = WorkerLaunchOptions {
             driver_host: self.options().driver_external_host.to_string(),
@@ -66,19 +77,10 @@ impl DriverActor {
         port: u16,
     ) -> ActorAction {
         info!("worker {worker_id} is available at {host}:{port}");
-        self.state.add_worker(
-            worker_id,
-            WorkerDescriptor {
-                host,
-                port,
-                active: true,
-            },
-        );
-        if let Some((job_id, result)) = self.incoming_job_queue.pop_front() {
-            if let Err(e) = self.schedule_job(ctx, worker_id, job_id) {
-                return ActorAction::warn(e);
-            }
-            self.pending_jobs.insert(job_id, result);
+        let status = WorkerStatus::Running { host, port };
+        self.state.update_worker_status(worker_id, status);
+        if let Some(worker) = self.state.get_worker(worker_id) {
+            self.schedule_tasks_for_job(ctx, worker.job_id);
         }
         ActorAction::Continue
     }
@@ -88,16 +90,18 @@ impl DriverActor {
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
     ) -> ActorAction {
-        if let Some(worker) = self.state.get_worker_mut(&worker_id) {
-            if worker.active {
-                worker.active = false;
-                let worker_manager = Arc::clone(&self.worker_manager);
-                ctx.spawn(async move {
-                    if let Err(e) = worker_manager.stop_worker(worker_id).await {
-                        error!("failed to stop worker {worker_id}: {e}");
-                    }
-                });
-            }
+        let Some(worker) = self.state.get_worker(worker_id) else {
+            return ActorAction::Continue;
+        };
+        if matches!(worker.status, WorkerStatus::Running { .. }) {
+            self.state
+                .update_worker_status(worker_id, WorkerStatus::Stopped);
+            let worker_manager = Arc::clone(&self.worker_manager);
+            ctx.spawn(async move {
+                if let Err(e) = worker_manager.stop_worker(worker_id).await {
+                    error!("failed to stop worker {worker_id}: {e}");
+                }
+            });
         }
         ActorAction::Continue
     }
@@ -108,105 +112,207 @@ impl DriverActor {
         plan: Arc<dyn ExecutionPlan>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     ) -> ActorAction {
-        let plan = match plan.output_partitioning().partition_count() {
-            0 => {
-                let stream = Box::pin(EmptyRecordBatchStream::new(plan.schema()));
-                let _ = result.send(Ok(stream));
-                return ActorAction::Continue;
+        match self.accept_job(ctx, plan) {
+            Ok(job_id) => {
+                self.job_outputs
+                    .insert(job_id, JobOutput::Pending { result });
             }
-            1 => plan,
-            2.. => Arc::new(CoalescePartitionsExec::new(Arc::clone(&plan))),
-        };
-        let job_id = match self.state.next_job_id() {
-            Ok(x) => x,
-            Err(e) => return ActorAction::fail(e),
-        };
-        let mut tasks = vec![];
-        for p in 0..plan.output_partitioning().partition_count() {
-            let task_id = match self.state.next_task_id() {
-                Ok(x) => x,
-                Err(e) => return ActorAction::fail(e),
-            };
-            self.state.add_task(
-                task_id,
-                TaskDescriptor {
-                    job_id,
-                    stage: 0,
-                    partition: p,
-                    attempt: 0,
-                    mode: TaskMode::Pipelined,
-                    status: TaskStatus::Pending,
-                },
-            );
-            tasks.push(task_id);
+            Err(e) => {
+                let _ = result.send(Err(e));
+            }
         }
-        let descriptor = JobDescriptor {
-            stages: vec![JobStage { plan, tasks }],
-        };
-        self.state.add_job(job_id, descriptor);
-        self.incoming_job_queue.push_back((job_id, result));
-        // TODO: update worker launch logic
-        let worker_id = match self.state.next_worker_id() {
-            Ok(x) => x,
-            Err(e) => return ActorAction::fail(e),
-        };
-        ctx.send(DriverEvent::StartWorker { worker_id });
         ActorAction::Continue
     }
 
-    pub(super) fn handle_task_updated(
+    pub(super) fn handle_remove_job_output(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        worker_id: WorkerId,
-        task_id: TaskId,
-        status: TaskStatus,
+        job_id: JobId,
     ) -> ActorAction {
-        let task = match self.state.get_task_mut(task_id) {
-            Ok(x) => x,
-            Err(e) => return ActorAction::warn(e),
+        self.job_outputs.remove(&job_id);
+        // TODO: reuse workers
+        for (worker_id, _) in self.state.find_workers_for_job(job_id) {
+            ctx.send(DriverEvent::StopWorker { worker_id });
+        }
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_update_task(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        task_id: TaskId,
+        attempt: usize,
+        status: TaskStatus,
+        message: Option<String>,
+        sequence: Option<u64>,
+    ) -> ActorAction {
+        self.state
+            .update_task_status(task_id, attempt, status, message.clone(), sequence);
+        let Some(task) = self.state.get_task(task_id) else {
+            return ActorAction::warn(format!("task {task_id} not found"));
         };
-        task.status = status;
-        if matches!(task.status, TaskStatus::Running) {
-            if let Some(result) = self.pending_jobs.remove(&task.job_id) {
-                let attempt = task.attempt;
-                let stage = match self.state.find_job_stage_by_task(task_id) {
-                    Ok(x) => x,
-                    Err(e) => return ActorAction::warn(e),
+        if sequence.is_some_and(|s| task.sequence != s) {
+            // The task status update is outdated, so we skip the remaining logic.
+            return ActorAction::Continue;
+        }
+        let job_id = task.job_id;
+        match task.status {
+            TaskStatus::Running | TaskStatus::Succeeded => {
+                self.schedule_tasks_for_job(ctx, job_id);
+                self.try_update_job_output(ctx, job_id);
+            }
+            TaskStatus::Failed => {
+                // TODO: support task retry
+                let reason = format!(
+                    "task {} failed at attempt {}: {}",
+                    task_id,
+                    attempt,
+                    message.as_deref().unwrap_or("unknown reason")
+                );
+                self.stop_job(ctx, job_id, reason);
+            }
+            TaskStatus::Created | TaskStatus::Scheduled | TaskStatus::Canceled => {}
+        }
+        ActorAction::Continue
+    }
+
+    fn accept_job(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> ExecutionResult<JobId> {
+        let job_id = self.state.next_job_id()?;
+        debug!(
+            "job {} execution plan\n{}",
+            job_id,
+            DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
+        );
+        let graph = JobGraph::try_new(plan)?;
+        debug!("job {} job graph \n{}", job_id, graph);
+        let worker_ids = self.start_workers_for_job(ctx, job_id)?;
+        let mut worker_id_selector = worker_ids.iter().cycle();
+        let mut stages = vec![];
+        for (s, stage) in graph.stages().iter().enumerate() {
+            let last = s == graph.stages().len() - 1;
+            let mut tasks = vec![];
+            for p in 0..stage.output_partitioning().partition_count() {
+                let task_id = self.state.next_task_id()?;
+                let attempt = 0;
+                let channel = if last {
+                    Some(format!("job-{job_id}/task-{task_id}/attempt-{attempt}").into())
+                } else {
+                    None
                 };
-                let schema = stage.plan.schema();
-                let client = match self.worker_client(worker_id) {
-                    Ok(x) => x.clone(),
-                    Err(e) => return ActorAction::warn(e),
-                };
-                ctx.spawn(async move {
-                    let out = client.fetch_task_stream(task_id, attempt, schema).await;
-                    let _ = result.send(out);
+                self.state.add_task(
+                    task_id,
+                    TaskDescriptor {
+                        job_id,
+                        stage: s,
+                        partition: p,
+                        attempt,
+                        worker_id: *worker_id_selector.next().unwrap(),
+                        mode: TaskMode::Pipelined,
+                        status: TaskStatus::Created,
+                        messages: vec![],
+                        sequence: 0,
+                        channel,
+                    },
+                );
+                tasks.push(task_id);
+            }
+            stages.push(JobStage {
+                plan: Arc::clone(stage),
+                tasks,
+            })
+        }
+        let descriptor = JobDescriptor { stages };
+        self.state.add_job(job_id, descriptor);
+        Ok(job_id)
+    }
+
+    fn start_workers_for_job(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+    ) -> ExecutionResult<Vec<WorkerId>> {
+        let worker_ids = (0..self.options().worker_count_per_job)
+            .map(|_| self.state.next_worker_id())
+            .collect::<ExecutionResult<Vec<_>>>()?;
+        for x in worker_ids.iter() {
+            let descriptor = WorkerDescriptor {
+                job_id,
+                status: WorkerStatus::Pending,
+            };
+            self.state.add_worker(*x, descriptor);
+            ctx.send(DriverEvent::StartWorker { worker_id: *x });
+        }
+        Ok(worker_ids)
+    }
+
+    fn schedule_tasks_for_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
+        let tasks = self
+            .state
+            .find_schedulable_tasks_for_job(job_id)
+            .into_iter()
+            .map(|(task_id, task)| TaskAttempt::new(task_id, task.attempt))
+            .collect::<Vec<_>>();
+        for TaskAttempt { task_id, attempt } in tasks {
+            self.state
+                .update_task_status(task_id, attempt, TaskStatus::Scheduled, None, None);
+            if let Err(e) = self.schedule_task(ctx, task_id) {
+                ctx.send(DriverEvent::UpdateTask {
+                    task_id,
+                    attempt,
+                    status: TaskStatus::Failed,
+                    message: Some(format!("failed to schedule task: {e}")),
+                    sequence: None,
                 });
             }
         }
-        ActorAction::Continue
     }
 
-    fn schedule_job(
+    fn schedule_task(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        worker_id: WorkerId,
-        job_id: JobId,
+        task_id: TaskId,
     ) -> ExecutionResult<()> {
-        // TODO: create job stages and implement scheduling logic
-        let _ = self
+        let task = self
             .state
-            .get_worker(&worker_id)
-            .ok_or_else(|| ExecutionError::InternalError("worker not found".to_string()))?;
-        let stage = &self.state.get_job(job_id)?.stages[0];
-        let plan = self.encode_plan(Arc::clone(&stage.plan))?;
-        let task_id = stage.tasks[0];
-        let task = self.state.get_task(task_id)?;
+            .get_task(task_id)
+            .ok_or_else(|| ExecutionError::InternalError(format!("task {task_id} not found")))?;
+        let job = self.state.get_job(task.job_id).ok_or_else(|| {
+            ExecutionError::InternalError(format!(
+                "job {} not found for task {}",
+                task.job_id, task_id
+            ))
+        })?;
+        let stage = job.stages.get(task.stage).ok_or_else(|| {
+            ExecutionError::InternalError(format!(
+                "stage {} not found for job {} and task {}",
+                task.stage, task.job_id, task_id
+            ))
+        })?;
         let attempt = task.attempt;
-        let client = self.worker_client(worker_id)?.clone();
+        let partition = task.partition;
+        let channel = task.channel.clone();
+        let plan = self.rewrite_shuffle(task.job_id, job, stage.plan.clone())?;
+        let plan = self.encode_plan(plan)?;
+        let client = self.worker_client(task.worker_id)?.clone();
+        let handle = ctx.handle().clone();
         ctx.spawn(async move {
-            if let Err(e) = client.run_task(task_id, attempt, plan, 0).await {
-                error!("failed to run task {task_id} on worker {worker_id}: {e}");
+            if let Err(e) = client
+                .run_task(task_id, attempt, plan, partition, channel)
+                .await
+            {
+                let _ = handle
+                    .send(DriverEvent::UpdateTask {
+                        task_id,
+                        attempt,
+                        status: TaskStatus::Failed,
+                        message: Some(format!("failed to run task via the worker client: {e}")),
+                        sequence: None,
+                    })
+                    .await;
             }
         });
         Ok(())
@@ -218,5 +324,202 @@ impl DriverActor {
         let mut buffer = BytesMut::new();
         plan.encode(&mut buffer)?;
         Ok(buffer.freeze().into())
+    }
+
+    fn rewrite_shuffle(
+        &self,
+        job_id: JobId,
+        job: &JobDescriptor,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+        // TODO: This can be expensive. We may want to cache the result
+        //   when the task attempt is the same.
+        let result = plan.transform(|node| {
+            if let Some(shuffle) = node.as_any().downcast_ref::<ShuffleReadExec>() {
+                let locations = (0..shuffle.locations().len())
+                    .map(|partition| {
+                        job.stages[shuffle.stage()]
+                            .tasks
+                            .iter()
+                            .map(|task_id| {
+                                let task = self
+                                    .state
+                                    .get_task(*task_id)
+                                    .ok_or_else(|| exec_datafusion_err!("task {task_id} not found"))?;
+                                let worker_id = task.worker_id;
+                                let worker = self
+                                    .state
+                                    .get_worker(worker_id)
+                                    .ok_or_else(|| exec_datafusion_err!("worker {worker_id} not found"))?;
+                                let (host, port) = match &worker.status {
+                                    WorkerStatus::Running { host, port } => (host.clone(), *port),
+                                    _ => return exec_err!("worker {worker_id} is not running"),
+                                };
+                                let attempt = task.attempt;
+                                Ok(TaskReadLocation::Worker {
+                                    worker_id,
+                                    host,
+                                    port,
+                                    channel: format!("job-{job_id}/task-{task_id}/attempt-{attempt}/partition-{partition}")
+                                        .into(),
+                                })
+                            })
+                            .collect::<Result<Vec<_>, DataFusionError>>()
+                    })
+                    .collect::<Result<Vec<_>, DataFusionError>>()?;
+                let shuffle = shuffle.clone().with_locations(locations);
+                Ok(Transformed::yes(Arc::new(shuffle)))
+            } else if let Some(shuffle) = node.as_any().downcast_ref::<ShuffleWriteExec>() {
+                let locations = (0..shuffle.locations().len())
+                    .map(|partition| {
+                        let task_id = job.stages[shuffle.stage()].tasks[partition];
+                        let task = self
+                            .state
+                            .get_task(task_id)
+                            .ok_or_else(|| exec_datafusion_err!("task {task_id} not found"))?;
+                        let attempt = task.attempt;
+                        let locations = (0..shuffle.shuffle_partitioning().partition_count())
+                            .map(|p| {
+                                TaskWriteLocation::Memory {
+                                    channel: format!("job-{job_id}/task-{task_id}/attempt-{attempt}/partition-{p}")
+                                        .into(),
+                                }
+                            })
+                            .collect();
+                        Ok(locations)
+                    })
+                    .collect::<Result<Vec<_>, DataFusionError>>()?;
+                let shuffle = shuffle.clone().with_locations(locations);
+                Ok(Transformed::yes(Arc::new(shuffle)))
+            } else {
+                Ok(Transformed::no(node))
+            }
+        });
+        Ok(result.data()?)
+    }
+
+    fn try_update_job_output(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
+        let Some(output) = self.job_outputs.remove(&job_id) else {
+            return;
+        };
+        match output {
+            JobOutput::Pending { result } => {
+                if let Some(stream) = self.try_build_job_output(job_id) {
+                    let stream = match stream {
+                        Ok(x) => x,
+                        Err(e) => {
+                            let reason = e.to_string();
+                            let _ = result.send(Err(e));
+                            self.stop_job(ctx, job_id, reason);
+                            return;
+                        }
+                    };
+                    let (sender, receiver) = mpsc::channel(self.options().job_output_buffer);
+                    let receiver_stream = Box::pin(RecordBatchStreamAdapter::new(
+                        stream.schema(),
+                        ReceiverStream::new(receiver),
+                    ));
+                    if result.send(Ok(receiver_stream)).is_err() {
+                        self.stop_job(ctx, job_id, "job output receiver dropped".to_string());
+                        return;
+                    }
+                    self.job_outputs
+                        .insert(job_id, JobOutput::run(ctx, job_id, stream, sender));
+                } else {
+                    self.job_outputs
+                        .insert(job_id, JobOutput::Pending { result });
+                }
+            }
+            x @ JobOutput::Running { .. } => {
+                self.job_outputs.insert(job_id, x);
+            }
+        }
+    }
+
+    fn try_build_job_output(
+        &mut self,
+        job_id: JobId,
+    ) -> Option<ExecutionResult<SendableRecordBatchStream>> {
+        let Some(job) = self.state.get_job(job_id) else {
+            return Some(Err(ExecutionError::InternalError(format!(
+                "job {job_id} not found"
+            ))));
+        };
+        let Some(last_stage) = job.stages.last() else {
+            return Some(Err(ExecutionError::InternalError(format!(
+                "last stage not found for job {job_id}"
+            ))));
+        };
+        let schema = last_stage.plan.schema();
+        let channels = last_stage
+            .tasks
+            .iter()
+            .map(|task_id| {
+                self.state.get_task(*task_id).and_then(|task| {
+                    matches!(task.status, TaskStatus::Running | TaskStatus::Succeeded)
+                        .then(|| (*task_id, task.channel.clone(), task.worker_id))
+                })
+            })
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .map(|(task_id, channel, worker_id)| {
+                let channel = channel.ok_or_else(|| {
+                    ExecutionError::InternalError(format!("task channel is not set: {task_id}"))
+                })?;
+                let client = self.worker_client(worker_id)?.clone();
+                Ok((channel, client))
+            })
+            .collect::<ExecutionResult<Vec<_>>>();
+        let channels = match channels {
+            Ok(x) => x,
+            Err(e) => return Some(Err(e)),
+        };
+        let output_schema = schema.clone();
+        let output = futures::stream::once(async move {
+            let futures = channels.into_iter().map(|(channel, client)| {
+                let channel_schema = schema.clone();
+                async move { client.fetch_task_stream(channel, channel_schema).await }
+            });
+            let streams = try_join_all(futures)
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            Ok(Box::pin(MergedRecordBatchStream::new(schema, streams)))
+                as Result<_, DataFusionError>
+        })
+        .try_flatten();
+        let stream = Box::pin(RecordBatchStreamAdapter::new(output_schema, output));
+        Some(Ok(stream))
+    }
+
+    fn stop_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId, reason: String) {
+        if let Some(output) = self.job_outputs.remove(&job_id) {
+            output.fail(reason);
+        }
+        let tasks = self
+            .state
+            .find_running_tasks_for_job(job_id)
+            .into_iter()
+            .map(|(task_id, task)| (task_id, task.attempt, task.worker_id))
+            .collect::<Vec<_>>();
+        let tasks = tasks
+            .into_iter()
+            .flat_map(|(task_id, attempt, worker_id)| {
+                let client = match self.worker_client(worker_id) {
+                    Ok(client) => client.clone(),
+                    Err(e) => {
+                        warn!("failed to stop task {task_id}: {e}");
+                        return None;
+                    }
+                };
+                Some((task_id, attempt, client))
+            })
+            .collect::<Vec<_>>();
+        ctx.spawn(async move {
+            for (task_id, attempt, client) in tasks {
+                if let Err(e) = client.stop_task(task_id, attempt).await {
+                    warn!("failed to stop task {task_id}: {e}");
+                }
+            }
+        });
     }
 }

@@ -59,17 +59,19 @@ impl DriverService for DriverServer {
         let request = request.into_inner();
         debug!("{:?}", request);
         let ReportTaskStatusRequest {
-            worker_id,
             task_id,
             status,
+            attempt,
+            message,
+            sequence,
         } = request;
-        let status = gen::TaskStatus::try_from(status)
-            .map_err(ExecutionError::from)?
-            .try_into()?;
-        let event = DriverEvent::TaskUpdated {
-            worker_id: worker_id.into(),
+        let status = gen::TaskStatus::try_from(status).map_err(ExecutionError::from)?;
+        let event = DriverEvent::UpdateTask {
             task_id: task_id.into(),
-            status,
+            attempt: attempt as usize,
+            status: status.into(),
+            message,
+            sequence: Some(sequence),
         };
         self.handle
             .send(event)

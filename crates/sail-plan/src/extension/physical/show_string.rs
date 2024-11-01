@@ -17,14 +17,14 @@ use sail_common::utils::rename_physical_plan;
 
 use crate::extension::logical::ShowStringFormat;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ShowStringExec {
     input: Arc<dyn ExecutionPlan>,
     names: Vec<String>,
     limit: usize,
     format: ShowStringFormat,
     schema: SchemaRef,
-    cache: PlanProperties,
+    properties: PlanProperties,
 }
 
 impl ShowStringExec {
@@ -35,7 +35,7 @@ impl ShowStringExec {
         format: ShowStringFormat,
         schema: SchemaRef,
     ) -> Self {
-        let cache = PlanProperties::new(
+        let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             Partitioning::UnknownPartitioning(1),
             ExecutionMode::Bounded,
@@ -46,7 +46,7 @@ impl ShowStringExec {
             limit,
             format,
             schema,
-            cache,
+            properties,
         }
     }
 
@@ -87,7 +87,7 @@ impl ExecutionPlan for ShowStringExec {
     }
 
     fn properties(&self) -> &PlanProperties {
-        &self.cache
+        &self.properties
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -108,18 +108,16 @@ impl ExecutionPlan for ShowStringExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.len() != 1 {
-            return internal_err!("ShowStringExec should have one child");
+        let child = children.pop();
+        match (child, children.is_empty()) {
+            (Some(input), true) => Ok(Arc::new(Self {
+                input,
+                ..self.as_ref().clone()
+            })),
+            _ => internal_err!("ShowStringExec should have one child"),
         }
-        Ok(Arc::new(ShowStringExec::new(
-            children[0].clone(),
-            self.names.clone(),
-            self.limit,
-            self.format.clone(),
-            self.schema.clone(),
-        )))
     }
 
     fn execute(

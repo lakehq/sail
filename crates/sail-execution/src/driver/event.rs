@@ -6,7 +6,7 @@ use tokio::sync::oneshot;
 
 use crate::driver::state::TaskStatus;
 use crate::error::ExecutionResult;
-use crate::id::{TaskId, WorkerId};
+use crate::id::{JobId, TaskId, WorkerId};
 
 pub enum DriverEvent {
     ServerReady {
@@ -31,10 +31,17 @@ pub enum DriverEvent {
         plan: Arc<dyn ExecutionPlan>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     },
-    TaskUpdated {
-        worker_id: WorkerId,
+    RemoveJobOutput {
+        job_id: JobId,
+    },
+    UpdateTask {
         task_id: TaskId,
+        attempt: usize,
         status: TaskStatus,
+        message: Option<String>,
+        /// The sequence number from the worker,
+        /// or [None] if it is a forced update within the driver.
+        sequence: Option<u64>,
     },
     #[allow(dead_code)]
     Shutdown,

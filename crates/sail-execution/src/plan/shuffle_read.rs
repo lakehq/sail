@@ -3,35 +3,76 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
-use datafusion::common::{DataFusionError, Result};
+use datafusion::common::{exec_datafusion_err, internal_err, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProperties,
 };
+use futures::future::try_join_all;
+use futures::TryStreamExt;
+use log::warn;
 
-#[derive(Debug)]
-#[allow(dead_code)]
+use crate::plan::write_list_of_lists;
+use crate::stream::{MergedRecordBatchStream, TaskReadLocation, TaskStreamReader};
+
+#[derive(Debug, Clone)]
 pub struct ShuffleReadExec {
-    schema: SchemaRef,
+    /// The stage to read from.
+    stage: usize,
+    /// For each output partition, a list of locations to read from.
+    locations: Vec<Vec<TaskReadLocation>>,
     properties: PlanProperties,
+    reader: Option<Arc<dyn TaskStreamReader>>,
 }
 
-#[allow(dead_code)]
 impl ShuffleReadExec {
-    pub fn new(schema: SchemaRef, partitioning: Partitioning) -> Self {
+    pub fn new(stage: usize, schema: SchemaRef, partitioning: Partitioning) -> Self {
+        let partition_count = partitioning.partition_count();
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             partitioning,
             ExecutionMode::Unbounded,
         );
-        Self { schema, properties }
+        Self {
+            stage,
+            locations: vec![vec![]; partition_count],
+            properties,
+            reader: None,
+        }
+    }
+
+    pub fn stage(&self) -> usize {
+        self.stage
+    }
+
+    pub fn partitioning(&self) -> &Partitioning {
+        self.properties.output_partitioning()
+    }
+
+    pub fn locations(&self) -> &[Vec<TaskReadLocation>] {
+        &self.locations
+    }
+
+    pub fn with_locations(self, locations: Vec<Vec<TaskReadLocation>>) -> Self {
+        Self { locations, ..self }
+    }
+
+    pub fn with_reader(self, reader: Option<Arc<dyn TaskStreamReader>>) -> Self {
+        Self { reader, ..self }
     }
 }
 
 impl DisplayAs for ShuffleReadExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "ShuffleReadExec")
+        write!(
+            f,
+            "ShuffleReadExec: stage={}, partitioning={}, locations=",
+            self.stage,
+            self.properties.output_partitioning()
+        )?;
+        write_list_of_lists(f, &self.locations)
     }
 }
 
@@ -57,18 +98,53 @@ impl ExecutionPlan for ShuffleReadExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if !children.is_empty() {
-            return Err(DataFusionError::Internal(
-                "ShuffleReadExec does not accept children".to_string(),
-            ));
+            return internal_err!("ShuffleReadExec does not accept children");
         }
         Ok(self)
     }
 
     fn execute(
         &self,
-        _partition: usize,
+        partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        todo!()
+        let locations = self
+            .locations
+            .get(partition)
+            .ok_or_else(|| {
+                exec_datafusion_err!("read locations for partition {partition} not found")
+            })?
+            .clone();
+        if locations.is_empty() {
+            let stage = self.stage;
+            warn!("empty read locations for stage {stage} partition {partition}");
+        }
+        let reader = self
+            .reader
+            .as_ref()
+            .ok_or_else(|| exec_datafusion_err!("reader not set for ShuffleReadExec"))?
+            .clone();
+        let output_schema = self.schema();
+        let output =
+            futures::stream::once(
+                async move { shuffle_read(reader, &locations, output_schema).await },
+            )
+            .try_flatten();
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema(),
+            output,
+        )))
     }
+}
+
+async fn shuffle_read(
+    reader: Arc<dyn TaskStreamReader>,
+    locations: &[TaskReadLocation],
+    schema: SchemaRef,
+) -> Result<SendableRecordBatchStream> {
+    let futures = locations
+        .iter()
+        .map(|location| reader.open(location, schema.clone()));
+    let streams = try_join_all(futures).await?;
+    Ok(Box::pin(MergedRecordBatchStream::new(schema, streams)))
 }

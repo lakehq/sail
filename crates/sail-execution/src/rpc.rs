@@ -37,8 +37,11 @@ impl ServerMonitor {
         Self::Stopped
     }
 
-    pub fn start(self, f: impl Future<Output = ExecutionResult<()>> + Send + 'static) -> Self {
-        self.stop();
+    pub async fn start(
+        self,
+        f: impl Future<Output = ExecutionResult<()>> + Send + 'static,
+    ) -> Self {
+        self.stop().await;
         Self::Pending {
             handle: tokio::spawn(f),
         }
@@ -57,7 +60,7 @@ impl ServerMonitor {
         }
     }
 
-    pub fn stop(self) {
+    pub async fn stop(self) {
         match self {
             Self::Stopped => {}
             Self::Pending { handle } => {
@@ -69,7 +72,7 @@ impl ServerMonitor {
                 port: _,
             } => {
                 let _ = signal.send(());
-                let _ = tokio::runtime::Handle::current().block_on(handle);
+                let _ = handle.await;
             }
         }
     }
@@ -82,7 +85,7 @@ impl ServerMonitor {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ClientOptions {
     pub enable_tls: bool,
     pub host: String,
@@ -116,7 +119,7 @@ impl_client_builder!(DriverServiceClient<Channel>);
 impl_client_builder!(WorkerServiceClient<Channel>);
 impl_client_builder!(FlightServiceClient<Channel>);
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ClientHandle<T> {
     options: Arc<ClientOptions>,
     inner: OnceCell<Arc<Mutex<T>>>,
