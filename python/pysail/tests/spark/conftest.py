@@ -31,6 +31,7 @@ def sail(remote):
 
 @pytest.fixture(scope="session")
 def spark():
+    os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
     os.environ["SPARK_LOCAL_REMOTE"] = "true"
     sc = SparkContext("local", "Spark")
     spark = SparkSession(sc)
