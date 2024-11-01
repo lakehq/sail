@@ -12,16 +12,11 @@
   - `DataFrame.cov`
   - `DataFrame.stat`
   - `DataFrame.drop`
-  - `functions.corr`
-  - `functions.regr_avgx`
-- Fixed most Query Plan sorts in derived TPC-DS, bringing total coverage to 74/99 queries ([#261](https://github.com/lakehq/sail/pull/261)).
-- Work towards Sail `0.2` - Upcoming MVP release of distributed processing!!
-  - Implement distributed job stages ([#265](https://github.com/lakehq/sail/pull/265)).
-  - Implement actor system ([#264](https://github.com/lakehq/sail/pull/264)).
-  - Improve actor error handling ([#263](https://github.com/lakehq/sail/pull/263)).
-  - Improve actor implementation ([#262](https://github.com/lakehq/sail/pull/262)).
-  - Implement physical plan extension codec ([#259](https://github.com/lakehq/sail/pull/259)).
-  - Set up distributed processing ([#244](https://github.com/lakehq/sail/pull/244)).
+  - `corr`
+  - `regr_avgx`
+- Fixed most issues with `ORDER BY` in the derived TPC-DS benchmark, bringing total coverage to 74 out of the 99 queries ([#261](https://github.com/lakehq/sail/pull/261)).
+
+We also made significant changes to the Sail internals to support **distributed processing**. We are targeting the 0.2.0 release in the next few weeks for an MVP (minimum viable product) of this exciting feature. Please stay tuned! If you are interested in the ongoing work, you can follow [#246](https://github.com/lakehq/sail/issues/246) in our GitHub repository to get the latest updates!
 
 ## 0.1.6
 
