@@ -12,6 +12,7 @@ mod literal;
 pub mod plan;
 mod schema;
 mod state;
+mod statistic;
 mod tree;
 
 pub struct PlanResolver<'a> {

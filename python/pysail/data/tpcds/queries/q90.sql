@@ -2,7 +2,7 @@
 -- TPC-DS queries are Copyright 2021 Transaction Processing Performance Council.
 -- This query was generated at scale factor 1.
 select
-  cast(amc as decimal(15, 4)) / cast(pmc as decimal(15, 4)) am_pm_ratio
+  CASE WHEN pmc = 0 THEN null ELSE cast(amc as decimal(15, 4)) / cast(pmc as decimal(15, 4)) END am_pm_ratio
 from
   (
     select

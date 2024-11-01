@@ -14,6 +14,7 @@ pub(crate) mod randn;
 pub(crate) mod random;
 pub(crate) mod size;
 pub(crate) mod spark_array;
+pub(crate) mod spark_concat;
 pub(crate) mod spark_hex_unhex;
 pub(crate) mod spark_murmur3_hash;
 pub(crate) mod spark_unix_timestamp;
