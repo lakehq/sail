@@ -2,7 +2,7 @@
 
 ## 0.1.7
 
-## _November 1, 2024_
+_November 1, 2024_
 
 - Expanded support for Spark DataFrame functions ([#268](https://github.com/lakehq/sail/pull/268) and [#261](https://github.com/lakehq/sail/pull/261)).
   Added full parity and coverage for the following DataFrame and SQL functions.
