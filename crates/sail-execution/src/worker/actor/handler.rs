@@ -5,12 +5,13 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
-use log::{error, info};
+use log::{debug, error, info};
 use prost::Message;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::{mpsc, oneshot};
@@ -63,7 +64,7 @@ impl WorkerActor {
         partition: usize,
         channel: Option<ChannelName>,
     ) -> ActorAction {
-        let stream = match self.execute_plan(ctx, plan, partition) {
+        let stream = match self.execute_plan(ctx, task_id, attempt, plan, partition) {
             Ok(x) => x,
             Err(e) => {
                 let event = WorkerEvent::ReportTaskStatus {
@@ -194,6 +195,8 @@ impl WorkerActor {
     fn execute_plan(
         &mut self,
         ctx: &mut ActorContext<Self>,
+        task_id: TaskId,
+        attempt: usize,
         plan: Vec<u8>,
         partition: usize,
     ) -> ExecutionResult<SendableRecordBatchStream> {
@@ -205,6 +208,12 @@ impl WorkerActor {
             self.physical_plan_codec.as_ref(),
         )?;
         let plan = self.rewrite_shuffle(ctx, plan)?;
+        debug!(
+            "task {} attempt {} execution plan\n{}",
+            task_id,
+            attempt,
+            DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
+        );
         let stream = plan.execute(partition, self.task_context())?;
         Ok(stream)
     }

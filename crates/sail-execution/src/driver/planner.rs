@@ -18,10 +18,9 @@ pub struct JobGraph {
 
 impl Display for JobGraph {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        writeln!(f, "= JobGraph =")?;
         for (i, stage) in self.stages.iter().enumerate() {
             let displayable = DisplayableExecutionPlan::new(stage.as_ref());
-            writeln!(f, "== Stage {i} ==")?;
+            writeln!(f, "=== stage {i} ===")?;
             writeln!(f, "{}", displayable.indent(true))?;
         }
         Ok(())

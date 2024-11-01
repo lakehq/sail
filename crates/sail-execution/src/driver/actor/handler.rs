@@ -5,13 +5,14 @@ use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{exec_datafusion_err, exec_err};
 use datafusion::error::DataFusionError;
 use datafusion::execution::SendableRecordBatchStream;
+use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use futures::future::try_join_all;
 use futures::TryStreamExt;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_server::actor::{ActorAction, ActorContext};
@@ -181,7 +182,13 @@ impl DriverActor {
         plan: Arc<dyn ExecutionPlan>,
     ) -> ExecutionResult<JobId> {
         let job_id = self.state.next_job_id()?;
+        debug!(
+            "job {} execution plan\n{}",
+            job_id,
+            DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
+        );
         let graph = JobGraph::try_new(plan)?;
+        debug!("job {} job graph \n{}", job_id, graph);
         let worker_ids = self.start_workers_for_job(ctx, job_id)?;
         let mut worker_id_selector = worker_ids.iter().cycle();
         let mut stages = vec![];
