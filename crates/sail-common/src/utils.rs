@@ -27,7 +27,7 @@ pub fn cast_record_batch(batch: RecordBatch, schema: SchemaRef) -> Result<Record
     Ok(RecordBatch::try_new(schema, columns)?)
 }
 
-pub fn read_record_batches(data: Vec<u8>) -> Result<Vec<RecordBatch>> {
+pub fn read_record_batches(data: &[u8]) -> Result<Vec<RecordBatch>> {
     let cursor = Cursor::new(data);
     let reader = StreamReader::try_new(cursor, None)?;
     let mut batches = Vec::new();

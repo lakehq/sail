@@ -1114,7 +1114,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let batches = if let Some(data) = data {
-            read_record_batches(data)?
+            read_record_batches(&data)?
         } else {
             vec![]
         };
