@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.7
+
+## _November 1, 2024_
+
+- Expanded support for Spark DataFrame functions ([#268](https://github.com/lakehq/sail/pull/268) and [#261](https://github.com/lakehq/sail/pull/261)).
+  Added full parity and coverage for the following DataFrame and SQL functions.
+  - `DataFrame.summary`
+  - `DataFrame.describe`
+  - `DataFrame.corr`
+  - `DataFrame.cov`
+  - `DataFrame.stat`
+  - `DataFrame.drop`
+  - `functions.corr`
+  - `functions.regr_avgx`
+- Fixed most Query Plan sorts in derived TPC-DS, bringing total coverage to 74/99 queries ([#261](https://github.com/lakehq/sail/pull/261)).
+- Work towards Sail `0.2` - Upcoming MVP release of distributed processing!!
+  - Implement distributed job stages ([#265](https://github.com/lakehq/sail/pull/265)).
+  - Implement actor system ([#264](https://github.com/lakehq/sail/pull/264)).
+  - Improve actor error handling ([#263](https://github.com/lakehq/sail/pull/263)).
+  - Improve actor implementation ([#262](https://github.com/lakehq/sail/pull/262)).
+  - Implement physical plan extension codec ([#259](https://github.com/lakehq/sail/pull/259)).
+  - Set up distributed processing ([#244](https://github.com/lakehq/sail/pull/244)).
+
 ## 0.1.6
 
 _October 23, 2024_

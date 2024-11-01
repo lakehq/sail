@@ -1,12 +1,12 @@
 [project]
 name = "pysail"
-version = "0.1.6"
+version = "0.1.7"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
 ]
 readme = "README.md"
-license = {file = "LICENSE"}
+license = { file = "LICENSE" }
 # Spark 3.5 does not support Python 3.12 yet.
 requires-python = ">=3.8,<3.12"
 dependencies = []
@@ -63,8 +63,8 @@ dependencies = [
     "pyspark[connect]==3.5.1",
     # We do not specify the extra dependencies for Ibis since we install PySpark explicitly.
     "ibis-framework~=9.4",
-    "pyarrow-hotfix>=0.4,<1",  # (required by Ibis PySpark)
-    "rich>=12.4.4,<14",  # (required by Ibis PySpark)
+    "pyarrow-hotfix>=0.4,<1", # (required by Ibis PySpark)
+    "rich>=12.4.4,<14", # (required by Ibis PySpark)
     "pytest~=8.3",
     "duckdb~=1.1",
 ]
