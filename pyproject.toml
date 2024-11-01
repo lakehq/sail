@@ -32,6 +32,7 @@ classifiers = [
 [project.optional-dependencies]
 spark = [
     "pyspark[connect]>=3.5,<4.0",
+    "duckdb>=1.0,<2.0",
 ]
 
 [project.urls]
