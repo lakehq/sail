@@ -6,7 +6,6 @@ edition = { workspace = true }
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-python-udf = { path = "../sail-python-udf" }
-sail-sql = { path = "../sail-sql" }
 
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }

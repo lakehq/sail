@@ -25,9 +25,9 @@ use crate::cereal::pyspark_udtf::{deserialize_pyspark_udtf, PySparkUdtfObject};
 use crate::cereal::PythonFunction;
 use crate::error::PyUdfResult;
 use crate::udf::{
-    build_pyarrow_record_batch_kwargs, get_pyarrow_record_batch_from_pandas_function,
-    get_pyarrow_record_batch_from_pylist_function, get_pyarrow_schema,
-    get_python_builtins_list_function,
+    build_pyarrow_record_batch_kwargs, build_pyarrow_to_pandas_kwargs,
+    get_pyarrow_record_batch_from_pandas_function, get_pyarrow_record_batch_from_pylist_function,
+    get_pyarrow_schema, get_python_builtins_list_function,
 };
 
 #[derive(Debug, Clone)]
@@ -116,6 +116,7 @@ impl PySparkUDTF {
             let python_function = python_function.function(py)?;
             let builtins_list = get_python_builtins_list_function(py)?;
             let record_batch_from_pandas = get_pyarrow_record_batch_from_pandas_function(py)?;
+            let pyarrow_to_pandas_kwargs = build_pyarrow_to_pandas_kwargs(py)?;
 
             let py_args = args
                 .iter()
@@ -123,7 +124,12 @@ impl PySparkUDTF {
                     let arg = arg
                         .into_data()
                         .to_pyarrow(py)?
-                        .call_method0(py, intern!(py, "to_pandas"))?
+                        .call_method_bound(
+                            py,
+                            intern!(py, "to_pandas"),
+                            (),
+                            Some(&pyarrow_to_pandas_kwargs),
+                        )?
                         .clone_ref(py)
                         .into_bound(py);
                     Ok(arg)
