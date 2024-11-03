@@ -1,10 +1,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{make_array, Array, ArrayData, ArrayRef, AsArray};
-use arrow::datatypes::{DataType, Field};
-use arrow::pyarrow::{FromPyArrow, ToPyArrow};
-use arrow_select::concat::concat;
+use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef, AsArray};
+use datafusion::arrow::compute::concat;
+use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::common::Result;
 use datafusion::logical_expr::{Accumulator, Signature, Volatility};
 use datafusion_common::utils::array_into_list_array;

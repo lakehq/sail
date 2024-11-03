@@ -4215,20 +4215,12 @@ dependencies = [
 name = "sail-python-udf"
 version = "0.1.7"
 dependencies = [
- "arrow",
- "arrow-cast",
- "arrow-select",
  "async-trait",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
- "datafusion-functions-nested",
  "pyo3",
  "sail-common",
- "serde",
- "serde_bytes",
- "serde_json",
- "sqlparser 0.51.0",
  "thiserror",
 ]
 
@@ -4432,15 +4424,6 @@ dependencies = [
  "bytemuck",
  "chrono",
  "half",
- "serde",
-]
-
-[[package]]
-name = "serde_bytes"
-version = "0.11.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "387cc504cb06bb40a96c8e04e951fe01854cf6bc921053c954e4a606d9675c6a"
-dependencies = [
  "serde",
 ]
 

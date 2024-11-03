@@ -1,7 +1,7 @@
 use std::hash::{Hash, Hasher};
 
-use arrow::pyarrow::ToPyArrow;
 use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::pyarrow::ToPyArrow;
 use datafusion_common::{plan_datafusion_err, Result};
 use pyo3::intern;
 use pyo3::prelude::*;
