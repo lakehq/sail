@@ -9,7 +9,7 @@ version = "0.1.7"
 edition = "2021"
 
 [workspace.dependencies]
-thiserror = { version = "1.0.64" }
+thiserror = { version = "1.0.67" }
 tokio = { version = "1.41.0", features = ["full"] }
 tokio-stream = "0.1.16"
 tonic = { version = "0.12.3", features = ["tls", "tls-roots", "gzip", "zstd"] }
@@ -53,7 +53,7 @@ mimalloc = { version = "0.1.43", features = ["local_dynamic_tls"] }
 rand = "0.8.5"
 rand_chacha = "0.3.1"
 rand_distr = "0.4.3"
-url = "2.5.2"
+url = "2.5.3"
 lexical-core = { version = "1.0.2", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 aws-config = "1.5.9"
 aws-credential-types = "1.2.1"
