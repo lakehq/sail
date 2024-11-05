@@ -17,6 +17,7 @@ pub(crate) mod spark_array;
 pub(crate) mod spark_concat;
 pub(crate) mod spark_hex_unhex;
 pub(crate) mod spark_murmur3_hash;
+pub(crate) mod spark_reverse;
 pub(crate) mod spark_unix_timestamp;
 pub(crate) mod spark_xxhash64;
 pub(crate) mod struct_function;
