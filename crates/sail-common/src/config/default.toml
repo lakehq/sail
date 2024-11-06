@@ -1,0 +1,27 @@
+runner = "local"
+
+[driver]
+listen_host = "127.0.0.1"
+listen_port = 0
+external_host = "127.0.0.1"
+# external_port = <value>
+worker_count_per_job = 4
+job_output_buffer = 16
+
+[worker]
+id = 1
+listen_host = "127.0.0.1"
+listen_port = 0
+external_host = "127.0.0.1"
+# external_port = <value>
+memory_stream_buffer = 16
+
+[network]
+enable_tls = false
+
+[execution]
+batch_size = 8192
+
+[execution.parquet]
+maximum_parallel_row_group_writers = 2
+maximum_buffered_record_batches_per_stream = 16

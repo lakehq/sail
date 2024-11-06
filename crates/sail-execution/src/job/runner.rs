@@ -13,17 +13,22 @@ use crate::error::{ExecutionError, ExecutionResult};
 pub trait JobRunner: Send + Sync + 'static {
     async fn execute(
         &self,
+        ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
     ) -> ExecutionResult<SendableRecordBatchStream>;
 }
 
-pub struct LocalJobRunner {
-    context: SessionContext,
-}
+pub struct LocalJobRunner {}
 
 impl LocalJobRunner {
-    pub fn new(context: SessionContext) -> Self {
-        Self { context }
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Default for LocalJobRunner {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -31,33 +36,21 @@ impl LocalJobRunner {
 impl JobRunner for LocalJobRunner {
     async fn execute(
         &self,
+        ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
     ) -> ExecutionResult<SendableRecordBatchStream> {
-        Ok(execute_stream(plan, self.context.task_ctx())?)
+        Ok(execute_stream(plan, ctx.task_ctx())?)
     }
 }
 
 pub struct ClusterJobRunner {
-    #[allow(dead_code)]
-    system: ActorSystem,
     driver: ActorHandle<DriverActor>,
 }
 
 impl ClusterJobRunner {
-    pub fn start() -> ExecutionResult<Self> {
-        let options = DriverOptions {
-            enable_tls: false,
-            driver_listen_host: "127.0.0.1".to_string(),
-            driver_listen_port: 0,
-            driver_external_host: "127.0.0.1".to_string(),
-            driver_external_port: None,
-            worker_count_per_job: 4,
-            job_output_buffer: 16,
-        };
-        // TODO: share actor system across sessions
-        let mut system = ActorSystem::new();
+    pub fn try_new(system: &mut ActorSystem, options: DriverOptions) -> ExecutionResult<Self> {
         let driver = system.spawn(options);
-        Ok(Self { system, driver })
+        Ok(Self { driver })
     }
 }
 
@@ -65,6 +58,8 @@ impl ClusterJobRunner {
 impl JobRunner for ClusterJobRunner {
     async fn execute(
         &self,
+        // TODO: propagate session context from the driver to the worker
+        _ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
     ) -> ExecutionResult<SendableRecordBatchStream> {
         let (tx, rx) = oneshot::channel();

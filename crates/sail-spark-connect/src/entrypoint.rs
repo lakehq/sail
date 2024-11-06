@@ -1,12 +1,14 @@
 use std::future::Future;
+use std::sync::Arc;
 
-use sail_plan::object_store::{load_aws_config, ObjectStoreConfig};
+use sail_common::config::AppConfig;
+use sail_plan::object_store::ObjectStoreConfig;
 use sail_server::ServerBuilder;
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
 
 use crate::server::SparkConnectServer;
-use crate::session::SessionManager;
+use crate::session_manager::SessionManager;
 use crate::spark::connect::spark_connect_service_server::SparkConnectServiceServer;
 
 // Same default as Spark
@@ -17,8 +19,9 @@ pub async fn serve<F>(listener: TcpListener, signal: F) -> Result<(), Box<dyn st
 where
     F: Future<Output = ()>,
 {
-    let object_store_config = ObjectStoreConfig::default().with_aws(load_aws_config().await);
-    let session_manager = SessionManager::new().with_object_store_config(object_store_config);
+    ObjectStoreConfig::initialize().await;
+    let config = AppConfig::load()?;
+    let session_manager = SessionManager::new(Arc::new(config));
     let server = SparkConnectServer::new(session_manager);
     let service = SparkConnectServiceServer::new(server)
         // The original Spark Connect server seems to have configuration for inbound (decoding) message size only.
