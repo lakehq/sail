@@ -10,7 +10,7 @@ use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::executor::read_stream;
 use crate::proto::data_type::parse_spark_data_type;
 use crate::schema::{to_spark_schema, to_tree_string};
-use crate::session::SparkSession;
+use crate::session::SparkExtension;
 use crate::spark::connect as sc;
 use crate::spark::connect::analyze_plan_request::explain::ExplainMode;
 use crate::spark::connect::analyze_plan_request::{
@@ -33,7 +33,7 @@ use crate::spark::connect::StorageLevel;
 use crate::SPARK_VERSION;
 
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
-    let spark = SparkSession::get(ctx)?;
+    let spark = SparkExtension::get(ctx)?;
     let resolver = PlanResolver::new(ctx, spark.plan_config()?);
     let NamedPlan { plan, fields } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
@@ -62,7 +62,7 @@ pub(crate) async fn handle_analyze_explain(
     ctx: &SessionContext,
     request: ExplainRequest,
 ) -> SparkResult<ExplainResponse> {
-    let spark = SparkSession::get(ctx)?;
+    let spark = SparkExtension::get(ctx)?;
     let ExplainRequest { plan, explain_mode } = request;
     let plan = plan.required("plan")?;
     let explain_mode = ExplainMode::try_from(explain_mode)?;

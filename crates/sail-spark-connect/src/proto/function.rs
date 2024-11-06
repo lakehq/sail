@@ -14,7 +14,7 @@ mod tests {
     use crate::error::{SparkError, SparkResult};
     use crate::executor::read_stream;
     use crate::proto::data_type_json::JsonDataType;
-    use crate::session::SparkSession;
+    use crate::session::SparkExtension;
     use crate::session_manager::{SessionKey, SessionManager};
     use crate::spark::connect::relation::RelType;
     use crate::spark::connect::{Relation, Sql};
@@ -74,7 +74,7 @@ mod tests {
                 };
                 let plan = relation.try_into()?;
                 let result = rt.block_on(async {
-                    let spark = SparkSession::get(&context)?;
+                    let spark = SparkExtension::get(&context)?;
                     let plan =
                         resolve_and_execute_plan(&context, spark.plan_config()?, plan).await?;
                     let stream = spark.job_runner().execute(&context, plan).await?;

@@ -23,23 +23,23 @@ pub(crate) const DEFAULT_SPARK_SCHEMA: &str = "default";
 pub(crate) const DEFAULT_SPARK_CATALOG: &str = "spark_catalog";
 
 /// A Spark-specific extension to the DataFusion [SessionContext].
-pub(crate) struct SparkSession {
+pub(crate) struct SparkExtension {
     user_id: Option<String>,
     session_id: String,
     job_runner: Box<dyn JobRunner>,
-    state: Mutex<SparkSessionState>,
+    state: Mutex<SparkExtensionState>,
 }
 
-impl Debug for SparkSession {
+impl Debug for SparkExtension {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Session")
+        f.debug_struct("SparkExtension")
             .field("user_id", &self.user_id)
             .field("session_id", &self.session_id)
             .finish()
     }
 }
 
-impl SparkSession {
+impl SparkExtension {
     pub(crate) fn new(
         user_id: Option<String>,
         session_id: String,
@@ -49,18 +49,18 @@ impl SparkSession {
             user_id,
             session_id,
             job_runner,
-            state: Mutex::new(SparkSessionState::new()),
+            state: Mutex::new(SparkExtensionState::new()),
         }
     }
 
-    /// Get the Spark session from the DataFusion [SessionContext].
-    pub(crate) fn get(context: &SessionContext) -> SparkResult<Arc<SparkSession>> {
+    /// Get the Spark extension from the DataFusion [SessionContext].
+    pub(crate) fn get(context: &SessionContext) -> SparkResult<Arc<SparkExtension>> {
         context
             .state_ref()
             .read()
             .config()
-            .get_extension::<SparkSession>()
-            .ok_or_else(|| SparkError::invalid("Spark session not found in the session context"))
+            .get_extension::<SparkExtension>()
+            .ok_or_else(|| SparkError::invalid("Spark extension not found in the session context"))
     }
 
     pub(crate) fn session_id(&self) -> &str {
@@ -250,12 +250,12 @@ impl SparkSession {
     }
 }
 
-struct SparkSessionState {
+struct SparkExtensionState {
     config: SparkRuntimeConfig,
     executors: HashMap<String, Arc<Executor>>,
 }
 
-impl SparkSessionState {
+impl SparkExtensionState {
     fn new() -> Self {
         Self {
             config: SparkRuntimeConfig::new(),

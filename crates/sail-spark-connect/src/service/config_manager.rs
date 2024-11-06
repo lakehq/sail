@@ -5,7 +5,7 @@ use sail_common::config::ConfigKeyValue;
 
 use crate::config::SparkRuntimeConfig;
 use crate::error::{SparkError, SparkResult};
-use crate::session::SparkSession;
+use crate::session::SparkExtension;
 use crate::spark::config::SPARK_SQL_SESSION_TIME_ZONE;
 use crate::spark::connect::{ConfigResponse, KeyValue};
 
@@ -39,7 +39,7 @@ pub(crate) fn handle_config_get(
     ctx: &SessionContext,
     keys: Vec<String>,
 ) -> SparkResult<ConfigResponse> {
-    let spark = SparkSession::get(ctx)?;
+    let spark = SparkExtension::get(ctx)?;
     let warnings = SparkRuntimeConfig::get_warnings_by_keys(&keys);
     let pairs = spark.get_config(keys)?;
     let pairs = pairs.into_iter().map(Into::into).collect();
@@ -54,7 +54,7 @@ pub(crate) fn handle_config_set(
     ctx: &SessionContext,
     kv: Vec<KeyValue>,
 ) -> SparkResult<ConfigResponse> {
-    let spark = SparkSession::get(ctx)?;
+    let spark = SparkExtension::get(ctx)?;
     let kv: Vec<ConfigKeyValue> = kv.into_iter().map(Into::into).collect();
     let warnings = SparkRuntimeConfig::get_warnings(&kv);
     for ConfigKeyValue { key, value } in &kv {
@@ -76,7 +76,7 @@ pub(crate) fn handle_config_get_with_default(
     ctx: &SessionContext,
     kv: Vec<KeyValue>,
 ) -> SparkResult<ConfigResponse> {
-    let spark = SparkSession::get(ctx)?;
+    let spark = SparkExtension::get(ctx)?;
     let kv: Vec<ConfigKeyValue> = kv.into_iter().map(Into::into).collect();
     let warnings = SparkRuntimeConfig::get_warnings(&kv);
     let pairs = spark.get_config_with_default(kv)?;
@@ -92,7 +92,7 @@ pub(crate) fn handle_config_get_option(
     ctx: &SessionContext,
     keys: Vec<String>,
 ) -> SparkResult<ConfigResponse> {
-    let spark = SparkSession::get(ctx)?;
+    let spark = SparkExtension::get(ctx)?;
     let warnings = SparkRuntimeConfig::get_warnings_by_keys(&keys);
     let kv = keys
         .into_iter()
@@ -111,7 +111,7 @@ pub(crate) fn handle_config_get_all(
     ctx: &SessionContext,
     prefix: Option<String>,
 ) -> SparkResult<ConfigResponse> {
-    let spark = SparkSession::get(ctx)?;
+    let spark = SparkExtension::get(ctx)?;
     let kv = spark.get_all_config(prefix.as_deref())?;
     let warnings = SparkRuntimeConfig::get_warnings(&kv);
     let pairs = kv.into_iter().map(Into::into).collect();
@@ -126,7 +126,7 @@ pub(crate) fn handle_config_unset(
     ctx: &SessionContext,
     keys: Vec<String>,
 ) -> SparkResult<ConfigResponse> {
-    let spark = SparkSession::get(ctx)?;
+    let spark = SparkExtension::get(ctx)?;
     let warnings = SparkRuntimeConfig::get_warnings_by_keys(&keys);
     spark.unset_config(keys)?;
     Ok(ConfigResponse {
@@ -140,7 +140,7 @@ pub(crate) fn handle_config_is_modifiable(
     ctx: &SessionContext,
     keys: Vec<String>,
 ) -> SparkResult<ConfigResponse> {
-    let spark = SparkSession::get(ctx)?;
+    let spark = SparkExtension::get(ctx)?;
     let warnings = SparkRuntimeConfig::get_warnings_by_keys(&keys);
     let pairs = keys
         .into_iter()

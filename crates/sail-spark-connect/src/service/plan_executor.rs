@@ -14,7 +14,7 @@ use crate::error::{SparkError, SparkResult};
 use crate::executor::{
     read_stream, to_arrow_batch, Executor, ExecutorBatch, ExecutorMetadata, ExecutorOutput,
 };
-use crate::session::SparkSession;
+use crate::session::SparkExtension;
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
@@ -105,7 +105,7 @@ async fn handle_execute_plan(
     metadata: ExecutorMetadata,
     mode: ExecutePlanMode,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    let spark = SparkSession::get(ctx)?;
+    let spark = SparkExtension::get(ctx)?;
     let operation_id = metadata.operation_id.clone();
     let plan = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
     let stream = spark.job_runner().execute(ctx, plan).await?;
@@ -188,7 +188,7 @@ pub(crate) async fn handle_execute_sql_command(
     sql: SqlCommand,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    let spark = SparkSession::get(ctx)?;
+    let spark = SparkExtension::get(ctx)?;
     let relation = Relation {
         common: None,
         rel_type: Some(relation::RelType::Sql(sc::Sql {
@@ -274,7 +274,7 @@ pub(crate) async fn handle_execute_register_table_function(
 }
 
 pub(crate) async fn handle_interrupt_all(ctx: &SessionContext) -> SparkResult<Vec<String>> {
-    let spark = SparkSession::get(ctx)?;
+    let spark = SparkExtension::get(ctx)?;
     let mut results = vec![];
     for executor in spark.remove_all_executors()? {
         executor.pause_if_running().await?;
@@ -287,7 +287,7 @@ pub(crate) async fn handle_interrupt_tag(
     ctx: &SessionContext,
     tag: String,
 ) -> SparkResult<Vec<String>> {
-    let spark = SparkSession::get(ctx)?;
+    let spark = SparkExtension::get(ctx)?;
     let mut results = vec![];
     for executor in spark.remove_executors_by_tag(tag.as_str())? {
         executor.pause_if_running().await?;
@@ -300,7 +300,7 @@ pub(crate) async fn handle_interrupt_operation_id(
     ctx: &SessionContext,
     operation_id: String,
 ) -> SparkResult<Vec<String>> {
-    let spark = SparkSession::get(ctx)?;
+    let spark = SparkExtension::get(ctx)?;
     match spark.remove_executor(operation_id.as_str())? {
         Some(executor) => {
             executor.pause_if_running().await?;
@@ -315,7 +315,7 @@ pub(crate) async fn handle_reattach_execute(
     operation_id: String,
     response_id: Option<String>,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    let spark = SparkSession::get(ctx)?;
+    let spark = SparkExtension::get(ctx)?;
     let executor = spark
         .get_executor(operation_id.as_str())?
         .ok_or_else(|| SparkError::invalid(format!("operation not found: {}", operation_id)))?;
@@ -340,7 +340,7 @@ pub(crate) async fn handle_release_execute(
     operation_id: String,
     response_id: Option<String>,
 ) -> SparkResult<()> {
-    let spark = SparkSession::get(ctx)?;
+    let spark = SparkExtension::get(ctx)?;
     // Some operations may not have an executor (e.g. DDL statements),
     // so it is a no-op if the executor is not found.
     if let Some(executor) = spark.get_executor(operation_id.as_str())? {

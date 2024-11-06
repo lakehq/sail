@@ -16,7 +16,7 @@ use sail_plan::temp_view::TemporaryViewManager;
 use sail_server::actor::ActorSystem;
 
 use crate::error::SparkResult;
-use crate::session::{SparkSession, DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA};
+use crate::session::{SparkExtension, DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA};
 
 #[derive(Eq, PartialEq, Hash, Clone, Debug)]
 pub(crate) struct SessionKey {
@@ -72,7 +72,7 @@ impl SessionManager {
                 self.config.as_ref().into(),
             )?),
         };
-        let spark = SparkSession::new(key.user_id, key.session_id, job_runner);
+        let spark = SparkExtension::new(key.user_id, key.session_id, job_runner);
         // TODO: support more systematic configuration
         // TODO: return error on invalid environment variables
         let config = SessionConfig::new()
