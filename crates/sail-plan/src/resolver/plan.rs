@@ -268,8 +268,13 @@ impl PlanResolver<'_> {
                 self.resolve_query_drop_na(*input, columns, min_non_nulls, state)
                     .await?
             }
-            QueryNode::ReplaceNa { .. } => {
-                return Err(PlanError::todo("replace"));
+            QueryNode::Replace {
+                input,
+                columns,
+                replacements,
+            } => {
+                self.resolve_query_replace(*input, columns, replacements, state)
+                    .await?
             }
             QueryNode::StatSummary { input, statistics } => {
                 self.resolve_query_summary(*input, vec![], statistics, state)
@@ -2641,6 +2646,62 @@ impl PlanResolver<'_> {
 
         Ok(LogicalPlan::Filter(plan::Filter::try_new(
             filter_expr,
+            Arc::new(input),
+        )?))
+    }
+
+    async fn resolve_query_replace(
+        &self,
+        input: spec::QueryPlan,
+        columns: Vec<spec::Identifier>,
+        replacements: Vec<spec::Replacement>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let input = self.resolve_query_plan(input, state).await?;
+        let schema = input.schema();
+        let columns: Vec<String> = columns.into_iter().map(|x| x.into()).collect();
+        let replacements: Vec<(Expr, Expr)> = replacements
+            .into_iter()
+            .map(|r| {
+                Ok((
+                    lit(self.resolve_literal(r.old_value)?),
+                    lit(self.resolve_literal(r.new_value)?),
+                ))
+            })
+            .collect::<PlanResult<_>>()?;
+
+        let replace_exprs = schema
+            .columns()
+            .into_iter()
+            .map(|c| {
+                let column_expr = col(c.clone());
+                let column_data_type = column_expr.get_type(schema)?;
+                let column_name = state.get_field_name(c.name())?;
+                // TODO: Avoid checking col == column_name twice
+                let expr = if columns.is_empty() || columns.iter().any(|col| col == column_name) {
+                    let mut when_then_expr = Vec::new();
+                    replacements.iter().for_each(|(old, new)| {
+                        let new = Expr::TryCast(TryCast {
+                            expr: Box::new(new.clone()),
+                            data_type: column_data_type.clone(),
+                        });
+                        when_then_expr
+                            .push((Box::new(column_expr.clone().eq(old.clone())), Box::new(new)));
+                    });
+                    Expr::Case(datafusion_expr::Case {
+                        expr: None,
+                        when_then_expr,
+                        else_expr: Some(Box::new(column_expr)),
+                    })
+                } else {
+                    column_expr
+                };
+                Ok(NamedExpr::new(vec![column_name.into()], expr))
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+
+        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+            self.rewrite_named_expressions(replace_exprs, state)?,
             Arc::new(input),
         )?))
     }
