@@ -76,7 +76,8 @@ pub(crate) fn manage_temporary_views<T>(
         f(&GLOBAL_TEMPORARY_VIEW_MANAGER)
     } else {
         let views = ctx
-            .state()
+            .state_ref()
+            .read()
             .config()
             .get_extension::<TemporaryViewManager>()
             .ok_or_else(|| internal_datafusion_err!("temporary view manager not found"))?;

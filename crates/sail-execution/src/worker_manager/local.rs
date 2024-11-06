@@ -46,6 +46,7 @@ impl WorkerManager for LocalWorkerManager {
             enable_tls: false,
             driver_host: options.driver_host,
             driver_port: options.driver_port,
+            // TODO: propagate the configuration from the driver
             worker_listen_host: "127.0.0.1".to_string(),
             worker_listen_port: 0,
             worker_external_host: "127.0.0.1".to_string(),

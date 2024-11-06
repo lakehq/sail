@@ -2,9 +2,17 @@ use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
 use datafusion::execution::context::QueryPlanner;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use datafusion_expr::{Extension, LogicalPlan};
+use sail_common::spec;
+use sail_common::utils::rename_physical_plan;
+
+use crate::config::PlanConfig;
+use crate::error::PlanResult;
+use crate::resolver::plan::NamedPlan;
+use crate::resolver::PlanResolver;
 
 mod catalog;
 pub mod config;
@@ -35,6 +43,22 @@ pub async fn execute_logical_plan(ctx: &SessionContext, plan: LogicalPlan) -> Re
     };
     let df = ctx.execute_logical_plan(plan).await?;
     Ok(df)
+}
+
+pub async fn resolve_and_execute_plan(
+    ctx: &SessionContext,
+    config: Arc<PlanConfig>,
+    plan: spec::Plan,
+) -> PlanResult<Arc<dyn ExecutionPlan>> {
+    let resolver = PlanResolver::new(ctx, config);
+    let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
+    let df = execute_logical_plan(ctx, plan).await?;
+    let plan = df.create_physical_plan().await?;
+    if let Some(fields) = fields {
+        Ok(rename_physical_plan(plan, fields.as_slice())?)
+    } else {
+        Ok(plan)
+    }
 }
 
 pub fn new_query_planner() -> Arc<dyn QueryPlanner + Send + Sync> {

@@ -20,3 +20,4 @@ pyo3 = { workspace = true }
 lexical-core = { workspace = true }
 num_enum = { workspace = true }
 sqlparser = { workspace = true }
+figment = { workspace = true }

@@ -6,8 +6,6 @@ use crate::error::{SparkError, SparkResult};
 use crate::spark::config::SPARK_CONFIG;
 use crate::spark::connect as sc;
 
-pub(crate) struct ConfigKeyValueList(Vec<ConfigKeyValue>);
-
 impl From<sc::KeyValue> for ConfigKeyValue {
     fn from(kv: sc::KeyValue) -> Self {
         Self {
@@ -23,30 +21,6 @@ impl From<ConfigKeyValue> for sc::KeyValue {
             key: kv.key,
             value: kv.value,
         }
-    }
-}
-
-impl From<Vec<ConfigKeyValue>> for ConfigKeyValueList {
-    fn from(kv: Vec<ConfigKeyValue>) -> Self {
-        Self(kv)
-    }
-}
-
-impl From<ConfigKeyValueList> for Vec<ConfigKeyValue> {
-    fn from(kv: ConfigKeyValueList) -> Self {
-        kv.0
-    }
-}
-
-impl From<Vec<sc::KeyValue>> for ConfigKeyValueList {
-    fn from(kv: Vec<sc::KeyValue>) -> Self {
-        Self(kv.into_iter().map(|x| x.into()).collect())
-    }
-}
-
-impl From<ConfigKeyValueList> for Vec<sc::KeyValue> {
-    fn from(kv: ConfigKeyValueList) -> Self {
-        kv.0.into_iter().map(|x| x.into()).collect()
     }
 }
 
@@ -130,7 +104,7 @@ impl SparkRuntimeConfig {
         Ok(())
     }
 
-    pub(crate) fn get_all(&self, prefix: Option<&str>) -> SparkResult<ConfigKeyValueList> {
+    pub(crate) fn get_all(&self, prefix: Option<&str>) -> SparkResult<Vec<ConfigKeyValue>> {
         let iter: Box<dyn Iterator<Item = _>> = match prefix {
             None => Box::new(self.config.iter()),
             Some(prefix) => Box::new(
@@ -144,8 +118,7 @@ impl SparkRuntimeConfig {
                 key: k.to_string(),
                 value: Some(v.to_string()),
             })
-            .collect::<Vec<_>>()
-            .into())
+            .collect())
     }
 
     pub(crate) fn is_modifiable(key: &str) -> bool {
@@ -162,8 +135,8 @@ impl SparkRuntimeConfig {
             .map(|x| x.comment)
     }
 
-    pub(crate) fn get_warnings(kv: &ConfigKeyValueList) -> Vec<String> {
-        kv.0.iter()
+    pub(crate) fn get_warnings(kv: &[ConfigKeyValue]) -> Vec<String> {
+        kv.iter()
             .flat_map(|x| Self::get_warning(x.key.as_str()))
             .map(|x| x.to_string())
             .collect()
