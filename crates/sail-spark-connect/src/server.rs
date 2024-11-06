@@ -8,7 +8,7 @@ use crate::error::ProtoFieldExt;
 use crate::executor::ExecutorMetadata;
 use crate::service;
 use crate::service::ExecutePlanResponseStream;
-use crate::session::{SessionKey, SessionManager};
+use crate::session_manager::{SessionKey, SessionManager};
 use crate::spark::connect as sc;
 use crate::spark::connect::analyze_plan_request::Analyze;
 use crate::spark::connect::analyze_plan_response::Result as AnalyzeResult;
@@ -67,12 +67,14 @@ impl SparkConnectService for SparkConnectServer {
             tags: request.tags,
             reattachable: is_reattachable(&request.request_options),
         };
-        let session = self.session_manager.get_session(session_key)?;
+        let ctx = self
+            .session_manager
+            .get_or_create_session_context(session_key)?;
         let Plan { op_type: op } = request.plan.required("plan")?;
         let op = op.required("plan op")?;
         let stream = match op {
             plan::OpType::Root(relation) => {
-                service::handle_execute_relation(session, relation, metadata).await?
+                service::handle_execute_relation(&ctx, relation, metadata).await?
             }
             plan::OpType::Command(Command {
                 command_type: command,
@@ -80,43 +82,40 @@ impl SparkConnectService for SparkConnectServer {
                 let command = command.required("command")?;
                 match command {
                     CommandType::RegisterFunction(udf) => {
-                        service::handle_execute_register_function(session, udf, metadata).await?
+                        service::handle_execute_register_function(&ctx, udf, metadata).await?
                     }
                     CommandType::WriteOperation(write) => {
-                        service::handle_execute_write_operation(session, write, metadata).await?
+                        service::handle_execute_write_operation(&ctx, write, metadata).await?
                     }
                     CommandType::CreateDataframeView(view) => {
-                        service::handle_execute_create_dataframe_view(session, view, metadata)
-                            .await?
+                        service::handle_execute_create_dataframe_view(&ctx, view, metadata).await?
                     }
                     CommandType::WriteOperationV2(write) => {
-                        service::handle_execute_write_operation_v2(session, write, metadata).await?
+                        service::handle_execute_write_operation_v2(&ctx, write, metadata).await?
                     }
                     CommandType::SqlCommand(sql) => {
-                        service::handle_execute_sql_command(session, sql, metadata).await?
+                        service::handle_execute_sql_command(&ctx, sql, metadata).await?
                     }
                     CommandType::WriteStreamOperationStart(start) => {
-                        service::handle_execute_write_stream_operation_start(
-                            session, start, metadata,
-                        )
-                        .await?
+                        service::handle_execute_write_stream_operation_start(&ctx, start, metadata)
+                            .await?
                     }
                     CommandType::StreamingQueryCommand(stream) => {
-                        service::handle_execute_streaming_query_command(session, stream, metadata)
+                        service::handle_execute_streaming_query_command(&ctx, stream, metadata)
                             .await?
                     }
                     CommandType::GetResourcesCommand(resource) => {
-                        service::handle_execute_get_resources_command(session, resource, metadata)
+                        service::handle_execute_get_resources_command(&ctx, resource, metadata)
                             .await?
                     }
                     CommandType::StreamingQueryManagerCommand(manager) => {
                         service::handle_execute_streaming_query_manager_command(
-                            session, manager, metadata,
+                            &ctx, manager, metadata,
                         )
                         .await?
                     }
                     CommandType::RegisterTableFunction(udtf) => {
-                        service::handle_execute_register_table_function(session, udtf, metadata)
+                        service::handle_execute_register_table_function(&ctx, udtf, metadata)
                             .await?
                     }
                     CommandType::Extension(_) => {
@@ -138,59 +137,61 @@ impl SparkConnectService for SparkConnectServer {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
         };
-        let session = self.session_manager.get_session(session_key)?;
+        let ctx = self
+            .session_manager
+            .get_or_create_session_context(session_key)?;
         let analyze = request.analyze.required("analyze")?;
         let result = match analyze {
             Analyze::Schema(schema) => {
-                let schema = service::handle_analyze_schema(session, schema).await?;
+                let schema = service::handle_analyze_schema(&ctx, schema).await?;
                 Some(AnalyzeResult::Schema(schema))
             }
             Analyze::Explain(explain) => {
-                let explain = service::handle_analyze_explain(session, explain).await?;
+                let explain = service::handle_analyze_explain(&ctx, explain).await?;
                 Some(AnalyzeResult::Explain(explain))
             }
             Analyze::TreeString(tree) => {
-                let tree = service::handle_analyze_tree_string(session, tree).await?;
+                let tree = service::handle_analyze_tree_string(&ctx, tree).await?;
                 Some(AnalyzeResult::TreeString(tree))
             }
             Analyze::IsLocal(local) => {
-                let local = service::handle_analyze_is_local(session, local).await?;
+                let local = service::handle_analyze_is_local(&ctx, local).await?;
                 Some(AnalyzeResult::IsLocal(local))
             }
             Analyze::IsStreaming(streaming) => {
-                let streaming = service::handle_analyze_is_streaming(session, streaming).await?;
+                let streaming = service::handle_analyze_is_streaming(&ctx, streaming).await?;
                 Some(AnalyzeResult::IsStreaming(streaming))
             }
             Analyze::InputFiles(input) => {
-                let input = service::handle_analyze_input_files(session, input).await?;
+                let input = service::handle_analyze_input_files(&ctx, input).await?;
                 Some(AnalyzeResult::InputFiles(input))
             }
             Analyze::SparkVersion(version) => {
-                let version = service::handle_analyze_spark_version(session, version).await?;
+                let version = service::handle_analyze_spark_version(&ctx, version).await?;
                 Some(AnalyzeResult::SparkVersion(version))
             }
             Analyze::DdlParse(ddl) => {
-                let ddl = service::handle_analyze_ddl_parse(session, ddl).await?;
+                let ddl = service::handle_analyze_ddl_parse(&ctx, ddl).await?;
                 Some(AnalyzeResult::DdlParse(ddl))
             }
             Analyze::SameSemantics(same) => {
-                let same = service::handle_analyze_same_semantics(session, same).await?;
+                let same = service::handle_analyze_same_semantics(&ctx, same).await?;
                 Some(AnalyzeResult::SameSemantics(same))
             }
             Analyze::SemanticHash(hash) => {
-                let hash = service::handle_analyze_semantic_hash(session, hash).await?;
+                let hash = service::handle_analyze_semantic_hash(&ctx, hash).await?;
                 Some(AnalyzeResult::SemanticHash(hash))
             }
             Analyze::Persist(persist) => {
-                let persist = service::handle_analyze_persist(session, persist).await?;
+                let persist = service::handle_analyze_persist(&ctx, persist).await?;
                 Some(AnalyzeResult::Persist(persist))
             }
             Analyze::Unpersist(unpersist) => {
-                let unpersist = service::handle_analyze_unpersist(session, unpersist).await?;
+                let unpersist = service::handle_analyze_unpersist(&ctx, unpersist).await?;
                 Some(AnalyzeResult::Unpersist(unpersist))
             }
             Analyze::GetStorageLevel(level) => {
-                let level = service::handle_analyze_get_storage_level(session, level).await?;
+                let level = service::handle_analyze_get_storage_level(&ctx, level).await?;
                 Some(AnalyzeResult::GetStorageLevel(level))
             }
         };
@@ -212,31 +213,33 @@ impl SparkConnectService for SparkConnectServer {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
         };
-        let session = self.session_manager.get_session(session_key)?;
+        let ctx = self
+            .session_manager
+            .get_or_create_session_context(session_key)?;
         let sc::config_request::Operation { op_type: op } =
             request.operation.required("operation")?;
         let op = op.required("operation type")?;
         let response = match op {
             ConfigOpType::Get(sc::config_request::Get { keys }) => {
-                service::handle_config_get(session, keys)?
+                service::handle_config_get(&ctx, keys)?
             }
             ConfigOpType::Set(sc::config_request::Set { pairs }) => {
-                service::handle_config_set(session, pairs)?
+                service::handle_config_set(&ctx, pairs)?
             }
             ConfigOpType::GetWithDefault(sc::config_request::GetWithDefault { pairs }) => {
-                service::handle_config_get_with_default(session, pairs)?
+                service::handle_config_get_with_default(&ctx, pairs)?
             }
             ConfigOpType::GetOption(sc::config_request::GetOption { keys }) => {
-                service::handle_config_get_option(session, keys)?
+                service::handle_config_get_option(&ctx, keys)?
             }
             ConfigOpType::GetAll(sc::config_request::GetAll { prefix }) => {
-                service::handle_config_get_all(session, prefix)?
+                service::handle_config_get_all(&ctx, prefix)?
             }
             ConfigOpType::Unset(sc::config_request::Unset { keys }) => {
-                service::handle_config_unset(session, keys)?
+                service::handle_config_unset(&ctx, keys)?
             }
             ConfigOpType::IsModifiable(sc::config_request::IsModifiable { keys }) => {
-                service::handle_config_is_modifiable(session, keys)?
+                service::handle_config_is_modifiable(&ctx, keys)?
             }
         };
         debug!("{:?}", response);
@@ -261,7 +264,9 @@ impl SparkConnectService for SparkConnectServer {
             user_id: first.user_context.map(|u| u.user_id),
             session_id: first.session_id.clone(),
         };
-        let session = self.session_manager.get_session(session_key)?;
+        let ctx = self
+            .session_manager
+            .get_or_create_session_context(session_key)?;
         let payload = first.payload;
         let session_id = first.session_id;
         let stream = async_stream::try_stream! {
@@ -279,7 +284,7 @@ impl SparkConnectService for SparkConnectServer {
                 }
             }
         };
-        let artifacts = service::handle_add_artifacts(session, stream).await?;
+        let artifacts = service::handle_add_artifacts(&ctx, stream).await?;
         let response = AddArtifactsResponse { artifacts };
         debug!("{:?}", response);
         Ok(Response::new(response))
@@ -295,8 +300,10 @@ impl SparkConnectService for SparkConnectServer {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
         };
-        let session = self.session_manager.get_session(session_key)?;
-        let statuses = service::handle_artifact_statuses(session, request.names).await?;
+        let ctx = self
+            .session_manager
+            .get_or_create_session_context(session_key)?;
+        let statuses = service::handle_artifact_statuses(&ctx, request.names).await?;
         let response = ArtifactStatusesResponse { statuses };
         debug!("{:?}", response);
         Ok(Response::new(response))
@@ -312,19 +319,21 @@ impl SparkConnectService for SparkConnectServer {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
         };
-        let session = self.session_manager.get_session(session_key)?;
+        let ctx = self
+            .session_manager
+            .get_or_create_session_context(session_key)?;
         let ids = match InterruptType::try_from(request.interrupt_type) {
-            Ok(InterruptType::All) => Ok(service::handle_interrupt_all(session).await?),
+            Ok(InterruptType::All) => Ok(service::handle_interrupt_all(&ctx).await?),
             Ok(InterruptType::Tag) => {
                 if let Some(Interrupt::OperationTag(tag)) = request.interrupt {
-                    Ok(service::handle_interrupt_tag(session, tag).await?)
+                    Ok(service::handle_interrupt_tag(&ctx, tag).await?)
                 } else {
                     Err(Status::invalid_argument("operation tag is required"))
                 }
             }
             Ok(InterruptType::OperationId) => {
                 if let Some(Interrupt::OperationId(id)) = request.interrupt {
-                    Ok(service::handle_interrupt_operation_id(session, id).await?)
+                    Ok(service::handle_interrupt_operation_id(&ctx, id).await?)
                 } else {
                     Err(Status::invalid_argument("operation ID is required"))
                 }
@@ -353,13 +362,12 @@ impl SparkConnectService for SparkConnectServer {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
         };
-        let session = self.session_manager.get_session(session_key)?;
-        let stream = service::handle_reattach_execute(
-            session,
-            request.operation_id,
-            request.last_response_id,
-        )
-        .await?;
+        let ctx = self
+            .session_manager
+            .get_or_create_session_context(session_key)?;
+        let stream =
+            service::handle_reattach_execute(&ctx, request.operation_id, request.last_response_id)
+                .await?;
         Ok(Response::new(stream))
     }
 
@@ -373,12 +381,14 @@ impl SparkConnectService for SparkConnectServer {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
         };
-        let session = self.session_manager.get_session(session_key)?;
+        let ctx = self
+            .session_manager
+            .get_or_create_session_context(session_key)?;
         let response_id = match request.release.required("release")? {
             Release::ReleaseAll(ReleaseAll {}) => None,
             Release::ReleaseUntil(ReleaseUntil { response_id }) => Some(response_id),
         };
-        service::handle_release_execute(session, request.operation_id.clone(), response_id).await?;
+        service::handle_release_execute(&ctx, request.operation_id.clone(), response_id).await?;
         let response = ReleaseExecuteResponse {
             session_id: request.session_id.clone(),
             operation_id: Some(request.operation_id),

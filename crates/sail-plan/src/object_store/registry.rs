@@ -10,8 +10,8 @@ use object_store::local::LocalFileSystem;
 use object_store::ObjectStore;
 use url::Url;
 
+use crate::object_store::config::OBJECT_STORE_CONFIG;
 use crate::object_store::s3::S3CredentialProvider;
-use crate::object_store::ObjectStoreConfig;
 
 #[derive(Debug, Eq, PartialEq, Hash)]
 struct ObjectStoreKey {
@@ -31,7 +31,6 @@ impl ObjectStoreKey {
 #[derive(Debug)]
 pub struct DynamicObjectStoreRegistry {
     stores: RwLock<HashMap<ObjectStoreKey, Arc<dyn ObjectStore>>>,
-    config: Arc<ObjectStoreConfig>,
 }
 
 impl Default for DynamicObjectStoreRegistry {
@@ -52,20 +51,14 @@ impl DynamicObjectStoreRegistry {
         );
         Self {
             stores: RwLock::new(stores),
-            config: Arc::new(ObjectStoreConfig::default()),
         }
-    }
-
-    pub fn with_config(mut self, config: Arc<ObjectStoreConfig>) -> Self {
-        self.config = config;
-        self
     }
 
     fn get_dynamic_object_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
         let key = ObjectStoreKey::new(url);
         match key.scheme.as_str() {
             "s3" => {
-                let config = self.config.aws().ok_or_else(|| {
+                let config = OBJECT_STORE_CONFIG.get().map(|x| &x.aws).ok_or_else(|| {
                     plan_datafusion_err!("AWS configuration is required for S3 object store")
                 })?;
                 let mut builder = AmazonS3Builder::from_env().with_bucket_name(key.authority);
@@ -81,9 +74,9 @@ impl DynamicObjectStoreRegistry {
             }
             #[cfg(feature = "hdfs")]
             "hdfs" => {
-                let store = match self.config.hdfs() {
-                    Some(hdfs_config) => {
-                        HdfsObjectStore::with_config(url.as_str(), hdfs_config.clone())?
+                let store = match OBJECT_STORE_CONFIG.get() {
+                    Some(config) => {
+                        HdfsObjectStore::with_config(url.as_str(), config.hdfs.clone())?
                     }
                     None => HdfsObjectStore::with_url(url.as_str())?,
                 };

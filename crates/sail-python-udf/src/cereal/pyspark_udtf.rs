@@ -6,10 +6,10 @@ use datafusion_common::{plan_datafusion_err, Result};
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
-use sail_common::config::SparkUdfConfig;
 use sail_common::spec;
 
 use crate::cereal::{check_python_udf_version, PythonFunction};
+use crate::config::SparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
 
 #[derive(Debug)]

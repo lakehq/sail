@@ -2,7 +2,8 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use sail_common::config::{ConfigKeyValue, SparkUdfConfig};
+use sail_common::config::ConfigKeyValue;
+use sail_python_udf::config::SparkUdfConfig;
 
 use crate::formatter::{DefaultPlanFormatter, PlanFormatter};
 

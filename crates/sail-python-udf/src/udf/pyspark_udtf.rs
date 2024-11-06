@@ -17,12 +17,12 @@ use datafusion_expr::{Expr, TableType};
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyIterator, PyList, PyTuple};
-use sail_common::config::SparkUdfConfig;
 use sail_common::spec::TableFunctionDefinition;
 use sail_common::utils::cast_record_batch;
 
 use crate::cereal::pyspark_udtf::{deserialize_pyspark_udtf, PySparkUdtfObject};
 use crate::cereal::PythonFunction;
+use crate::config::SparkUdfConfig;
 use crate::error::PyUdfResult;
 use crate::udf::{
     build_pyarrow_record_batch_kwargs, build_pyarrow_to_pandas_kwargs,
