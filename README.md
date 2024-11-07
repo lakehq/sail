@@ -12,13 +12,13 @@ Currently, Sail features a drop-in replacement for Spark SQL and the Spark DataF
 Sail is available as a Python package on PyPI. You can install it using `pip`.
 
 ```bash
-# Quick install
 pip install pysail
 ```
 
+Alternatively, you can install Sail from source for better performance for your hardware architecture.
+You would need [rustup](https://rustup.rs/) and [protoc](https://protobuf.dev/) in your environment for this.
+
 ```bash
-# Install from source for best performance
-# rustup (https://rustup.rs/) and protoc are required
 env RUSTFLAGS="-C target-cpu=native" pip install pysail -v --no-binary pysail
 ```
 
@@ -28,6 +28,10 @@ You can follow the [Getting Started](https://docs.lakesail.com/sail/latest/guide
 
 The documentation of the latest Sail version can be found [here](https://docs.lakesail.com/sail/latest/).
 
+## Benchmark Results
+
+Check out our blog post, [Supercharge Spark: Quadruple Speed, Cut Costs by 94%](https://lakesail.com/blog/supercharge-spark/), for detailed benchmark results comparing Sail with Spark.
+
 ## Contributing
 
 Contributions are more than welcome!
@@ -36,10 +40,6 @@ Please submit GitHub issues for bug reports and feature requests.
 
 Feel free to create a pull request if you would like to make a code change.
 You can refer to the [development guide](https://docs.lakesail.com/sail/main/development/) to get started.
-
-## Sail vs. Spark Benchmark
-
-Check out our blog post, [Supercharge Spark: Quadruple Speed, Cut Costs by 94%](https://lakesail.com/blog/supercharge-spark/), for detailed benchmark results.
 
 ## Support
 

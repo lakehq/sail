@@ -8,4 +8,13 @@ name = "sail"
 path = "src/main.rs"
 
 [dependencies]
+sail-common = { path = "../sail-common" }
+sail-execution = { path = "../sail-execution" }
+sail-telemetry = { path = "../sail-telemetry" }
+sail-spark-connect = { path = "../sail-spark-connect" }
+
 clap = { workspace = true }
+tokio = { workspace = true }
+log = { workspace = true }
+fastrace = { workspace = true }
+pyo3 = { workspace = true }

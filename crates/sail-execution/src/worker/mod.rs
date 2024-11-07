@@ -1,5 +1,6 @@
 mod actor;
 mod client;
+pub(crate) mod entrypoint;
 mod event;
 mod flight_server;
 mod options;

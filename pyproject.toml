@@ -1,6 +1,6 @@
 [project]
 name = "pysail"
-version = "0.1.7"
+version = "0.2.0.dev0"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
@@ -154,6 +154,7 @@ packages = ["python/pysail"]
 packages = ["python/pysail"]
 
 [tool.ruff.lint.per-file-ignores]
+"crates/sail-cli/src/**/*.py" = ["INP001"]
 "python/pysail/docs/conf.py" = ["INP001"]
 "python/pysail/examples/**/*.py" = ["T201"]
 "python/pysail/tests/**/*.py" = ["S101"]
