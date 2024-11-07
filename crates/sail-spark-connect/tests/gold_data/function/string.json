@@ -437,7 +437,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: The array_concat function can only accept list as the args."
+        "success": "ok"
       }
     },
     {

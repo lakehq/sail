@@ -1,10 +1,11 @@
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::compute::concat_batches;
+use datafusion::prelude::SessionContext;
 use log::debug;
 use sail_common::spec;
+use sail_plan::resolve_and_execute_plan;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
@@ -13,7 +14,7 @@ use crate::error::{SparkError, SparkResult};
 use crate::executor::{
     read_stream, to_arrow_batch, Executor, ExecutorBatch, ExecutorMetadata, ExecutorOutput,
 };
-use crate::session::Session;
+use crate::session::SparkExtension;
 use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
@@ -99,18 +100,20 @@ enum ExecutePlanMode {
 }
 
 async fn handle_execute_plan(
-    session: Arc<Session>,
+    ctx: &SessionContext,
     plan: spec::Plan,
     metadata: ExecutorMetadata,
     mode: ExecutePlanMode,
 ) -> SparkResult<ExecutePlanResponseStream> {
+    let spark = SparkExtension::get(ctx)?;
     let operation_id = metadata.operation_id.clone();
-    let stream = session.execute_plan(plan).await?;
+    let plan = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
+    let stream = spark.job_runner().execute(ctx, plan).await?;
     let rx = match mode {
         ExecutePlanMode::Lazy => {
             let executor = Executor::new(metadata, stream);
             let rx = executor.start()?;
-            session.add_executor(executor)?;
+            spark.add_executor(executor)?;
             rx
         }
         ExecutePlanMode::EagerSilent => {
@@ -123,68 +126,69 @@ async fn handle_execute_plan(
         }
     };
     Ok(ExecutePlanResponseStream::new(
-        session.session_id().to_string(),
+        spark.session_id().to_string(),
         operation_id,
         rx,
     ))
 }
 
 pub(crate) async fn handle_execute_relation(
-    session: Arc<Session>,
+    ctx: &SessionContext,
     relation: Relation,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let plan = relation.try_into()?;
-    handle_execute_plan(session, plan, metadata, ExecutePlanMode::Lazy).await
+    handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::Lazy).await
 }
 
 pub(crate) async fn handle_execute_register_function(
-    session: Arc<Session>,
+    ctx: &SessionContext,
     udf: CommonInlineUserDefinedFunction,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let plan = spec::Plan::Command(spec::CommandPlan::new(spec::CommandNode::RegisterFunction(
         udf.try_into()?,
     )));
-    handle_execute_plan(session, plan, metadata, ExecutePlanMode::EagerSilent).await
+    handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
 }
 
 pub(crate) async fn handle_execute_write_operation(
-    session: Arc<Session>,
+    ctx: &SessionContext,
     write: WriteOperation,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let plan = spec::Plan::Command(spec::CommandPlan::new(spec::CommandNode::Write(
         write.try_into()?,
     )));
-    handle_execute_plan(session, plan, metadata, ExecutePlanMode::EagerSilent).await
+    handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
 }
 
 pub(crate) async fn handle_execute_create_dataframe_view(
-    session: Arc<Session>,
+    ctx: &SessionContext,
     view: CreateDataFrameViewCommand,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let plan = spec::Plan::Command(spec::CommandPlan::new(view.try_into()?));
-    handle_execute_plan(session, plan, metadata, ExecutePlanMode::EagerSilent).await
+    handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
 }
 
 pub(crate) async fn handle_execute_write_operation_v2(
-    session: Arc<Session>,
+    ctx: &SessionContext,
     write: WriteOperationV2,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let plan = spec::Plan::Command(spec::CommandPlan::new(spec::CommandNode::Write(
         write.try_into()?,
     )));
-    handle_execute_plan(session, plan, metadata, ExecutePlanMode::EagerSilent).await
+    handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
 }
 
 pub(crate) async fn handle_execute_sql_command(
-    session: Arc<Session>,
+    ctx: &SessionContext,
     sql: SqlCommand,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
+    let spark = SparkExtension::get(ctx)?;
     let relation = Relation {
         common: None,
         rel_type: Some(relation::RelType::Sql(sc::Sql {
@@ -197,7 +201,8 @@ pub(crate) async fn handle_execute_sql_command(
     let relation = match plan {
         spec::Plan::Query(_) => relation,
         command @ spec::Plan::Command(_) => {
-            let stream = session.execute_plan(command).await?;
+            let plan = resolve_and_execute_plan(ctx, spark.plan_config()?, command).await?;
+            let stream = spark.job_runner().execute(ctx, plan).await?;
             let schema = stream.schema();
             let data = read_stream(stream).await?;
             let data = concat_batches(&schema, data.iter())?;
@@ -219,14 +224,14 @@ pub(crate) async fn handle_execute_sql_command(
         tx.send(ExecutorOutput::complete()).await?;
     }
     Ok(ExecutePlanResponseStream::new(
-        session.session_id().to_string(),
+        spark.session_id().to_string(),
         metadata.operation_id,
         ReceiverStream::new(rx),
     ))
 }
 
 pub(crate) async fn handle_execute_write_stream_operation_start(
-    _session: Arc<Session>,
+    _ctx: &SessionContext,
     _start: WriteStreamOperationStart,
     _metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
@@ -234,7 +239,7 @@ pub(crate) async fn handle_execute_write_stream_operation_start(
 }
 
 pub(crate) async fn handle_execute_streaming_query_command(
-    _session: Arc<Session>,
+    _ctx: &SessionContext,
     _stream: StreamingQueryCommand,
     _metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
@@ -242,7 +247,7 @@ pub(crate) async fn handle_execute_streaming_query_command(
 }
 
 pub(crate) async fn handle_execute_get_resources_command(
-    _session: Arc<Session>,
+    _ctx: &SessionContext,
     _resource: GetResourcesCommand,
     _metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
@@ -250,7 +255,7 @@ pub(crate) async fn handle_execute_get_resources_command(
 }
 
 pub(crate) async fn handle_execute_streaming_query_manager_command(
-    _session: Arc<Session>,
+    _ctx: &SessionContext,
     _manager: StreamingQueryManagerCommand,
     _metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
@@ -258,19 +263,20 @@ pub(crate) async fn handle_execute_streaming_query_manager_command(
 }
 
 pub(crate) async fn handle_execute_register_table_function(
-    session: Arc<Session>,
+    ctx: &SessionContext,
     udtf: CommonInlineUserDefinedTableFunction,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let plan = spec::Plan::Command(spec::CommandPlan::new(
         spec::CommandNode::RegisterTableFunction(udtf.try_into()?),
     ));
-    handle_execute_plan(session, plan, metadata, ExecutePlanMode::EagerSilent).await
+    handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
 }
 
-pub(crate) async fn handle_interrupt_all(session: Arc<Session>) -> SparkResult<Vec<String>> {
+pub(crate) async fn handle_interrupt_all(ctx: &SessionContext) -> SparkResult<Vec<String>> {
+    let spark = SparkExtension::get(ctx)?;
     let mut results = vec![];
-    for executor in session.remove_all_executors()? {
+    for executor in spark.remove_all_executors()? {
         executor.pause_if_running().await?;
         results.push(executor.metadata.operation_id.clone());
     }
@@ -278,11 +284,12 @@ pub(crate) async fn handle_interrupt_all(session: Arc<Session>) -> SparkResult<V
 }
 
 pub(crate) async fn handle_interrupt_tag(
-    session: Arc<Session>,
+    ctx: &SessionContext,
     tag: String,
 ) -> SparkResult<Vec<String>> {
+    let spark = SparkExtension::get(ctx)?;
     let mut results = vec![];
-    for executor in session.remove_executors_by_tag(tag.as_str())? {
+    for executor in spark.remove_executors_by_tag(tag.as_str())? {
         executor.pause_if_running().await?;
         results.push(executor.metadata.operation_id.clone());
     }
@@ -290,10 +297,11 @@ pub(crate) async fn handle_interrupt_tag(
 }
 
 pub(crate) async fn handle_interrupt_operation_id(
-    session: Arc<Session>,
+    ctx: &SessionContext,
     operation_id: String,
 ) -> SparkResult<Vec<String>> {
-    match session.remove_executor(operation_id.as_str())? {
+    let spark = SparkExtension::get(ctx)?;
+    match spark.remove_executor(operation_id.as_str())? {
         Some(executor) => {
             executor.pause_if_running().await?;
             Ok(vec![executor.metadata.operation_id.clone()])
@@ -303,11 +311,12 @@ pub(crate) async fn handle_interrupt_operation_id(
 }
 
 pub(crate) async fn handle_reattach_execute(
-    session: Arc<Session>,
+    ctx: &SessionContext,
     operation_id: String,
     response_id: Option<String>,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    let executor = session
+    let spark = SparkExtension::get(ctx)?;
+    let executor = spark
         .get_executor(operation_id.as_str())?
         .ok_or_else(|| SparkError::invalid(format!("operation not found: {}", operation_id)))?;
     if !executor.metadata.reattachable {
@@ -320,20 +329,21 @@ pub(crate) async fn handle_reattach_execute(
     executor.release(response_id)?;
     let rx = executor.start()?;
     Ok(ExecutePlanResponseStream::new(
-        session.session_id().to_string(),
+        spark.session_id().to_string(),
         operation_id,
         rx,
     ))
 }
 
 pub(crate) async fn handle_release_execute(
-    session: Arc<Session>,
+    ctx: &SessionContext,
     operation_id: String,
     response_id: Option<String>,
 ) -> SparkResult<()> {
+    let spark = SparkExtension::get(ctx)?;
     // Some operations may not have an executor (e.g. DDL statements),
     // so it is a no-op if the executor is not found.
-    if let Some(executor) = session.get_executor(operation_id.as_str())? {
+    if let Some(executor) = spark.get_executor(operation_id.as_str())? {
         executor.release(response_id)?;
     }
     Ok(())

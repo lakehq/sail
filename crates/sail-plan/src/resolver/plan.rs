@@ -271,20 +271,40 @@ impl PlanResolver<'_> {
             QueryNode::ReplaceNa { .. } => {
                 return Err(PlanError::todo("replace"));
             }
-            QueryNode::StatSummary { .. } => {
-                return Err(PlanError::todo("summary"));
+            QueryNode::StatSummary { input, statistics } => {
+                self.resolve_query_summary(*input, vec![], statistics, state)
+                    .await?
             }
             QueryNode::StatCrosstab { .. } => {
                 return Err(PlanError::todo("crosstab"));
             }
-            QueryNode::StatDescribe { .. } => {
-                return Err(PlanError::todo("describe"));
+            QueryNode::StatDescribe { input, columns } => {
+                let statistics = vec![
+                    "count".to_string(),
+                    "mean".to_string(),
+                    "stddev".to_string(),
+                    "min".to_string(),
+                    "max".to_string(),
+                ];
+                self.resolve_query_summary(*input, columns, statistics, state)
+                    .await?
             }
-            QueryNode::StatCov { .. } => {
-                return Err(PlanError::todo("cov"));
+            QueryNode::StatCov {
+                input,
+                left_column,
+                right_column,
+            } => {
+                self.resolve_query_stat_cov(*input, left_column, right_column, state)
+                    .await?
             }
-            QueryNode::StatCorr { .. } => {
-                return Err(PlanError::todo("corr"));
+            QueryNode::StatCorr {
+                input,
+                left_column,
+                right_column,
+                method,
+            } => {
+                self.resolve_query_stat_corr(*input, left_column, right_column, method, state)
+                    .await?
             }
             QueryNode::StatApproxQuantile { .. } => {
                 return Err(PlanError::todo("approx quantile"));
@@ -748,12 +768,13 @@ impl PlanResolver<'_> {
             // use inner join type to build the schema for cross join
             JoinType::Cross => (plan::JoinType::Inner, true),
         };
-        let schema = Arc::new(build_join_schema(
+        let join_schema = Arc::new(build_join_schema(
             left.schema(),
             right.schema(),
             &join_type,
         )?);
-        if is_cross_join {
+
+        if is_cross_join || (join_condition.is_none() && using_columns.is_empty()) {
             if join_condition.is_some() {
                 return Err(PlanError::invalid("cross join with join condition"));
             }
@@ -766,43 +787,64 @@ impl PlanResolver<'_> {
             return Ok(LogicalPlan::CrossJoin(plan::CrossJoin {
                 left: Arc::new(left),
                 right: Arc::new(right),
-                schema,
+                schema: join_schema,
             }));
         }
-        // FIXME: resolve using columns
         // TODO: add more validation logic here and in the plan optimizer
-        // See `LogicalPlanBuilder` for details about such logic.
-        let (on, filter, join_constraint) = if join_condition.is_some() && using_columns.is_empty()
-        {
+        //  See `LogicalPlanBuilder` for details about such logic.
+        if join_condition.is_some() && using_columns.is_empty() {
             let condition = match join_condition {
-                Some(condition) => Some(self.resolve_expression(condition, &schema, state).await?),
+                Some(condition) => Some(
+                    self.resolve_expression(condition, &join_schema, state)
+                        .await?
+                        .unalias_nested()
+                        .data,
+                ),
                 None => None,
             };
-            (vec![], condition, plan::JoinConstraint::On)
+            let plan = LogicalPlanBuilder::from(left)
+                .join_on(right, join_type, condition)?
+                .build()?;
+            Ok(plan)
         } else if join_condition.is_none() && !using_columns.is_empty() {
+            let left_names = state.get_field_names(left.schema().inner())?;
+            let right_names = state.get_field_names(right.schema().inner())?;
             let on = using_columns
                 .into_iter()
                 .map(|name| {
-                    let column = Expr::Column(Column::new_unqualified(name));
-                    (column.clone(), column)
+                    let name: &str = (&name).into();
+                    let left_idx = left_names
+                        .iter()
+                        .position(|left_name| left_name.eq_ignore_ascii_case(name))
+                        .ok_or_else(|| {
+                            PlanError::invalid(format!("left column not found: {name}"))
+                        })?;
+                    let right_idx = right_names
+                        .iter()
+                        .position(|right_name| right_name.eq_ignore_ascii_case(name))
+                        .ok_or_else(|| {
+                            PlanError::invalid(format!("right column not found: {name}"))
+                        })?;
+                    let left_column = Column::from(left.schema().qualified_field(left_idx));
+                    let right_column = Column::from(right.schema().qualified_field(right_idx));
+                    Ok((Expr::Column(left_column), Expr::Column(right_column)))
                 })
-                .collect();
-            (on, None, plan::JoinConstraint::Using)
+                .collect::<PlanResult<Vec<(Expr, Expr)>>>()?;
+            Ok(LogicalPlan::Join(plan::Join {
+                left: Arc::new(left),
+                right: Arc::new(right),
+                on,
+                filter: None,
+                join_type,
+                join_constraint: plan::JoinConstraint::Using,
+                schema: join_schema,
+                null_equals_null: false,
+            }))
         } else {
             return Err(PlanError::invalid(
                 "expecting either join condition or using columns",
             ));
-        };
-        Ok(LogicalPlan::Join(plan::Join {
-            left: Arc::new(left),
-            right: Arc::new(right),
-            on,
-            filter,
-            join_type,
-            join_constraint,
-            schema,
-            null_equals_null: false,
-        }))
+        }
     }
 
     async fn resolve_query_set_operation(
@@ -817,21 +859,99 @@ impl PlanResolver<'_> {
             right,
             set_op_type,
             is_all,
-            by_name: _,
-            allow_missing_columns: _,
+            by_name,
+            allow_missing_columns,
         } = op;
-        // TODO: support set operation by name
         let left = self.resolve_query_plan(*left, state).await?;
         let right = self.resolve_query_plan(*right, state).await?;
         match set_op_type {
             SetOpType::Intersect => Ok(LogicalPlanBuilder::intersect(left, right, is_all)?),
             SetOpType::Union => {
-                if is_all {
-                    Ok(LogicalPlanBuilder::from(left).union(right)?.build()?)
+                let (left, right) = if by_name {
+                    let left_names = state.get_field_names(left.schema().inner())?;
+                    let right_names = state.get_field_names(right.schema().inner())?;
+                    let (mut left_reordered_columns, mut right_reordered_columns): (
+                        Vec<Expr>,
+                        Vec<Expr>,
+                    ) = left_names
+                        .iter()
+                        .enumerate()
+                        .map(|(left_idx, left_name)| {
+                            match right_names
+                                .iter()
+                                .position(|right_name| left_name.eq_ignore_ascii_case(right_name))
+                            {
+                                Some(right_idx) => Ok((
+                                    Expr::Column(Column::from(
+                                        left.schema().qualified_field(left_idx),
+                                    )),
+                                    Expr::Column(Column::from(
+                                        right.schema().qualified_field(right_idx),
+                                    )),
+                                )),
+                                None if allow_missing_columns => Ok((
+                                    Expr::Column(Column::from(
+                                        left.schema().qualified_field(left_idx),
+                                    )),
+                                    Expr::Literal(ScalarValue::Null)
+                                        .alias(state.register_field(left_name)),
+                                )),
+                                None => Err(PlanError::invalid(format!(
+                                    "right column not found: {left_name}"
+                                ))),
+                            }
+                        })
+                        .collect::<PlanResult<Vec<(Expr, Expr)>>>()?
+                        .into_iter()
+                        .unzip();
+                    if allow_missing_columns {
+                        let (left_extra_columns, right_extra_columns): (Vec<Expr>, Vec<Expr>) =
+                            right_names
+                                .into_iter()
+                                .enumerate()
+                                .filter(|(_, right_name)| {
+                                    !left_names
+                                        .iter()
+                                        .any(|left_name| left_name.eq_ignore_ascii_case(right_name))
+                                })
+                                .map(|(right_idx, right_name)| {
+                                    (
+                                        Expr::Literal(ScalarValue::Null)
+                                            .alias(state.register_field(right_name)),
+                                        Expr::Column(Column::from(
+                                            right.schema().qualified_field(right_idx),
+                                        )),
+                                    )
+                                })
+                                .collect::<Vec<(Expr, Expr)>>()
+                                .into_iter()
+                                .unzip();
+                        right_reordered_columns.extend(right_extra_columns);
+                        left_reordered_columns.extend(left_extra_columns);
+                        (
+                            project(left, left_reordered_columns)?,
+                            project(right, right_reordered_columns)?,
+                        )
+                    } else {
+                        (left, project(right, right_reordered_columns)?)
+                    }
                 } else {
-                    Ok(LogicalPlanBuilder::from(left)
-                        .union_distinct(right)?
-                        .build()?)
+                    (left, right)
+                };
+                let (left, right) = (Arc::new(left), Arc::new(right));
+                let union_schema = left.schema().clone();
+                if is_all {
+                    Ok(LogicalPlan::Union(plan::Union {
+                        inputs: vec![left, right],
+                        schema: union_schema,
+                    }))
+                } else {
+                    Ok(LogicalPlan::Distinct(plan::Distinct::All(Arc::new(
+                        LogicalPlan::Union(plan::Union {
+                            inputs: vec![left, right],
+                            schema: union_schema,
+                        }),
+                    ))))
                 }
             }
             SetOpType::Except => Ok(LogicalPlanBuilder::except(left, right, is_all)?),
@@ -846,18 +966,63 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
-        let schema = input.schema();
-        let expr = self.resolve_sort_orders(order, true, schema, state).await?;
+        let sorts = self
+            .resolve_query_sort_orders_by_plan(&input, &order, state)
+            .await?;
         if is_global {
-            Ok(LogicalPlan::Sort(plan::Sort {
-                expr,
-                input: Arc::new(input),
-                fetch: None,
-            }))
+            Ok(LogicalPlanBuilder::from(input).sort(sorts)?.build()?)
         } else {
             Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(SortWithinPartitionsNode::new(Arc::new(input), expr, None)),
+                node: Arc::new(SortWithinPartitionsNode::new(Arc::new(input), sorts, None)),
             }))
+        }
+    }
+
+    async fn resolve_query_sort_orders_by_plan(
+        &self,
+        plan: &LogicalPlan,
+        sorts: &[spec::SortOrder],
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<Sort>> {
+        let mut results: Vec<Sort> = Vec::with_capacity(sorts.len());
+        for sort in sorts {
+            let expr = self
+                .resolve_query_sort_order_by_plan(plan, sort, state)
+                .await?;
+            results.push(expr);
+        }
+        Ok(results)
+    }
+
+    #[async_recursion]
+    async fn resolve_query_sort_order_by_plan(
+        &self,
+        plan: &LogicalPlan,
+        sort: &spec::SortOrder,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Sort> {
+        let sort_expr = self
+            .resolve_sort_order(sort.clone(), true, plan.schema(), state)
+            .await;
+        match sort_expr {
+            Ok(sort_expr) => Ok(sort_expr),
+            Err(_) => {
+                let mut sorts = Vec::with_capacity(plan.inputs().len());
+                for input_plan in plan.inputs() {
+                    let sort_expr = self
+                        .resolve_query_sort_order_by_plan(input_plan, sort, state)
+                        .await?;
+                    sorts.push(sort_expr);
+                }
+                if sorts.len() != 1 {
+                    Err(PlanError::invalid(format!(
+                        "Expected one sort expression, found: {}. Sorts: {sorts:?}",
+                        sorts.len()
+                    )))
+                } else {
+                    Ok(sorts.one()?)
+                }
+            }
         }
     }
 
@@ -949,7 +1114,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let batches = if let Some(data) = data {
-            read_record_batches(data)?
+            read_record_batches(&data)?
         } else {
             vec![]
         };
@@ -1176,16 +1341,31 @@ impl PlanResolver<'_> {
         for col in columns {
             if let spec::Expr::UnresolvedAttribute { name, plan_id } = col {
                 let name: Vec<String> = name.into();
-                let name = name
-                    .one()
-                    .map_err(|_| PlanError::invalid("expecting a single column name to drop"))?;
                 if let Some(plan_id) = plan_id {
+                    let name = if name.len() > 1 {
+                        // In `crates/sail-spark-connect/src/proto/expression`,
+                        // unparsed identifiers with periods are split into multiple strings for `UnresolvedAttribute`.
+                        // Recombine them, as column names can contain periods.
+                        name.join(".")
+                    } else {
+                        name.one().map_err(|_| {
+                            PlanError::invalid("expecting a single column name to drop")
+                        })?
+                    };
                     let field = state
                         .get_resolved_field_name_in_plan(plan_id, &name)?
                         .clone();
                     excluded_fields.push(field)
                 } else {
-                    excluded_names.push(name);
+                    let name = name.last().ok_or_else(|| {
+                        PlanError::invalid("expecting at least one column name to drop")
+                    })?;
+                    // Ensure there is only one column name.
+                    // This applies only to columns given as expressions.
+                    let column = self.maybe_get_resolved_column(schema, name, state)?;
+                    if let Some(column) = column {
+                        excluded_fields.push(column.name().into());
+                    }
                 }
             } else {
                 return Err(PlanError::invalid("expecting column name to drop"));
@@ -1495,6 +1675,10 @@ impl PlanResolver<'_> {
             } else {
                 self.resolve_query_plan(query, state).await?
             };
+            let plan = LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
+                Arc::new(plan),
+                reference.clone(),
+            )?);
             state.insert_cte(reference, plan);
         }
         self.resolve_query_plan(input, state).await
@@ -1584,7 +1768,7 @@ impl PlanResolver<'_> {
             true => ShowStringStyle::Vertical,
             false => ShowStringStyle::Default,
         };
-        let format = ShowStringFormat::new("show_string".to_string(), style, truncate);
+        let format = ShowStringFormat::new(style, truncate);
         let names = state.get_field_names(input.schema().inner())?;
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(ShowStringNode::try_new(
@@ -1592,6 +1776,7 @@ impl PlanResolver<'_> {
                 names,
                 num_rows,
                 format,
+                "show_string".to_string(),
             )?),
         }))
     }
@@ -1607,8 +1792,7 @@ impl PlanResolver<'_> {
             truncate,
         } = html;
         let input = self.resolve_query_plan(*input, state).await?;
-        let format =
-            ShowStringFormat::new("html_string".to_string(), ShowStringStyle::Html, truncate);
+        let format = ShowStringFormat::new(ShowStringStyle::Html, truncate);
         let names = state.get_field_names(input.schema().inner())?;
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(ShowStringNode::try_new(
@@ -1616,6 +1800,7 @@ impl PlanResolver<'_> {
                 names,
                 num_rows,
                 format,
+                "html_string".to_string(),
             )?),
         }))
     }
@@ -2036,6 +2221,10 @@ impl PlanResolver<'_> {
             definition,
         } = definition;
         let input = self.resolve_query_plan(*input, state).await?;
+        let input = LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
+            Arc::new(input),
+            self.resolve_table_reference(&view)?,
+        )?);
         let fields = match columns {
             Some(columns) => columns.into_iter().map(String::from).collect(),
             None => state.get_field_names(input.schema().inner())?,
@@ -2470,6 +2659,10 @@ impl PlanResolver<'_> {
         Ok(LogicalPlan::Statement(statement))
     }
 
+    /// All resolved plans must have "resolved columns".
+    /// If you define new fields in the plan, register the field in the state and use the "resolved field name" to alias the newly created field.
+    /// If you fetch an existing field in the plan, you likely have the "unresolved" field name from the spec.
+    /// Convert the unresolved field name to the "resolved field name" using the state.
     fn verify_query_plan(&self, plan: &LogicalPlan, state: &PlanResolverState) -> PlanResult<()> {
         let invalid = plan
             .schema()
@@ -2538,6 +2731,78 @@ impl PlanResolver<'_> {
                 }
             })
             .collect()
+    }
+
+    async fn resolve_query_stat_cov(
+        &self,
+        input: spec::QueryPlan,
+        left_column: spec::Identifier,
+        right_column: spec::Identifier,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let input = self.resolve_query_plan(input, state).await?;
+        let covar_samp = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+            func: datafusion::functions_aggregate::covariance::covar_samp_udaf(),
+            args: vec![
+                Expr::Column(self.get_resolved_column(
+                    input.schema(),
+                    (&left_column).into(),
+                    state,
+                )?),
+                Expr::Column(self.get_resolved_column(
+                    input.schema(),
+                    (&right_column).into(),
+                    state,
+                )?),
+            ],
+            distinct: false,
+            filter: None,
+            order_by: None,
+            null_treatment: None,
+        })
+        .alias(state.register_field("cov"));
+        Ok(LogicalPlanBuilder::from(input)
+            .aggregate(Vec::<Expr>::new(), vec![covar_samp])?
+            .build()?)
+    }
+
+    async fn resolve_query_stat_corr(
+        &self,
+        input: spec::QueryPlan,
+        left_column: spec::Identifier,
+        right_column: spec::Identifier,
+        method: String,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        if !method.eq_ignore_ascii_case("pearson") {
+            return Err(PlanError::unsupported(format!(
+                "Unsupported correlation method: {method}. Currently only Pearson is supported.",
+            )));
+        }
+        let input = self.resolve_query_plan(input, state).await?;
+        let corr = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+            func: datafusion::functions_aggregate::correlation::corr_udaf(),
+            args: vec![
+                Expr::Column(self.get_resolved_column(
+                    input.schema(),
+                    (&left_column).into(),
+                    state,
+                )?),
+                Expr::Column(self.get_resolved_column(
+                    input.schema(),
+                    (&right_column).into(),
+                    state,
+                )?),
+            ],
+            distinct: false,
+            filter: None,
+            order_by: None,
+            null_treatment: None,
+        })
+        .alias(state.register_field("corr"));
+        Ok(LogicalPlanBuilder::from(input)
+            .aggregate(Vec::<Expr>::new(), vec![corr])?
+            .build()?)
     }
 
     fn rewrite_aggregate(

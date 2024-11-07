@@ -86,3 +86,75 @@ pub fn get_pyarrow_schema<'py>(
 pub fn get_pyarrow_table_function(py: Python) -> PyUdfResult<Bound<PyAny>> {
     Ok(PyModule::import_bound(py, intern!(py, "pyarrow"))?.getattr(intern!(py, "table"))?)
 }
+
+/// In Arrow all data types are nullable, meaning they support storing missing values. In pandas,
+/// however, not all data types have support for missing data. Most notably, the default integer
+/// data types do not, and will get casted to float when missing values are introduced. Therefore,
+/// when an Arrow array or table gets converted to pandas, integer columns will become float when
+/// missing values are present.
+/// This function returns use all currently supported nullable dtypes by pandas.
+/// See: https://arrow.apache.org/docs/python/pandas.html#nullable-types
+pub fn build_pyarrow_to_pandas_kwargs(py: Python<'_>) -> PyUdfResult<Bound<'_, PyDict>> {
+    let pa = PyModule::import_bound(py, intern!(py, "pyarrow"))?;
+    let pd = PyModule::import_bound(py, intern!(py, "pandas"))?;
+
+    let kwargs = PyDict::new_bound(py);
+    let dtype_mapping = PyDict::new_bound(py);
+    let mappings = [
+        (
+            pa.getattr(intern!(py, "int8"))?.call0()?,
+            pd.getattr(intern!(py, "Int8Dtype"))?.call0()?,
+        ),
+        (
+            pa.getattr(intern!(py, "int16"))?.call0()?,
+            pd.getattr(intern!(py, "Int16Dtype"))?.call0()?,
+        ),
+        (
+            pa.getattr(intern!(py, "int32"))?.call0()?,
+            pd.getattr(intern!(py, "Int32Dtype"))?.call0()?,
+        ),
+        (
+            pa.getattr(intern!(py, "int64"))?.call0()?,
+            pd.getattr(intern!(py, "Int64Dtype"))?.call0()?,
+        ),
+        (
+            pa.getattr(intern!(py, "uint8"))?.call0()?,
+            pd.getattr(intern!(py, "UInt8Dtype"))?.call0()?,
+        ),
+        (
+            pa.getattr(intern!(py, "uint16"))?.call0()?,
+            pd.getattr(intern!(py, "UInt16Dtype"))?.call0()?,
+        ),
+        (
+            pa.getattr(intern!(py, "uint32"))?.call0()?,
+            pd.getattr(intern!(py, "UInt32Dtype"))?.call0()?,
+        ),
+        (
+            pa.getattr(intern!(py, "uint64"))?.call0()?,
+            pd.getattr(intern!(py, "UInt64Dtype"))?.call0()?,
+        ),
+        (
+            pa.getattr(intern!(py, "bool_"))?.call0()?,
+            pd.getattr(intern!(py, "BooleanDtype"))?.call0()?,
+        ),
+        (
+            pa.getattr(intern!(py, "float32"))?.call0()?,
+            pd.getattr(intern!(py, "Float32Dtype"))?.call0()?,
+        ),
+        (
+            pa.getattr(intern!(py, "float64"))?.call0()?,
+            pd.getattr(intern!(py, "Float64Dtype"))?.call0()?,
+        ),
+        (
+            pa.getattr(intern!(py, "string"))?.call0()?,
+            pd.getattr(intern!(py, "StringDtype"))?.call0()?,
+        ),
+    ];
+    for (key, value) in mappings {
+        dtype_mapping.set_item(key, value)?;
+    }
+    kwargs.set_item("types_mapper", dtype_mapping.getattr(intern!(py, "get"))?)?;
+    // https://arrow.apache.org/docs/python/pandas.html#reducing-memory-use-in-table-to-pandas
+    kwargs.set_item("split_blocks", true)?;
+    Ok(kwargs)
+}

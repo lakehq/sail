@@ -39,19 +39,19 @@ def udf_add():
 
 
 @pytest.fixture(scope="module")
-def df(spark):
-    return spark.createDataFrame(
+def df(sail):
+    return sail.createDataFrame(
         [Row(a=1, b=Row(foo="hello")), Row(a=2, b=Row(foo="world"))],
         schema="a integer, b struct<foo: string>",
     )
 
 
 @pytest.fixture(scope="module")
-def df_view(spark, df):
+def df_view(sail, df):
     name = "df"
     df.createOrReplaceTempView(name)
     yield name
-    spark.catalog.dropTempView(name)
+    sail.catalog.dropTempView(name)
 
 
 def test_data_frame_schema(df):
@@ -63,26 +63,26 @@ def test_data_frame_schema(df):
     )
 
 
-def test_range(spark):
-    assert_frame_equal(spark.range(-1).toPandas(), pd.DataFrame({"id": []}, dtype="int64"))
+def test_range(sail):
+    assert_frame_equal(sail.range(-1).toPandas(), pd.DataFrame({"id": []}, dtype="int64"))
     assert_frame_equal(
-        spark.range(10, 0, -2, 3).toPandas().sort_values("id").reset_index(drop=True),
+        sail.range(10, 0, -2, 3).toPandas().sort_values("id").reset_index(drop=True),
         pd.DataFrame({"id": [2, 4, 6, 8, 10]}, dtype="int64"),
     )
 
 
-def test_create_data_frame(spark):
+def test_create_data_frame(sail):
     assert_frame_equal(
-        spark.createDataFrame([1, 2, 3], schema="long").toPandas(), pd.DataFrame({"value": [1, 2, 3]}, dtype="int64")
+        sail.createDataFrame([1, 2, 3], schema="long").toPandas(), pd.DataFrame({"value": [1, 2, 3]}, dtype="int64")
     )
     assert_frame_equal(
-        spark.createDataFrame([(1, "a"), (2, "b")], schema="a integer, t string").toPandas(),
+        sail.createDataFrame([(1, "a"), (2, "b")], schema="a integer, t string").toPandas(),
         pd.DataFrame({"a": [1, 2], "t": ["a", "b"]}).astype({"a": "int32"}),
     )
 
 
-def test_schema_simple_string(spark):
-    df = spark.range(1).selectExpr("struct(id, 1, 2.0D AS foo, id) as struct")
+def test_schema_simple_string(sail):
+    df = sail.range(1).selectExpr("struct(id, 1, 2.0D AS foo, id) as struct")
     assert df.schema.simpleString() == "struct<struct:struct<id:bigint,col2:int,foo:double,id:bigint>>"
 
 
@@ -207,29 +207,29 @@ def test_data_frame_operations(df):
     )
 
 
-def test_sql(spark):
+def test_sql(sail):
     assert_frame_equal(
-        spark.sql("SELECT 1").alias("a").select("a.*").toPandas(), pd.DataFrame({"1": [1]}, dtype="int32")
+        sail.sql("SELECT 1").alias("a").select("a.*").toPandas(), pd.DataFrame({"1": [1]}, dtype="int32")
     )
     assert_frame_equal(
-        spark.sql("SELECT 1").alias("a").selectExpr("a.*").toPandas(), pd.DataFrame({"1": [1]}, dtype="int32")
+        sail.sql("SELECT 1").alias("a").selectExpr("a.*").toPandas(), pd.DataFrame({"1": [1]}, dtype="int32")
     )
 
 
-def test_sql_temp_view(spark, df, df_view):
-    assert_frame_equal(spark.sql(f"SELECT * FROM {df_view}").toPandas(), df.toPandas())  # noqa: S608
+def test_sql_temp_view(sail, df, df_view):
+    assert_frame_equal(sail.sql(f"SELECT * FROM {df_view}").toPandas(), df.toPandas())  # noqa: S608
 
 
-def test_write(spark, df, tmpdir):
+def test_write(sail, df, tmpdir):
     path = str(tmpdir.join("df.json"))
     df.write.json(path)
-    out = spark.read.json(path)
+    out = sail.read.json(path)
     assert_frame_equal(df.toPandas(), out.toPandas(), check_dtype=False)
 
 
-def test_explode(spark):
+def test_explode(sail):
     assert_frame_equal(
-        spark.createDataFrame(
+        sail.createDataFrame(
             [
                 Row(a=[1, 2, None], b={"m": 3.0, "n": 4.0}, c="foo"),
                 Row(a=[], b={"p": 1.0}, c="bar"),
@@ -253,7 +253,7 @@ def test_explode(spark):
     )
 
     assert_frame_equal(
-        spark.createDataFrame([Row(a=[[1, 2], None], b={"m": 3.0, "n": 4.0})])
+        sail.createDataFrame([Row(a=[[1, 2], None], b={"m": 3.0, "n": 4.0})])
         .select(
             F.posexplode_outer(F.explode("a")).alias("p", "a"),
             F.posexplode("b").alias("q", "k", "v"),
@@ -290,17 +290,24 @@ def test_udf(df, udf_add_one, udf_add_x_y, udf_add):
     )
 
 
-def test_sql_with_clause(spark, df, df_view):
+def test_sql_with_clause(sail, df, df_view):
     assert_frame_equal(
-        spark.sql(f"WITH test AS (SELECT * FROM {df_view}) SELECT * FROM test").toPandas(),  # noqa: S608
+        sail.sql(f"WITH test AS (SELECT * FROM {df_view}) SELECT * FROM test").toPandas(),  # noqa: S608
         df.toPandas(),
     )
 
 
-@pytest.mark.skip(reason="not working")
-def test_sql_parameters(spark):
-    spark.sql("SELECT 1 AS text WHERE $1 > 'a'", ["b"]).toPandas()
-    spark.sql("SELECT 1 AS text WHERE $foo > 'a'", {"foo": "b"}).toPandas()
+def test_sql_parameters(sail):
+    actual = sail.sql("SELECT 1 AS text WHERE $1 > 'a'", ["b"]).toPandas()
+    expected = pd.DataFrame({"text": [1]}).astype({"text": "int32"})
+    assert_frame_equal(actual, expected)
+    actual = sail.sql("SELECT 1 AS text WHERE $foo > 'a'", {"foo": "b"}).toPandas()
+    expected = pd.DataFrame({"text": [1]}).astype({"text": "int32"})
+    assert_frame_equal(actual, expected)
+
+
+def test_save_table(df):
+    df.write.saveAsTable("meow")
 
 
 @pytest.mark.skip(reason="not working")
@@ -310,10 +317,5 @@ def test_select_expression(df):
 
 
 @pytest.mark.skip(reason="not implemented")
-def test_save_table(df):
-    df.write.saveAsTable("meow")
-
-
-@pytest.mark.skip(reason="not implemented")
-def test_stream(spark):
-    spark.readStream.format("rate").load().writeStream.format("console").start()
+def test_stream(sail):
+    sail.readStream.format("rate").load().writeStream.format("console").start()

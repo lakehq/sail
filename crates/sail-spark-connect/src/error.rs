@@ -6,6 +6,7 @@ use datafusion::common::DataFusionError;
 use prost::{DecodeError, UnknownEnumValue};
 use pyo3::PyErr;
 use sail_common::error::CommonError;
+use sail_execution::error::ExecutionError;
 use sail_plan::error::PlanError;
 use sail_sql::error::SqlError;
 use thiserror::Error;
@@ -38,6 +39,8 @@ pub enum SparkError {
     NotSupported(String),
     #[error("internal error: {0}")]
     InternalError(String),
+    #[error("analysis error: {0}")]
+    AnalysisError(String),
 }
 
 impl SparkError {
@@ -102,6 +105,20 @@ impl From<PlanError> for SparkError {
             PlanError::NotSupported(message) => SparkError::NotSupported(message),
             PlanError::InternalError(message) => SparkError::InternalError(message),
             PlanError::NotImplemented(message) => SparkError::NotImplemented(message),
+            PlanError::AnalysisError(message) => SparkError::AnalysisError(message),
+        }
+    }
+}
+
+impl From<ExecutionError> for SparkError {
+    fn from(value: ExecutionError) -> Self {
+        match value {
+            ExecutionError::DataFusionError(e) => SparkError::DataFusionError(e),
+            ExecutionError::InvalidArgument(e) => SparkError::InvalidArgument(e),
+            ExecutionError::IoError(e) => SparkError::IoError(e),
+            ExecutionError::TonicTransportError(e) => SparkError::InternalError(e.to_string()),
+            ExecutionError::TonicStatusError(e) => SparkError::InternalError(e.to_string()),
+            ExecutionError::InternalError(e) => SparkError::InternalError(e),
         }
     }
 }
@@ -307,6 +324,7 @@ impl From<SparkError> for Status {
             SparkError::NotImplemented(s) | SparkError::NotSupported(s) => {
                 SparkThrowable::UnsupportedOperationException(s).into()
             }
+            SparkError::AnalysisError(s) => SparkThrowable::AnalysisException(s).into(),
             e @ SparkError::SendError(_) => Status::cancelled(e.to_string()),
             e @ SparkError::InternalError(_) => Status::internal(e.to_string()),
         }

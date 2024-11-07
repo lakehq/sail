@@ -1,17 +1,23 @@
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use arrow::array::RecordBatch;
     use arrow::error::ArrowError;
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
+    use sail_common::config::AppConfig;
     use sail_common::tests::test_gold_set;
-    use sail_plan::object_store::ObjectStoreConfig;
+    use sail_plan::resolve_and_execute_plan;
     use serde::{Deserialize, Serialize};
 
     use crate::error::{SparkError, SparkResult};
+    use crate::executor::read_stream;
     use crate::proto::data_type_json::JsonDataType;
-    use crate::session::Session;
+    use crate::session::SparkExtension;
+    use crate::session_manager::{SessionKey, SessionManager};
+    use crate::spark::connect::relation::RelType;
+    use crate::spark::connect::{Relation, Sql};
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -48,16 +54,32 @@ mod tests {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        let session = Session::try_new(
-            None,
-            "test".to_string(),
-            Arc::new(ObjectStoreConfig::default()),
-        )?;
+        let config = AppConfig::load()?;
+        let session_manager = SessionManager::new(Arc::new(config));
+        let session_key = SessionKey {
+            user_id: None,
+            session_id: "test".to_string(),
+        };
+        let context = session_manager.get_or_create_session_context(session_key)?;
         Ok(test_gold_set(
             "tests/gold_data/function/*.json",
             |example: FunctionExample| -> SparkResult<String> {
-                let result =
-                    rt.block_on(async { session.execute_query(example.query.as_str()).await });
+                let relation = Relation {
+                    common: None,
+                    rel_type: Some(RelType::Sql(Sql {
+                        query: example.query,
+                        args: HashMap::new(),
+                        pos_args: vec![],
+                    })),
+                };
+                let plan = relation.try_into()?;
+                let result = rt.block_on(async {
+                    let spark = SparkExtension::get(&context)?;
+                    let plan =
+                        resolve_and_execute_plan(&context, spark.plan_config()?, plan).await?;
+                    let stream = spark.job_runner().execute(&context, plan).await?;
+                    read_stream(stream).await
+                });
                 // TODO: validate the result against the expected output
                 // TODO: handle non-deterministic results and error messages
                 match result {

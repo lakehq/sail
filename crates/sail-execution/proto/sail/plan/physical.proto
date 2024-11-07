@@ -1,0 +1,116 @@
+syntax = "proto3";
+
+package sail.plan;
+
+// All DataFusion data structures are represented as opaque bytes.
+// The encoding and decoding of these data structures are handled
+// in the code.
+// We do not explicitly use the DataFusion message types since there may be
+// breaking changes across DataFusion versions, and it is difficult to
+// keep the proto definitions in sync with the DataFusion proto crate.
+
+message ExtendedPhysicalPlanNode {
+  oneof NodeKind {
+    RangeExecNode range = 1;
+    ShowStringExecNode show_string = 2;
+    ShuffleReadExecNode shuffle_read = 3;
+    ShuffleWriteExecNode shuffle_write = 4;
+    // TODO: This can be removed once it is supported by DataFusion.
+    MemoryExecNode memory = 101;
+  }
+}
+
+message RangeExecNode {
+  int64 start = 1;
+  int64 end = 2;
+  int64 step = 3;
+  uint64 num_partitions = 4;
+  bytes schema = 5;
+}
+
+message ShowStringExecNode {
+  bytes input = 1;
+  repeated string names = 2;
+  uint64 limit = 3;
+  ShowStringStyle style = 4;
+  uint64 truncate = 5;
+  bytes schema = 6;
+}
+
+enum ShowStringStyle {
+  SHOW_STRING_STYLE_DEFAULT = 0;
+  SHOW_STRING_STYLE_VERTICAL = 1;
+  SHOW_STRING_STYLE_HTML = 2;
+}
+
+message MemoryExecNode {
+  repeated bytes partitions = 1;
+  bytes schema = 2;
+  optional PhysicalProjection projection = 3;
+  // TODO: `sort_information` and `show_sizes` are missing
+  //   since there is no getter for them in the node.
+}
+
+message PhysicalProjection {
+  repeated uint64 columns = 1;
+}
+
+message ShuffleReadExecNode {
+  uint64 stage = 1;
+  bytes schema = 2;
+  bytes partitioning = 3;
+  repeated TaskReadLocationList locations = 4;
+}
+
+message TaskReadLocationList {
+  repeated TaskReadLocation locations = 1;
+}
+
+message TaskReadLocation {
+  oneof Location {
+    TaskReadLocationWorker worker = 1;
+    TaskReadLocationRemote remote = 2;
+  }
+}
+
+message TaskReadLocationWorker {
+  uint64 worker_id = 1;
+  string host = 2;
+  uint32 port = 3;
+  string channel = 4;
+}
+
+message TaskReadLocationRemote {
+  string uri = 1;
+}
+
+message ShuffleWriteExecNode {
+  uint64 stage = 1;
+  bytes plan = 2;
+  bytes partitioning = 3;
+  repeated TaskWriteLocationList locations = 4;
+}
+
+message TaskWriteLocationList {
+  repeated TaskWriteLocation locations = 1;
+}
+
+message TaskWriteLocation {
+  oneof Location {
+    TaskWriteLocationMemory memory = 1;
+    TaskWriteLocationDisk disk = 2;
+    TaskWriteLocationRemote remote = 3;
+  }
+}
+
+message TaskWriteLocationMemory {
+  string channel = 1;
+}
+
+message TaskWriteLocationDisk {
+  string channel = 1;
+}
+
+message TaskWriteLocationRemote {
+  string uri = 1;
+}

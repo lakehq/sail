@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
@@ -13,6 +13,7 @@ use datafusion_expr::expr::PlannedReplaceSelectItem;
 use datafusion_expr::{
     expr, expr_fn, window_frame, AggregateUDF, ExprSchemable, Operator, ScalarUDF,
 };
+use log::debug;
 use num_traits::Float;
 use sail_common::spec;
 use sail_common::spec::PySparkUdfType;
@@ -637,11 +638,12 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let candidates =
             self.resolve_expression_attribute_candidates(&name, plan_id, schema, state)?;
-        if candidates.len() > 1 {
-            return plan_err!("ambiguous attribute: {:?}", name)?;
-        }
         if !candidates.is_empty() {
-            let (name, _, column) = candidates.one()?;
+            if candidates.len() > 1 {
+                // FIXME: This is a temporary hack to handle ambiguous attributes.
+                debug!("ambiguous attribute: name: {name:?}, candidates: {candidates:?}");
+            }
+            let ((name, _, column), _candidates) = candidates.at_least_one()?;
             return Ok(NamedExpr::new(vec![name], expr::Expr::Column(column)));
         }
         let candidates = if let Some(schema) = state.get_outer_query_schema().cloned() {
@@ -650,7 +652,7 @@ impl PlanResolver<'_> {
             vec![]
         };
         if candidates.len() > 1 {
-            return plan_err!("ambiguous outer attribute: {:?}", name)?;
+            return plan_err!("ambiguous outer attribute: {name:?}")?;
         }
         if !candidates.is_empty() {
             let (name, dt, column) = candidates.one()?;
@@ -659,7 +661,7 @@ impl PlanResolver<'_> {
                 expr::Expr::OuterReferenceColumn(dt, column),
             ));
         }
-        plan_err!("cannot resolve attribute: {:?}", name)?
+        plan_err!("cannot resolve attribute: {name:?}")?
     }
 
     fn resolve_expression_attribute_candidates(
@@ -694,9 +696,12 @@ impl PlanResolver<'_> {
             schema
                 .iter()
                 .filter_map(|(qualifier, field)| {
-                    if state.get_field_name(field.name()).is_ok_and(|f| f == last)
+                    if state
+                        .get_field_name(field.name())
+                        .is_ok_and(|f| f.eq_ignore_ascii_case(last))
                         && (name.len() == 1
-                            || name.len() == 2 && qualifier.is_some_and(|q| q.table() == first))
+                            || name.len() == 2
+                                && qualifier.is_some_and(|q| q.table().eq_ignore_ascii_case(first)))
                     {
                         Some((
                             last.clone(),
@@ -1061,12 +1066,13 @@ impl PlanResolver<'_> {
             .transpose()?;
         let except = wildcard_options
             .except_columns
-            .map(|mut x| {
+            .map(|x| {
                 let except = if x.len() > 1 {
-                    let first_element = x.pop().ok_or_else(|| {
+                    let mut deque = VecDeque::from(x);
+                    let first_element = deque.pop_front().ok_or_else(|| {
                         PlanError::invalid("except columns must have at least one column")
                     })?;
-                    let additional_elements = x.into_iter().map(df_ast::Ident::new).collect();
+                    let additional_elements = deque.into_iter().map(df_ast::Ident::new).collect();
                     df_ast::ExceptSelectItem {
                         first_element: df_ast::Ident::new(first_element),
                         additional_elements,
@@ -1598,15 +1604,29 @@ impl PlanResolver<'_> {
         let expr = self.resolve_expression(expr, schema, state).await?;
         let low = self.resolve_expression(low, schema, state).await?;
         let high = self.resolve_expression(high, schema, state).await?;
-        Ok(NamedExpr::new(
-            vec!["between".to_string()],
-            expr::Expr::Between(expr::Between::new(
-                Box::new(expr),
-                negated,
-                Box::new(low),
-                Box::new(high),
-            )),
-        ))
+
+        // DataFusion's BETWEEN operator has a bug, so we construct the expression manually.
+        let greater_eq = expr::Expr::BinaryExpr(expr::BinaryExpr::new(
+            Box::new(expr.clone()),
+            Operator::GtEq,
+            Box::new(low),
+        ));
+        let less_eq = expr::Expr::BinaryExpr(expr::BinaryExpr::new(
+            Box::new(expr),
+            Operator::LtEq,
+            Box::new(high),
+        ));
+        let between_expr = expr::Expr::BinaryExpr(expr::BinaryExpr::new(
+            Box::new(greater_eq),
+            Operator::And,
+            Box::new(less_eq),
+        ));
+        let between_expr = if negated {
+            expr::Expr::Not(Box::new(between_expr))
+        } else {
+            between_expr
+        };
+        Ok(NamedExpr::new(vec!["between".to_string()], between_expr))
     }
 
     async fn resolve_expression_is_distinct_from(

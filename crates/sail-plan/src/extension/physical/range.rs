@@ -14,17 +14,17 @@ use crate::extension::logical::Range;
 
 const RANGE_BATCH_SIZE: usize = 1024;
 
-#[derive(Debug)]
-pub(crate) struct RangeExec {
+#[derive(Debug, Clone)]
+pub struct RangeExec {
     range: Range,
     num_partitions: usize,
     schema: SchemaRef,
-    cache: PlanProperties,
+    properties: PlanProperties,
 }
 
 impl RangeExec {
     pub fn new(range: Range, num_partitions: usize, schema: SchemaRef) -> Self {
-        let cache = PlanProperties::new(
+        let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             Partitioning::UnknownPartitioning(num_partitions),
             ExecutionMode::Bounded,
@@ -33,8 +33,16 @@ impl RangeExec {
             range,
             num_partitions,
             schema,
-            cache,
+            properties,
         }
+    }
+
+    pub fn range(&self) -> &Range {
+        &self.range
+    }
+
+    pub fn num_partitions(&self) -> usize {
+        self.num_partitions
     }
 }
 
@@ -58,7 +66,7 @@ impl ExecutionPlan for RangeExec {
     }
 
     fn properties(&self) -> &PlanProperties {
-        &self.cache
+        &self.properties
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {

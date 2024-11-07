@@ -1,5 +1,6 @@
 pub(crate) mod array;
 pub(crate) mod array_min_max;
+mod datetime_utils;
 pub(crate) mod drop_struct_field;
 pub(crate) mod explode;
 mod functions_nested_utils;
@@ -13,8 +14,11 @@ pub(crate) mod randn;
 pub(crate) mod random;
 pub(crate) mod size;
 pub(crate) mod spark_array;
+pub(crate) mod spark_concat;
 pub(crate) mod spark_hex_unhex;
 pub(crate) mod spark_murmur3_hash;
+pub(crate) mod spark_unix_timestamp;
 pub(crate) mod spark_xxhash64;
 pub(crate) mod struct_function;
+pub(crate) mod unix_timestamp_now;
 pub(crate) mod update_struct_field;

@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package sail.driver;
+
+message RegisterWorkerRequest {
+  uint64 worker_id = 1;
+  string host = 2;
+  uint32 port = 3;
+}
+
+message RegisterWorkerResponse {
+}
+
+message ReportTaskStatusRequest {
+  uint64 task_id = 1;
+  TaskStatus status = 2;
+  uint64 attempt = 3;
+  optional string message = 4;
+  uint64 sequence = 101;
+}
+
+enum TaskStatus {
+  TASK_STATUS_CREATED = 0;
+  TASK_STATUS_SCHEDULED = 1;
+  TASK_STATUS_RUNNING = 2;
+  TASK_STATUS_SUCCEEDED = 3;
+  TASK_STATUS_FAILED = 4;
+  TASK_STATUS_CANCELED = 5;
+}
+
+message ReportTaskStatusResponse {
+}
+
+service DriverService {
+  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse) {}
+  rpc ReportTaskStatus(ReportTaskStatusRequest) returns (ReportTaskStatusResponse) {}
+}

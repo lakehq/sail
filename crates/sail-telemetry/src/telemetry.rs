@@ -8,7 +8,7 @@ use fastrace::prelude::*;
 use fastrace_opentelemetry::OpenTelemetryReporter;
 use opentelemetry::trace::SpanKind;
 use opentelemetry::{InstrumentationLibrary, KeyValue};
-use opentelemetry_otlp::{self, WithExportConfig};
+use opentelemetry_otlp::{Protocol, WithExportConfig, OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT};
 use opentelemetry_sdk::Resource;
 
 use crate::error::TelemetryResult;
@@ -33,10 +33,8 @@ pub fn init_tracer(use_collector: bool) -> TelemetryResult<()> {
             opentelemetry_otlp::new_exporter()
                 .tonic()
                 .with_endpoint(url)
-                .with_protocol(opentelemetry_otlp::Protocol::Grpc)
-                .with_timeout(Duration::from_secs(
-                    opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
-                ))
+                .with_protocol(Protocol::Grpc)
+                .with_timeout(Duration::from_secs(OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT))
                 .build_span_exporter()?,
             SpanKind::Server,
             Cow::Owned(Resource::new([KeyValue::new(

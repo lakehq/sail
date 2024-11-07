@@ -170,12 +170,7 @@ pub(crate) enum CatalogCommand {
 }
 
 fn build_record_batch<T: Serialize>(schema: SchemaRef, items: &[T]) -> Result<RecordBatch> {
-    let fields = schema
-        .fields()
-        .iter()
-        .map(|f| f.as_ref().clone())
-        .collect::<Vec<_>>();
-    let arrays = to_arrow(&fields, items)
+    let arrays = to_arrow(schema.fields(), items)
         .map_err(|e| exec_datafusion_err!("failed to create record batch: {}", e))?;
     // We must specify the row count if the schema has no fields.
     let options = RecordBatchOptions::new().with_row_count(Some(items.len()));

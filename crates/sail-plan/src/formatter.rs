@@ -376,7 +376,12 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 Ok(format!("{name}({args})"))
             }
-            "any_value" | "first" | "first_value" | "last" | "last_value" => {
+            "first" | "last" => {
+                let name = name.to_lowercase();
+                let arg = arguments[0];
+                Ok(format!("{name}({arg})"))
+            }
+            "any_value" | "first_value" | "last_value" => {
                 let arg = arguments[0];
                 Ok(format!("{name}({arg})"))
             }

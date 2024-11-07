@@ -36,7 +36,7 @@ struct Args {
 ///   - [1] https://github.com/PyO3/pyo3/issues/2576
 ///   - [2] https://github.com/PyO3/pyo3/issues/3218
 async fn shutdown() {
-    _ = tokio::signal::ctrl_c().await;
+    let _ = tokio::signal::ctrl_c().await;
     info!("Shutting down the Spark Connect server...");
 }
 
@@ -49,7 +49,7 @@ async fn run(ip: &IpAddr, port: u16) -> Result<(), Box<dyn std::error::Error>> {
         "Starting the Spark Connect server on {}...",
         listener.local_addr()?
     );
-    serve(listener, Some(shutdown())).await?;
+    serve(listener, shutdown()).await?;
     info!("The Spark Connect server has stopped.");
 
     fastrace::flush();

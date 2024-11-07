@@ -1,12 +1,16 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::{
     DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType,
 };
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{self, Expr};
-use datafusion_expr::{lit, BinaryExpr, Operator};
+use datafusion_expr::{lit, BinaryExpr, Operator, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::spark_unix_timestamp::SparkUnixTimestamp;
+use crate::extension::function::unix_timestamp_now::UnixTimestampNow;
 use crate::function::common::{Function, FunctionContext};
 use crate::utils::{spark_datetime_format_to_chrono_strftime, ItemTaker};
 
@@ -149,15 +153,26 @@ fn to_date(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<E
     }
 }
 
-fn unix_timestamp(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<Expr> {
+fn unix_timestamp(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult<Expr> {
     if args.is_empty() {
-        Ok(expr_fn::now())
+        Ok(Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(UnixTimestampNow::new())),
+            args: vec![],
+        }))
     } else if args.len() == 1 {
-        Ok(expr_fn::to_date(args))
+        let timezone: Arc<str> = function_context.plan_config().time_zone.clone().into();
+        Ok(Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(SparkUnixTimestamp::new(timezone))),
+            args,
+        }))
     } else if args.len() == 2 {
+        let timezone: Arc<str> = function_context.plan_config().time_zone.clone().into();
         let (expr, format) = args.two()?;
         let format = to_chrono_fmt(format)?;
-        Ok(expr_fn::to_unixtime(vec![expr, format]))
+        Ok(Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(SparkUnixTimestamp::new(timezone))),
+            args: vec![expr, format],
+        }))
     } else {
         return Err(PlanError::invalid(
             "unix_timestamp requires 1 or 2 arguments",
@@ -180,6 +195,21 @@ fn to_timestamp(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanRes
         Ok(expr_fn::to_timestamp_micros(vec![expr, format]))
     } else {
         return Err(PlanError::invalid("to_timestamp requires 1 or 2 arguments"));
+    }
+}
+
+fn from_unixtime(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<Expr> {
+    if args.len() == 1 {
+        let arg = args.one()?;
+        Ok(expr_fn::from_unixtime(arg))
+    } else if args.len() == 2 {
+        return Err(PlanError::invalid(
+            "from_unixtime with format is not supported yet",
+        ));
+    } else {
+        return Err(PlanError::invalid(
+            "from_unixtime requires 1 or 2 arguments",
+        ));
     }
 }
 
@@ -237,7 +267,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("dayofweek", F::unknown("dayofweek")),
         ("dayofyear", F::unknown("dayofyear")),
         ("extract", F::binary(expr_fn::date_part)),
-        ("from_unixtime", F::unknown("from_unixtime")),
+        ("from_unixtime", F::custom(from_unixtime)),
         ("from_utc_timestamp", F::unknown("from_utc_timestamp")),
         ("hour", F::unknown("hour")),
         ("last_day", F::unknown("last_day")),

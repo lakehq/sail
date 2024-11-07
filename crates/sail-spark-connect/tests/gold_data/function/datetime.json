@@ -1360,7 +1360,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: from_unixtime"
+        "success": "ok"
       }
     },
     {
@@ -1382,7 +1382,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: from_unixtime"
+        "failure": "invalid argument: from_unixtime with format is not supported yet"
       }
     },
     {

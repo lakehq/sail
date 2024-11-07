@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package sail.worker;
+
+message TaskStreamTicket {
+  string channel = 1;
+}
+
+message RunTaskRequest {
+  uint64 task_id = 1;
+  uint64 attempt = 2;
+  bytes plan = 3;
+  uint64 partition = 4;
+  optional string channel = 5;
+}
+
+message RunTaskResponse {
+}
+
+message StopTaskRequest {
+  uint64 task_id = 1;
+  uint64 attempt = 2;
+}
+
+message StopTaskResponse {
+}
+
+message StopWorkerRequest {
+}
+
+message StopWorkerResponse {
+}
+
+service WorkerService {
+  rpc RunTask(RunTaskRequest) returns (RunTaskResponse) {}
+  rpc StopTask(StopTaskRequest) returns (StopTaskResponse) {}
+  rpc StopWorker(StopWorkerRequest) returns (StopWorkerResponse) {}
+}

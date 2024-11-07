@@ -14,8 +14,9 @@ use crate::cereal::pyspark_udf::PySparkUdfObject;
 use crate::cereal::PythonFunction;
 use crate::error::PyUdfResult;
 use crate::udf::{
-    build_pyarrow_array_kwargs, get_pyarrow_array_function, get_pyarrow_output_data_type,
-    get_python_builtins_list_function, get_python_builtins_str_function, get_udf_name,
+    build_pyarrow_array_kwargs, build_pyarrow_to_pandas_kwargs, get_pyarrow_array_function,
+    get_pyarrow_output_data_type, get_python_builtins_list_function,
+    get_python_builtins_str_function, get_udf_name,
 };
 
 #[derive(Debug)]
@@ -70,6 +71,7 @@ fn call_arrow_udf(
     let python_function = function.function(py)?;
     let pyarrow_output_data_type = get_pyarrow_output_data_type(output_type, py)?;
     let pyarrow_array_kwargs = build_pyarrow_array_kwargs(py, pyarrow_output_data_type, true)?;
+    let pyarrow_to_pandas_kwargs = build_pyarrow_to_pandas_kwargs(py)?;
 
     let py_args = args
         .iter()
@@ -77,9 +79,12 @@ fn call_arrow_udf(
             let arg = arg
                 .into_data()
                 .to_pyarrow(py)?
-                // FIXME: Should be to_pandas here for performance (Zero-Copy),
-                //  but behavior of results is inconsistent with PySpark's expectations.
-                .call_method0(py, intern!(py, "to_pylist"))?
+                .call_method_bound(
+                    py,
+                    intern!(py, "to_pandas"),
+                    (),
+                    Some(&pyarrow_to_pandas_kwargs),
+                )?
                 .clone_ref(py)
                 .into_bound(py);
             Ok(arg)
@@ -109,6 +114,7 @@ fn call_pandas_udf(
     let python_function = function.function(py)?;
     let pyarrow_output_data_type = get_pyarrow_output_data_type(output_type, py)?;
     let pyarrow_array_kwargs = build_pyarrow_array_kwargs(py, pyarrow_output_data_type, true)?;
+    let pyarrow_to_pandas_kwargs = build_pyarrow_to_pandas_kwargs(py)?;
 
     let py_args = args
         .iter()
@@ -116,7 +122,12 @@ fn call_pandas_udf(
             let arg = arg
                 .into_data()
                 .to_pyarrow(py)?
-                .call_method0(py, intern!(py, "to_pandas"))?
+                .call_method_bound(
+                    py,
+                    intern!(py, "to_pandas"),
+                    (),
+                    Some(&pyarrow_to_pandas_kwargs),
+                )?
                 .clone_ref(py)
                 .into_bound(py);
             Ok(arg)

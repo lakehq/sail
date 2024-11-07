@@ -1,0 +1,26 @@
+[package]
+name = "sail-execution"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+sail-common = { path = "../sail-common" }
+sail-server = { path = "../sail-server" }
+sail-plan = { path = "../sail-plan" }
+
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tonic-types = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+datafusion = { workspace = true }
+datafusion-proto = { workspace = true }
+arrow = { workspace = true }
+arrow-flight = { workspace = true }
+log = { workspace = true }
+futures = { workspace = true }
+
+[build-dependencies]
+prost-build = { workspace = true }
+tonic-build = { workspace = true }

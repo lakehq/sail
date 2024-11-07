@@ -1,0 +1,16 @@
+[package]
+name = "sail-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sail-telemetry = { path = "../sail-telemetry" }
+
+tokio = { workspace = true }
+tonic = { workspace = true }
+tonic-reflection = { workspace = true }
+tonic-health = { workspace = true }
+tonic-types = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+log = { workspace = true }
