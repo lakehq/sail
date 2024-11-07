@@ -12,3 +12,5 @@ export RUST_BACKTRACE="${RUST_BACKTRACE:-full}"
 # This is because the Python executable is the Rust program itself, and there is
 # no `pyvenv.cfg` at its required location (one directory above the executable).
 export PYTHONPATH="${python_env_path}/lib/python${python_version}/site-packages"
+# TODO: Add the logic in Rust
+export PYARROW_IGNORE_TIMEZONE="1"

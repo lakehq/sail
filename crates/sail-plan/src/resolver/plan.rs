@@ -280,8 +280,13 @@ impl PlanResolver<'_> {
                 self.resolve_query_summary(*input, vec![], statistics, state)
                     .await?
             }
-            QueryNode::StatCrosstab { .. } => {
-                return Err(PlanError::todo("crosstab"));
+            QueryNode::StatCrosstab {
+                input,
+                left_column,
+                right_column,
+            } => {
+                self.resolve_query_cross_tab(*input, left_column, right_column, state)
+                    .await?
             }
             QueryNode::StatDescribe { input, columns } => {
                 let statistics = vec![

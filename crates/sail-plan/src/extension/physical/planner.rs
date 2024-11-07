@@ -8,8 +8,11 @@ use datafusion::physical_planner::{create_physical_sort_exprs, ExtensionPlanner,
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
 
-use crate::extension::logical::{RangeNode, ShowStringNode, SortWithinPartitionsNode};
+use crate::extension::logical::{
+    RangeNode, SchemaPivotNode, ShowStringNode, SortWithinPartitionsNode,
+};
 use crate::extension::physical::range::RangeExec;
+use crate::extension::physical::schema_pivot::SchemaPivotExec;
 use crate::extension::physical::show_string::ShowStringExec;
 use crate::utils::ItemTaker;
 
@@ -51,6 +54,12 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     .with_fetch(node.fetch())
                     .with_preserve_partitioning(true);
                 Arc::new(sort)
+            } else if let Some(node) = node.as_any().downcast_ref::<SchemaPivotNode>() {
+                Arc::new(SchemaPivotExec::new(
+                    physical_inputs.one()?,
+                    node.names().to_vec(),
+                    node.schema().inner().clone(),
+                ))
             } else {
                 return internal_err!("Unsupported logical extension node: {:?}", node);
             };

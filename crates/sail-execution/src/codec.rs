@@ -16,7 +16,7 @@ use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common::utils::{read_record_batches, write_record_batches};
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
-use sail_plan::extension::physical::{RangeExec, ShowStringExec};
+use sail_plan::extension::physical::{RangeExec, SchemaPivotExec, ShowStringExec};
 
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::ExtendedPhysicalPlanNode;
@@ -79,6 +79,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         self.try_decode_show_string_style(style)?,
                         truncate as usize,
                     ),
+                    Arc::new((&schema).try_into()?),
+                )))
+            }
+            NodeKind::SchemaPivot(gen::SchemaPivotExecNode {
+                input,
+                names,
+                schema,
+            }) => {
+                let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
+                Ok(Arc::new(SchemaPivotExec::new(
+                    self.try_decode_plan(&input, registry)?,
+                    names,
                     Arc::new((&schema).try_into()?),
                 )))
             }
@@ -161,6 +173,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 limit: show_string.limit() as u64,
                 style: self.try_encode_show_string_style(show_string.format().style())?,
                 truncate: show_string.format().truncate() as u64,
+                schema,
+            })
+        } else if let Some(schema_pivot) = node.as_any().downcast_ref::<SchemaPivotExec>() {
+            let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
+                schema_pivot.schema().as_ref().try_into()?,
+            )?;
+            NodeKind::SchemaPivot(gen::SchemaPivotExecNode {
+                input: self.try_encode_plan(schema_pivot.input().clone())?,
+                names: schema_pivot.names().to_vec(),
                 schema,
             })
         } else if let Some(shuffle_read) = node.as_any().downcast_ref::<ShuffleReadExec>() {
