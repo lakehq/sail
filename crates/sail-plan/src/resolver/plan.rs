@@ -1507,11 +1507,35 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_to_schema(
         &self,
-        _input: spec::QueryPlan,
-        _schema: spec::Schema,
-        _state: &mut PlanResolverState,
+        input: spec::QueryPlan,
+        schema: spec::Schema,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        Err(PlanError::todo("to schema"))
+        let input = self.resolve_query_plan(input, state).await?;
+        let target_schema = self.resolve_schema(schema)?;
+        let input_names = state.get_field_names(input.schema().inner())?;
+        let mut projected_exprs = Vec::new();
+        for target_field in target_schema.fields() {
+            let target_name = target_field.name();
+            let input_idx = input_names
+                .iter()
+                .position(|input_name| input_name.eq_ignore_ascii_case(target_name))
+                .ok_or_else(|| {
+                    PlanError::invalid(format!("field not found in input schema: {target_name}"))
+                })?;
+            let (input_qualifier, input_field) = input.schema().qualified_field(input_idx);
+            let expr = Expr::Column(Column::from((input_qualifier, input_field)));
+            let expr = if input_field.data_type() == target_field.data_type() {
+                expr
+            } else {
+                expr.cast_to(target_field.data_type(), &input.schema())?
+                    .alias_qualified(input_qualifier.cloned(), input_field.name())
+            };
+            projected_exprs.push(expr);
+        }
+        let projected_plan =
+            LogicalPlan::Projection(plan::Projection::try_new(projected_exprs, Arc::new(input))?);
+        Ok(projected_plan)
     }
 
     async fn resolve_query_repartition_by_expression(
