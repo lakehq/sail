@@ -18,7 +18,7 @@ pub fn run_python_interpreter() -> ! {
         })
         .collect::<Result<Vec<_>, NulError>>()
     else {
-        eprintln!("Error: null characters in command line arguments");
+        eprintln!("Error: null bytes found in command line argument strings");
         std::process::exit(1);
     };
     argv.push(std::ptr::null_mut());
