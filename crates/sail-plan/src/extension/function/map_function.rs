@@ -81,6 +81,12 @@ pub struct MapFunction {
     signature: Signature,
 }
 
+impl Default for MapFunction {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MapFunction {
     pub fn new() -> Self {
         Self {

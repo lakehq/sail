@@ -13,6 +13,12 @@ pub struct SparkReverse {
     signature: Signature,
 }
 
+impl Default for SparkReverse {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SparkReverse {
     pub fn new() -> Self {
         Self {

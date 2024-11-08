@@ -16,11 +16,8 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common::utils::{read_record_batches, write_record_batches};
-use sail_plan::extension::function::spark_array::SparkArray;
-use sail_plan::extension::function::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
 use sail_plan::extension::physical::{RangeExec, SchemaPivotExec, ShowStringExec};
-use sail_plan::function::get_built_in_function;
 
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::{ExtendedPhysicalPlanNode, ExtendedScalarUdf};
@@ -248,6 +245,28 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         };
         node.encode(buf)
             .map_err(|e| plan_datafusion_err!("failed to encode plan: {e:?}"))
+    }
+    fn try_decode_udf(&self, _name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+        plan_err!("try_decode_udf")
+    }
+
+    fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
+        let name = node.name();
+        let node = ExtendedScalarUdf {
+            udf_kind: Some(gen::extended_scalar_udf::UdfKind::Named(gen::NamedUdf {
+                name: name.to_string(),
+            })),
+        };
+        node.encode(buf)
+            .map_err(|e| plan_datafusion_err!("failed to encode udf: {e:?}"))
+    }
+
+    fn try_decode_udaf(&self, _name: &str, _buf: &[u8]) -> Result<Arc<AggregateUDF>> {
+        plan_err!("try_decode_udaf")
+    }
+
+    fn try_encode_udaf(&self, _node: &AggregateUDF, _buf: &mut Vec<u8>) -> Result<()> {
+        Ok(())
     }
 }
 
