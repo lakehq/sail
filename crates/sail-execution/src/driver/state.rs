@@ -51,6 +51,13 @@ impl DriverState {
         self.workers.get(&worker_id)
     }
 
+    pub fn list_workers(&self) -> Vec<(WorkerId, &WorkerDescriptor)> {
+        self.workers
+            .iter()
+            .map(|(&worker_id, worker)| (worker_id, worker))
+            .collect()
+    }
+
     pub fn update_worker_status(&mut self, worker_id: WorkerId, status: WorkerStatus) {
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             warn!("worker {worker_id} not found");

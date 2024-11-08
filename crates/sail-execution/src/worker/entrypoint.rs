@@ -8,7 +8,7 @@ pub async fn run_worker() -> Result<(), Box<dyn std::error::Error>> {
     ObjectStoreConfig::initialize().await;
     let config = AppConfig::load()?;
     let mut system = ActorSystem::new();
-    let options = (&config).into();
+    let options = (&config).try_into()?;
     let _handle = system.spawn::<WorkerActor>(options);
     system.join().await;
     Ok(())

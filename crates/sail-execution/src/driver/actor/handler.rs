@@ -57,12 +57,13 @@ impl DriverActor {
             return ActorAction::fail("the driver server is not ready");
         };
         let options = WorkerLaunchOptions {
-            driver_host: self.options().driver_external_host.to_string(),
-            driver_port: self.options().driver_external_port.unwrap_or(port),
+            enable_tls: self.options().enable_tls,
+            driver_external_host: self.options().driver_external_host.to_string(),
+            driver_external_port: self.options().driver_external_port.unwrap_or(port),
         };
         let worker_manager = Arc::clone(&self.worker_manager);
         ctx.spawn(async move {
-            if let Err(e) = worker_manager.start_worker(worker_id, options).await {
+            if let Err(e) = worker_manager.launch_worker(worker_id, options).await {
                 error!("failed to start worker {worker_id}: {e}");
             }
         });
@@ -90,19 +91,7 @@ impl DriverActor {
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
     ) -> ActorAction {
-        let Some(worker) = self.state.get_worker(worker_id) else {
-            return ActorAction::Continue;
-        };
-        if matches!(worker.status, WorkerStatus::Running { .. }) {
-            self.state
-                .update_worker_status(worker_id, WorkerStatus::Stopped);
-            let worker_manager = Arc::clone(&self.worker_manager);
-            ctx.spawn(async move {
-                if let Err(e) = worker_manager.stop_worker(worker_id).await {
-                    error!("failed to stop worker {worker_id}: {e}");
-                }
-            });
-        }
+        self.stop_worker(ctx, worker_id);
         ActorAction::Continue
     }
 
@@ -521,5 +510,40 @@ impl DriverActor {
                 }
             }
         });
+    }
+
+    fn stop_worker(&mut self, ctx: &mut ActorContext<Self>, worker_id: WorkerId) {
+        let Some(worker) = self.state.get_worker(worker_id) else {
+            warn!("worker {worker_id} not found");
+            return;
+        };
+        if matches!(worker.status, WorkerStatus::Running { .. }) {
+            let client = match self.worker_client(worker_id) {
+                Ok(client) => client.clone(),
+                Err(e) => {
+                    warn!("failed to stop worker {worker_id}: {e}");
+                    return;
+                }
+            };
+            ctx.spawn(async move {
+                if let Err(e) = client.stop_worker().await {
+                    error!("failed to stop worker {worker_id}: {e}");
+                }
+            });
+            self.state
+                .update_worker_status(worker_id, WorkerStatus::Stopped);
+        }
+    }
+
+    pub(super) fn stop_all_workers(&mut self, ctx: &mut ActorContext<Self>) {
+        let worker_ids = self
+            .state
+            .list_workers()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        for worker_id in worker_ids {
+            self.stop_worker(ctx, worker_id);
+        }
     }
 }

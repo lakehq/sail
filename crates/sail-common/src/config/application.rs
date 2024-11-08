@@ -8,7 +8,7 @@ const DEFAULT_CONFIG: &str = include_str!("default.toml");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    pub runner: RunnerKind,
+    pub deployment: DeploymentKind,
     pub driver: DriverConfig,
     pub worker: WorkerConfig,
     pub network: NetworkConfig,
@@ -26,9 +26,10 @@ impl AppConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum RunnerKind {
+pub enum DeploymentKind {
     Local,
-    Cluster,
+    LocalCluster,
+    KubeCluster,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

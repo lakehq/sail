@@ -68,6 +68,8 @@ opentelemetry_sdk = "0.26.0"
 opentelemetry-otlp = { version = "0.26.0", features = ["tls", "tls-roots"] }
 hdfs-native-object-store = "0.12.1"
 figment = { version = "0.10.19", features = ["toml", "env"] }
+kube = "0.96.0"
+k8s-openapi = { version = "0.23.0", features = ["latest"] }
 
 ######
 # The versions of the following dependencies are managed manually.

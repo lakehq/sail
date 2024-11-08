@@ -105,7 +105,7 @@ impl Actor for WorkerActor {
         }
     }
 
-    async fn stop(self) {
+    async fn stop(self, _ctx: &mut ActorContext<Self>) {
         self.server.stop().await;
         debug!("worker {} server has stopped", self.options.worker_id);
     }

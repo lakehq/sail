@@ -20,6 +20,8 @@ arrow = { workspace = true }
 arrow-flight = { workspace = true }
 log = { workspace = true }
 futures = { workspace = true }
+kube = { workspace = true }
+k8s-openapi = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

@@ -20,6 +20,8 @@ pub enum ExecutionError {
     TonicTransportError(#[from] tonic::transport::Error),
     #[error("error in Tonic status: {0}")]
     TonicStatusError(#[from] tonic::Status),
+    #[error("error in Kubernetes: {0}")]
+    KubernetesError(#[from] kube::Error),
     #[error("internal error: {0}")]
     InternalError(String),
 }

@@ -21,7 +21,7 @@ pub trait Actor: Sized + Send + 'static {
     /// If the actor needs to perform async operations, it should spawn tasks via
     /// [ActorContext::spawn].
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction;
-    async fn stop(self);
+    async fn stop(self, ctx: &mut ActorContext<Self>);
 }
 
 pub enum ActorAction {
@@ -190,7 +190,7 @@ impl<T: Actor> ActorRunner<T> {
             }
             self.ctx.reap();
         }
-        self.actor.stop().await;
+        self.actor.stop(&mut self.ctx).await;
     }
 }
 
@@ -231,7 +231,7 @@ mod tests {
             }
         }
 
-        async fn stop(self) {}
+        async fn stop(self, _: &mut ActorContext<Self>) {}
     }
 
     #[tokio::test]

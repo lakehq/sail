@@ -10,11 +10,11 @@ use sail_server::actor::{Actor, ActorAction, ActorContext};
 use crate::codec::RemoteExecutionCodec;
 use crate::driver::actor::output::JobOutput;
 use crate::driver::state::DriverState;
-use crate::driver::{DriverEvent, DriverOptions};
+use crate::driver::{DriverEvent, DriverOptions, WorkerManagerKind};
 use crate::id::{JobId, WorkerId};
 use crate::rpc::ServerMonitor;
 use crate::worker::WorkerClient;
-use crate::worker_manager::{LocalWorkerManager, WorkerManager};
+use crate::worker_manager::{KubernetesWorkerManager, LocalWorkerManager, WorkerManager};
 
 pub struct DriverActor {
     options: DriverOptions,
@@ -32,11 +32,15 @@ impl Actor for DriverActor {
     type Options = DriverOptions;
 
     fn new(options: DriverOptions) -> Self {
+        let worker_manager: Arc<dyn WorkerManager> = match options.worker_manager_kind {
+            WorkerManagerKind::Local => Arc::new(LocalWorkerManager::new()),
+            WorkerManagerKind::Kubernetes => Arc::new(KubernetesWorkerManager::new()),
+        };
         Self {
             options,
             state: DriverState::new(),
             server: ServerMonitor::new(),
-            worker_manager: Arc::new(LocalWorkerManager::new()),
+            worker_manager,
             worker_clients: HashMap::new(),
             physical_plan_codec: Box::new(RemoteExecutionCodec::new(SessionContext::default())),
             job_outputs: HashMap::new(),
@@ -77,10 +81,11 @@ impl Actor for DriverActor {
         }
     }
 
-    async fn stop(self) {
+    async fn stop(mut self, ctx: &mut ActorContext<Self>) {
+        self.stop_all_workers(ctx);
         self.server.stop().await;
         debug!("driver server has stopped");
-        if let Err(e) = self.worker_manager.stop_all_workers().await {
+        if let Err(e) = self.worker_manager.stop().await {
             error!("encountered error while stopping workers: {e}");
         }
     }
