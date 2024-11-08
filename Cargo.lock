@@ -4319,8 +4319,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3cb5ba0dc43242ce17de99c180e96db90b235b8a9fdc9543c96d2209116bd9f"
 
 [[package]]
+name = "sail-cli"
+version = "0.2.0"
+dependencies = [
+ "clap",
+ "fastrace",
+ "log",
+ "pyo3",
+ "sail-common",
+ "sail-execution",
+ "sail-spark-connect",
+ "sail-telemetry",
+ "tokio",
+]
+
+[[package]]
 name = "sail-common"
-version = "0.1.7"
+version = "0.2.0"
 dependencies = [
  "arrow",
  "arrow-cast",
@@ -4343,7 +4358,7 @@ dependencies = [
 
 [[package]]
 name = "sail-execution"
-version = "0.1.7"
+version = "0.2.0"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -4366,7 +4381,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan"
-version = "0.1.7"
+version = "0.2.0"
 dependencies = [
  "arrow",
  "arrow-cast",
@@ -4410,12 +4425,13 @@ dependencies = [
 
 [[package]]
 name = "sail-python"
-version = "0.1.7"
+version = "0.2.0"
 dependencies = [
  "fastrace",
  "futures",
  "log",
  "pyo3",
+ "sail-cli",
  "sail-common",
  "sail-spark-connect",
  "sail-telemetry",
@@ -4424,7 +4440,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python-udf"
-version = "0.1.7"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -4437,7 +4453,7 @@ dependencies = [
 
 [[package]]
 name = "sail-server"
-version = "0.1.7"
+version = "0.2.0"
 dependencies = [
  "log",
  "sail-telemetry",
@@ -4452,7 +4468,7 @@ dependencies = [
 
 [[package]]
 name = "sail-spark-connect"
-version = "0.1.7"
+version = "0.2.0"
 dependencies = [
  "arrow",
  "arrow-cast",
@@ -4465,7 +4481,6 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "datafusion-functions-nested",
- "fastrace",
  "glob",
  "lazy_static",
  "log",
@@ -4488,7 +4503,6 @@ dependencies = [
  "sail-python-udf",
  "sail-server",
  "sail-sql",
- "sail-telemetry",
  "serde",
  "serde_arrow",
  "serde_json",
@@ -4504,7 +4518,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql"
-version = "0.1.7"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "chrono-tz 0.10.0",
@@ -4520,7 +4534,7 @@ dependencies = [
 
 [[package]]
 name = "sail-telemetry"
-version = "0.1.7"
+version = "0.2.0"
 dependencies = [
  "datafusion",
  "env_logger",

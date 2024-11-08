@@ -1,19 +1,20 @@
 [package]
-name = "sail-python"
+name = "sail-cli"
 version = { workspace = true }
 edition = { workspace = true }
 
+[[bin]]
+name = "sail"
+path = "src/main.rs"
+
 [dependencies]
 sail-common = { path = "../sail-common" }
+sail-execution = { path = "../sail-execution" }
 sail-telemetry = { path = "../sail-telemetry" }
 sail-spark-connect = { path = "../sail-spark-connect" }
-sail-cli = { path = "../sail-cli" }
 
-pyo3 = { workspace = true }
-futures = { workspace = true }
+clap = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }
 fastrace = { workspace = true }
-
-[lib]
-crate-type = ["cdylib"]
+pyo3 = { workspace = true }

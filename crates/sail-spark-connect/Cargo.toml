@@ -9,7 +9,6 @@ sail-server = { path = "../sail-server" }
 sail-plan = { path = "../sail-plan" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-sql = { path = "../sail-sql" }
-sail-telemetry = { path = "../sail-telemetry" }
 sail-execution = { path = "../sail-execution" }
 
 thiserror = { workspace = true }
@@ -44,7 +43,6 @@ phf = { workspace = true }
 mimalloc = { workspace = true }
 clap = { workspace = true }
 log = { workspace = true }
-fastrace = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

@@ -1,34 +1,32 @@
 ---
-title: Standalone Spark Connect Server
+title: Standalone Binary
 rank: 80
 ---
 
-# Standalone Spark Connect Server
+# Standalone Binary
 
-By default, you can run the Spark Connect server using the `pysail` Python library.
-In some situations, however, you may want to build and run the server as a standalone binary.
+By default, you can run the Sail CLI (the `sail` command) by installing the `pysail` Python library.
+In some situations, however, you may want to build and run the CLI as a standalone binary.
 
-You can build the server with the `release` profile in Cargo.
+You can build the CLI with the `release` profile in Cargo.
 
 ```bash
 env \
   RUSTFLAGS="-C target-cpu=native" \
-  cargo build -r -p sail-spark-connect --bins
+  cargo build -r -p sail-cli --bins
 ```
 
-You can then run the server with the following command.
+You can then run the Spark Connect server with the following command.
 
 ```bash
-env \
-  RUST_LOG="sail_spark_connect=info" \
-  target/release/sail-spark-connect
+target/release/sail spark server
 ```
 
-The `--help` option can be used to show all the supported arguments of the server.
+The `--help` option can be used to show all the supported arguments of the `sail` command.
 
 ## Python Dependency
 
-The server binary is dynamically linked to the Python library.
+The Sail CLI binary is dynamically linked to the Python library.
 The Python version is determined at build time.
 PyO3 infers the Python version from the environment, or you can explicitly configure the
 Python interpreter via the `PYO3_PYTHON` environment variable.
@@ -39,11 +37,11 @@ You can inspect the dynamic library dependencies with command line tools.
 ::: code-group
 
 ```bash [Linux]
-ldd target/release/sail-spark-connect
+ldd target/release/sail
 ```
 
 ```bash [macOS]
-otool -L target/release/sail-spark-connect
+otool -L target/release/sail
 ```
 
 :::

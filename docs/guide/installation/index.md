@@ -39,6 +39,6 @@ You can refer to the [Rust documentation](https://doc.rust-lang.org/rustc/codege
 for more information about the compiler options that can be specified via the `RUSTFLAGS` environment variable.
 :::
 
-## Standalone Server
+## Standalone Binary
 
-Please refer to the [Standalone Spark Connect Server](/development/recipes/spark-connect-server) guide for more information about building and running the Spark Connect Server as a standalone binary.
+Please refer to the [Standalone Binary](/development/recipes/standalone-binary) guide for more information about building and running the Sail CLI as a standalone binary.
