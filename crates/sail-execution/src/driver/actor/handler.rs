@@ -76,12 +76,33 @@ impl DriverActor {
         worker_id: WorkerId,
         host: String,
         port: u16,
+        result: oneshot::Sender<ExecutionResult<()>>,
     ) -> ActorAction {
         info!("worker {worker_id} is available at {host}:{port}");
-        let status = WorkerStatus::Running { host, port };
-        self.state.update_worker_status(worker_id, status);
-        if let Some(worker) = self.state.get_worker(worker_id) {
-            self.schedule_tasks_for_job(ctx, worker.job_id);
+        let out = if let Some(worker) = self.state.get_worker(worker_id) {
+            match worker.status {
+                WorkerStatus::Pending => {
+                    self.state
+                        .update_worker_status(worker_id, WorkerStatus::Running { host, port });
+                    if let Some(worker) = self.state.get_worker(worker_id) {
+                        self.schedule_tasks_for_job(ctx, worker.job_id);
+                    }
+                    Ok(())
+                }
+                WorkerStatus::Running { .. } => Err(ExecutionError::InternalError(format!(
+                    "worker {worker_id} is already running"
+                ))),
+                WorkerStatus::Stopped => Err(ExecutionError::InternalError(format!(
+                    "worker {worker_id} is stopped"
+                ))),
+            }
+        } else {
+            Err(ExecutionError::InvalidArgument(format!(
+                "worker {worker_id} not found"
+            )))
+        };
+        if result.send(out).is_err() {
+            warn!("failed to send worker registration result");
         }
         ActorAction::Continue
     }
@@ -517,21 +538,30 @@ impl DriverActor {
             warn!("worker {worker_id} not found");
             return;
         };
-        if matches!(worker.status, WorkerStatus::Running { .. }) {
-            let client = match self.worker_client(worker_id) {
-                Ok(client) => client.clone(),
-                Err(e) => {
-                    warn!("failed to stop worker {worker_id}: {e}");
-                    return;
-                }
-            };
-            ctx.spawn(async move {
-                if let Err(e) = client.stop_worker().await {
-                    error!("failed to stop worker {worker_id}: {e}");
-                }
-            });
-            self.state
-                .update_worker_status(worker_id, WorkerStatus::Stopped);
+        match worker.status {
+            WorkerStatus::Pending => {
+                warn!("trying to stop pending worker {worker_id}");
+                self.state
+                    .update_worker_status(worker_id, WorkerStatus::Stopped);
+            }
+            WorkerStatus::Running { .. } => {
+                info!("stopping worker {worker_id}");
+                let client = match self.worker_client(worker_id) {
+                    Ok(client) => client.clone(),
+                    Err(e) => {
+                        warn!("failed to stop worker {worker_id}: {e}");
+                        return;
+                    }
+                };
+                ctx.spawn(async move {
+                    if let Err(e) = client.stop_worker().await {
+                        error!("failed to stop worker {worker_id}: {e}");
+                    }
+                });
+                self.state
+                    .update_worker_status(worker_id, WorkerStatus::Stopped);
+            }
+            WorkerStatus::Stopped => {}
         }
     }
 

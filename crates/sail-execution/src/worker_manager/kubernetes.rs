@@ -100,6 +100,7 @@ impl WorkerManager for KubernetesWorkerManager {
                     image_pull_policy: Some("IfNotPresent".to_string()),
                     ..Default::default()
                 }],
+                restart_policy: Some("Never".to_string()),
                 ..Default::default()
             }),
             status: None,

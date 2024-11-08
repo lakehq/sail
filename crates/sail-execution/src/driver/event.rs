@@ -22,6 +22,7 @@ pub enum DriverEvent {
         worker_id: WorkerId,
         host: String,
         port: u16,
+        result: oneshot::Sender<ExecutionResult<()>>,
     },
     #[allow(dead_code)]
     StopWorker {
