@@ -8,3 +8,5 @@ mod rpc;
 mod stream;
 mod worker;
 mod worker_manager;
+
+pub use worker::entrypoint::run_worker;

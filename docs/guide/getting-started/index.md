@@ -22,8 +22,12 @@ Please refer to the [Installation Guide](/guide/installation/) for more informat
 You can start a PySpark shell from Sail, using the following command.
 
 ```bash
-python -m pysail.spark shell
+sail spark shell
 ```
+
+::: info
+The `sail` command is installed as an executable script as part of the `pysail` Python package. You can also invoke the Sail CLI via `python -m pysail`.
+:::
 
 You will see the banner and prompt similar to a regular PySpark shell.
 The `SparkSession` is available as the `spark` local variable.
@@ -56,7 +60,7 @@ spark.sql("SELECT 1 + 1").show()
 You can use the following command to start a Spark Connect server powered by Sail.
 
 ```bash
-env RUST_LOG=info python -m pysail.spark server
+env RUST_LOG=info sail spark server
 ```
 
 By default, the server listens on port `50051` on `127.0.0.1`. You can change the listening address and port using the
