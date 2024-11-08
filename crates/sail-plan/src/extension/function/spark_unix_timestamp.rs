@@ -21,6 +21,10 @@ impl SparkUnixTimestamp {
             timezone,
         }
     }
+
+    pub fn timezone(&self) -> &str {
+        &self.timezone
+    }
 }
 
 impl ScalarUDFImpl for SparkUnixTimestamp {

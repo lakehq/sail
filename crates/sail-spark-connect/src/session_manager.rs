@@ -117,6 +117,7 @@ impl SessionManager {
 
         // TODO: This is a temp workaround to deregister all built-in functions that we define.
         //  We should deregister all context.udfs() once we have better coverage of functions.
+        // handler.rs needs to do this
         for (&name, _function) in BUILT_IN_SCALAR_FUNCTIONS.iter() {
             context.deregister_udf(name);
         }

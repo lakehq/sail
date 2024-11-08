@@ -4,6 +4,7 @@ use std::sync::Arc;
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion::common::{plan_datafusion_err, plan_err, Result};
 use datafusion::execution::FunctionRegistry;
+use datafusion::logical_expr::{AggregateUDF, ScalarUDF};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion::prelude::SessionContext;
@@ -15,11 +16,14 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common::utils::{read_record_batches, write_record_batches};
+use sail_plan::extension::function::spark_array::SparkArray;
+use sail_plan::extension::function::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
 use sail_plan::extension::physical::{RangeExec, SchemaPivotExec, ShowStringExec};
+use sail_plan::function::get_built_in_function;
 
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
-use crate::plan::gen::ExtendedPhysicalPlanNode;
+use crate::plan::gen::{ExtendedPhysicalPlanNode, ExtendedScalarUdf};
 use crate::plan::{gen, ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::{TaskReadLocation, TaskWriteLocation};
 

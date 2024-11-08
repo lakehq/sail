@@ -21,6 +21,21 @@ message ExtendedPhysicalPlanNode {
   }
 }
 
+message ExtendedScalarUdf {
+  oneof UdfKind {
+    NamedUdf named = 1;
+    TimestampUdf timestamp = 2;
+  }
+}
+
+message NamedUdf {
+  string name = 1;
+}
+
+message TimestampUdf {
+  string timestamp = 1;
+}
+
 message RangeExecNode {
   int64 start = 1;
   int64 end = 2;
