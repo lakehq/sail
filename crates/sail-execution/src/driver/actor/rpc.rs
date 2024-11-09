@@ -1,3 +1,4 @@
+use sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT;
 use sail_server::actor::ActorHandle;
 use sail_server::ServerBuilder;
 use tokio::net::{TcpListener, ToSocketAddrs};
@@ -23,6 +24,7 @@ impl DriverActor {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let server = DriverServer::new(handle.clone());
         let service = DriverServiceServer::new(server)
+            .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
             .accept_compressed(CompressionEncoding::Gzip)
             .accept_compressed(CompressionEncoding::Zstd)
             .send_compressed(CompressionEncoding::Gzip)
