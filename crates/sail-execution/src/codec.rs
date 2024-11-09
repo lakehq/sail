@@ -25,7 +25,7 @@ use sail_plan::extension::function::{
     array::{ArrayEmptyToNull, ArrayItemWithPosition, MapToArray},
     array_min_max::{ArrayMax, ArrayMin},
     drop_struct_field::DropStructField,
-    explode::Explode,
+    explode::{explode_name_to_kind, Explode},
     least_greatest::{Greatest, Least},
     levenshtein::Levenshtein,
     map_function::MapFunction,
@@ -47,7 +47,7 @@ use sail_plan::extension::function::{
 };
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
 use sail_plan::extension::physical::{RangeExec, SchemaPivotExec, ShowStringExec};
-use sail_python_udf::udf::pyspark_udf::PySparkUDF;
+// use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
 pub struct RemoteExecutionCodec {
     context: SessionContext,
@@ -271,12 +271,156 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         node.encode(buf)
             .map_err(|e| plan_datafusion_err!("failed to encode plan: {e:?}"))
     }
-    fn try_decode_udf(&self, _name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
-        plan_err!("try_decode_udf")
+    fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+        let udf = ExtendedScalarUdf::decode(buf)
+            .map_err(|e| plan_datafusion_err!("failed to decode udf: {e:?}"))?;
+        let ExtendedScalarUdf { udf_kind } = udf;
+        let udf_kind = match udf_kind {
+            Some(x) => x,
+            None => return plan_err!("ExtendedScalarUdf: no UDF found for {name}"),
+        };
+        let auxiliary_field = match udf_kind {
+            UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf { auxiliary_field }) => {
+                let auxiliary_field = match auxiliary_field {
+                    Some(auxiliary_field) => auxiliary_field,
+                    None => return plan_err!("no auxiliary field found for {name}"),
+                };
+                match auxiliary_field.auxiliary_field {
+                    Some(auxiliary_field) => Some(auxiliary_field),
+                    None => return plan_err!("no auxiliary field found for {name}"),
+                }
+            }
+            UdfKind::Standard(gen::StandardUdf {}) => None,
+        };
+        match name {
+            "array_item_with_position" => {
+                Ok(Arc::new(ScalarUDF::from(ArrayItemWithPosition::new())))
+            }
+            "array_empty_to_null" => Ok(Arc::new(ScalarUDF::from(ArrayEmptyToNull::new()))),
+            "map_to_array" => {
+                let nullable = match auxiliary_field {
+                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(single)) => {
+                        self.try_decode_message::<bool>(&single.auxiliary_field)?
+                    }
+                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(_)) => {
+                        return plan_err!(
+                            "Expected single auxiliary field, but found repeated for {name}"
+                        )
+                    }
+                    None => return plan_err!("no auxiliary field found for {name}"),
+                };
+                Ok(Arc::new(ScalarUDF::from(MapToArray::new(nullable))))
+            }
+            "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
+            "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
+            "drop_struct_field" => {
+                let field_names = match auxiliary_field {
+                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(_)) => {
+                        return plan_err!(
+                            "Expected repeated auxiliary field, but found single for {name}"
+                        )
+                    }
+                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(
+                        repeated,
+                    )) => repeated
+                        .auxiliary_field
+                        .iter()
+                        .map(|x| self.try_decode_message::<String>(x))
+                        .collect::<Result<_>>()?,
+                    None => return plan_err!("no auxiliary field found for {name}"),
+                };
+                Ok(Arc::new(ScalarUDF::from(DropStructField::new(field_names))))
+            }
+            "explode" | "explode_outer" | "posexplode" | "posexplode_outer" => {
+                let kind = match auxiliary_field {
+                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(single)) => {
+                        self.try_decode_message::<String>(&single.auxiliary_field)?
+                    }
+                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(_)) => {
+                        return plan_err!(
+                            "Expected single auxiliary field, but found repeated for {name}"
+                        )
+                    }
+                    None => return plan_err!("no auxiliary field found for {name}"),
+                };
+                let kind = explode_name_to_kind(&kind);
+                Ok(Arc::new(ScalarUDF::from(Explode::new(kind))))
+            }
+            "greatest" => Ok(Arc::new(ScalarUDF::from(Greatest::new()))),
+            "least" => Ok(Arc::new(ScalarUDF::from(Least::new()))),
+            "levenshtein" => Ok(Arc::new(ScalarUDF::from(Levenshtein::new()))),
+            "map" => Ok(Arc::new(ScalarUDF::from(MapFunction::new()))),
+            "multi_expr" => Ok(Arc::new(ScalarUDF::from(MultiExpr::new()))),
+            "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
+            "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
+            "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
+            "size" | "cardinality" => Ok(Arc::new(ScalarUDF::from(Size::new()))),
+            "spark_array" | "spark_make_array" | "array" => {
+                Ok(Arc::new(ScalarUDF::from(SparkArray::new())))
+            }
+            "spark_concat" | "concat" => Ok(Arc::new(ScalarUDF::from(SparkConcat::new()))),
+            "spark_hex" | "hex" => Ok(Arc::new(ScalarUDF::from(SparkHex::new()))),
+            "spark_unhex" | "unhex" => Ok(Arc::new(ScalarUDF::from(SparkUnHex::new()))),
+            "spark_murmur3_hash" | "hash" => Ok(Arc::new(ScalarUDF::from(SparkMurmur3Hash::new()))),
+            "spark_reverse" | "reverse" => Ok(Arc::new(ScalarUDF::from(SparkReverse::new()))),
+            "spark_unix_timestamp" | "unix_timestamp" | "unix_timestamp_now" => {
+                match auxiliary_field {
+                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(single)) => {
+                        let timezone =
+                            self.try_decode_message::<String>(&single.auxiliary_field)?;
+                        let timezone: Arc<str> = timezone.into();
+                        Ok(Arc::new(ScalarUDF::from(SparkUnixTimestamp::new(timezone))))
+                    }
+                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(_)) => {
+                        plan_err!("Expected single auxiliary field, but found repeated for {name}")
+                    }
+                    None => Ok(Arc::new(ScalarUDF::from(UnixTimestampNow::new()))),
+                }
+            }
+            "spark_xxhash64" | "xxhash64" => Ok(Arc::new(ScalarUDF::from(SparkXxhash64::new()))),
+            "struct" => {
+                let field_names = match auxiliary_field {
+                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(_)) => {
+                        return plan_err!(
+                            "Expected repeated auxiliary field, but found single for {name}"
+                        )
+                    }
+                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(
+                        repeated,
+                    )) => repeated
+                        .auxiliary_field
+                        .iter()
+                        .map(|x| self.try_decode_message::<String>(x))
+                        .collect::<Result<_>>()?,
+                    None => return plan_err!("no auxiliary field found for {name}"),
+                };
+                Ok(Arc::new(ScalarUDF::from(StructFunction::new(field_names))))
+            }
+            "update_struct_field" => {
+                let field_names = match auxiliary_field {
+                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(_)) => {
+                        return plan_err!(
+                            "Expected repeated auxiliary field, but found single for {name}"
+                        )
+                    }
+                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(
+                        repeated,
+                    )) => repeated
+                        .auxiliary_field
+                        .iter()
+                        .map(|x| self.try_decode_message::<String>(x))
+                        .collect::<Result<_>>()?,
+                    None => return plan_err!("no auxiliary field found for {name}"),
+                };
+                Ok(Arc::new(ScalarUDF::from(UpdateStructField::new(
+                    field_names,
+                ))))
+            }
+            _ => plan_err!("Could not find Scalar Function: {name}"),
+        }
     }
 
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
-        // plan_err!("try_decode_udaf")
         let udf_kind = if let Some(_func) = node
             .inner()
             .as_any()

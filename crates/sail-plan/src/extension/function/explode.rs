@@ -5,6 +5,16 @@ use datafusion::common::Result;
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_common::plan_err;
 
+pub fn explode_name_to_kind(name: &str) -> ExplodeKind {
+    match name {
+        "explode" => ExplodeKind::Explode,
+        "explode_outer" => ExplodeKind::ExplodeOuter,
+        "posexplode" => ExplodeKind::PosExplode,
+        "posexplode_outer" => ExplodeKind::PosExplodeOuter,
+        _ => unreachable!(),
+    }
+}
+
 #[derive(Debug)]
 pub struct Explode {
     signature: Signature,
@@ -32,13 +42,7 @@ impl Explode {
     }
 
     pub fn name_to_kind(&self) -> ExplodeKind {
-        match self.kind_to_name() {
-            "explode" => ExplodeKind::Explode,
-            "explode_outer" => ExplodeKind::ExplodeOuter,
-            "posexplode" => ExplodeKind::PosExplode,
-            "posexplode_outer" => ExplodeKind::PosExplodeOuter,
-            _ => unreachable!(),
-        }
+        explode_name_to_kind(self.kind_to_name())
     }
 
     pub fn kind_to_name(&self) -> &str {
