@@ -30,8 +30,23 @@ message ExtendedScalarUdf {
 
 message StandardUdf {}
 
+message AuxiliaryFieldSingle {
+  bytes auxiliary_field = 1;
+}
+
+message AuxiliaryFieldRepeated {
+  repeated bytes auxiliary_field = 1;
+}
+
+message AuxiliaryField {
+  oneof auxiliary_field {
+    AuxiliaryFieldSingle auxiliary_field_single = 1;
+    AuxiliaryFieldRepeated auxiliary_field_repeated = 2;
+  }
+}
+
 message WithOneAuxiliaryFieldUdf {
-  bytes auxiliary_field = 2;
+  AuxiliaryField auxiliary_field = 1;
 }
 
 message RangeExecNode {

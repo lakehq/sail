@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion::common::{plan_datafusion_err, plan_err, Result, ScalarValue};
+use datafusion::common::{plan_datafusion_err, plan_err, Result};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{AggregateUDF, ScalarUDF};
 use datafusion::physical_plan::memory::MemoryExec;
@@ -16,11 +16,10 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common::utils::{read_record_batches, write_record_batches};
-use sail_plan::extension::function::array::{ArrayItemWithPosition, MapToArray};
+use sail_plan::extension::function::array::{ArrayEmptyToNull, ArrayItemWithPosition, MapToArray};
 use sail_plan::extension::function::array_min_max::{ArrayMax, ArrayMin};
-use sail_plan::extension::function::{
-    array::ArrayEmptyToNull, spark_unix_timestamp::SparkUnixTimestamp,
-};
+use sail_plan::extension::function::drop_struct_field::DropStructField;
+use sail_plan::extension::function::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
 use sail_plan::extension::physical::{RangeExec, SchemaPivotExec, ShowStringExec};
 
@@ -257,6 +256,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
+        // plan_err!("try_decode_udaf")
         let udf_kind = if let Some(_func) = node
             .inner()
             .as_any()
@@ -266,18 +266,39 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(_func) = node.inner().as_any().downcast_ref::<ArrayEmptyToNull>() {
             UdfKind::Standard(gen::StandardUdf {})
         } else if let Some(func) = node.inner().as_any().downcast_ref::<MapToArray>() {
-            let nullable = self.try_encode_message::<gen_datafusion_common::ScalarValue>(
-                (&ScalarValue::Boolean(Some(func.nullable()))).try_into()?,
-            )?;
+            let nullable = self.try_encode_message::<bool>(func.nullable())?;
             UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
-                auxiliary_field: nullable,
+                auxiliary_field: Some(gen::AuxiliaryField {
+                    auxiliary_field: Some(
+                        gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(
+                            gen::AuxiliaryFieldSingle {
+                                auxiliary_field: nullable,
+                            },
+                        ),
+                    ),
+                }),
             })
         } else if let Some(_func) = node.inner().as_any().downcast_ref::<ArrayMin>() {
             UdfKind::Standard(gen::StandardUdf {})
         } else if let Some(_func) = node.inner().as_any().downcast_ref::<ArrayMax>() {
             UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
-            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<DropStructField>() {
+            let field_names = func
+                .field_names()
+                .iter()
+                .map(|x| self.try_encode_message::<String>(x.to_string()))
+                .collect::<Result<_>>()?;
+            UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
+                auxiliary_field: Some(gen::AuxiliaryField {
+                    auxiliary_field: Some(
+                        gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(
+                            gen::AuxiliaryFieldRepeated {
+                                auxiliary_field: field_names,
+                            },
+                        ),
+                    ),
+                }),
+            })
         } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
             UdfKind::Standard(gen::StandardUdf {})
         } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
@@ -327,11 +348,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
             UdfKind::Standard(gen::StandardUdf {})
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkUnixTimestamp>() {
-            let timezone = self.try_encode_message::<gen_datafusion_common::ScalarValue>(
-                (&ScalarValue::Utf8(Some(func.timezone().to_string()))).try_into()?,
-            )?;
+            let timezone = self.try_encode_message::<String>(func.timezone().to_string())?;
             UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
-                auxiliary_field: timezone,
+                auxiliary_field: Some(gen::AuxiliaryField {
+                    auxiliary_field: Some(
+                        gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(
+                            gen::AuxiliaryFieldSingle {
+                                auxiliary_field: timezone,
+                            },
+                        ),
+                    ),
+                }),
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
