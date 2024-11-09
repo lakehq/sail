@@ -1,6 +1,11 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use crate::plan::gen::extended_physical_plan_node::NodeKind;
+use crate::plan::gen::extended_scalar_udf::UdfKind;
+use crate::plan::gen::{ExtendedPhysicalPlanNode, ExtendedScalarUdf};
+use crate::plan::{gen, ShuffleReadExec, ShuffleWriteExec};
+use crate::stream::{TaskReadLocation, TaskWriteLocation};
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion::common::{plan_datafusion_err, plan_err, Result};
 use datafusion::execution::FunctionRegistry;
@@ -16,18 +21,33 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common::utils::{read_record_batches, write_record_batches};
-use sail_plan::extension::function::array::{ArrayEmptyToNull, ArrayItemWithPosition, MapToArray};
-use sail_plan::extension::function::array_min_max::{ArrayMax, ArrayMin};
-use sail_plan::extension::function::drop_struct_field::DropStructField;
-use sail_plan::extension::function::spark_unix_timestamp::SparkUnixTimestamp;
+use sail_plan::extension::function::{
+    array::{ArrayEmptyToNull, ArrayItemWithPosition, MapToArray},
+    array_min_max::{ArrayMax, ArrayMin},
+    drop_struct_field::DropStructField,
+    explode::Explode,
+    least_greatest::{Greatest, Least},
+    levenshtein::Levenshtein,
+    map_function::MapFunction,
+    multi_expr::MultiExpr,
+    raise_error::RaiseError,
+    randn::Randn,
+    random::Random,
+    size::Size,
+    spark_array::SparkArray,
+    spark_concat::SparkConcat,
+    spark_hex_unhex::{SparkHex, SparkUnHex},
+    spark_murmur3_hash::SparkMurmur3Hash,
+    spark_reverse::SparkReverse,
+    spark_unix_timestamp::SparkUnixTimestamp,
+    spark_xxhash64::SparkXxhash64,
+    struct_function::StructFunction,
+    unix_timestamp_now::UnixTimestampNow,
+    update_struct_field::UpdateStructField,
+};
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
 use sail_plan::extension::physical::{RangeExec, SchemaPivotExec, ShowStringExec};
-
-use crate::plan::gen::extended_physical_plan_node::NodeKind;
-use crate::plan::gen::extended_scalar_udf::UdfKind;
-use crate::plan::gen::{ExtendedPhysicalPlanNode, ExtendedScalarUdf};
-use crate::plan::{gen, ShuffleReadExec, ShuffleWriteExec};
-use crate::stream::{TaskReadLocation, TaskWriteLocation};
+use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
 pub struct RemoteExecutionCodec {
     context: SessionContext,
@@ -299,53 +319,48 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     ),
                 }),
             })
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<Explode>() {
+            let kind = self.try_encode_message::<String>(func.kind_to_name().to_string())?;
+            UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
+                auxiliary_field: Some(gen::AuxiliaryField {
+                    auxiliary_field: Some(
+                        gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(
+                            gen::AuxiliaryFieldSingle {
+                                auxiliary_field: kind,
+                            },
+                        ),
+                    ),
+                }),
+            })
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<Greatest>() {
             UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<Least>() {
             UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<Levenshtein>() {
             UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapFunction>() {
             UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MultiExpr>() {
             UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<RaiseError>() {
             UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<Randn>() {
             UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<Random>() {
             UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<Size>() {
             UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkArray>() {
             UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkConcat>() {
             UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkHex>() {
             UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkUnHex>() {
             UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkMurmur3Hash>() {
             UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkReverse>() {
             UdfKind::Standard(gen::StandardUdf {})
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkUnixTimestamp>() {
             let timezone = self.try_encode_message::<String>(func.timezone().to_string())?;
@@ -360,7 +375,49 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     ),
                 }),
             })
-        } else {
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkXxhash64>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<StructFunction>() {
+            let field_names = func
+                .field_names()
+                .iter()
+                .map(|x| self.try_encode_message::<String>(x.to_string()))
+                .collect::<Result<_>>()?;
+            UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
+                auxiliary_field: Some(gen::AuxiliaryField {
+                    auxiliary_field: Some(
+                        gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(
+                            gen::AuxiliaryFieldRepeated {
+                                auxiliary_field: field_names,
+                            },
+                        ),
+                    ),
+                }),
+            })
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<UnixTimestampNow>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<UpdateStructField>() {
+            let field_names = func
+                .field_names()
+                .iter()
+                .map(|x| self.try_encode_message::<String>(x.to_string()))
+                .collect::<Result<_>>()?;
+            UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
+                auxiliary_field: Some(gen::AuxiliaryField {
+                    auxiliary_field: Some(
+                        gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(
+                            gen::AuxiliaryFieldRepeated {
+                                auxiliary_field: field_names,
+                            },
+                        ),
+                    ),
+                }),
+            })
+        }
+        // else if let Some(_func) = node.inner().as_any().downcast_ref::<PySparkUDF>() {
+        //     UdfKind::Standard(gen::StandardUdf {})
+        // }
+        else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
         let node = ExtendedScalarUdf {

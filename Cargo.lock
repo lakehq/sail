@@ -4371,6 +4371,7 @@ dependencies = [
  "prost-types 0.13.3",
  "sail-common",
  "sail-plan",
+ "sail-python-udf",
  "sail-server",
  "thiserror",
  "tokio",

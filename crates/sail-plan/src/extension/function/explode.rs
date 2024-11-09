@@ -30,6 +30,25 @@ impl Explode {
     pub fn kind(&self) -> &ExplodeKind {
         &self.kind
     }
+
+    pub fn name_to_kind(&self) -> ExplodeKind {
+        match self.kind_to_name() {
+            "explode" => ExplodeKind::Explode,
+            "explode_outer" => ExplodeKind::ExplodeOuter,
+            "posexplode" => ExplodeKind::PosExplode,
+            "posexplode_outer" => ExplodeKind::PosExplodeOuter,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn kind_to_name(&self) -> &str {
+        match self.kind {
+            ExplodeKind::Explode => "explode",
+            ExplodeKind::ExplodeOuter => "explode_outer",
+            ExplodeKind::PosExplode => "posexplode",
+            ExplodeKind::PosExplodeOuter => "posexplode_outer",
+        }
+    }
 }
 
 impl ScalarUDFImpl for Explode {
@@ -38,12 +57,7 @@ impl ScalarUDFImpl for Explode {
     }
 
     fn name(&self) -> &str {
-        match self.kind {
-            ExplodeKind::Explode => "explode",
-            ExplodeKind::ExplodeOuter => "explode_outer",
-            ExplodeKind::PosExplode => "posexplode",
-            ExplodeKind::PosExplodeOuter => "posexplode_outer",
-        }
+        self.kind_to_name()
     }
 
     fn signature(&self) -> &Signature {

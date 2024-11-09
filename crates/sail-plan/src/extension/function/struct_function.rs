@@ -43,6 +43,10 @@ impl StructFunction {
         }
     }
 
+    pub fn field_names(&self) -> &[String] {
+        &self.field_names
+    }
+
     pub fn try_new_from_expressions(expr: Vec<Expr>) -> Result<Self> {
         let field_names: Vec<String> = expr
             .into_iter()
