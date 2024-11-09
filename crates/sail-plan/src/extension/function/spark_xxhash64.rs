@@ -11,6 +11,12 @@ pub struct SparkXxhash64 {
     signature: Signature,
 }
 
+impl Default for SparkXxhash64 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SparkXxhash64 {
     pub fn new() -> Self {
         Self {

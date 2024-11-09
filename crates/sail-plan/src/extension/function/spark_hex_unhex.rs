@@ -12,6 +12,12 @@ pub struct SparkHex {
     signature: Signature,
 }
 
+impl Default for SparkHex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SparkHex {
     pub fn new() -> Self {
         Self {
@@ -63,6 +69,12 @@ impl ScalarUDFImpl for SparkHex {
 #[derive(Debug)]
 pub struct SparkUnHex {
     signature: Signature,
+}
+
+impl Default for SparkUnHex {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SparkUnHex {

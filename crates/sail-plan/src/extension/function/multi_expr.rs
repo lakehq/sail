@@ -13,6 +13,12 @@ pub struct MultiExpr {
     signature: Signature,
 }
 
+impl Default for MultiExpr {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MultiExpr {
     pub fn new() -> Self {
         Self {

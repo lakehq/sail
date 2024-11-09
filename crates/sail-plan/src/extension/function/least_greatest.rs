@@ -11,6 +11,12 @@ pub struct Greatest {
     signature: Signature,
 }
 
+impl Default for Greatest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Greatest {
     pub fn new() -> Self {
         Self {
@@ -64,6 +70,12 @@ impl Least {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
         }
+    }
+}
+
+impl Default for Least {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

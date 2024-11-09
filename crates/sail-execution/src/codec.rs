@@ -1,11 +1,6 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use crate::plan::gen::extended_physical_plan_node::NodeKind;
-use crate::plan::gen::extended_scalar_udf::UdfKind;
-use crate::plan::gen::{ExtendedPhysicalPlanNode, ExtendedScalarUdf};
-use crate::plan::{gen, ShuffleReadExec, ShuffleWriteExec};
-use crate::stream::{TaskReadLocation, TaskWriteLocation};
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion::common::{plan_datafusion_err, plan_err, Result};
 use datafusion::execution::FunctionRegistry;
@@ -21,32 +16,36 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common::utils::{read_record_batches, write_record_batches};
-use sail_plan::extension::function::{
-    array::{ArrayEmptyToNull, ArrayItemWithPosition, MapToArray},
-    array_min_max::{ArrayMax, ArrayMin},
-    drop_struct_field::DropStructField,
-    explode::{explode_name_to_kind, Explode},
-    least_greatest::{Greatest, Least},
-    levenshtein::Levenshtein,
-    map_function::MapFunction,
-    multi_expr::MultiExpr,
-    raise_error::RaiseError,
-    randn::Randn,
-    random::Random,
-    size::Size,
-    spark_array::SparkArray,
-    spark_concat::SparkConcat,
-    spark_hex_unhex::{SparkHex, SparkUnHex},
-    spark_murmur3_hash::SparkMurmur3Hash,
-    spark_reverse::SparkReverse,
-    spark_unix_timestamp::SparkUnixTimestamp,
-    spark_xxhash64::SparkXxhash64,
-    struct_function::StructFunction,
-    unix_timestamp_now::UnixTimestampNow,
-    update_struct_field::UpdateStructField,
-};
+use sail_plan::extension::function::array::{ArrayEmptyToNull, ArrayItemWithPosition, MapToArray};
+use sail_plan::extension::function::array_min_max::{ArrayMax, ArrayMin};
+use sail_plan::extension::function::drop_struct_field::DropStructField;
+use sail_plan::extension::function::explode::{explode_name_to_kind, Explode};
+use sail_plan::extension::function::least_greatest::{Greatest, Least};
+use sail_plan::extension::function::levenshtein::Levenshtein;
+use sail_plan::extension::function::map_function::MapFunction;
+use sail_plan::extension::function::multi_expr::MultiExpr;
+use sail_plan::extension::function::raise_error::RaiseError;
+use sail_plan::extension::function::randn::Randn;
+use sail_plan::extension::function::random::Random;
+use sail_plan::extension::function::size::Size;
+use sail_plan::extension::function::spark_array::SparkArray;
+use sail_plan::extension::function::spark_concat::SparkConcat;
+use sail_plan::extension::function::spark_hex_unhex::{SparkHex, SparkUnHex};
+use sail_plan::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
+use sail_plan::extension::function::spark_reverse::SparkReverse;
+use sail_plan::extension::function::spark_unix_timestamp::SparkUnixTimestamp;
+use sail_plan::extension::function::spark_xxhash64::SparkXxhash64;
+use sail_plan::extension::function::struct_function::StructFunction;
+use sail_plan::extension::function::unix_timestamp_now::UnixTimestampNow;
+use sail_plan::extension::function::update_struct_field::UpdateStructField;
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
 use sail_plan::extension::physical::{RangeExec, SchemaPivotExec, ShowStringExec};
+
+use crate::plan::gen::extended_physical_plan_node::NodeKind;
+use crate::plan::gen::extended_scalar_udf::UdfKind;
+use crate::plan::gen::{ExtendedPhysicalPlanNode, ExtendedScalarUdf};
+use crate::plan::{gen, ShuffleReadExec, ShuffleWriteExec};
+use crate::stream::{TaskReadLocation, TaskWriteLocation};
 // use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
 pub struct RemoteExecutionCodec {
@@ -562,7 +561,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         //     UdfKind::Standard(gen::StandardUdf {})
         // }
         else {
-            return plan_err!("unsupported physical plan node: {node:?}");
+            return Ok(());
         };
         let node = ExtendedScalarUdf {
             udf_kind: Some(udf_kind),

@@ -11,6 +11,12 @@ pub struct SparkMurmur3Hash {
     signature: Signature,
 }
 
+impl Default for SparkMurmur3Hash {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SparkMurmur3Hash {
     pub fn new() -> Self {
         Self {

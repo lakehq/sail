@@ -10,6 +10,12 @@ pub struct RaiseError {
     signature: Signature,
 }
 
+impl Default for RaiseError {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RaiseError {
     pub fn new() -> Self {
         Self {

@@ -16,7 +16,7 @@ pub struct Randn {
 
 impl Default for Randn {
     fn default() -> Self {
-        Randn::new()
+        Self::new()
     }
 }
 

@@ -18,6 +18,12 @@ pub struct ArrayItemWithPosition {
     signature: Signature,
 }
 
+impl Default for ArrayItemWithPosition {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArrayItemWithPosition {
     pub fn new() -> Self {
         Self {
@@ -153,6 +159,12 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
 #[derive(Debug)]
 pub struct ArrayEmptyToNull {
     signature: Signature,
+}
+
+impl Default for ArrayEmptyToNull {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayEmptyToNull {
