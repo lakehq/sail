@@ -8,7 +8,7 @@ use datafusion_comet_spark_expr::scalar_funcs::{spark_hex, spark_unhex};
 use datafusion_common::{DataFusionError, ScalarValue};
 
 #[derive(Debug)]
-pub(crate) struct SparkHex {
+pub struct SparkHex {
     signature: Signature,
 }
 
@@ -61,7 +61,7 @@ impl ScalarUDFImpl for SparkHex {
 }
 
 #[derive(Debug)]
-pub(crate) struct SparkUnHex {
+pub struct SparkUnHex {
     signature: Signature,
 }
 

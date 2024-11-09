@@ -7,7 +7,7 @@ use datafusion_comet_spark_expr::scalar_funcs::spark_xxhash64;
 use datafusion_common::ScalarValue;
 
 #[derive(Debug)]
-pub(crate) struct SparkXxhash64 {
+pub struct SparkXxhash64 {
     signature: Signature,
 }
 

@@ -120,7 +120,7 @@ pub(super) fn empty_array_type() -> DataType {
 /// `make_array_inner` is the implementation of the `make_array` function.
 /// Constructs an array using the input `data` as `ArrayRef`.
 /// Returns a reference-counted `Array` instance result.
-pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     let mut data_type = DataType::Null;
     for arg in arrays {
         let arg_data_type = arg.data_type();

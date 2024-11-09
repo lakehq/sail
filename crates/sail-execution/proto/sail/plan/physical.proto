@@ -23,17 +23,15 @@ message ExtendedPhysicalPlanNode {
 
 message ExtendedScalarUdf {
   oneof UdfKind {
-    NamedUdf named = 1;
-    TimestampUdf timestamp = 2;
+    StandardUdf standard = 1;
+    WithOneAuxiliaryFieldUdf with_one_auxiliary_field = 2;
   }
 }
 
-message NamedUdf {
-  string name = 1;
-}
+message StandardUdf {}
 
-message TimestampUdf {
-  string timestamp = 1;
+message WithOneAuxiliaryFieldUdf {
+  bytes auxiliary_field = 2;
 }
 
 message RangeExecNode {

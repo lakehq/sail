@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion::common::{plan_datafusion_err, plan_err, Result};
+use datafusion::common::{plan_datafusion_err, plan_err, Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{AggregateUDF, ScalarUDF};
 use datafusion::physical_plan::memory::MemoryExec;
@@ -16,10 +16,16 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common::utils::{read_record_batches, write_record_batches};
+use sail_plan::extension::function::array::{ArrayItemWithPosition, MapToArray};
+use sail_plan::extension::function::array_min_max::{ArrayMax, ArrayMin};
+use sail_plan::extension::function::{
+    array::ArrayEmptyToNull, spark_unix_timestamp::SparkUnixTimestamp,
+};
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
 use sail_plan::extension::physical::{RangeExec, SchemaPivotExec, ShowStringExec};
 
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
+use crate::plan::gen::extended_scalar_udf::UdfKind;
 use crate::plan::gen::{ExtendedPhysicalPlanNode, ExtendedScalarUdf};
 use crate::plan::{gen, ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::{TaskReadLocation, TaskWriteLocation};
@@ -251,11 +257,87 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
-        let name = node.name();
+        let udf_kind = if let Some(_func) = node
+            .inner()
+            .as_any()
+            .downcast_ref::<ArrayItemWithPosition>()
+        {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<ArrayEmptyToNull>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            let timezone = self.try_encode_message::<gen_datafusion_common::ScalarValue>(
+                (&ScalarValue::new_utf8(func.timezone().to_string())).try_into()?,
+            )?;
+            UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
+                auxiliary_field: timezone,
+            })
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<ArrayMin>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<ArrayMax>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkUnixTimestamp>() {
+            let timezone = self.try_encode_message::<gen_datafusion_common::ScalarValue>(
+                (&ScalarValue::new_utf8(func.timezone().to_string())).try_into()?,
+            )?;
+            UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
+                auxiliary_field: timezone,
+            })
+        } else {
+            return plan_err!("unsupported physical plan node: {node:?}");
+        };
         let node = ExtendedScalarUdf {
-            udf_kind: Some(gen::extended_scalar_udf::UdfKind::Named(gen::NamedUdf {
-                name: name.to_string(),
-            })),
+            udf_kind: Some(udf_kind),
         };
         node.encode(buf)
             .map_err(|e| plan_datafusion_err!("failed to encode udf: {e:?}"))

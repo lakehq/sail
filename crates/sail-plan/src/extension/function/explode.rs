@@ -6,13 +6,13 @@ use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatili
 use datafusion_common::plan_err;
 
 #[derive(Debug)]
-pub(crate) struct Explode {
+pub struct Explode {
     signature: Signature,
     kind: ExplodeKind,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum ExplodeKind {
+pub enum ExplodeKind {
     Explode,
     ExplodeOuter,
     PosExplode,
@@ -20,14 +20,14 @@ pub(crate) enum ExplodeKind {
 }
 
 impl Explode {
-    pub(crate) fn new(kind: ExplodeKind) -> Self {
+    pub fn new(kind: ExplodeKind) -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
             kind,
         }
     }
 
-    pub(crate) fn kind(&self) -> &ExplodeKind {
+    pub fn kind(&self) -> &ExplodeKind {
         &self.kind
     }
 }

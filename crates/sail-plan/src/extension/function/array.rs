@@ -14,12 +14,12 @@ use datafusion::common::{DataFusionError, Result};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub(crate) struct ArrayItemWithPosition {
+pub struct ArrayItemWithPosition {
     signature: Signature,
 }
 
 impl ArrayItemWithPosition {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
         }
@@ -151,12 +151,12 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
 }
 
 #[derive(Debug)]
-pub(crate) struct ArrayEmptyToNull {
+pub struct ArrayEmptyToNull {
     signature: Signature,
 }
 
 impl ArrayEmptyToNull {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
         }
@@ -242,13 +242,13 @@ impl ScalarUDFImpl for ArrayEmptyToNull {
 }
 
 #[derive(Debug)]
-pub(crate) struct MapToArray {
+pub struct MapToArray {
     signature: Signature,
     nullable: bool,
 }
 
 impl MapToArray {
-    pub(crate) fn new(nullable: bool) -> Self {
+    pub fn new(nullable: bool) -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
             nullable,
