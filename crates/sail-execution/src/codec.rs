@@ -266,11 +266,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(_func) = node.inner().as_any().downcast_ref::<ArrayEmptyToNull>() {
             UdfKind::Standard(gen::StandardUdf {})
         } else if let Some(func) = node.inner().as_any().downcast_ref::<MapToArray>() {
-            let timezone = self.try_encode_message::<gen_datafusion_common::ScalarValue>(
-                (&ScalarValue::new_utf8(func.timezone().to_string())).try_into()?,
+            let nullable = self.try_encode_message::<gen_datafusion_common::ScalarValue>(
+                (&ScalarValue::Boolean(Some(func.nullable()))).try_into()?,
             )?;
             UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
-                auxiliary_field: timezone,
+                auxiliary_field: nullable,
             })
         } else if let Some(_func) = node.inner().as_any().downcast_ref::<ArrayMin>() {
             UdfKind::Standard(gen::StandardUdf {})
@@ -328,7 +328,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::Standard(gen::StandardUdf {})
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkUnixTimestamp>() {
             let timezone = self.try_encode_message::<gen_datafusion_common::ScalarValue>(
-                (&ScalarValue::new_utf8(func.timezone().to_string())).try_into()?,
+                (&ScalarValue::Utf8(Some(func.timezone().to_string()))).try_into()?,
             )?;
             UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
                 auxiliary_field: timezone,

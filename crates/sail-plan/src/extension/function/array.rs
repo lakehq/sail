@@ -275,6 +275,10 @@ impl MapToArray {
         let data_type = DataType::Struct(self.nullable_entry_fields(field)?);
         Ok(Arc::new(Field::new(field.name(), data_type, true)))
     }
+
+    pub fn nullable(&self) -> bool {
+        self.nullable
+    }
 }
 
 impl ScalarUDFImpl for MapToArray {
