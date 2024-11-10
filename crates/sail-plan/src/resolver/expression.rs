@@ -17,7 +17,7 @@ use log::debug;
 use num_traits::Float;
 use sail_common::spec;
 use sail_common::spec::PySparkUdfType;
-use sail_python_udf::cereal::pyspark_udf::{deserialize_partial_pyspark_udf, PySparkUdfObject};
+use sail_python_udf::cereal::pyspark_udf::build_pyspark_udf_payload;
 use sail_python_udf::udf::pyspark_udaf::PySparkAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 use sail_python_udf::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
@@ -750,16 +750,13 @@ impl PlanResolver<'_> {
                 };
                 let output_type: DataType = self.resolve_data_type(output_type.clone())?;
 
-                let python_function: PySparkUdfObject = deserialize_partial_pyspark_udf(
+                let python_bytes: Vec<u8> = build_pyspark_udf_payload(
                     python_version,
                     command,
                     *eval_type,
                     arguments.len(),
                     &self.config.spark_udf_config,
-                )
-                .map_err(|e| {
-                    PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
-                })?;
+                )?;
 
                 let input_types: Vec<DataType> = arguments
                     .iter()
@@ -770,10 +767,11 @@ impl PlanResolver<'_> {
                 let python_udf: PySparkUDF = PySparkUDF::new(
                     function_name.to_owned(),
                     deterministic,
-                    input_types,
                     *eval_type,
-                    python_function,
+                    input_types,
                     output_type,
+                    python_bytes,
+                    true,
                 );
 
                 Arc::new(ScalarUDF::from(python_udf))
@@ -939,7 +937,7 @@ impl PlanResolver<'_> {
                     };
                     let output_type = self.resolve_data_type(output_type)?;
 
-                    let python_function: PySparkUdfObject = deserialize_partial_pyspark_udf(
+                    let python_bytes: Vec<u8> = build_pyspark_udf_payload(
                         &python_version,
                         &command,
                         eval_type,
@@ -957,7 +955,8 @@ impl PlanResolver<'_> {
                                 deterministic,
                                 input_types,
                                 output_type,
-                                python_function,
+                                python_bytes,
+                                true,
                             );
                             let udaf = AggregateUDF::from(udaf);
                             expr::WindowFunctionDefinition::AggregateUDF(Arc::new(udaf))
@@ -1189,9 +1188,6 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         // TODO: Function arg for if pyspark_udf or not.
-        use sail_python_udf::cereal::pyspark_udf::{
-            deserialize_partial_pyspark_udf, PySparkUdfObject,
-        };
         use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
         let spec::CommonInlineUserDefinedFunction {
@@ -1223,14 +1219,13 @@ impl PlanResolver<'_> {
         };
         let output_type = self.resolve_data_type(output_type)?;
 
-        let python_function: PySparkUdfObject = deserialize_partial_pyspark_udf(
+        let python_bytes: Vec<u8> = build_pyspark_udf_payload(
             &python_version,
             &command,
             eval_type,
             arguments.len(),
             &self.config.spark_udf_config,
-        )
-        .map_err(|e| PlanError::invalid(format!("Python UDF deserialization error: {:?}", e)))?;
+        )?;
 
         let func = match eval_type {
             PySparkUdfType::None
@@ -1249,10 +1244,11 @@ impl PlanResolver<'_> {
                 let udf = PySparkUDF::new(
                     function_name.to_owned(),
                     deterministic,
-                    input_types,
                     eval_type,
-                    python_function,
+                    input_types,
                     output_type,
+                    python_bytes,
+                    true,
                 );
                 expr::Expr::ScalarFunction(expr::ScalarFunction {
                     func: Arc::new(ScalarUDF::from(udf)),
@@ -1265,7 +1261,8 @@ impl PlanResolver<'_> {
                     deterministic,
                     input_types,
                     output_type,
-                    python_function,
+                    python_bytes,
+                    true,
                 );
                 expr::Expr::AggregateFunction(expr::AggregateFunction {
                     func: Arc::new(AggregateUDF::from(udaf)),

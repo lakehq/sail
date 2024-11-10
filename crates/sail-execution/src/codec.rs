@@ -1,10 +1,10 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use arrow::datatypes::{Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::common::{plan_datafusion_err, plan_err, Result};
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::{AggregateUDF, ScalarUDF};
+use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, Volatility};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion::prelude::SessionContext;
@@ -15,6 +15,7 @@ use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use prost::bytes::BytesMut;
 use prost::Message;
+use sail_common::spec::PySparkUdfType;
 use sail_common::utils::{read_record_batches, write_record_batches};
 use sail_plan::extension::function::array::{ArrayEmptyToNull, ArrayItemWithPosition, MapToArray};
 use sail_plan::extension::function::array_min_max::{ArrayMax, ArrayMin};
@@ -40,13 +41,15 @@ use sail_plan::extension::function::unix_timestamp_now::UnixTimestampNow;
 use sail_plan::extension::function::update_struct_field::UpdateStructField;
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
 use sail_plan::extension::physical::{RangeExec, SchemaPivotExec, ShowStringExec};
+use sail_python_udf::udf::pyspark_udaf::PySparkAggregateUDF;
+use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
+use crate::plan::gen::extended_aggregate_udf::UdafKind;
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
-use crate::plan::gen::{ExtendedPhysicalPlanNode, ExtendedScalarUdf};
+use crate::plan::gen::{ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf};
 use crate::plan::{gen, ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::{TaskReadLocation, TaskWriteLocation};
-// use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
 pub struct RemoteExecutionCodec {
     context: SessionContext,
@@ -270,6 +273,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         node.encode(buf)
             .map_err(|e| plan_datafusion_err!("failed to encode plan: {e:?}"))
     }
+
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         let udf = ExtendedScalarUdf::decode(buf)
             .map_err(|e| plan_datafusion_err!("failed to decode udf: {e:?}"))?;
@@ -290,6 +294,39 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 }
             }
             UdfKind::Standard(gen::StandardUdf {}) => None,
+            UdfKind::PySpark(gen::PySparkUdf {
+                function_name,
+                deterministic,
+                input_types,
+                eval_type,
+                output_type,
+                python_bytes,
+            }) => {
+                let input_types: Vec<DataType> = input_types
+                    .iter()
+                    .map(|x| {
+                        let arrow_type =
+                            self.try_decode_message::<gen_datafusion_common::ArrowType>(x)?;
+                        let data_type: DataType = (&arrow_type).try_into()?;
+                        Ok(data_type)
+                    })
+                    .collect::<Result<_>>()?;
+                let eval_type = PySparkUdfType::try_from(eval_type)
+                    .map_err(|e| plan_datafusion_err!("failed to decode eval_type: {e:?}"))?;
+                let output_type =
+                    self.try_decode_message::<gen_datafusion_common::ArrowType>(&output_type)?;
+                let output_type: DataType = (&output_type).try_into()?;
+                let udf = PySparkUDF::new(
+                    function_name.to_owned(),
+                    deterministic,
+                    eval_type,
+                    input_types,
+                    output_type,
+                    python_bytes,
+                    false,
+                );
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -556,11 +593,28 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     ),
                 }),
             })
-        }
-        // else if let Some(_func) = node.inner().as_any().downcast_ref::<PySparkUDF>() {
-        //     UdfKind::Standard(gen::StandardUdf {})
-        // }
-        else {
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<PySparkUDF>() {
+            let input_types = func
+                .input_types()
+                .iter()
+                .map(|x| {
+                    let input_type =
+                        self.try_encode_message::<gen_datafusion_common::ArrowType>(x.try_into()?)?;
+                    Ok(input_type)
+                })
+                .collect::<Result<_>>()?;
+            let output_type = self.try_encode_message::<gen_datafusion_common::ArrowType>(
+                func.output_type().try_into()?,
+            )?;
+            UdfKind::PySpark(gen::PySparkUdf {
+                function_name: func.function_name().to_string(),
+                deterministic: func.deterministic(),
+                eval_type: (*func.eval_type()).into(),
+                input_types,
+                output_type,
+                python_bytes: func.python_bytes().to_vec(),
+            })
+        } else {
             return Ok(());
         };
         let node = ExtendedScalarUdf {
@@ -570,12 +624,74 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             .map_err(|e| plan_datafusion_err!("failed to encode udf: {e:?}"))
     }
 
-    fn try_decode_udaf(&self, _name: &str, _buf: &[u8]) -> Result<Arc<AggregateUDF>> {
-        plan_err!("try_decode_udaf")
+    fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
+        let udaf = ExtendedAggregateUdf::decode(buf)
+            .map_err(|e| plan_datafusion_err!("failed to decode udf: {e:?}"))?;
+        let ExtendedAggregateUdf { udaf_kind } = udaf;
+        match udaf_kind {
+            Some(UdafKind::PySparkAgg(gen::PySparkUdaf {
+                function_name,
+                deterministic,
+                input_types,
+                output_type,
+                python_bytes,
+            })) => {
+                let input_types: Vec<DataType> = input_types
+                    .iter()
+                    .map(|x| {
+                        let arrow_type =
+                            self.try_decode_message::<gen_datafusion_common::ArrowType>(x)?;
+                        let data_type: DataType = (&arrow_type).try_into()?;
+                        Ok(data_type)
+                    })
+                    .collect::<Result<_>>()?;
+                let output_type =
+                    self.try_decode_message::<gen_datafusion_common::ArrowType>(&output_type)?;
+                let output_type: DataType = (&output_type).try_into()?;
+                let udaf = PySparkAggregateUDF::new(
+                    function_name.to_owned(),
+                    deterministic,
+                    input_types,
+                    output_type,
+                    python_bytes,
+                    false,
+                );
+                Ok(Arc::new(AggregateUDF::from(udaf)))
+            }
+            None => plan_err!("ExtendedScalarUdf: no UDF found for {name}"),
+        }
     }
 
-    fn try_encode_udaf(&self, _node: &AggregateUDF, _buf: &mut Vec<u8>) -> Result<()> {
-        Ok(())
+    fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
+        if let Some(func) = node.inner().as_any().downcast_ref::<PySparkAggregateUDF>() {
+            let input_types = func
+                .input_types()
+                .iter()
+                .map(|x| {
+                    let input_type =
+                        self.try_encode_message::<gen_datafusion_common::ArrowType>(x.try_into()?)?;
+                    Ok(input_type)
+                })
+                .collect::<Result<_>>()?;
+            let output_type = self.try_encode_message::<gen_datafusion_common::ArrowType>(
+                func.output_type().try_into()?,
+            )?;
+            let deterministic = matches!(func.signature().volatility, Volatility::Immutable);
+            let udaf_kind = UdafKind::PySparkAgg(gen::PySparkUdaf {
+                function_name: func.function_name().to_string(),
+                deterministic,
+                input_types,
+                output_type,
+                python_bytes: func.python_bytes().to_vec(),
+            });
+            let node = ExtendedAggregateUdf {
+                udaf_kind: Some(udaf_kind),
+            };
+            node.encode(buf)
+                .map_err(|e| plan_datafusion_err!("failed to encode udaf: {e:?}"))
+        } else {
+            Ok(())
+        }
     }
 }
 

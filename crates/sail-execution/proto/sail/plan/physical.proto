@@ -21,10 +21,17 @@ message ExtendedPhysicalPlanNode {
   }
 }
 
+message ExtendedAggregateUdf {
+  oneof UdafKind {
+    PySparkUdaf py_spark_agg = 1;
+  }
+}
+
 message ExtendedScalarUdf {
   oneof UdfKind {
     StandardUdf standard = 1;
     WithOneAuxiliaryFieldUdf with_one_auxiliary_field = 2;
+    PySparkUdf py_spark = 3;
   }
 }
 
@@ -47,6 +54,23 @@ message AuxiliaryField {
 
 message WithOneAuxiliaryFieldUdf {
   AuxiliaryField auxiliary_field = 1;
+}
+
+message PySparkUdf {
+  string function_name = 1;
+  bool deterministic = 2;
+  int32 eval_type = 3;
+  repeated bytes input_types = 4;
+  bytes output_type = 5;
+  bytes python_bytes = 6;
+}
+
+message PySparkUdaf {
+  string function_name = 1;
+  bool deterministic = 2;
+  repeated bytes input_types = 3;
+  bytes output_type = 4;
+  bytes python_bytes = 5;
 }
 
 message RangeExecNode {

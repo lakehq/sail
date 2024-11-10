@@ -1,9 +1,11 @@
 use std::any::Any;
+use std::sync::OnceLock;
 
 use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::common::Result;
+use datafusion_common::DataFusionError;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -23,28 +25,35 @@ use crate::udf::{
 pub struct PySparkUDF {
     signature: Signature,
     function_name: String,
-    deterministic: bool,
-    output_type: DataType,
     // TODO: We should not keep spec information in the UDF.
     //   We should define different UDFs for different eval types
     //   and let the plan resolver create the correct UDF instance.
+    deterministic: bool,
     eval_type: spec::PySparkUdfType,
-    python_function: PySparkUdfObject,
+    input_types: Vec<DataType>,
+    output_type: DataType,
+    python_bytes: Vec<u8>,
+    python_function: OnceLock<Result<PySparkUdfObject>>,
 }
 
 impl PySparkUDF {
     pub fn new(
         function_name: String,
         deterministic: bool,
-        input_types: Vec<DataType>,
         eval_type: spec::PySparkUdfType,
-        python_function: PySparkUdfObject,
+        input_types: Vec<DataType>,
         output_type: DataType,
+        python_bytes: Vec<u8>,
+        construct_udf_name: bool,
     ) -> Self {
-        let function_name = get_udf_name(&function_name, &python_function.0);
+        let function_name = if construct_udf_name {
+            get_udf_name(&function_name, &python_bytes)
+        } else {
+            function_name
+        };
         Self {
             signature: Signature::exact(
-                input_types,
+                input_types.clone(),
                 // TODO: Check if this is correct. There is also `Volatility::Stable`
                 match deterministic {
                     true => Volatility::Immutable,
@@ -53,10 +62,45 @@ impl PySparkUDF {
             ),
             function_name,
             deterministic,
+            input_types,
             output_type,
             eval_type,
-            python_function,
+            python_bytes,
+            python_function: OnceLock::new(),
         }
+    }
+
+    pub fn function_name(&self) -> &str {
+        &self.function_name
+    }
+
+    pub fn deterministic(&self) -> bool {
+        self.deterministic
+    }
+
+    pub fn eval_type(&self) -> &spec::PySparkUdfType {
+        &self.eval_type
+    }
+
+    pub fn input_types(&self) -> &[DataType] {
+        &self.input_types
+    }
+
+    pub fn output_type(&self) -> &DataType {
+        &self.output_type
+    }
+
+    pub fn python_bytes(&self) -> &[u8] {
+        &self.python_bytes
+    }
+
+    pub fn python_function(&self) -> Result<&PySparkUdfObject> {
+        self.python_function
+            .get_or_init(|| -> Result<PySparkUdfObject> {
+                Ok(PySparkUdfObject::load(&self.python_bytes)?)
+            })
+            .as_ref()
+            .map_err(|e| DataFusionError::Internal(format!("Python function error: {e}")))
     }
 }
 
@@ -262,21 +306,20 @@ impl ScalarUDFImpl for PySparkUDF {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        // We intentionally call self.python_function() in invoke() instead of in the constructor.
+        // This is because the Sail Driver may serialize the UDF in `try_encode_udf`.
+        let python_function = self.python_function()?;
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(args)?;
 
         let array_data = if self.eval_type.is_arrow_udf() {
-            Python::with_gil(|py| {
-                call_arrow_udf(py, &self.python_function, args, &self.output_type)
-            })?
+            Python::with_gil(|py| call_arrow_udf(py, python_function, args, &self.output_type))?
         } else if self.eval_type.is_pandas_udf() {
-            Python::with_gil(|py| {
-                call_pandas_udf(py, &self.python_function, args, &self.output_type)
-            })?
+            Python::with_gil(|py| call_pandas_udf(py, python_function, args, &self.output_type))?
         } else {
             Python::with_gil(|py| {
                 call_udf(
                     py,
-                    &self.python_function,
+                    python_function,
                     args,
                     self.eval_type,
                     self.deterministic,
@@ -288,10 +331,11 @@ impl ScalarUDFImpl for PySparkUDF {
     }
 
     fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
+        let python_function = self.python_function()?;
         let array_data = Python::with_gil(|py| {
             call_udf_no_args(
                 py,
-                &self.python_function,
+                python_function,
                 self.eval_type,
                 self.deterministic,
                 &self.output_type,

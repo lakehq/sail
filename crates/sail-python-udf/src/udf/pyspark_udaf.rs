@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef, AsArray};
 use datafusion::arrow::compute::concat;
@@ -8,7 +8,7 @@ use datafusion::arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::common::Result;
 use datafusion::logical_expr::{Accumulator, Signature, Volatility};
 use datafusion_common::utils::array_into_list_array;
-use datafusion_common::{exec_err, ScalarValue};
+use datafusion_common::{exec_err, DataFusionError, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::AggregateUDFImpl;
@@ -30,7 +30,8 @@ pub struct PySparkAggregateUDF {
     function_name: String,
     input_types: Vec<DataType>,
     output_type: DataType,
-    python_function: PySparkUdfObject,
+    python_bytes: Vec<u8>,
+    python_function: OnceLock<Result<PySparkUdfObject>>,
 }
 
 impl PySparkAggregateUDF {
@@ -39,9 +40,14 @@ impl PySparkAggregateUDF {
         deterministic: bool,
         input_types: Vec<DataType>,
         output_type: DataType,
-        python_function: PySparkUdfObject,
+        python_bytes: Vec<u8>,
+        construct_udf_name: bool,
     ) -> Self {
-        let function_name = get_udf_name(&function_name, &python_function.0);
+        let function_name = if construct_udf_name {
+            get_udf_name(&function_name, &python_bytes)
+        } else {
+            function_name
+        };
         let signature = Signature::exact(
             input_types.clone(),
             match deterministic {
@@ -54,8 +60,34 @@ impl PySparkAggregateUDF {
             function_name,
             input_types,
             output_type,
-            python_function,
+            python_bytes,
+            python_function: OnceLock::new(),
         }
+    }
+
+    pub fn function_name(&self) -> &str {
+        &self.function_name
+    }
+
+    pub fn input_types(&self) -> &[DataType] {
+        &self.input_types
+    }
+
+    pub fn output_type(&self) -> &DataType {
+        &self.output_type
+    }
+
+    pub fn python_bytes(&self) -> &[u8] {
+        &self.python_bytes
+    }
+
+    pub fn python_function(&self) -> Result<&PySparkUdfObject> {
+        self.python_function
+            .get_or_init(|| -> Result<PySparkUdfObject> {
+                Ok(PySparkUdfObject::load(&self.python_bytes)?)
+            })
+            .as_ref()
+            .map_err(|e| DataFusionError::Internal(format!("Aggregate Python function error: {e}")))
     }
 }
 
@@ -77,11 +109,14 @@ impl AggregateUDFImpl for PySparkAggregateUDF {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        // We intentionally call self.python_function() in accumulator() instead of in the constructor.
+        // This is because the Sail Driver may serialize the UDAF in `try_encode_udaf`.
+        let python_function = self.python_function()?;
         if acc_args.is_distinct {
             return exec_err!("distinct is not supported for aggregate UDFs");
         }
         Ok(Box::new(PySparkAggregateUDFAccumulator::new(
-            &self.python_function,
+            python_function,
             &self.input_types,
             &self.output_type,
         )))
