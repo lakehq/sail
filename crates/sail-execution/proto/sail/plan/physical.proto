@@ -18,6 +18,7 @@ message ExtendedPhysicalPlanNode {
     SchemaPivotExecNode schema_pivot = 5;
     // TODO: This can be removed once it is supported by DataFusion.
     MemoryExecNode memory = 101;
+    ValuesExecNode values = 102;
   }
 }
 
@@ -108,6 +109,11 @@ message MemoryExecNode {
   optional PhysicalProjection projection = 3;
   // TODO: `sort_information` and `show_sizes` are missing
   //   since there is no getter for them in the node.
+}
+
+message ValuesExecNode {
+  bytes data = 1;
+  bytes schema = 2;
 }
 
 message PhysicalProjection {

@@ -6,6 +6,7 @@ use datafusion::common::{plan_datafusion_err, plan_err, Result};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, Volatility};
 use datafusion::physical_plan::memory::MemoryExec;
+use datafusion::physical_plan::values::ValuesExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
@@ -176,6 +177,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     projection,
                 )?))
             }
+            NodeKind::Values(gen::ValuesExecNode { data, schema }) => {
+                let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
+                let schema = Arc::new((&schema).try_into()?);
+                let data = read_record_batches(&data)?;
+                Ok(Arc::new(ValuesExec::try_new_from_batches(schema, data)?))
+            }
         }
     }
 
@@ -264,6 +271,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
                 projection,
             })
+        } else if let Some(values) = node.as_any().downcast_ref::<ValuesExec>() {
+            let data = write_record_batches(&values.data(), &values.schema())?;
+            let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
+                values.schema().as_ref().try_into()?,
+            )?;
+            NodeKind::Values(gen::ValuesExecNode { data, schema })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
