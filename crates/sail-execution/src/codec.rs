@@ -392,7 +392,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     }
                     None => return plan_err!("no auxiliary field found for {name}"),
                 };
-                let kind = explode_name_to_kind(&kind);
+                let kind = explode_name_to_kind(&kind)?;
                 Ok(Arc::new(ScalarUDF::from(Explode::new(kind))))
             }
             "greatest" => Ok(Arc::new(ScalarUDF::from(Greatest::new()))),
@@ -512,14 +512,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     ),
                 }),
             })
-        } else if let Some(func) = node.inner().as_any().downcast_ref::<Explode>() {
-            let kind = self.try_encode_message::<String>(func.kind_to_name().to_string())?;
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<Explode>() {
+            let name = self.try_encode_message::<String>(node.name().to_string())?;
             UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
                 auxiliary_field: Some(gen::AuxiliaryField {
                     auxiliary_field: Some(
                         gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(
                             gen::AuxiliaryFieldSingle {
-                                auxiliary_field: kind,
+                                auxiliary_field: name,
                             },
                         ),
                     ),

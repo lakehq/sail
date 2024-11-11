@@ -287,6 +287,7 @@ impl PlanResolver<'_> {
             .project(vec![Expr::Column(right_column.clone())])?
             .distinct()?
             .build()?;
+        // TODO: This can be expensive for large input datasets
         let distinct_values_batches = self
             .ctx
             .execute_logical_plan(distinct_values)

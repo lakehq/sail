@@ -5,13 +5,15 @@ use datafusion::common::Result;
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_common::plan_err;
 
-pub fn explode_name_to_kind(name: &str) -> ExplodeKind {
+pub fn explode_name_to_kind(name: &str) -> Result<ExplodeKind> {
     match name {
-        "explode" => ExplodeKind::Explode,
-        "explode_outer" => ExplodeKind::ExplodeOuter,
-        "posexplode" => ExplodeKind::PosExplode,
-        "posexplode_outer" => ExplodeKind::PosExplodeOuter,
-        _ => unreachable!(),
+        "explode" => Ok(ExplodeKind::Explode),
+        "explode_outer" => Ok(ExplodeKind::ExplodeOuter),
+        "posexplode" => Ok(ExplodeKind::PosExplode),
+        "posexplode_outer" => Ok(ExplodeKind::PosExplodeOuter),
+        _ => Err(datafusion::error::DataFusionError::Plan(
+            "Invalid explode function name".to_string(),
+        )),
     }
 }
 
@@ -40,19 +42,6 @@ impl Explode {
     pub fn kind(&self) -> &ExplodeKind {
         &self.kind
     }
-
-    pub fn name_to_kind(&self) -> ExplodeKind {
-        explode_name_to_kind(self.kind_to_name())
-    }
-
-    pub fn kind_to_name(&self) -> &str {
-        match self.kind {
-            ExplodeKind::Explode => "explode",
-            ExplodeKind::ExplodeOuter => "explode_outer",
-            ExplodeKind::PosExplode => "posexplode",
-            ExplodeKind::PosExplodeOuter => "posexplode_outer",
-        }
-    }
 }
 
 impl ScalarUDFImpl for Explode {
@@ -61,7 +50,12 @@ impl ScalarUDFImpl for Explode {
     }
 
     fn name(&self) -> &str {
-        self.kind_to_name()
+        match self.kind {
+            ExplodeKind::Explode => "explode",
+            ExplodeKind::ExplodeOuter => "explode_outer",
+            ExplodeKind::PosExplode => "posexplode",
+            ExplodeKind::PosExplodeOuter => "posexplode_outer",
+        }
     }
 
     fn signature(&self) -> &Signature {

@@ -18,6 +18,7 @@ use crate::error::PyUdfResult;
 /// by logical plan optimization rules (e.g. common sub-expression elimination), resulting in
 /// incorrect logical plans.
 pub fn get_udf_name(function_name: &str, function_bytes: &[u8]) -> String {
+    // FIXME: Hash collision is possible
     let mut hasher = DefaultHasher::new();
     function_bytes.hash(&mut hasher);
     let hash = hasher.finish();
