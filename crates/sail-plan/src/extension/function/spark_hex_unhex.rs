@@ -145,11 +145,6 @@ fn hex_encode<T: AsRef<[u8]>>(data: T, lower_case: bool) -> String {
 }
 
 #[inline(always)]
-pub(super) fn hex_strings<T: AsRef<[u8]>>(data: T) -> String {
-    hex_encode(data, true)
-}
-
-#[inline(always)]
 fn hex_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<String, std::fmt::Error> {
     let hex_string = hex_encode(bytes, false);
     Ok(hex_string)

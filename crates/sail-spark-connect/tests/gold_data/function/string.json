@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Internal error: Unsupported data type.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
       }
     },
     {
@@ -173,7 +173,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: bit_length"
       }
     },
     {
@@ -195,7 +195,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: bit_length"
       }
     },
     {
@@ -611,7 +611,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Binary and Binary are not coercible to a common string type No function matches the given name and argument types 'contains(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tcontains(String(2))"
       }
     },
     {
@@ -875,7 +875,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Binary and Binary are not coercible to a common string type No function matches the given name and argument types 'ends_with(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tends_with(String(2))"
       }
     },
     {
@@ -897,7 +897,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Binary and Binary are not coercible to a common string type No function matches the given name and argument types 'ends_with(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tends_with(String(2))"
       }
     },
     {
@@ -1843,7 +1843,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: octet_length"
       }
     },
     {
@@ -1865,7 +1865,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: octet_length"
       }
     },
     {
@@ -2681,7 +2681,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Binary and Binary are not coercible to a common string type No function matches the given name and argument types 'starts_with(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tstarts_with(String(2))"
       }
     },
     {
@@ -2703,7 +2703,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Error during planning: Error during planning: Binary and Binary are not coercible to a common string type No function matches the given name and argument types 'starts_with(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tstarts_with(String(2))"
       }
     },
     {

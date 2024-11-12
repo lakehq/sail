@@ -1,52 +1,55 @@
-// use datafusion_common::ScalarValue;
-// use datafusion_expr::{expr, lit};
-// use datafusion_functions_json::udfs;
-//
-// use crate::error::PlanResult;
-use crate::function::common::Function;
-// use crate::utils::ItemTaker;
+use std::sync::Arc;
 
-// fn get_json_object(
-//     args: Vec<expr::Expr>,
-//     _function_context: &FunctionContext,
-// ) -> PlanResult<expr::Expr> {
-//     // > 1 path means nested access e.g. json_as_text(json, p1, p2) => json.p1.p2
-//     let (expr, paths) = args.at_least_one()?;
-//     let paths: Vec<expr::Expr> = paths
-//         .into_iter()
-//         .map(|path| match &path {
-//             expr::Expr::Literal(ScalarValue::Utf8(Some(value))) => {
-//                 if value.starts_with("$") {
-//                     let nth = if value.starts_with("$.") { 2 } else { 1 };
-//                     let index = value
-//                         .char_indices()
-//                         .nth(nth)
-//                         .map(|(idx, _)| idx)
-//                         .unwrap_or(value.len());
-//                     lit(ScalarValue::Utf8(Some(value[index..].to_string())))
-//                 } else {
-//                     path
-//                 }
-//             }
-//             _ => path,
-//         })
-//         .collect();
-//     let mut args = Vec::with_capacity(1 + paths.len());
-//     args.push(expr);
-//     args.extend(paths);
-//     Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-//         func: udfs::json_as_text_udf(),
-//         args,
-//     }))
-// }
+use datafusion_common::ScalarValue;
+use datafusion_expr::{expr, lit, ScalarUDF};
+
+use crate::error::PlanResult;
+use crate::extension::function::json_as_text::JsonAsText;
+use crate::extension::function::json_length::JsonLength;
+use crate::function::common::{Function, FunctionContext};
+use crate::utils::ItemTaker;
+
+fn get_json_object(
+    args: Vec<expr::Expr>,
+    _function_context: &FunctionContext,
+) -> PlanResult<expr::Expr> {
+    // > 1 path means nested access e.g. json_as_text(json, p1, p2) => json.p1.p2
+    let (expr, paths) = args.at_least_one()?;
+    let paths: Vec<expr::Expr> = paths
+        .into_iter()
+        .map(|path| match &path {
+            expr::Expr::Literal(ScalarValue::Utf8(Some(value))) => {
+                if value.starts_with("$") {
+                    let nth = if value.starts_with("$.") { 2 } else { 1 };
+                    let index = value
+                        .char_indices()
+                        .nth(nth)
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(value.len());
+                    lit(ScalarValue::Utf8(Some(value[index..].to_string())))
+                } else {
+                    path
+                }
+            }
+            _ => path,
+        })
+        .collect();
+    let mut args = Vec::with_capacity(1 + paths.len());
+    args.push(expr);
+    args.extend(paths);
+    Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(JsonAsText::new())),
+        args,
+    }))
+}
 
 pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
     vec![
         ("from_json", F::unknown("from_json")),
-        // ("get_json_object", F::custom(get_json_object)), // FIXME: NOTE TO SELF DON'T MERGE PR UNTIL THIS FIXED
-        // ("json_array_length", F::scalar_udf(udfs::json_length_udf)), // FIXME: NOTE TO SELF DON'T MERGE PR UNTIL THIS FIXED
+        ("get_json_object", F::custom(get_json_object)),
+        ("json_array_length", F::udf(JsonLength::new())),
         ("json_object_keys", F::unknown("json_object_keys")),
         ("json_tuple", F::unknown("json_tuple")),
         ("schema_of_json", F::unknown("schema_of_json")),

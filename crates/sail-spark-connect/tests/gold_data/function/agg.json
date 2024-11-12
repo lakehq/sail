@@ -1071,7 +1071,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not supported: unknown function: kurtosis"
       }
     },
     {
@@ -1093,7 +1093,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not supported: unknown function: kurtosis"
       }
     },
     {
@@ -1269,7 +1269,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not supported: unknown function: max_by"
       }
     },
     {
@@ -1401,7 +1401,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not supported: unknown function: min_by"
       }
     },
     {
@@ -1423,7 +1423,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not supported: unknown function: mode"
       }
     },
     {
@@ -1445,7 +1445,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not supported: unknown function: mode"
       }
     },
     {
@@ -1467,7 +1467,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported data type: Interval(YearMonth) for mode function"
+        "failure": "not supported: unknown function: mode"
       }
     },
     {
@@ -1503,7 +1503,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: External error: External error: This feature is not implemented: physical plan is not yet implemented for GROUPING aggregate function"
+        "failure": "error in DataFusion: resolve_grouping_function\ncaused by\nError during planning: Argument people.#3 AS name to grouping function is not in grouping columns people.#3"
       }
     },
     {
@@ -1829,7 +1829,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Utf8] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_avgx(Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_avgx(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "success": "ok"
       }
     },
     {
@@ -1851,7 +1851,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Int32] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_avgx(Utf8, Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_avgx(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "success": "ok"
       }
     },
     {
@@ -1939,7 +1939,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Utf8] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_avgy(Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_avgy(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "success": "ok"
       }
     },
     {
@@ -1961,7 +1961,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Int32] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_avgy(Utf8, Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_avgy(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "success": "ok"
       }
     },
     {
@@ -2049,7 +2049,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Utf8] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_intercept(Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_intercept(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "success": "ok"
       }
     },
     {
@@ -2093,7 +2093,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Int32] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_intercept(Utf8, Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_intercept(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "success": "ok"
       }
     },
     {
@@ -2181,7 +2181,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Utf8] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_r2(Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_r2(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "success": "ok"
       }
     },
     {
@@ -2203,7 +2203,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Int32] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_r2(Utf8, Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_r2(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "success": "ok"
       }
     },
     {
@@ -2225,7 +2225,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Int32, Utf8] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_slope(Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_slope(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "success": "ok"
       }
     },
     {
@@ -2269,7 +2269,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Coercion from [Utf8, Int32] to the signature Uniform(2, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed. No function matches the given name and argument types 'regr_slope(Utf8, Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tregr_slope(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64, Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)"
+        "success": "ok"
       }
     },
     {
@@ -2489,7 +2489,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not supported: unknown function: skewness"
       }
     },
     {
@@ -2511,7 +2511,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not supported: unknown function: skewness"
       }
     },
     {
@@ -2819,7 +2819,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Execution error: User-defined coercion failed with Execution(\"Sum not supported for Utf8\") No function matches the given name and argument types 'sum(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tsum(UserDefined)"
+        "failure": "error in DataFusion: Error during planning: Execution error: User-defined coercion failed with Execution(\"Sum not supported for Null\") No function matches the given name and argument types 'sum(Null)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tsum(UserDefined)"
       }
     },
     {

@@ -1898,7 +1898,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "532feb5c208fd1708f4d93b1984fb7a7ed678a9f0e6f799af97118d7c4e863a1"
 dependencies = [
  "datafusion 42.2.0",
- "jiter",
+ "jiter 0.5.0",
  "log",
  "paste",
 ]
@@ -3286,6 +3286,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "jiter"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f69107091dc861900882c599876b095d9db7f71064b6914d6c68b284d19f9ee8"
+dependencies = [
+ "ahash",
+ "bitvec",
+ "lexical-parse-float 0.8.5",
+ "num-bigint",
+ "num-traits",
+ "pyo3",
+ "smallvec",
+]
+
+[[package]]
 name = "jobserver"
 version = "0.1.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4281,6 +4296,7 @@ dependencies = [
  "indoc",
  "libc",
  "memoffset",
+ "num-bigint",
  "once_cell",
  "portable-atomic",
  "pyo3-build-config",
@@ -4768,7 +4784,6 @@ dependencies = [
  "arrow",
  "arrow-flight",
  "datafusion 43.0.0",
- "datafusion-functions-json",
  "datafusion-proto",
  "futures",
  "log",
@@ -4809,6 +4824,7 @@ dependencies = [
  "futures",
  "hdfs-native-object-store",
  "html-escape",
+ "jiter 0.7.0",
  "lazy_static",
  "log",
  "num-traits",

@@ -105,7 +105,7 @@ impl SessionManager {
         let runtime = {
             let registry = DynamicObjectStoreRegistry::new();
             let config = RuntimeConfig::default().with_object_store_registry(Arc::new(registry));
-            Arc::new(RuntimeEnv::new(config)?)
+            Arc::new(RuntimeEnv::try_new(config)?)
         };
         let state = SessionStateBuilder::new()
             .with_config(config)

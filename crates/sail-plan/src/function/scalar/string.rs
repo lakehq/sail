@@ -152,7 +152,8 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
     vec![
         ("ascii", F::unary(expr_fn::ascii)),
         ("base64", F::unary(base64)),
-        ("bit_length", F::unary(expr_fn::bit_length)),
+        ("bit_length", F::unknown("bit_length")), // FIXME: NOTE TO SELF DON'T MERGE PR UNTIL THIS FIXED
+        // ("bit_length", F::unary(expr_fn::bit_length)), // FIXME: NOTE TO SELF DON'T MERGE PR UNTIL THIS FIXED
         ("btrim", F::var_arg(expr_fn::btrim)),
         ("char", F::unary(expr_fn::chr)),
         ("char_length", F::unary(expr_fn::char_length)),
@@ -180,7 +181,8 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("ltrim", F::var_arg(expr_fn::ltrim)),
         ("luhn_check", F::unknown("luhn_check")),
         ("mask", F::unknown("mask")),
-        ("octet_length", F::unary(expr_fn::octet_length)),
+        ("octet_length", F::unknown("octet_length")), // FIXME: NOTE TO SELF DON'T MERGE PR UNTIL THIS FIXED
+        // ("octet_length", F::unary(expr_fn::octet_length)), // FIXME: NOTE TO SELF DON'T MERGE PR UNTIL THIS FIXED
         ("overlay", F::custom(overlay)),
         ("position", F::custom(position)),
         ("printf", F::unknown("printf")),
