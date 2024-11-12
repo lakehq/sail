@@ -7,7 +7,7 @@ use sail_python_udf::config::SparkUdfConfig;
 
 use crate::formatter::{DefaultPlanFormatter, PlanFormatter};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub enum TimestampType {
     TimestampLtz,
     TimestampNtz,
@@ -15,7 +15,7 @@ pub enum TimestampType {
 
 // The generic type parameter is used to work around the issue deriving `PartialEq` for `dyn` trait.
 // See also: https://github.com/rust-lang/rust/issues/78808
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct PlanConfig<F: ?Sized = dyn PlanFormatter> {
     /// The time zone of the session.
     pub time_zone: String,

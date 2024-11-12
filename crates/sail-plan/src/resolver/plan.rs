@@ -21,6 +21,7 @@ use datafusion_common::{
     Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference, ToDFSchema,
 };
 use datafusion_expr::builder::project;
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{ScalarFunction, Sort};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::{
@@ -794,11 +795,7 @@ impl PlanResolver<'_> {
             if join_data_type.is_some() {
                 return Err(PlanError::invalid("cross join with join data type"));
             }
-            return Ok(LogicalPlan::CrossJoin(plan::CrossJoin {
-                left: Arc::new(left),
-                right: Arc::new(right),
-                schema: join_schema,
-            }));
+            return Ok(LogicalPlanBuilder::from(left).cross_join(right)?.build()?);
         }
         // TODO: add more validation logic here and in the plan optimizer
         //  See `LogicalPlanBuilder` for details about such logic.
@@ -1045,8 +1042,8 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         Ok(LogicalPlan::Limit(plan::Limit {
-            skip,
-            fetch: Some(limit),
+            skip: Some(Box::new(lit(skip as i64))),
+            fetch: Some(Box::new(lit(limit as i64))),
             input: Arc::new(input),
         }))
     }
@@ -1170,7 +1167,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         Ok(LogicalPlan::Limit(plan::Limit {
-            skip: offset,
+            skip: Some(Box::new(lit(offset as i64))),
             fetch: None,
             input: Arc::new(input),
         }))
@@ -1793,9 +1790,9 @@ impl PlanResolver<'_> {
         let input = self.resolve_query_plan(*input, state).await?;
         // add a `Limit` plan so that the optimizer can push down the limit
         let input = LogicalPlan::Limit(plan::Limit {
-            skip: 0,
+            skip: Some(Box::new(lit(0))),
             // fetch one more row so that the proper message can be displayed if there is more data
-            fetch: Some(num_rows + 1),
+            fetch: Some(Box::new(lit(num_rows as i64 + 1))),
             input: Arc::new(input),
         });
         let style = match vertical {
@@ -1966,12 +1963,17 @@ impl PlanResolver<'_> {
                             .collect();
                         // TODO: convert input in a way similar to `SqlToRel::insert_to_plan()`
                         let plan = rename_logical_plan(plan, &fields)?;
-                        let overwrite = mode == SaveMode::Overwrite;
+                        let insert_op = match mode {
+                            SaveMode::Append => InsertOp::Append,
+                            SaveMode::Overwrite => InsertOp::Overwrite,
+                            SaveMode::Replace | SaveMode::CreateOrReplace => InsertOp::Replace,
+                            _ => InsertOp::Append,
+                        };
                         LogicalPlanBuilder::insert_into(
                             plan,
                             table_ref,
                             &table_provider.schema(),
-                            overwrite,
+                            insert_op,
                         )?
                         .build()?
                     }
@@ -2426,8 +2428,13 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<_>>>()?;
 
         let input = project(rename_logical_plan(input, &fields)?, exprs)?;
+        let insert_op = match overwrite {
+            // TODO: resolve_command_insert_into should pass in insert_op instead of overwrite
+            true => InsertOp::Overwrite,
+            false => InsertOp::Append,
+        };
         let plan =
-            LogicalPlanBuilder::insert_into(input, table_reference, schema.as_ref(), overwrite)?
+            LogicalPlanBuilder::insert_into(input, table_reference, schema.as_ref(), insert_op)?
                 .build()?;
         Ok(plan)
     }

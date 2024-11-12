@@ -91,8 +91,10 @@ impl ScalarUDFImpl for SparkConcat {
             .iter()
             .any(|arg| matches!(arg.data_type(), DataType::List(_)))
         {
+            #[allow(deprecated)] // TODO use invoke_batch
             ArrayConcat::new().invoke(args)
         } else {
+            #[allow(deprecated)] // TODO use invoke_batch
             ConcatFunc::new().invoke(args)
         }
     }

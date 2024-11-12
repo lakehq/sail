@@ -288,7 +288,7 @@ pub struct CommonInlineUserDefinedTableFunction {
     pub function: TableFunctionDefinition,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum TableFunctionDefinition {
     PythonUdtf {
@@ -300,7 +300,17 @@ pub enum TableFunctionDefinition {
 }
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TryFromPrimitive, IntoPrimitive,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    TryFromPrimitive,
+    IntoPrimitive,
 )]
 #[serde(rename_all = "camelCase")]
 #[num_enum(error_type(name = CommonError, constructor = PySparkUdfType::invalid))]

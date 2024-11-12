@@ -73,11 +73,11 @@ figment = { version = "0.10.19", features = ["toml", "env"] }
 # The versions of the following dependencies are managed manually.
 ######
 
-datafusion = { version = "42.2.0", features = ["serde", "pyarrow", "avro"] }
-datafusion-common = { version = "42.2.0", features = ["object_store", "pyarrow", "avro"] }
-datafusion-expr = "42.2.0"
-datafusion-proto = "42.2.0"
-datafusion-functions-nested = "42.2.0"
+datafusion = { version = "43.0.0", features = ["serde", "pyarrow", "avro"] }
+datafusion-common = { version = "43.0.0", features = ["object_store", "pyarrow", "avro"] }
+datafusion-expr = "43.0.0"
+datafusion-proto = "43.0.0"
+datafusion-functions-nested = "43.0.0"
 datafusion-functions-json = "0.42.0"
 datafusion-functions-extra = "0.2.0"
 datafusion-comet-spark-expr = "0.3.0"

@@ -9,10 +9,10 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::expr;
 use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::sqlparser::ast::NullTreatment;
-use datafusion_functions_extra::kurtosis::kurtosis_udaf;
-use datafusion_functions_extra::max_min_by::{max_by_udaf, min_by_udaf};
-use datafusion_functions_extra::mode::mode_udaf;
-use datafusion_functions_extra::skewness::skewness_udaf;
+// use datafusion_functions_extra::kurtosis::kurtosis_udaf;
+// use datafusion_functions_extra::max_min_by::{max_by_udaf, min_by_udaf};
+// use datafusion_functions_extra::mode::mode_udaf;
+// use datafusion_functions_extra::skewness::skewness_udaf;
 use lazy_static::lazy_static;
 
 use crate::error::{PlanError, PlanResult};
@@ -121,7 +121,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("histogram_numeric", F::unknown("histogram_numeric")),
         ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
         ("hll_union_agg", F::unknown("hll_union_agg")),
-        ("kurtosis", F::default(kurtosis_udaf)),
+        // ("kurtosis", F::default(kurtosis_udaf)), // FIXME: NOTE TO SELF DON'T MERGE PR UNTIL THIS FIXED
         (
             "last",
             F::custom(|args, agg_function_context| {
@@ -135,12 +135,12 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
             }),
         ),
         ("max", F::default(min_max::max_udaf)),
-        ("max_by", F::default(max_by_udaf)),
+        // ("max_by", F::default(max_by_udaf)), // FIXME: NOTE TO SELF DON'T MERGE PR UNTIL THIS FIXED
         ("mean", F::default(average::avg_udaf)),
         ("median", F::default(median::median_udaf)),
         ("min", F::default(min_max::min_udaf)),
-        ("min_by", F::default(min_by_udaf)),
-        ("mode", F::default(mode_udaf)),
+        // ("min_by", F::default(min_by_udaf)), // FIXME: NOTE TO SELF DON'T MERGE PR UNTIL THIS FIXED
+        // ("mode", F::default(mode_udaf)), // FIXME: NOTE TO SELF DON'T MERGE PR UNTIL THIS FIXED
         ("percentile", F::unknown("percentile")),
         (
             "percentile_approx",
@@ -155,7 +155,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("regr_sxx", F::default(regr::regr_sxx_udaf)),
         ("regr_sxy", F::default(regr::regr_sxy_udaf)),
         ("regr_syy", F::default(regr::regr_syy_udaf)),
-        ("skewness", F::default(skewness_udaf)),
+        // ("skewness", F::default(skewness_udaf)), // FIXME: NOTE TO SELF DON'T MERGE PR UNTIL THIS FIXED
         ("some", F::default(bool_and_or::bool_or_udaf)),
         ("std", F::default(stddev::stddev_udaf)),
         ("stddev", F::default(stddev::stddev_udaf)),

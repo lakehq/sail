@@ -50,6 +50,7 @@ impl ScalarUDFImpl for SparkReverse {
         }
         match &args[0].data_type() {
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                #[allow(deprecated)] // TODO use invoke_batch
                 ReverseFunc::new().invoke(args)
             }
             _ => make_scalar_function(array_reverse_inner)(args),

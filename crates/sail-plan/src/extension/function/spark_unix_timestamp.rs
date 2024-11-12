@@ -66,6 +66,7 @@ impl ScalarUDFImpl for SparkUnixTimestamp {
                     None,
                 )?
                 .cast_to(&DataType::Int64, None),
+            #[allow(deprecated)] // TODO use invoke_batch
             DataType::Utf8 => ToTimestampSecondsFunc::new()
                 .invoke(args)?
                 .cast_to(

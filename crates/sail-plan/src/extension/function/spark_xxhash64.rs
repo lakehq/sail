@@ -1,10 +1,12 @@
 use std::any::Any;
+use std::sync::Arc;
 
+use datafusion::arrow::array::{ArrayRef, Int64Array};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use datafusion_comet_spark_expr::scalar_funcs::spark_xxhash64;
-use datafusion_common::ScalarValue;
+use datafusion_comet_spark_expr::spark_hash::create_xxhash64_hashes;
+use datafusion_common::{internal_err, DataFusionError, ScalarValue};
 
 #[derive(Debug)]
 pub struct SparkXxhash64 {
@@ -62,5 +64,52 @@ impl ScalarUDFImpl for SparkXxhash64 {
             }
         }
         spark_xxhash64(&args[..])
+    }
+}
+
+/// TODO: Copy spark_xxhash64 until Comet upgrades to DataFusion 43.0.0
+/// [Credit]: <https://github.com/apache/datafusion-comet/blob/712658e2966e33b0f56fcc5449a9d8aab33a5d58/native/spark-expr/src/scalar_funcs/hash_expressions.rs>
+pub fn spark_xxhash64(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
+    let length = args.len();
+    let seed = &args[length - 1];
+    match seed {
+        ColumnarValue::Scalar(ScalarValue::Int64(Some(seed))) => {
+            // iterate over the arguments to find out the length of the array
+            let num_rows = args[0..args.len() - 1]
+                .iter()
+                .find_map(|arg| match arg {
+                    ColumnarValue::Array(array) => Some(array.len()),
+                    ColumnarValue::Scalar(_) => None,
+                })
+                .unwrap_or(1);
+            let mut hashes: Vec<u64> = vec![0_u64; num_rows];
+            hashes.fill(*seed as u64);
+            let arrays = args[0..args.len() - 1]
+                .iter()
+                .map(|arg| match arg {
+                    ColumnarValue::Array(array) => Arc::clone(array),
+                    ColumnarValue::Scalar(scalar) => {
+                        scalar.clone().to_array_of_size(num_rows).unwrap()
+                    }
+                })
+                .collect::<Vec<ArrayRef>>();
+            create_xxhash64_hashes(&arrays, &mut hashes).map_err(|e| {
+                DataFusionError::Internal(format!("Failed to create xxhash64 hashes: {e:?}"))
+            })?;
+            if num_rows == 1 {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(
+                    hashes[0] as i64,
+                ))))
+            } else {
+                let hashes: Vec<i64> = hashes.into_iter().map(|x| x as i64).collect();
+                Ok(ColumnarValue::Array(Arc::new(Int64Array::from(hashes))))
+            }
+        }
+        _ => {
+            internal_err!(
+                "The seed of function xxhash64 must be an Int64 scalar value, but got: {:?}.",
+                seed
+            )
+        }
     }
 }

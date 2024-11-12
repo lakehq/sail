@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -14,6 +15,16 @@ pub struct SchemaPivotNode {
     names: Vec<String>,
     schema: DFSchemaRef,
     exprs: Vec<Expr>,
+}
+
+impl PartialOrd for SchemaPivotNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        // names is part of schema so we skip that
+        match self.exprs.partial_cmp(&other.exprs) {
+            Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
+            cmp => cmp,
+        }
+    }
 }
 
 impl SchemaPivotNode {
