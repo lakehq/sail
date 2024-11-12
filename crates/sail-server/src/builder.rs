@@ -11,6 +11,8 @@ use tonic::transport::server::{Router, TcpIncoming};
 use tonic_health::server::HealthReporter;
 use tower::layer::util::{Identity, Stack};
 use tower::ServiceBuilder;
+use tower_http::compression::CompressionLayer;
+// use tower_http::decompression::DecompressionLayer;
 
 pub struct ServerBuilderOptions {
     pub nodelay: bool,
@@ -32,8 +34,15 @@ pub struct ServerBuilder<'b> {
     options: ServerBuilderOptions,
     health_reporter: HealthReporter,
     reflection_server_builder: tonic_reflection::server::Builder<'b>,
+    #[allow(clippy::type_complexity)]
     // The router type has to change accordingly when layers are added.
-    router: Router<Stack<Stack<TraceLayer, Identity>, Identity>>,
+    router: Router<Stack<Stack<CompressionLayer, Stack<TraceLayer, Identity>>, Identity>>,
+    // router: Router<
+    //     Stack<
+    //         Stack<DecompressionLayer, Stack<CompressionLayer, Stack<TraceLayer, Identity>>>,
+    //         Identity,
+    //     >,
+    // >,
 }
 
 impl<'b> ServerBuilder<'b> {
@@ -45,12 +54,9 @@ impl<'b> ServerBuilder<'b> {
             .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET);
 
         let layer = ServiceBuilder::new()
-            // FIXME: Unsure why this doesn't work. Might be fixed when we upgrade to tower-http 0.5.2
-            //  Might be related: https://github.com/tower-rs/tower-http/issues/420
-            // .layer(
-            //     CompressionLayer::new().gzip(true).zstd(true),
-            // )
             .layer(TraceLayer::new(name))
+            .layer(CompressionLayer::new())
+            // .layer(DecompressionLayer::new()) // Don't know if this is needed anywhere
             .into_inner();
 
         let router = tonic::transport::Server::builder()
