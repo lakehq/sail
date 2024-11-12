@@ -169,7 +169,7 @@ dependencies = [
  "snap",
  "strum 0.25.0",
  "strum_macros 0.25.3",
- "thiserror",
+ "thiserror 1.0.69",
  "typed-builder",
  "uuid",
  "xz2",
@@ -1570,7 +1570,7 @@ dependencies = [
  "datafusion-physical-expr 42.2.0",
  "num",
  "regex",
- "thiserror",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -2737,7 +2737,7 @@ dependencies = [
  "regex",
  "roxmltree",
  "socket2",
- "thiserror",
+ "thiserror 1.0.69",
  "tokio",
  "url",
  "uuid",
@@ -2756,7 +2756,7 @@ dependencies = [
  "futures",
  "hdfs-native",
  "object_store",
- "thiserror",
+ "thiserror 1.0.69",
  "tokio",
 ]
 
@@ -3810,7 +3810,7 @@ dependencies = [
  "js-sys",
  "once_cell",
  "pin-project-lite",
- "thiserror",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -3826,7 +3826,7 @@ dependencies = [
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "prost 0.13.3",
- "thiserror",
+ "thiserror 1.0.69",
  "tokio",
  "tonic",
 ]
@@ -3859,7 +3859,7 @@ dependencies = [
  "percent-encoding",
  "rand",
  "serde_json",
- "thiserror",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -4380,7 +4380,7 @@ dependencies = [
  "rustc-hash",
  "rustls 0.23.16",
  "socket2",
- "thiserror",
+ "thiserror 1.0.69",
  "tokio",
  "tracing",
 ]
@@ -4397,7 +4397,7 @@ dependencies = [
  "rustc-hash",
  "rustls 0.23.16",
  "slab",
- "thiserror",
+ "thiserror 1.0.69",
  "tinyvec",
  "tracing",
 ]
@@ -4774,7 +4774,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlparser 0.51.0 (git+https://github.com/lakehq/sqlparser-rs.git?rev=0908ddb)",
- "thiserror",
+ "thiserror 2.0.3",
 ]
 
 [[package]]
@@ -4794,7 +4794,7 @@ dependencies = [
  "sail-plan",
  "sail-python-udf",
  "sail-server",
- "thiserror",
+ "thiserror 2.0.3",
  "tokio",
  "tonic",
  "tonic-build",
@@ -4840,7 +4840,7 @@ dependencies = [
  "serde",
  "serde_arrow",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.3",
  "tokio",
  "tokio-stream",
  "url",
@@ -4871,7 +4871,7 @@ dependencies = [
  "datafusion-expr 43.0.0",
  "pyo3",
  "sail-common",
- "thiserror",
+ "thiserror 2.0.3",
 ]
 
 [[package]]
@@ -4931,7 +4931,7 @@ dependencies = [
  "serde_json",
  "sqlparser 0.51.0 (git+https://github.com/lakehq/sqlparser-rs.git?rev=0908ddb)",
  "syn 2.0.87",
- "thiserror",
+ "thiserror 2.0.3",
  "tokio",
  "tonic",
  "tonic-build",
@@ -4952,7 +4952,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlparser 0.51.0 (git+https://github.com/lakehq/sqlparser-rs.git?rev=0908ddb)",
- "thiserror",
+ "thiserror 2.0.3",
 ]
 
 [[package]]
@@ -4967,7 +4967,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "sail-common",
- "thiserror",
+ "thiserror 2.0.3",
  "tonic",
  "tower 0.5.1",
 ]
@@ -5395,7 +5395,16 @@ version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c006c85c7651b3cf2ada4584faa36773bd07bac24acfb39f3c431b36d7e667aa"
+dependencies = [
+ "thiserror-impl 2.0.3",
 ]
 
 [[package]]
@@ -5403,6 +5412,17 @@ name = "thiserror-impl"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.87",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f077553d607adc1caf65430528a576c757a71ed73944b66ebb58ef2bbd243568"
 dependencies = [
  "proc-macro2",
  "quote",
