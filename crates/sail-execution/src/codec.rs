@@ -23,8 +23,6 @@ use sail_plan::extension::function::array::{ArrayEmptyToNull, ArrayItemWithPosit
 use sail_plan::extension::function::array_min_max::{ArrayMax, ArrayMin};
 use sail_plan::extension::function::drop_struct_field::DropStructField;
 use sail_plan::extension::function::explode::{explode_name_to_kind, Explode};
-use sail_plan::extension::function::json_as_text::JsonAsText;
-use sail_plan::extension::function::json_length::JsonLength;
 use sail_plan::extension::function::kurtosis::KurtosisFunction;
 use sail_plan::extension::function::least_greatest::{Greatest, Least};
 use sail_plan::extension::function::levenshtein::Levenshtein;
@@ -473,8 +471,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 ))))
             }
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
-            "json_length" | "json_len" => Ok(Arc::new(ScalarUDF::from(JsonLength::new()))),
-            "json_as_text" => Ok(Arc::new(ScalarUDF::from(JsonAsText::new()))),
+            "json_length" | "json_len" => Ok(datafusion_functions_json::udfs::json_length_udf()),
+            "json_as_text" => Ok(datafusion_functions_json::udfs::json_as_text_udf()),
             _ => plan_err!("Could not find Scalar Function: {name}"),
         }
     }
@@ -639,9 +637,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(_func) = node.inner().as_any().downcast_ref::<OverlayFunc>() {
             UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<JsonLength>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<JsonAsText>() {
+        } else if node.name() == "json_length"
+            || node.name() == "json_len"
+            || node.name() == "json_as_text"
+        {
             UdfKind::Standard(gen::StandardUdf {})
         } else {
             return Ok(());

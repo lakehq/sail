@@ -1,11 +1,8 @@
-use std::sync::Arc;
-
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit, ScalarUDF};
+use datafusion_expr::{expr, lit};
+use datafusion_functions_json::udfs;
 
 use crate::error::PlanResult;
-use crate::extension::function::json_as_text::JsonAsText;
-use crate::extension::function::json_length::JsonLength;
 use crate::function::common::{Function, FunctionContext};
 use crate::utils::ItemTaker;
 
@@ -38,7 +35,7 @@ fn get_json_object(
     args.push(expr);
     args.extend(paths);
     Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-        func: Arc::new(ScalarUDF::from(JsonAsText::new())),
+        func: udfs::json_as_text_udf(),
         args,
     }))
 }
@@ -49,7 +46,7 @@ pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, Function)> {
     vec![
         ("from_json", F::unknown("from_json")),
         ("get_json_object", F::custom(get_json_object)),
-        ("json_array_length", F::udf(JsonLength::new())),
+        ("json_array_length", F::scalar_udf(udfs::json_length_udf)),
         ("json_object_keys", F::unknown("json_object_keys")),
         ("json_tuple", F::unknown("json_tuple")),
         ("schema_of_json", F::unknown("schema_of_json")),
