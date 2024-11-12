@@ -25,14 +25,18 @@ use sail_plan::extension::function::drop_struct_field::DropStructField;
 use sail_plan::extension::function::explode::{explode_name_to_kind, Explode};
 use sail_plan::extension::function::json_as_text::JsonAsText;
 use sail_plan::extension::function::json_length::JsonLength;
+use sail_plan::extension::function::kurtosis::KurtosisFunction;
 use sail_plan::extension::function::least_greatest::{Greatest, Least};
 use sail_plan::extension::function::levenshtein::Levenshtein;
 use sail_plan::extension::function::map_function::MapFunction;
+use sail_plan::extension::function::max_min_by::{MaxByFunction, MinByFunction};
+use sail_plan::extension::function::mode::ModeFunction;
 use sail_plan::extension::function::multi_expr::MultiExpr;
 use sail_plan::extension::function::raise_error::RaiseError;
 use sail_plan::extension::function::randn::Randn;
 use sail_plan::extension::function::random::Random;
 use sail_plan::extension::function::size::Size;
+use sail_plan::extension::function::skewness::SkewnessFunc;
 use sail_plan::extension::function::spark_array::SparkArray;
 use sail_plan::extension::function::spark_concat::SparkConcat;
 use sail_plan::extension::function::spark_hex_unhex::{SparkHex, SparkUnHex};
@@ -683,12 +687,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 );
                 Ok(Arc::new(AggregateUDF::from(udaf)))
             }
+            Some(UdafKind::Standard(gen::StandardUdaf {})) => match name {
+                "kurtosis" => Ok(Arc::new(AggregateUDF::from(KurtosisFunction::new()))),
+                "max_by" => Ok(Arc::new(AggregateUDF::from(MaxByFunction::new()))),
+                "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
+                "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
+                "skewness" => Ok(Arc::new(AggregateUDF::from(SkewnessFunc::new()))),
+                _ => plan_err!("Could not find Aggregate Function: {name}"),
+            },
             None => plan_err!("ExtendedScalarUdf: no UDF found for {name}"),
         }
     }
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
-        if let Some(func) = node.inner().as_any().downcast_ref::<PySparkAggregateUDF>() {
+        let udaf_kind = if let Some(func) =
+            node.inner().as_any().downcast_ref::<PySparkAggregateUDF>()
+        {
             let input_types = func
                 .input_types()
                 .iter()
@@ -702,21 +716,31 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 func.output_type().try_into()?,
             )?;
             let deterministic = matches!(func.signature().volatility, Volatility::Immutable);
-            let udaf_kind = UdafKind::PySparkAgg(gen::PySparkUdaf {
+            UdafKind::PySparkAgg(gen::PySparkUdaf {
                 function_name: func.function_name().to_string(),
                 deterministic,
                 input_types,
                 output_type,
                 python_bytes: func.python_bytes().to_vec(),
-            });
-            let node = ExtendedAggregateUdf {
-                udaf_kind: Some(udaf_kind),
-            };
-            node.encode(buf)
-                .map_err(|e| plan_datafusion_err!("failed to encode udaf: {e:?}"))
+            })
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<KurtosisFunction>() {
+            UdafKind::Standard(gen::StandardUdaf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MaxByFunction>() {
+            UdafKind::Standard(gen::StandardUdaf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MinByFunction>() {
+            UdafKind::Standard(gen::StandardUdaf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<ModeFunction>() {
+            UdafKind::Standard(gen::StandardUdaf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SkewnessFunc>() {
+            UdafKind::Standard(gen::StandardUdaf {})
         } else {
-            Ok(())
-        }
+            return Ok(());
+        };
+        let node = ExtendedAggregateUdf {
+            udaf_kind: Some(udaf_kind),
+        };
+        node.encode(buf)
+            .map_err(|e| plan_datafusion_err!("failed to encode udaf: {e:?}"))
     }
 }
 
