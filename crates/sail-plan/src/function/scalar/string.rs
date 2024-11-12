@@ -147,7 +147,8 @@ fn upper(expr: expr::Expr) -> expr::Expr {
 }
 
 fn startswith(str: expr::Expr, substr: expr::Expr) -> expr::Expr {
-    // FIXME: Create UDF for upper to properly determine datatype
+    // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
+    //  Looks like many issues have been opened for this. Revert once fixed.
     let str = match str {
         expr::Expr::Literal(ScalarValue::Utf8(_))
         | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
@@ -170,7 +171,8 @@ fn startswith(str: expr::Expr, substr: expr::Expr) -> expr::Expr {
 }
 
 fn endswith(str: expr::Expr, substr: expr::Expr) -> expr::Expr {
-    // FIXME: Create UDF for upper to properly determine datatype
+    // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
+    //  Looks like many issues have been opened for this. Revert once fixed.
     let str = match str {
         expr::Expr::Literal(ScalarValue::Utf8(_))
         | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
@@ -193,7 +195,8 @@ fn endswith(str: expr::Expr, substr: expr::Expr) -> expr::Expr {
 }
 
 fn bit_length(expr: expr::Expr) -> expr::Expr {
-    // FIXME: Create UDF for upper to properly determine datatype
+    // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
+    //  Looks like many issues have been opened for this. Revert once fixed.
     let expr = match expr {
         expr::Expr::Literal(ScalarValue::Utf8(_))
         | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
@@ -207,7 +210,8 @@ fn bit_length(expr: expr::Expr) -> expr::Expr {
 }
 
 fn octet_length(expr: expr::Expr) -> expr::Expr {
-    // FIXME: Create UDF for upper to properly determine datatype
+    // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
+    //  Looks like many issues have been opened for this. Revert once fixed.
     let expr = match expr {
         expr::Expr::Literal(ScalarValue::Utf8(_))
         | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
@@ -221,7 +225,8 @@ fn octet_length(expr: expr::Expr) -> expr::Expr {
 }
 
 fn ascii(expr: expr::Expr) -> expr::Expr {
-    // FIXME: Create UDF for upper to properly determine datatype
+    // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
+    //  Looks like many issues have been opened for this. Revert once fixed.
     let expr = match expr {
         expr::Expr::Literal(ScalarValue::Utf8(_))
         | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
@@ -235,7 +240,8 @@ fn ascii(expr: expr::Expr) -> expr::Expr {
 }
 
 fn contains(str: expr::Expr, search_str: expr::Expr) -> expr::Expr {
-    // FIXME: Create UDF for upper to properly determine datatype
+    // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
+    //  Looks like many issues have been opened for this. Revert once fixed.
     let str = match str {
         expr::Expr::Literal(ScalarValue::Utf8(_))
         | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
