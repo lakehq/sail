@@ -120,7 +120,10 @@ impl WorkerActor {
         message: Option<String>,
     ) -> ActorAction {
         let sequence = self.sequence;
-        self.sequence += 1;
+        self.sequence = match self.sequence.checked_add(1) {
+            Some(x) => x,
+            None => return ActorAction::fail("sequence number overflow"),
+        };
         let client = self.driver_client.clone();
         ctx.spawn(async move {
             if let Err(e) = client

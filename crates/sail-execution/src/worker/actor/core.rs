@@ -25,8 +25,7 @@ pub struct WorkerActor {
     pub(super) task_signals: HashMap<TaskAttempt, oneshot::Sender<()>>,
     pub(super) memory_streams: HashMap<ChannelName, SendableRecordBatchStream>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
-    /// An increasing sequence number for ordered events.
-    /// The sequence number must be non-zero.
+    /// A monotonically increasing sequence number for ordered events.
     pub(super) sequence: u64,
 }
 

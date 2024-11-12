@@ -68,6 +68,15 @@ impl<T: Actor> ActorContext<T> {
         });
     }
 
+    /// Spawn a task to send a message to the actor itself after a delay.
+    pub fn send_with_delay(&mut self, message: T::Message, delay: std::time::Duration) {
+        let handle = self.handle.clone();
+        self.spawn(async move {
+            tokio::time::sleep(delay).await;
+            let _ = handle.send(message).await;
+        });
+    }
+
     /// Spawn a task and save the handle in the context.
     /// The task should handle errors internally.
     pub fn spawn(

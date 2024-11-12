@@ -15,17 +15,16 @@ pub enum DriverEvent {
         port: u16,
         signal: oneshot::Sender<()>,
     },
-    StartWorker {
-        worker_id: WorkerId,
-    },
     RegisterWorker {
         worker_id: WorkerId,
         host: String,
         port: u16,
         result: oneshot::Sender<ExecutionResult<()>>,
     },
-    #[allow(dead_code)]
-    StopWorker {
+    ProbePendingWorker {
+        worker_id: WorkerId,
+    },
+    ProbeIdleWorker {
         worker_id: WorkerId,
     },
     ExecuteJob {
@@ -44,6 +43,8 @@ pub enum DriverEvent {
         /// or [None] if it is a forced update within the driver.
         sequence: Option<u64>,
     },
-    #[allow(dead_code)]
+    ProbePendingTask {
+        task_id: TaskId,
+    },
     Shutdown,
 }

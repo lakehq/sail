@@ -1,8 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::physical_plan::ExecutionPlan;
 use log::warn;
+use tokio::time::Instant;
 
 use crate::driver::gen;
 use crate::error::ExecutionResult;
@@ -58,12 +59,20 @@ impl DriverState {
             .collect()
     }
 
-    pub fn update_worker_status(&mut self, worker_id: WorkerId, status: WorkerStatus) {
+    pub fn update_worker(
+        &mut self,
+        worker_id: WorkerId,
+        state: WorkerState,
+        message: Option<String>,
+    ) {
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             warn!("worker {worker_id} not found");
             return;
         };
-        worker.status = status;
+        if let Some(message) = message {
+            worker.messages.push(message);
+        }
+        worker.state = state;
     }
 
     pub fn add_job(&mut self, job_id: JobId, descriptor: JobDescriptor) {
@@ -82,13 +91,104 @@ impl DriverState {
         self.tasks.get(&task_id)
     }
 
-    pub fn update_task_status(
+    pub fn can_schedule_task(&self, task_id: TaskId) -> bool {
+        let Some(task) = self.tasks.get(&task_id) else {
+            return false;
+        };
+        let Some(job) = self.jobs.get(&task.job_id) else {
+            return false;
+        };
+        job.stages.iter().take(task.stage).all(|stage| {
+            stage.tasks.iter().all(|&task_id| {
+                self.tasks.get(&task_id).is_some_and(|task| {
+                    matches!(
+                        task.state,
+                        TaskState::Running { .. } | TaskState::Succeeded { .. }
+                    )
+                })
+            })
+        })
+    }
+
+    pub fn attach_task_to_worker(&mut self, task_id: TaskId) {
+        let Some(task) = self.tasks.get(&task_id) else {
+            warn!("task {task_id} not found");
+            return;
+        };
+        let Some(worker_id) = task.state.worker_id() else {
+            warn!("task {task_id} is not assigned to any worker");
+            return;
+        };
+        let Some(worker) = self.workers.get_mut(&worker_id) else {
+            warn!("worker {worker_id} not found");
+            return;
+        };
+        match &mut worker.state {
+            WorkerState::Running {
+                tasks,
+                jobs,
+                updated_at,
+                ..
+            } => {
+                tasks.insert(task_id);
+                jobs.insert(task.job_id);
+                *updated_at = Instant::now();
+            }
+            _ => {
+                warn!("cannot assign task {task_id} to worker {worker_id} that is not running");
+            }
+        }
+    }
+
+    pub fn detach_task_from_worker(&mut self, task_id: TaskId) -> Option<WorkerId> {
+        let Some(task) = self.tasks.get(&task_id) else {
+            warn!("task {task_id} not found");
+            return None;
+        };
+        let Some(worker_id) = task.state.worker_id() else {
+            warn!("task {task_id} is not assigned to any worker");
+            return None;
+        };
+        let Some(worker) = self.workers.get_mut(&worker_id) else {
+            warn!("worker {worker_id} not found");
+            return None;
+        };
+        match &mut worker.state {
+            WorkerState::Running {
+                tasks, updated_at, ..
+            } => {
+                tasks.remove(&task_id);
+                *updated_at = Instant::now();
+            }
+            _ => {
+                warn!("cannot unassign task {task_id} from worker {worker_id} that is not running");
+                return None;
+            }
+        };
+        Some(worker_id)
+    }
+
+    pub fn detach_job_from_workers(&mut self, job_id: JobId) -> Vec<WorkerId> {
+        let mut out = vec![];
+        for (&worker_id, worker) in self.workers.iter_mut() {
+            if let WorkerState::Running {
+                jobs, updated_at, ..
+            } = &mut worker.state
+            {
+                jobs.remove(&job_id);
+                *updated_at = Instant::now();
+                out.push(worker_id);
+            }
+        }
+        out
+    }
+
+    pub fn update_task(
         &mut self,
         task_id: TaskId,
         attempt: usize,
-        status: TaskStatus,
+        state: TaskState,
         message: Option<String>,
-        sequence: Option<u64>,
     ) {
         let Some(task) = self.tasks.get_mut(&task_id) else {
             warn!("task {task_id} not found");
@@ -98,59 +198,13 @@ impl DriverState {
             warn!("task {task_id} attempt {attempt} is stale");
             return;
         }
-        if let Some(sequence) = sequence {
-            if task.sequence >= sequence {
-                warn!("task {task_id} sequence {sequence} is stale");
-                return;
-            } else {
-                task.sequence = sequence;
-            }
-        }
         if let Some(message) = message {
             task.messages.push(message);
         }
-        task.status = status;
+        task.state = state;
     }
 
-    pub fn find_schedulable_tasks_for_job(&self, job_id: JobId) -> Vec<(TaskId, &TaskDescriptor)> {
-        let Some(job) = self.jobs.get(&job_id) else {
-            return vec![];
-        };
-        for stage in &job.stages {
-            let Some(tasks) = stage
-                .tasks
-                .iter()
-                .map(|task_id| self.tasks.get(task_id).map(|task| (*task_id, task)))
-                .collect::<Option<Vec<_>>>()
-            else {
-                return vec![];
-            };
-            if tasks
-                .iter()
-                .all(|(_, task)| matches!(task.status, TaskStatus::Running | TaskStatus::Succeeded))
-            {
-                continue;
-            }
-            if tasks
-                .iter()
-                .any(|(_, task)| matches!(task.status, TaskStatus::Failed | TaskStatus::Canceled))
-            {
-                return vec![];
-            }
-            return tasks
-                .into_iter()
-                .filter(|(_, task)| {
-                    matches!(task.status, TaskStatus::Created)
-                        && self.get_worker(task.worker_id).is_some_and(|worker| {
-                            matches!(worker.status, WorkerStatus::Running { .. })
-                        })
-                })
-                .collect();
-        }
-        vec![]
-    }
-
-    pub fn find_running_tasks_for_job(&self, job_id: JobId) -> Vec<(TaskId, &TaskDescriptor)> {
+    pub fn find_active_tasks_for_job(&self, job_id: JobId) -> Vec<(TaskId, &TaskDescriptor)> {
         let Some(job) = self.jobs.get(&job_id) else {
             return vec![];
         };
@@ -161,32 +215,74 @@ impl DriverState {
                     .tasks
                     .iter()
                     .filter_map(|task_id| self.tasks.get(task_id).map(|task| (*task_id, task)))
-                    .filter(|(_, task)| matches!(task.status, TaskStatus::Running))
+                    .filter(|(_, task)| {
+                        matches!(
+                            task.state,
+                            TaskState::Scheduled { .. } | TaskState::Running { .. }
+                        )
+                    })
             })
             .collect()
     }
 
-    pub fn find_workers_for_job(&self, job_id: JobId) -> Vec<(WorkerId, &WorkerDescriptor)> {
+    pub fn count_active_workers(&self) -> usize {
         self.workers
-            .iter()
-            .filter(|(_, worker)| worker.job_id == job_id)
-            .map(|(&worker_id, worker)| (worker_id, worker))
-            .collect()
+            .values()
+            .filter(|worker| {
+                matches!(
+                    worker.state,
+                    WorkerState::Pending { .. } | WorkerState::Running { .. }
+                )
+            })
+            .count()
+    }
+
+    pub fn count_active_tasks(&self) -> usize {
+        self.tasks
+            .values()
+            .filter(|task| {
+                matches!(
+                    task.state,
+                    TaskState::Scheduled { .. } | TaskState::Running { .. }
+                )
+            })
+            .count()
+    }
+
+    pub fn count_pending_tasks(&self) -> usize {
+        self.tasks
+            .values()
+            .filter(|task| matches!(task.state, TaskState::Pending { .. }))
+            .count()
     }
 }
 
 #[derive(Debug)]
 pub struct WorkerDescriptor {
-    // TODO: support worker reuse
-    pub job_id: JobId,
-    pub status: WorkerStatus,
+    pub state: WorkerState,
+    pub messages: Vec<String>,
 }
 
 #[derive(Debug)]
-pub enum WorkerStatus {
-    Pending,
-    Running { host: String, port: u16 },
+pub enum WorkerState {
+    Pending {
+        pending_at: Instant,
+    },
+    Running {
+        host: String,
+        port: u16,
+        /// The tasks that are running on the worker.
+        tasks: HashSet<TaskId>,
+        /// The jobs that depend on the worker.
+        /// This is used to support a naive version of the Spark "shuffle tracking" mechanism.
+        /// A job depends on a worker if the tasks of the job are running on the worker,
+        /// or if the worker owns a channel for the job output.
+        /// The worker needs to be running for shuffle stream or job output stream consumption.
+        jobs: HashSet<JobId>,
+        updated_at: Instant,
+    },
     Stopped,
+    Failed,
 }
 
 #[derive(Debug)]
@@ -204,20 +300,13 @@ pub struct JobStage {
 #[derive(Debug)]
 pub struct TaskDescriptor {
     pub job_id: JobId,
-    #[allow(dead_code)]
     pub stage: usize,
-    #[allow(dead_code)]
     pub partition: usize,
     pub attempt: usize,
-    /// The worker ID for the current task attempt.
-    pub worker_id: WorkerId,
     #[allow(dead_code)]
     pub mode: TaskMode,
-    pub status: TaskStatus,
+    pub state: TaskState,
     pub messages: Vec<String>,
-    /// The sequence number corresponding to the last task status update from the worker.
-    // TODO: clear the sequence number when assigning the task to a different worker.
-    pub sequence: u64,
     /// An optional channel for writing task output.
     /// This is used for sending the last stage output
     /// from the worker to the driver.
@@ -231,30 +320,79 @@ pub enum TaskMode {
     Pipelined,
 }
 
+#[derive(Debug, Clone)]
+pub enum TaskState {
+    Pending {
+        /// The time when the current task attempt becomes pending.
+        pending_at: Instant,
+    },
+    Scheduled {
+        /// The worker ID to schedule the current task attempt.
+        worker_id: WorkerId,
+    },
+    Running {
+        /// The worker ID for running the current task attempt.
+        worker_id: WorkerId,
+    },
+    Succeeded {
+        /// The worker ID for the task output.
+        worker_id: WorkerId,
+    },
+    Failed,
+    Canceled,
+}
+
+impl TaskState {
+    pub fn run(&self) -> Option<TaskState> {
+        match self {
+            TaskState::Pending { .. } => None,
+            TaskState::Scheduled { worker_id } => Some(TaskState::Running {
+                worker_id: *worker_id,
+            }),
+            TaskState::Running { .. } => Some(self.clone()),
+            TaskState::Succeeded { .. } => None,
+            TaskState::Failed => None,
+            TaskState::Canceled => None,
+        }
+    }
+
+    pub fn succeed(&self) -> Option<TaskState> {
+        match self {
+            TaskState::Pending { .. } => None,
+            TaskState::Scheduled { worker_id } | TaskState::Running { worker_id } => {
+                Some(TaskState::Succeeded {
+                    worker_id: *worker_id,
+                })
+            }
+            TaskState::Succeeded { .. } => Some(self.clone()),
+            TaskState::Failed => None,
+            TaskState::Canceled => None,
+        }
+    }
+}
+
+impl TaskState {
+    pub fn worker_id(&self) -> Option<WorkerId> {
+        match self {
+            TaskState::Scheduled { worker_id }
+            | TaskState::Running { worker_id }
+            | TaskState::Succeeded { worker_id } => Some(*worker_id),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum TaskStatus {
-    Created,
-    Scheduled,
     Running,
     Succeeded,
     Failed,
     Canceled,
 }
 
-impl TaskStatus {
-    pub fn completed(&self) -> bool {
-        match self {
-            TaskStatus::Succeeded | TaskStatus::Failed | TaskStatus::Canceled => true,
-            TaskStatus::Created | TaskStatus::Scheduled | TaskStatus::Running => false,
-        }
-    }
-}
-
 impl From<gen::TaskStatus> for TaskStatus {
     fn from(value: gen::TaskStatus) -> Self {
         match value {
-            gen::TaskStatus::Created => Self::Created,
-            gen::TaskStatus::Scheduled => Self::Scheduled,
             gen::TaskStatus::Running => Self::Running,
             gen::TaskStatus::Succeeded => Self::Succeeded,
             gen::TaskStatus::Failed => Self::Failed,
@@ -266,8 +404,6 @@ impl From<gen::TaskStatus> for TaskStatus {
 impl From<TaskStatus> for gen::TaskStatus {
     fn from(value: TaskStatus) -> Self {
         match value {
-            TaskStatus::Created => gen::TaskStatus::Created,
-            TaskStatus::Scheduled => gen::TaskStatus::Scheduled,
             TaskStatus::Running => gen::TaskStatus::Running,
             TaskStatus::Succeeded => gen::TaskStatus::Succeeded,
             TaskStatus::Failed => gen::TaskStatus::Failed,
