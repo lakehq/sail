@@ -1,4 +1,8 @@
 use datafusion::functions_aggregate::{average, count, min_max, sum};
+use datafusion::functions_window::cume_dist::cume_dist_udwf;
+use datafusion::functions_window::lead_lag::{lag_udwf, lead_udwf};
+use datafusion::functions_window::ntile::ntile_udwf;
+use datafusion::functions_window::rank::{dense_rank_udwf, percent_rank_udwf, rank_udwf};
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion_expr::{expr, BuiltInWindowFunction};
 
@@ -22,36 +26,24 @@ pub(crate) fn get_built_in_window_function(
         "count" => Ok(expr::WindowFunctionDefinition::AggregateUDF(
             count::count_udaf(),
         )),
-        "cume_dist" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::CumeDist,
-        )),
-        "dense_rank" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::DenseRank,
-        )),
+        "cume_dist" => Ok(expr::WindowFunctionDefinition::WindowUDF(cume_dist_udwf())),
+        "dense_rank" => Ok(expr::WindowFunctionDefinition::WindowUDF(dense_rank_udwf())),
         "first_value" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
             BuiltInWindowFunction::FirstValue,
         )),
-        "lag" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::Lag,
-        )),
+        "lag" => Ok(expr::WindowFunctionDefinition::WindowUDF(lag_udwf())),
         "last_value" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
             BuiltInWindowFunction::LastValue,
         )),
-        "lead" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::Lead,
-        )),
+        "lead" => Ok(expr::WindowFunctionDefinition::WindowUDF(lead_udwf())),
         "nth_value" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
             BuiltInWindowFunction::NthValue,
         )),
-        "ntile" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::Ntile,
-        )),
-        "rank" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::Rank,
-        )),
+        "ntile" => Ok(expr::WindowFunctionDefinition::WindowUDF(ntile_udwf())),
+        "rank" => Ok(expr::WindowFunctionDefinition::WindowUDF(rank_udwf())),
         "row_number" => Ok(expr::WindowFunctionDefinition::WindowUDF(row_number_udwf())),
-        "percent_rank" => Ok(expr::WindowFunctionDefinition::BuiltInWindowFunction(
-            BuiltInWindowFunction::PercentRank,
+        "percent_rank" => Ok(expr::WindowFunctionDefinition::WindowUDF(
+            percent_rank_udwf(),
         )),
         s => Err(PlanError::invalid(format!("unknown window function: {s}",))),
     }
