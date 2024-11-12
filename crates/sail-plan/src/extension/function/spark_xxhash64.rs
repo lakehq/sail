@@ -7,8 +7,14 @@ use datafusion_comet_spark_expr::scalar_funcs::spark_xxhash64;
 use datafusion_common::ScalarValue;
 
 #[derive(Debug)]
-pub(crate) struct SparkXxhash64 {
+pub struct SparkXxhash64 {
     signature: Signature,
+}
+
+impl Default for SparkXxhash64 {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SparkXxhash64 {

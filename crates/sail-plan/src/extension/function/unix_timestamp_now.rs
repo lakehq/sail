@@ -6,7 +6,7 @@ use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub(crate) struct UnixTimestampNow {
+pub struct UnixTimestampNow {
     signature: Signature,
 }
 
@@ -17,7 +17,7 @@ impl Default for UnixTimestampNow {
 }
 
 impl UnixTimestampNow {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             signature: Signature::uniform(0, vec![], Volatility::Stable),
         }

@@ -21,6 +21,10 @@ impl DropStructField {
         }
     }
 
+    pub fn field_names(&self) -> &[String] {
+        &self.field_names
+    }
+
     fn drop_nested_field(data_type: &DataType, field_names: &[String]) -> Result<DataType> {
         match data_type {
             DataType::Struct(fields) => {

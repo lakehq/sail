@@ -14,12 +14,18 @@ use datafusion::common::{DataFusionError, Result};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub(crate) struct ArrayItemWithPosition {
+pub struct ArrayItemWithPosition {
     signature: Signature,
 }
 
+impl Default for ArrayItemWithPosition {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArrayItemWithPosition {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
         }
@@ -151,12 +157,18 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
 }
 
 #[derive(Debug)]
-pub(crate) struct ArrayEmptyToNull {
+pub struct ArrayEmptyToNull {
     signature: Signature,
 }
 
+impl Default for ArrayEmptyToNull {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArrayEmptyToNull {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
         }
@@ -242,13 +254,13 @@ impl ScalarUDFImpl for ArrayEmptyToNull {
 }
 
 #[derive(Debug)]
-pub(crate) struct MapToArray {
+pub struct MapToArray {
     signature: Signature,
     nullable: bool,
 }
 
 impl MapToArray {
-    pub(crate) fn new(nullable: bool) -> Self {
+    pub fn new(nullable: bool) -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
             nullable,
@@ -274,6 +286,10 @@ impl MapToArray {
     fn nullable_map_field(&self, field: &FieldRef) -> Result<FieldRef> {
         let data_type = DataType::Struct(self.nullable_entry_fields(field)?);
         Ok(Arc::new(Field::new(field.name(), data_type, true)))
+    }
+
+    pub fn nullable(&self) -> bool {
+        self.nullable
     }
 }
 

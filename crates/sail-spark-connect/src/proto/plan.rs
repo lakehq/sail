@@ -987,7 +987,7 @@ impl TryFrom<RelType> for RelationNode {
                         })
                     })
                     .collect::<SparkResult<Vec<_>>>()?;
-                Ok(RelationNode::Query(spec::QueryNode::ReplaceNa {
+                Ok(RelationNode::Query(spec::QueryNode::Replace {
                     input: Box::new((*input).try_into()?),
                     columns,
                     replacements,

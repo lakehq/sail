@@ -14,6 +14,12 @@ pub struct SparkConcat {
     signature: Signature,
 }
 
+impl Default for SparkConcat {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SparkConcat {
     pub fn new() -> Self {
         Self {

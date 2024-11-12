@@ -7,8 +7,14 @@ use datafusion::common::{DataFusionError, Result};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub(crate) struct Greatest {
+pub struct Greatest {
     signature: Signature,
+}
+
+impl Default for Greatest {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Greatest {
@@ -55,7 +61,7 @@ impl ScalarUDFImpl for Greatest {
 }
 
 #[derive(Debug)]
-pub(crate) struct Least {
+pub struct Least {
     signature: Signature,
 }
 
@@ -64,6 +70,12 @@ impl Least {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
         }
+    }
+}
+
+impl Default for Least {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

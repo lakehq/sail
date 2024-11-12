@@ -9,12 +9,18 @@ use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 /// The UDF must only exist as a top-level expression in projection nodes,
 /// otherwise a planning error will be raised during logical plan analysis.
 #[derive(Debug)]
-pub(crate) struct MultiExpr {
+pub struct MultiExpr {
     signature: Signature,
 }
 
+impl Default for MultiExpr {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MultiExpr {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Volatile),
         }

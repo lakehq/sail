@@ -21,7 +21,7 @@ lazy_static! {
         HashMap::from_iter(generator::list_built_in_generator_functions());
 }
 
-pub(crate) fn get_built_in_function(name: &str) -> PlanResult<Function> {
+pub fn get_built_in_function(name: &str) -> PlanResult<Function> {
     let name = name.to_lowercase();
     Ok(BUILT_IN_SCALAR_FUNCTIONS
         .get(name.as_str())

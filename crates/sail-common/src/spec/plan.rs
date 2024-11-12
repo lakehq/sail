@@ -194,7 +194,7 @@ pub enum QueryNode {
         columns: Vec<Identifier>,
         min_non_nulls: Option<usize>,
     },
-    ReplaceNa {
+    Replace {
         input: Box<QueryPlan>,
         columns: Vec<Identifier>,
         replacements: Vec<Replacement>,

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use datafusion::arrow::array::{Array, StringArray};
 use datafusion::arrow::datatypes as adt;
 use datafusion::functions_aggregate::approx_median::approx_median_udaf;
 use datafusion::functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
@@ -7,8 +8,9 @@ use datafusion::functions_aggregate::average::avg_udaf;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
 use datafusion::functions_aggregate::stddev::stddev_udaf;
+use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion_common::{Column, ScalarValue};
-use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{col, expr, lit, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
@@ -54,7 +56,7 @@ impl PlanResolver<'_> {
         let mut all_aggregates = Vec::new();
         for column in &columns {
             if statistics.contains("count") {
-                let count = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+                let count = Expr::AggregateFunction(expr::AggregateFunction {
                     func: count_udaf(),
                     args: vec![Expr::Column(column.clone())],
                     distinct: false,
@@ -69,81 +71,76 @@ impl PlanResolver<'_> {
             if let Ok(field) = input.schema().field_from_column(column) {
                 if field.data_type().is_numeric() {
                     if statistics.contains("mean") {
-                        let mean =
-                            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
-                                func: avg_udaf(),
-                                args: vec![Expr::Column(column.clone())],
-                                distinct: false,
-                                filter: None,
-                                order_by: None,
-                                null_treatment: None,
-                            })
-                            .alias(state.register_field(format!("mean_{}", column.name())));
+                        let mean = Expr::AggregateFunction(expr::AggregateFunction {
+                            func: avg_udaf(),
+                            args: vec![Expr::Column(column.clone())],
+                            distinct: false,
+                            filter: None,
+                            order_by: None,
+                            null_treatment: None,
+                        })
+                        .alias(state.register_field(format!("mean_{}", column.name())));
                         all_aggregates.push(mean);
                     }
                     if statistics.contains("stddev") {
-                        let stddev =
-                            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
-                                func: stddev_udaf(),
-                                args: vec![Expr::Column(column.clone())],
-                                distinct: false,
-                                filter: None,
-                                order_by: None,
-                                null_treatment: None,
-                            })
-                            .alias(state.register_field(format!("stddev_{}", column.name())));
+                        let stddev = Expr::AggregateFunction(expr::AggregateFunction {
+                            func: stddev_udaf(),
+                            args: vec![Expr::Column(column.clone())],
+                            distinct: false,
+                            filter: None,
+                            order_by: None,
+                            null_treatment: None,
+                        })
+                        .alias(state.register_field(format!("stddev_{}", column.name())));
                         all_aggregates.push(stddev);
                     }
                     if statistics.contains("25%") {
-                        let percentile_25 =
-                            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
-                                func: approx_percentile_cont_udaf(),
-                                args: vec![
-                                    Expr::Column(column.clone()),
-                                    Expr::Literal(ScalarValue::Float64(Some(0.25_f64))),
-                                ],
-                                distinct: false,
-                                filter: None,
-                                order_by: None,
-                                null_treatment: None,
-                            })
-                            .alias(state.register_field(format!("25%_{}", column.name())));
+                        let percentile_25 = Expr::AggregateFunction(expr::AggregateFunction {
+                            func: approx_percentile_cont_udaf(),
+                            args: vec![
+                                Expr::Column(column.clone()),
+                                Expr::Literal(ScalarValue::Float64(Some(0.25_f64))),
+                            ],
+                            distinct: false,
+                            filter: None,
+                            order_by: None,
+                            null_treatment: None,
+                        })
+                        .alias(state.register_field(format!("25%_{}", column.name())));
                         all_aggregates.push(percentile_25);
                     }
                     if statistics.contains("50%") {
-                        let percentile_50 =
-                            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
-                                func: approx_median_udaf(),
-                                args: vec![Expr::Column(column.clone())],
-                                distinct: false,
-                                filter: None,
-                                order_by: None,
-                                null_treatment: None,
-                            })
-                            .alias(state.register_field(format!("50%_{}", column.name())));
+                        let percentile_50 = Expr::AggregateFunction(expr::AggregateFunction {
+                            func: approx_median_udaf(),
+                            args: vec![Expr::Column(column.clone())],
+                            distinct: false,
+                            filter: None,
+                            order_by: None,
+                            null_treatment: None,
+                        })
+                        .alias(state.register_field(format!("50%_{}", column.name())));
                         all_aggregates.push(percentile_50);
                     }
                     if statistics.contains("75%") {
-                        let percentile_75 =
-                            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
-                                func: approx_percentile_cont_udaf(),
-                                args: vec![
-                                    Expr::Column(column.clone()),
-                                    Expr::Literal(ScalarValue::Float64(Some(0.75_f64))),
-                                ],
-                                distinct: false,
-                                filter: None,
-                                order_by: None,
-                                null_treatment: None,
-                            })
-                            .alias(state.register_field(format!("75%_{}", column.name())));
+                        let percentile_75 = Expr::AggregateFunction(expr::AggregateFunction {
+                            func: approx_percentile_cont_udaf(),
+                            args: vec![
+                                Expr::Column(column.clone()),
+                                Expr::Literal(ScalarValue::Float64(Some(0.75_f64))),
+                            ],
+                            distinct: false,
+                            filter: None,
+                            order_by: None,
+                            null_treatment: None,
+                        })
+                        .alias(state.register_field(format!("75%_{}", column.name())));
                         all_aggregates.push(percentile_75);
                     }
                 }
             }
 
             if statistics.contains("min") {
-                let min = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+                let min = Expr::AggregateFunction(expr::AggregateFunction {
                     func: min_udaf(),
                     args: vec![Expr::Column(column.clone())],
                     distinct: false,
@@ -156,7 +153,7 @@ impl PlanResolver<'_> {
             }
 
             if statistics.contains("max") {
-                let max = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+                let max = Expr::AggregateFunction(expr::AggregateFunction {
                     func: max_udaf(),
                     args: vec![Expr::Column(column.clone())],
                     distinct: false,
@@ -260,5 +257,100 @@ impl PlanResolver<'_> {
             }
         }
         union_plan.ok_or_else(|| PlanError::internal("No describe statistics generated"))
+    }
+
+    pub(super) async fn resolve_query_cross_tab(
+        &self,
+        input: spec::QueryPlan,
+        left_column: spec::Identifier,
+        right_column: spec::Identifier,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let input = self.resolve_query_plan(input, state).await?;
+        let left_column: &str = (&left_column).into();
+        let right_column: &str = (&right_column).into();
+        let cross_tab_column = state.register_field(format!("{left_column}_{right_column}"));
+        let left_column = self.get_resolved_column(input.schema(), left_column, state)?;
+        let right_column = self.get_resolved_column(input.schema(), right_column, state)?;
+
+        let projected_plan = LogicalPlanBuilder::from(input.clone())
+            .project(vec![Expr::Cast(expr::Cast {
+                expr: Box::new(col(right_column.clone())),
+                data_type: adt::DataType::Utf8,
+            })
+            .alias_qualified(
+                right_column.relation.clone(),
+                right_column.name.clone(),
+            )])?
+            .build()?;
+        let distinct_values = LogicalPlanBuilder::from(projected_plan)
+            .project(vec![Expr::Column(right_column.clone())])?
+            .distinct()?
+            .build()?;
+        // TODO: This can be expensive for large input datasets
+        let distinct_values_batches = self
+            .ctx
+            .execute_logical_plan(distinct_values)
+            .await?
+            .collect()
+            .await?;
+
+        let mut unique_values: Vec<(String, String)> = vec![];
+        for batch in distinct_values_batches {
+            let array = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(|| PlanError::internal("Expected string array"))?;
+
+            for i in 0..array.len() {
+                if array.is_valid(i) {
+                    let value = array.value(i).to_string();
+                    let alias = state.register_field(&value);
+                    unique_values.push((value, alias));
+                }
+            }
+        }
+
+        let mut projection_exprs = vec![col(left_column.clone())];
+        for (value, alias) in &unique_values {
+            let column_expr = Expr::Case(expr::Case {
+                expr: None,
+                when_then_expr: vec![(
+                    Box::new(lit(value).eq(col(right_column.clone()))),
+                    Box::new(lit(1)),
+                )],
+                else_expr: Some(Box::new(lit(0))),
+            })
+            .alias(alias);
+            projection_exprs.push(column_expr);
+        }
+
+        let projected_counts_plan = LogicalPlanBuilder::from(input)
+            .project(projection_exprs)?
+            .build()?;
+
+        let aggregate_exprs = unique_values
+            .iter()
+            .map(|(value, alias)| {
+                Ok(Expr::AggregateFunction(expr::AggregateFunction {
+                    func: sum_udaf(),
+                    args: vec![col(alias)],
+                    distinct: false,
+                    filter: None,
+                    order_by: None,
+                    null_treatment: None,
+                })
+                .alias(state.register_field(value)))
+            })
+            .collect::<PlanResult<Vec<Expr>>>()?;
+
+        let plan = LogicalPlanBuilder::from(projected_counts_plan)
+            .aggregate(
+                vec![col(left_column).alias(cross_tab_column)],
+                aggregate_exprs,
+            )?
+            .build()?;
+        Ok(plan)
     }
 }
