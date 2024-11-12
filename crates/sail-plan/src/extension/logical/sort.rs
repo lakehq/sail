@@ -7,7 +7,7 @@ use datafusion_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 
 use crate::utils::ItemTaker;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub(crate) struct SortWithinPartitionsNode {
     input: Arc<LogicalPlan>,
     sort_expr: Vec<Sort>,

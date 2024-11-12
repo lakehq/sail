@@ -29,17 +29,13 @@ def data(sail, spark, duck):  # noqa: ARG001
 def test_derived_tpcds_query_execution(sail, query):
     # Skip unsupported queries to ensure continued support for the supported ones.
     skip = {
-        "q10",
         "q12",
         "q16",
         "q20",
         "q23",
         "q27",
-        "q35",
         "q36",
         "q39",
-        "q41",
-        "q45",
         "q47",
         "q51",
         "q53",

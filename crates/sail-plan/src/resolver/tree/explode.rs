@@ -122,10 +122,16 @@ impl<'s> TreeNodeRewriter for ExplodeRewriter<'s> {
         projections.push(arg.alias(&name));
 
         let plan = mem::replace(&mut self.plan, empty_logical_plan());
+        // TODO: If specific columns need to be unnested multiple times (e. g at different depth), declare them here.
+        //  Any unnested columns not being mentioned inside this option will be unnested with depth = 1.
+        let recursions = vec![];
         self.plan = unnest_with_options(
             LogicalPlan::Projection(Projection::try_new(projections, Arc::new(plan))?),
             vec![Column::from_name(&name)],
-            UnnestOptions { preserve_nulls },
+            UnnestOptions {
+                preserve_nulls,
+                recursions,
+            },
         )?;
 
         let out = match out.one_or_more()? {

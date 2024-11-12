@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::sync::Arc;
@@ -9,7 +10,7 @@ use datafusion_common::plan_err;
 
 use crate::utils::ItemTaker;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub struct Range {
     pub start: i64,
     pub end: i64,
@@ -81,6 +82,15 @@ pub(crate) struct RangeNode {
     range: Range,
     num_partitions: usize,
     schema: DFSchemaRef,
+}
+
+impl PartialOrd for RangeNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.num_partitions.partial_cmp(&other.num_partitions) {
+            Some(Ordering::Equal) => self.range.partial_cmp(&other.range),
+            cmp => cmp,
+        }
+    }
 }
 
 impl RangeNode {

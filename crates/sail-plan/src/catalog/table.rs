@@ -113,6 +113,7 @@ impl<'a> CatalogManager<'a> {
             if_not_exists,
             or_replace,
             column_defaults,
+            temporary: false, // TODO: Propagate temporary
         }));
         // TODO: process the output
         _ = self.ctx.execute_logical_plan(ddl).await?;
@@ -145,6 +146,7 @@ impl<'a> CatalogManager<'a> {
                 file_type: file_format.clone(),
                 table_partition_cols,
                 if_not_exists,
+                temporary: false, // TODO: Propagate temporary
                 definition,
                 order_exprs: file_sort_order,
                 unbounded,

@@ -24,7 +24,8 @@ message ExtendedPhysicalPlanNode {
 
 message ExtendedAggregateUdf {
   oneof UdafKind {
-    PySparkUdaf py_spark_agg = 1;
+    StandardUdaf standard = 1;
+    PySparkUdaf py_spark_agg = 2;
   }
 }
 
@@ -37,6 +38,7 @@ message ExtendedScalarUdf {
 }
 
 message StandardUdf {}
+message StandardUdaf {}
 
 message AuxiliaryFieldSingle {
   bytes auxiliary_field = 1;

@@ -11,6 +11,7 @@ pub mod logical;
 pub mod physical;
 pub(crate) mod source;
 
+#[derive(Debug)]
 pub(crate) struct ExtensionQueryPlanner {}
 
 #[async_trait]

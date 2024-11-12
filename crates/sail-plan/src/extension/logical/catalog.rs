@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -34,6 +35,18 @@ pub(crate) struct CatalogCommandNode {
     config: Arc<PlanConfig>,
 }
 
+impl PartialOrd for CatalogCommandNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name.partial_cmp(&other.name) {
+            Some(Ordering::Equal) => match self.config.partial_cmp(&other.config) {
+                Some(Ordering::Equal) => self.command.partial_cmp(&other.command),
+                cmp => cmp,
+            },
+            cmp => cmp,
+        }
+    }
+}
+
 impl CatalogCommandNode {
     pub(crate) fn try_new(command: CatalogCommand, config: Arc<PlanConfig>) -> Result<Self> {
         let schema = command.schema()?;
@@ -46,7 +59,7 @@ impl CatalogCommandNode {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub(crate) enum CatalogTableFunction {
     PySparkUDTF(PySparkUDTF),
 }
@@ -167,6 +180,103 @@ pub(crate) enum CatalogCommand {
         replace: bool,
         definition: Option<String>,
     },
+}
+
+// Used for comparing `CatalogCommand` in `PartialOrd` implementation.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
+struct CatalogCommandHelper(CatalogCommand);
+impl PartialOrd for CatalogCommand {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (
+                CatalogCommand::CreateTable {
+                    table: t1,
+                    schema: _, // ignore schema
+                    comment: c1,
+                    column_defaults: cd1,
+                    constraints: cons1,
+                    location: l1,
+                    file_format: f1,
+                    table_partition_cols: tp1,
+                    file_sort_order: fs1,
+                    if_not_exists: i1,
+                    or_replace: o1,
+                    unbounded: u1,
+                    options: opt1,
+                    definition: d1,
+                    copy_to_plan: cp1,
+                },
+                CatalogCommand::CreateTable {
+                    table: t2,
+                    schema: _, // ignore schema
+                    comment: c2,
+                    column_defaults: cd2,
+                    constraints: cons2,
+                    location: l2,
+                    file_format: f2,
+                    table_partition_cols: tp2,
+                    file_sort_order: fs2,
+                    if_not_exists: i2,
+                    or_replace: o2,
+                    unbounded: u2,
+                    options: opt2,
+                    definition: d2,
+                    copy_to_plan: cp2,
+                },
+            ) => match t1.partial_cmp(t2) {
+                Some(Ordering::Equal) => match c1.partial_cmp(c2) {
+                    Some(Ordering::Equal) => match cd1.partial_cmp(cd2) {
+                        Some(Ordering::Equal) => match cons1.partial_cmp(cons2) {
+                            Some(Ordering::Equal) => match l1.partial_cmp(l2) {
+                                Some(Ordering::Equal) => match f1.partial_cmp(f2) {
+                                    Some(Ordering::Equal) => match tp1.partial_cmp(tp2) {
+                                        Some(Ordering::Equal) => match fs1.partial_cmp(fs2) {
+                                            Some(Ordering::Equal) => match i1.partial_cmp(i2) {
+                                                Some(Ordering::Equal) => match o1.partial_cmp(o2) {
+                                                    Some(Ordering::Equal) => {
+                                                        match u1.partial_cmp(u2) {
+                                                            Some(Ordering::Equal) => match opt1
+                                                                .partial_cmp(opt2)
+                                                            {
+                                                                Some(Ordering::Equal) => {
+                                                                    match d1.partial_cmp(d2) {
+                                                                        Some(Ordering::Equal) => {
+                                                                            cp1.partial_cmp(cp2)
+                                                                        }
+                                                                        cmp => cmp,
+                                                                    }
+                                                                }
+                                                                cmp => cmp,
+                                                            },
+                                                            cmp => cmp,
+                                                        }
+                                                    }
+                                                    cmp => cmp,
+                                                },
+                                                cmp => cmp,
+                                            },
+                                            cmp => cmp,
+                                        },
+                                        cmp => cmp,
+                                    },
+                                    cmp => cmp,
+                                },
+                                cmp => cmp,
+                            },
+                            cmp => cmp,
+                        },
+                        cmp => cmp,
+                    },
+                    cmp => cmp,
+                },
+                cmp => cmp,
+            },
+            // For all other cases, use the default derived comparison
+            _ => {
+                CatalogCommandHelper(self.clone()).partial_cmp(&CatalogCommandHelper(other.clone()))
+            }
+        }
+    }
 }
 
 fn build_record_batch<T: Serialize>(schema: SchemaRef, items: &[T]) -> Result<RecordBatch> {
@@ -456,7 +566,7 @@ impl CatalogCommand {
                 definition,
             } => {
                 manager
-                    .create_view(input, view, replace, definition)
+                    .create_view(input, view, replace, definition, false)
                     .await?;
                 let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
