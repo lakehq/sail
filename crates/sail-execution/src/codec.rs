@@ -4,6 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::common::{plan_datafusion_err, plan_err, Result};
 use datafusion::execution::FunctionRegistry;
+use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, Volatility};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::values::ValuesExec;
@@ -465,6 +466,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     field_names,
                 ))))
             }
+            "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
+            "json_length" | "json_len" => Ok(datafusion_functions_json::udfs::json_length_udf()),
+            "json_as_text" => Ok(datafusion_functions_json::udfs::json_as_text_udf()),
             _ => plan_err!("Could not find Scalar Function: {name}"),
         }
     }
@@ -627,6 +631,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 output_type,
                 python_bytes: func.python_bytes().to_vec(),
             })
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<OverlayFunc>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if node.name() == "json_length"
+            || node.name() == "json_len"
+            || node.name() == "json_as_text"
+        {
+            UdfKind::Standard(gen::StandardUdf {})
         } else {
             return Ok(());
         };

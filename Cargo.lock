@@ -4363,6 +4363,7 @@ dependencies = [
  "arrow",
  "arrow-flight",
  "datafusion",
+ "datafusion-functions-json",
  "datafusion-proto",
  "futures",
  "log",
