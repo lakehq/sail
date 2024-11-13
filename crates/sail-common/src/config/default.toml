@@ -1,4 +1,4 @@
-deployment = "local"
+mode = "local"
 
 [driver]
 listen_host = "127.0.0.1"

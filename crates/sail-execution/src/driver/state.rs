@@ -382,6 +382,7 @@ impl TaskState {
     }
 }
 
+/// The observed task status that drives the task state transition.
 #[derive(Debug, Clone, Copy)]
 pub enum TaskStatus {
     Running,

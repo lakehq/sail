@@ -101,7 +101,7 @@ impl DriverActor {
 
     pub(super) fn handle_probe_pending_worker(
         &mut self,
-        _ctx: &mut ActorContext<Self>,
+        ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
     ) -> ActorAction {
         let Some(worker) = self.state.get_worker(worker_id) else {
@@ -118,6 +118,7 @@ impl DriverActor {
                 );
                 self.state
                     .update_worker(worker_id, WorkerState::Failed, Some(message));
+                self.scale_up_workers(ctx);
             }
         }
         ActorAction::Continue
@@ -194,6 +195,7 @@ impl DriverActor {
                 .is_some_and(|s| sequence <= *s)
             {
                 // The task status update is outdated, so we skip the remaining logic.
+                warn!("task {task_id} sequence {sequence} is stale");
                 return ActorAction::Continue;
             }
             self.task_sequences.insert(task_id, sequence);
@@ -700,6 +702,9 @@ impl DriverActor {
                 self.state
                     .get_task(*task_id)
                     .and_then(|task| match task.state {
+                        // We should not consider tasks in the "scheduled" state even if the
+                        // worker ID is known at that time. This is because the task may not be
+                        // running on the worker, and the shuffle stream may not be available.
                         TaskState::Running { worker_id } | TaskState::Succeeded { worker_id } => {
                             Some((*task_id, task.channel.clone(), worker_id))
                         }
@@ -750,9 +755,14 @@ impl DriverActor {
             .into_iter()
             .map(|(task_id, task)| (task_id, task.attempt, task.state.worker_id()))
             .collect::<Vec<_>>();
+        // The tasks are canceled, but they may remain in the task queue.
+        // This is OK, since they will be removed when the task scheduling logic runs next time.
         let tasks = tasks
             .into_iter()
             .flat_map(|(task_id, attempt, worker_id)| {
+                let reason = format!("task {task_id} attempt {attempt} canceled for job {job_id}");
+                self.state
+                    .update_task(task_id, attempt, TaskState::Canceled, Some(reason));
                 if let Some(worker_id) = self.state.detach_task_from_worker(task_id) {
                     self.schedule_idle_worker_probe(ctx, worker_id);
                 }

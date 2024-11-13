@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use sail_common::config::{AppConfig, DeploymentKind};
+use sail_common::config::{AppConfig, ExecutionMode};
 use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
 use sail_plan::function::BUILT_IN_SCALAR_FUNCTIONS;
 use sail_plan::new_query_planner;
@@ -65,9 +65,9 @@ impl SessionManager {
         actor_system: &mut ActorSystem,
         key: SessionKey,
     ) -> SparkResult<SessionContext> {
-        let job_runner: Box<dyn JobRunner> = match self.config.deployment {
-            DeploymentKind::Local => Box::new(LocalJobRunner::new()),
-            DeploymentKind::LocalCluster | DeploymentKind::KubeCluster => {
+        let job_runner: Box<dyn JobRunner> = match self.config.mode {
+            ExecutionMode::Local => Box::new(LocalJobRunner::new()),
+            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster => {
                 let options = self.config.as_ref().try_into()?;
                 Box::new(ClusterJobRunner::new(actor_system, options))
             }

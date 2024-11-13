@@ -8,7 +8,7 @@ const DEFAULT_CONFIG: &str = include_str!("default.toml");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    pub deployment: DeploymentKind,
+    pub mode: ExecutionMode,
     pub driver: DriverConfig,
     pub worker: WorkerConfig,
     pub network: NetworkConfig,
@@ -26,10 +26,10 @@ impl AppConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum DeploymentKind {
+pub enum ExecutionMode {
     Local,
     LocalCluster,
-    KubeCluster,
+    KubernetesCluster,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use sail_common::config::{AppConfig, DeploymentKind};
+use sail_common::config::{AppConfig, ExecutionMode};
 
 use crate::error::{ExecutionError, ExecutionResult};
 
@@ -30,14 +30,14 @@ pub enum WorkerManagerKind {
 impl TryFrom<&AppConfig> for DriverOptions {
     type Error = ExecutionError;
     fn try_from(config: &AppConfig) -> ExecutionResult<Self> {
-        let worker_manager_kind = match config.deployment {
-            DeploymentKind::Local => {
+        let worker_manager_kind = match config.mode {
+            ExecutionMode::Local => {
                 return Err(ExecutionError::InvalidArgument(
                     "local deployment is not supposed to work with the driver".to_string(),
                 ))
             }
-            DeploymentKind::LocalCluster => WorkerManagerKind::Local,
-            DeploymentKind::KubeCluster => WorkerManagerKind::Kubernetes,
+            ExecutionMode::LocalCluster => WorkerManagerKind::Local,
+            ExecutionMode::KubernetesCluster => WorkerManagerKind::Kubernetes,
         };
         Ok(Self {
             enable_tls: config.network.enable_tls,
