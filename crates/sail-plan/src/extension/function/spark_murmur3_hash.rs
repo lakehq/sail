@@ -7,8 +7,14 @@ use datafusion_comet_spark_expr::scalar_funcs::spark_murmur3_hash;
 use datafusion_common::ScalarValue;
 
 #[derive(Debug)]
-pub(crate) struct SparkMurmur3Hash {
+pub struct SparkMurmur3Hash {
     signature: Signature,
+}
+
+impl Default for SparkMurmur3Hash {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SparkMurmur3Hash {

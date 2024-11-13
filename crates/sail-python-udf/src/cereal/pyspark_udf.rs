@@ -67,24 +67,14 @@ impl PartialEq for PySparkUdfObject {
 
 impl Eq for PySparkUdfObject {}
 
-pub fn deserialize_partial_pyspark_udf(
+pub fn build_pyspark_udf_payload(
     python_version: &str,
     command: &[u8],
     eval_type: spec::PySparkUdfType,
     num_args: usize,
     spark_udf_config: &SparkUdfConfig,
-) -> Result<PySparkUdfObject> {
-    check_python_udf_version(python_version)?;
-    let data = build_pyspark_udf_payload(command, eval_type, num_args, spark_udf_config)?;
-    Ok(PySparkUdfObject::load(&data)?)
-}
-
-pub fn build_pyspark_udf_payload(
-    command: &[u8],
-    eval_type: spec::PySparkUdfType,
-    num_args: usize,
-    spark_udf_config: &SparkUdfConfig,
 ) -> Result<Vec<u8>> {
+    check_python_udf_version(python_version)?;
     let mut data: Vec<u8> = Vec::new();
     data.extend(&i32::from(eval_type).to_be_bytes()); // Add eval_type for extraction in visit_bytes
     if eval_type.is_arrow_udf() || eval_type.is_pandas_udf() {

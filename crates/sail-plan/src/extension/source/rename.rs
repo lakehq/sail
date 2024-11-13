@@ -11,6 +11,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_datafusion_err, Column, Constraints, Result, Statistics};
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, LogicalPlan, TableProviderFilterPushDown, TableType};
 use sail_common::utils::{rename_physical_plan, rename_schema};
 
@@ -144,7 +145,7 @@ impl TableProvider for RenameTableProvider {
         &self,
         state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        overwrite: bool,
+        insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let names = self
             .inner
@@ -154,6 +155,6 @@ impl TableProvider for RenameTableProvider {
             .map(|f| f.name().clone())
             .collect::<Vec<_>>();
         let input = rename_physical_plan(input, &names)?;
-        self.inner.insert_into(state, input, overwrite).await
+        self.inner.insert_into(state, input, insert_op).await
     }
 }

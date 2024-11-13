@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -88,6 +89,27 @@ pub struct PySparkUDTF {
     spark_udf_config: SparkUdfConfig,
     #[allow(dead_code)]
     deterministic: bool,
+}
+
+impl PartialOrd for PySparkUDTF {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.return_type.partial_cmp(&other.return_type) {
+            Some(Ordering::Equal) => match self
+                .table_function_definition
+                .partial_cmp(&other.table_function_definition)
+            {
+                Some(Ordering::Equal) => match self
+                    .spark_udf_config
+                    .partial_cmp(&other.spark_udf_config)
+                {
+                    Some(Ordering::Equal) => self.deterministic.partial_cmp(&other.deterministic),
+                    cmp => cmp,
+                },
+                cmp => cmp,
+            },
+            cmp => cmp,
+        }
+    }
 }
 
 impl PySparkUDTF {

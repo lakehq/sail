@@ -21,6 +21,10 @@ impl UpdateStructField {
         }
     }
 
+    pub fn field_names(&self) -> &[String] {
+        &self.field_names
+    }
+
     fn update_nested_field(
         data_type: &DataType,
         field_names: &[String],

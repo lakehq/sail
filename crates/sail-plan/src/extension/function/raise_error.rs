@@ -6,12 +6,18 @@ use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatili
 use datafusion_common::ScalarValue;
 
 #[derive(Debug, Clone)]
-pub(crate) struct RaiseError {
+pub struct RaiseError {
     signature: Signature,
 }
 
+impl Default for RaiseError {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RaiseError {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             signature: Signature::exact(vec![DataType::Utf8], Volatility::Immutable),
         }

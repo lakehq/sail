@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
@@ -6,16 +7,16 @@ use datafusion::functions_aggregate::{
     variance,
 };
 use datafusion_common::ScalarValue;
-use datafusion_expr::expr;
 use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::sqlparser::ast::NullTreatment;
-use datafusion_functions_extra::kurtosis::kurtosis_udaf;
-use datafusion_functions_extra::max_min_by::{max_by_udaf, min_by_udaf};
-use datafusion_functions_extra::mode::mode_udaf;
-use datafusion_functions_extra::skewness::skewness_udaf;
+use datafusion_expr::{expr, AggregateUDF};
 use lazy_static::lazy_static;
 
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::kurtosis::KurtosisFunction;
+use crate::extension::function::max_min_by::{MaxByFunction, MinByFunction};
+use crate::extension::function::mode::ModeFunction;
+use crate::extension::function::skewness::SkewnessFunc;
 use crate::function::common::{AggFunction, AggFunctionContext};
 use crate::utils::ItemTaker;
 
@@ -64,6 +65,73 @@ fn first_last_value(
         filter: None,
         order_by: None,
         null_treatment: Some(ignore_nulls),
+    }))
+}
+
+fn kurtosis(
+    args: Vec<expr::Expr>,
+    agg_function_context: AggFunctionContext,
+) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(KurtosisFunction::new())),
+        args,
+        distinct: agg_function_context.distinct(),
+        filter: None,
+        order_by: None,
+        null_treatment: None,
+    }))
+}
+
+fn max_by(
+    args: Vec<expr::Expr>,
+    agg_function_context: AggFunctionContext,
+) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(MaxByFunction::new())),
+        args,
+        distinct: agg_function_context.distinct(),
+        filter: None,
+        order_by: None,
+        null_treatment: None,
+    }))
+}
+
+fn min_by(
+    args: Vec<expr::Expr>,
+    agg_function_context: AggFunctionContext,
+) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(MinByFunction::new())),
+        args,
+        distinct: agg_function_context.distinct(),
+        filter: None,
+        order_by: None,
+        null_treatment: None,
+    }))
+}
+
+fn mode(args: Vec<expr::Expr>, agg_function_context: AggFunctionContext) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(ModeFunction::new())),
+        args,
+        distinct: agg_function_context.distinct(),
+        filter: None,
+        order_by: None,
+        null_treatment: None,
+    }))
+}
+
+fn skewness(
+    args: Vec<expr::Expr>,
+    agg_function_context: AggFunctionContext,
+) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(SkewnessFunc::new())),
+        args,
+        distinct: agg_function_context.distinct(),
+        filter: None,
+        order_by: None,
+        null_treatment: None,
     }))
 }
 
@@ -121,7 +189,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("histogram_numeric", F::unknown("histogram_numeric")),
         ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
         ("hll_union_agg", F::unknown("hll_union_agg")),
-        ("kurtosis", F::default(kurtosis_udaf)),
+        ("kurtosis", F::custom(kurtosis)),
         (
             "last",
             F::custom(|args, agg_function_context| {
@@ -135,12 +203,12 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
             }),
         ),
         ("max", F::default(min_max::max_udaf)),
-        ("max_by", F::default(max_by_udaf)),
+        ("max_by", F::custom(max_by)),
         ("mean", F::default(average::avg_udaf)),
         ("median", F::default(median::median_udaf)),
         ("min", F::default(min_max::min_udaf)),
-        ("min_by", F::default(min_by_udaf)),
-        ("mode", F::default(mode_udaf)),
+        ("min_by", F::custom(min_by)),
+        ("mode", F::custom(mode)),
         ("percentile", F::unknown("percentile")),
         (
             "percentile_approx",
@@ -155,7 +223,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("regr_sxx", F::default(regr::regr_sxx_udaf)),
         ("regr_sxy", F::default(regr::regr_sxy_udaf)),
         ("regr_syy", F::default(regr::regr_syy_udaf)),
-        ("skewness", F::default(skewness_udaf)),
+        ("skewness", F::custom(skewness)),
         ("some", F::default(bool_and_or::bool_or_udaf)),
         ("std", F::default(stddev::stddev_udaf)),
         ("stddev", F::default(stddev::stddev_udaf)),

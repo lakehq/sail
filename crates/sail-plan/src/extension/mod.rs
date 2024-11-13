@@ -6,11 +6,12 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 
-pub(crate) mod function;
+pub mod function;
 pub mod logical;
 pub mod physical;
 pub(crate) mod source;
 
+#[derive(Debug)]
 pub(crate) struct ExtensionQueryPlanner {}
 
 #[async_trait]

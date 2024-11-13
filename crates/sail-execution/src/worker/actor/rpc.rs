@@ -1,4 +1,5 @@
 use arrow_flight::flight_service_server::FlightServiceServer;
+use sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT;
 use sail_server::actor::ActorHandle;
 use sail_server::ServerBuilder;
 use tokio::net::{TcpListener, ToSocketAddrs};
@@ -24,6 +25,7 @@ impl WorkerActor {
 
         let server = WorkerServer::new(handle.clone());
         let service = WorkerServiceServer::new(server)
+            .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
             .accept_compressed(CompressionEncoding::Gzip)
             .accept_compressed(CompressionEncoding::Zstd)
             .send_compressed(CompressionEncoding::Gzip)
@@ -31,6 +33,7 @@ impl WorkerActor {
 
         let flight_server = WorkerFlightServer::new(handle.clone());
         let flight_service = FlightServiceServer::new(flight_server)
+            .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
             .accept_compressed(CompressionEncoding::Gzip)
             .accept_compressed(CompressionEncoding::Zstd)
             .send_compressed(CompressionEncoding::Gzip)

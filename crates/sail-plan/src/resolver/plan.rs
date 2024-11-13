@@ -21,6 +21,7 @@ use datafusion_common::{
     Column, DFSchema, DFSchemaRef, ParamValues, ScalarValue, TableReference, ToDFSchema,
 };
 use datafusion_expr::builder::project;
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{ScalarFunction, Sort};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::{
@@ -268,15 +269,25 @@ impl PlanResolver<'_> {
                 self.resolve_query_drop_na(*input, columns, min_non_nulls, state)
                     .await?
             }
-            QueryNode::ReplaceNa { .. } => {
-                return Err(PlanError::todo("replace"));
+            QueryNode::Replace {
+                input,
+                columns,
+                replacements,
+            } => {
+                self.resolve_query_replace(*input, columns, replacements, state)
+                    .await?
             }
             QueryNode::StatSummary { input, statistics } => {
                 self.resolve_query_summary(*input, vec![], statistics, state)
                     .await?
             }
-            QueryNode::StatCrosstab { .. } => {
-                return Err(PlanError::todo("crosstab"));
+            QueryNode::StatCrosstab {
+                input,
+                left_column,
+                right_column,
+            } => {
+                self.resolve_query_cross_tab(*input, left_column, right_column, state)
+                    .await?
             }
             QueryNode::StatDescribe { input, columns } => {
                 let statistics = vec![
@@ -784,11 +795,7 @@ impl PlanResolver<'_> {
             if join_data_type.is_some() {
                 return Err(PlanError::invalid("cross join with join data type"));
             }
-            return Ok(LogicalPlan::CrossJoin(plan::CrossJoin {
-                left: Arc::new(left),
-                right: Arc::new(right),
-                schema: join_schema,
-            }));
+            return Ok(LogicalPlanBuilder::from(left).cross_join(right)?.build()?);
         }
         // TODO: add more validation logic here and in the plan optimizer
         //  See `LogicalPlanBuilder` for details about such logic.
@@ -1035,8 +1042,8 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         Ok(LogicalPlan::Limit(plan::Limit {
-            skip,
-            fetch: Some(limit),
+            skip: Some(Box::new(lit(skip as i64))),
+            fetch: Some(Box::new(lit(limit as i64))),
             input: Arc::new(input),
         }))
     }
@@ -1160,7 +1167,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         Ok(LogicalPlan::Limit(plan::Limit {
-            skip: offset,
+            skip: Some(Box::new(lit(offset as i64))),
             fetch: None,
             input: Arc::new(input),
         }))
@@ -1497,11 +1504,35 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_to_schema(
         &self,
-        _input: spec::QueryPlan,
-        _schema: spec::Schema,
-        _state: &mut PlanResolverState,
+        input: spec::QueryPlan,
+        schema: spec::Schema,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        Err(PlanError::todo("to schema"))
+        let input = self.resolve_query_plan(input, state).await?;
+        let target_schema = self.resolve_schema(schema)?;
+        let input_names = state.get_field_names(input.schema().inner())?;
+        let mut projected_exprs = Vec::new();
+        for target_field in target_schema.fields() {
+            let target_name = target_field.name();
+            let input_idx = input_names
+                .iter()
+                .position(|input_name| input_name.eq_ignore_ascii_case(target_name))
+                .ok_or_else(|| {
+                    PlanError::invalid(format!("field not found in input schema: {target_name}"))
+                })?;
+            let (input_qualifier, input_field) = input.schema().qualified_field(input_idx);
+            let expr = Expr::Column(Column::from((input_qualifier, input_field)));
+            let expr = if input_field.data_type() == target_field.data_type() {
+                expr
+            } else {
+                expr.cast_to(target_field.data_type(), &input.schema())?
+                    .alias_qualified(input_qualifier.cloned(), input_field.name())
+            };
+            projected_exprs.push(expr);
+        }
+        let projected_plan =
+            LogicalPlan::Projection(plan::Projection::try_new(projected_exprs, Arc::new(input))?);
+        Ok(projected_plan)
     }
 
     async fn resolve_query_repartition_by_expression(
@@ -1759,9 +1790,9 @@ impl PlanResolver<'_> {
         let input = self.resolve_query_plan(*input, state).await?;
         // add a `Limit` plan so that the optimizer can push down the limit
         let input = LogicalPlan::Limit(plan::Limit {
-            skip: 0,
+            skip: Some(Box::new(lit(0))),
             // fetch one more row so that the proper message can be displayed if there is more data
-            fetch: Some(num_rows + 1),
+            fetch: Some(Box::new(lit(num_rows as i64 + 1))),
             input: Arc::new(input),
         });
         let style = match vertical {
@@ -1932,12 +1963,17 @@ impl PlanResolver<'_> {
                             .collect();
                         // TODO: convert input in a way similar to `SqlToRel::insert_to_plan()`
                         let plan = rename_logical_plan(plan, &fields)?;
-                        let overwrite = mode == SaveMode::Overwrite;
+                        let insert_op = match mode {
+                            SaveMode::Append => InsertOp::Append,
+                            SaveMode::Overwrite => InsertOp::Overwrite,
+                            SaveMode::Replace | SaveMode::CreateOrReplace => InsertOp::Replace,
+                            _ => InsertOp::Append,
+                        };
                         LogicalPlanBuilder::insert_into(
                             plan,
                             table_ref,
                             &table_provider.schema(),
-                            overwrite,
+                            insert_op,
                         )?
                         .build()?
                     }
@@ -2392,8 +2428,13 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<_>>>()?;
 
         let input = project(rename_logical_plan(input, &fields)?, exprs)?;
+        let insert_op = match overwrite {
+            // TODO: resolve_command_insert_into should pass in insert_op instead of overwrite
+            true => InsertOp::Overwrite,
+            false => InsertOp::Append,
+        };
         let plan =
-            LogicalPlanBuilder::insert_into(input, table_reference, schema.as_ref(), overwrite)?
+            LogicalPlanBuilder::insert_into(input, table_reference, schema.as_ref(), insert_op)?
                 .build()?;
         Ok(plan)
     }
@@ -2641,6 +2682,62 @@ impl PlanResolver<'_> {
 
         Ok(LogicalPlan::Filter(plan::Filter::try_new(
             filter_expr,
+            Arc::new(input),
+        )?))
+    }
+
+    async fn resolve_query_replace(
+        &self,
+        input: spec::QueryPlan,
+        columns: Vec<spec::Identifier>,
+        replacements: Vec<spec::Replacement>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let input = self.resolve_query_plan(input, state).await?;
+        let schema = input.schema();
+        let columns: Vec<String> = columns.into_iter().map(|x| x.into()).collect();
+        let replacements: Vec<(Expr, Expr)> = replacements
+            .into_iter()
+            .map(|r| {
+                Ok((
+                    lit(self.resolve_literal(r.old_value)?),
+                    lit(self.resolve_literal(r.new_value)?),
+                ))
+            })
+            .collect::<PlanResult<_>>()?;
+
+        let replace_exprs = schema
+            .columns()
+            .into_iter()
+            .map(|c| {
+                let column_expr = col(c.clone());
+                let column_data_type = column_expr.get_type(schema)?;
+                let column_name = state.get_field_name(c.name())?;
+                // TODO: Avoid checking col == column_name twice
+                let expr = if columns.is_empty() || columns.iter().any(|col| col == column_name) {
+                    let mut when_then_expr = Vec::new();
+                    replacements.iter().for_each(|(old, new)| {
+                        let new = Expr::TryCast(TryCast {
+                            expr: Box::new(new.clone()),
+                            data_type: column_data_type.clone(),
+                        });
+                        when_then_expr
+                            .push((Box::new(column_expr.clone().eq(old.clone())), Box::new(new)));
+                    });
+                    Expr::Case(datafusion_expr::Case {
+                        expr: None,
+                        when_then_expr,
+                        else_expr: Some(Box::new(column_expr)),
+                    })
+                } else {
+                    column_expr
+                };
+                Ok(NamedExpr::new(vec![column_name.into()], expr))
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+
+        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+            self.rewrite_named_expressions(replace_exprs, state)?,
             Arc::new(input),
         )?))
     }

@@ -37,7 +37,7 @@ impl ShowStringExec {
     ) -> Self {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
-            Partitioning::UnknownPartitioning(1),
+            Partitioning::RoundRobinBatch(1),
             ExecutionMode::Bounded,
         );
         Self {

@@ -23,6 +23,12 @@ pub struct Size {
     signature: Signature,
 }
 
+impl Default for Size {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Size {
     pub fn new() -> Self {
         Self {

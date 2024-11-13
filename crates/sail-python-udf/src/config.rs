@@ -1,6 +1,6 @@
 use sail_common::config::ConfigKeyValue;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct SparkUdfConfig {
     pub timezone: ConfigKeyValue,
     pub pandas_window_bound_types: ConfigKeyValue,

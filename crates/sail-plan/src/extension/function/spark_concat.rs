@@ -14,6 +14,12 @@ pub struct SparkConcat {
     signature: Signature,
 }
 
+impl Default for SparkConcat {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SparkConcat {
     pub fn new() -> Self {
         Self {
@@ -85,8 +91,10 @@ impl ScalarUDFImpl for SparkConcat {
             .iter()
             .any(|arg| matches!(arg.data_type(), DataType::List(_)))
         {
+            #[allow(deprecated)] // TODO use invoke_batch
             ArrayConcat::new().invoke(args)
         } else {
+            #[allow(deprecated)] // TODO use invoke_batch
             ConcatFunc::new().invoke(args)
         }
     }

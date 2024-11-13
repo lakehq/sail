@@ -20,6 +20,12 @@ pub struct ArrayMin {
     signature: Signature,
 }
 
+impl Default for ArrayMin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArrayMin {
     pub fn new() -> Self {
         Self {
@@ -58,6 +64,12 @@ impl ScalarUDFImpl for ArrayMin {
 #[derive(Debug)]
 pub struct ArrayMax {
     signature: Signature,
+}
+
+impl Default for ArrayMax {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayMax {

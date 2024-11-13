@@ -27,7 +27,7 @@ pub trait PlanFormatter: DynObject + Debug + Send + Sync {
 
 impl_dyn_object_traits!(PlanFormatter);
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
 pub struct DefaultPlanFormatter;
 
 impl DefaultPlanFormatter {

@@ -15,9 +15,65 @@ message ExtendedPhysicalPlanNode {
     ShowStringExecNode show_string = 2;
     ShuffleReadExecNode shuffle_read = 3;
     ShuffleWriteExecNode shuffle_write = 4;
+    SchemaPivotExecNode schema_pivot = 5;
     // TODO: This can be removed once it is supported by DataFusion.
     MemoryExecNode memory = 101;
+    ValuesExecNode values = 102;
   }
+}
+
+message ExtendedAggregateUdf {
+  oneof UdafKind {
+    StandardUdaf standard = 1;
+    PySparkUdaf py_spark_agg = 2;
+  }
+}
+
+message ExtendedScalarUdf {
+  oneof UdfKind {
+    StandardUdf standard = 1;
+    WithOneAuxiliaryFieldUdf with_one_auxiliary_field = 2;
+    PySparkUdf py_spark = 3;
+  }
+}
+
+message StandardUdf {}
+message StandardUdaf {}
+
+message AuxiliaryFieldSingle {
+  bytes auxiliary_field = 1;
+}
+
+message AuxiliaryFieldRepeated {
+  repeated bytes auxiliary_field = 1;
+}
+
+message AuxiliaryField {
+  oneof auxiliary_field {
+    AuxiliaryFieldSingle auxiliary_field_single = 1;
+    AuxiliaryFieldRepeated auxiliary_field_repeated = 2;
+  }
+}
+
+message WithOneAuxiliaryFieldUdf {
+  AuxiliaryField auxiliary_field = 1;
+}
+
+message PySparkUdf {
+  string function_name = 1;
+  bool deterministic = 2;
+  int32 eval_type = 3;
+  repeated bytes input_types = 4;
+  bytes output_type = 5;
+  bytes python_bytes = 6;
+}
+
+message PySparkUdaf {
+  string function_name = 1;
+  bool deterministic = 2;
+  repeated bytes input_types = 3;
+  bytes output_type = 4;
+  bytes python_bytes = 5;
 }
 
 message RangeExecNode {
@@ -43,12 +99,23 @@ enum ShowStringStyle {
   SHOW_STRING_STYLE_HTML = 2;
 }
 
+message SchemaPivotExecNode {
+  bytes input = 1;
+  repeated string names = 2;
+  bytes schema = 3;
+}
+
 message MemoryExecNode {
   repeated bytes partitions = 1;
   bytes schema = 2;
   optional PhysicalProjection projection = 3;
   // TODO: `sort_information` and `show_sizes` are missing
   //   since there is no getter for them in the node.
+}
+
+message ValuesExecNode {
+  bytes data = 1;
+  bytes schema = 2;
 }
 
 message PhysicalProjection {

@@ -26,7 +26,7 @@ impl RangeExec {
     pub fn new(range: Range, num_partitions: usize, schema: SchemaRef) -> Self {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
-            Partitioning::UnknownPartitioning(num_partitions),
+            Partitioning::RoundRobinBatch(num_partitions),
             ExecutionMode::Bounded,
         );
         Self {

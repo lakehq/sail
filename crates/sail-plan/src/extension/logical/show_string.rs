@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
@@ -23,14 +24,14 @@ fn truncate_string(s: &str, n: usize) -> String {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub enum ShowStringStyle {
     Default,
     Vertical,
     Html,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub struct ShowStringFormat {
     style: ShowStringStyle,
     truncate: usize,
@@ -214,6 +215,19 @@ pub(crate) struct ShowStringNode {
     schema: DFSchemaRef,
     limit: usize,
     format: ShowStringFormat,
+}
+
+impl PartialOrd for ShowStringNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        // names is part of schema so we skip that
+        match self.format.partial_cmp(&other.format) {
+            Some(Ordering::Equal) => match self.limit.partial_cmp(&other.limit) {
+                Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
+                cmp => cmp,
+            },
+            cmp => cmp,
+        }
+    }
 }
 
 impl ShowStringNode {

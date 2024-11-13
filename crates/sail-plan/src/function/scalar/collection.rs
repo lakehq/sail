@@ -1,21 +1,9 @@
-use datafusion::functions::expr_fn as core_expr_fn;
 use datafusion::functions_nested::expr_fn;
-use datafusion_common::ScalarValue;
-use datafusion_expr::expr;
 
 use crate::extension::function::size::Size;
 use crate::extension::function::spark_concat::SparkConcat;
+use crate::extension::function::spark_reverse::SparkReverse;
 use crate::function::common::Function;
-
-fn reverse(arg: expr::Expr) -> expr::Expr {
-    match arg {
-        expr::Expr::Literal(ScalarValue::Utf8(_))
-        | expr::Expr::Literal(ScalarValue::Utf8View(_))
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_)) => core_expr_fn::reverse(arg),
-        _ => expr_fn::array_reverse(arg),
-        // FIXME: Create UDF for reverse to properly determine datatype
-    }
-}
 
 pub(super) fn list_built_in_collection_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
@@ -25,6 +13,6 @@ pub(super) fn list_built_in_collection_functions() -> Vec<(&'static str, Functio
         ("cardinality", F::udf(Size::new())),
         ("size", F::udf(Size::new())),
         ("concat", F::udf(SparkConcat::new())),
-        ("reverse", F::unary(reverse)),
+        ("reverse", F::udf(SparkReverse::new())),
     ]
 }
