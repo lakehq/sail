@@ -1,8 +1,11 @@
 use std::path::PathBuf;
 
+use prost_build::Config;
+
 struct ProtoBuilder<'a> {
     package: &'a str,
     files: &'a [&'a str],
+    skip_debug: Option<&'a [&'a str]>,
     with_service: bool,
 }
 
@@ -11,8 +14,14 @@ impl<'a> ProtoBuilder<'a> {
         Self {
             package,
             files,
+            skip_debug: None,
             with_service: false,
         }
+    }
+
+    fn skip_debug(mut self, skip_debug: &'a [&'a str]) -> Self {
+        self.skip_debug = Some(skip_debug);
+        self
     }
 
     fn with_service(mut self) -> Self {
@@ -40,9 +49,14 @@ impl<'a> ProtoBuilder<'a> {
             builder
         };
 
+        let mut config = Config::new();
+        if let Some(skip_debug) = self.skip_debug {
+            config.skip_debug(skip_debug);
+        }
+
         builder
             .compile_well_known_types(true)
-            .compile_protos(&protos, &["proto"])?;
+            .compile_protos_with_config(config, &protos, &["proto"])?;
 
         Ok(())
     }
@@ -55,6 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_service()
         .build()?;
     ProtoBuilder::new("worker", &["service.proto"])
+        .skip_debug(&["sail.worker.RunTaskRequest"])
         .with_service()
         .build()?;
     Ok(())

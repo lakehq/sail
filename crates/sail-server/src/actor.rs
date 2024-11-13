@@ -21,7 +21,7 @@ pub trait Actor: Sized + Send + 'static {
     /// If the actor needs to perform async operations, it should spawn tasks via
     /// [ActorContext::spawn].
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction;
-    async fn stop(self);
+    async fn stop(self, ctx: &mut ActorContext<Self>);
 }
 
 pub enum ActorAction {
@@ -64,6 +64,15 @@ impl<T: Actor> ActorContext<T> {
     pub fn send(&mut self, message: T::Message) {
         let handle = self.handle.clone();
         self.spawn(async move {
+            let _ = handle.send(message).await;
+        });
+    }
+
+    /// Spawn a task to send a message to the actor itself after a delay.
+    pub fn send_with_delay(&mut self, message: T::Message, delay: std::time::Duration) {
+        let handle = self.handle.clone();
+        self.spawn(async move {
+            tokio::time::sleep(delay).await;
             let _ = handle.send(message).await;
         });
     }
@@ -190,7 +199,7 @@ impl<T: Actor> ActorRunner<T> {
             }
             self.ctx.reap();
         }
-        self.actor.stop().await;
+        self.actor.stop(&mut self.ctx).await;
     }
 }
 
@@ -231,7 +240,7 @@ mod tests {
             }
         }
 
-        async fn stop(self) {}
+        async fn stop(self, _: &mut ActorContext<Self>) {}
     }
 
     #[tokio::test]

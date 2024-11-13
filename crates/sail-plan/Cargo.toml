@@ -42,7 +42,6 @@ aws-config = { workspace = true }
 aws-credential-types = { workspace = true }
 hdfs-native-object-store = { workspace = true, optional = true }
 log = { workspace = true }
-jiter = { workspace = true }
 
 [features]
 hdfs = ["dep:hdfs-native-object-store"]

@@ -48,9 +48,9 @@ pub struct ClusterJobRunner {
 }
 
 impl ClusterJobRunner {
-    pub fn try_new(system: &mut ActorSystem, options: DriverOptions) -> ExecutionResult<Self> {
+    pub fn new(system: &mut ActorSystem, options: DriverOptions) -> Self {
         let driver = system.spawn(options);
-        Ok(Self { driver })
+        Self { driver }
     }
 }
 

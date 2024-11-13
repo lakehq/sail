@@ -1,11 +1,16 @@
-runner = "local"
+mode = "local"
 
 [driver]
 listen_host = "127.0.0.1"
 listen_port = 0
 external_host = "127.0.0.1"
 # external_port = <value>
-worker_count_per_job = 4
+worker_initial_count = 4
+# worker_max_count = <value>
+worker_max_idle_time_secs = 300
+worker_launch_timeout_secs = 300
+worker_task_slots = 8
+task_launch_timeout_secs = 600
 job_output_buffer = 16
 
 [worker]

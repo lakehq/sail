@@ -118,6 +118,7 @@ impl From<ExecutionError> for SparkError {
             ExecutionError::IoError(e) => SparkError::IoError(e),
             ExecutionError::TonicTransportError(e) => SparkError::InternalError(e.to_string()),
             ExecutionError::TonicStatusError(e) => SparkError::InternalError(e.to_string()),
+            ExecutionError::KubernetesError(e) => SparkError::InternalError(e.to_string()),
             ExecutionError::InternalError(e) => SparkError::InternalError(e),
         }
     }

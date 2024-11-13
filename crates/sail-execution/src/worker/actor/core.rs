@@ -25,8 +25,7 @@ pub struct WorkerActor {
     pub(super) task_signals: HashMap<TaskAttempt, oneshot::Sender<()>>,
     pub(super) memory_streams: HashMap<ChannelName, SendableRecordBatchStream>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
-    /// An increasing sequence number for ordered events.
-    /// The sequence number must be non-zero.
+    /// A monotonically increasing sequence number for ordered events.
     pub(super) sequence: u64,
 }
 
@@ -105,7 +104,7 @@ impl Actor for WorkerActor {
         }
     }
 
-    async fn stop(self) {
+    async fn stop(self, _ctx: &mut ActorContext<Self>) {
         self.server.stop().await;
         debug!("worker {} server has stopped", self.options.worker_id);
     }

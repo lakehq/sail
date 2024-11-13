@@ -8,7 +8,7 @@ const DEFAULT_CONFIG: &str = include_str!("default.toml");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    pub runner: RunnerKind,
+    pub mode: ExecutionMode,
     pub driver: DriverConfig,
     pub worker: WorkerConfig,
     pub network: NetworkConfig,
@@ -26,9 +26,10 @@ impl AppConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum RunnerKind {
+pub enum ExecutionMode {
     Local,
-    Cluster,
+    LocalCluster,
+    KubernetesCluster,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,7 +38,12 @@ pub struct DriverConfig {
     pub listen_port: u16,
     pub external_host: String,
     pub external_port: Option<u16>,
-    pub worker_count_per_job: usize,
+    pub worker_initial_count: usize,
+    pub worker_max_count: Option<usize>,
+    pub worker_max_idle_time_secs: u64,
+    pub worker_launch_timeout_secs: u64,
+    pub worker_task_slots: usize,
+    pub task_launch_timeout_secs: u64,
     pub job_output_buffer: usize,
 }
 

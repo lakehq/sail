@@ -1,5 +1,6 @@
 use log::debug;
 use sail_server::actor::ActorHandle;
+use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};
 
 use crate::driver::actor::DriverActor;
@@ -38,15 +39,18 @@ impl DriverService for DriverServer {
         let port = u16::try_from(port).map_err(|_| {
             Status::invalid_argument("port must be a valid 16-bit unsigned integer")
         })?;
+        let (tx, rx) = oneshot::channel();
         let event = DriverEvent::RegisterWorker {
             worker_id: WorkerId::from(worker_id),
             host,
             port,
+            result: tx,
         };
         self.handle
             .send(event)
             .await
             .map_err(ExecutionError::from)?;
+        rx.await.map_err(ExecutionError::from)??;
         let response = RegisterWorkerResponse {};
         debug!("{:?}", response);
         Ok(Response::new(response))

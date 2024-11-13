@@ -17,17 +17,19 @@ use prost::bytes::BytesMut;
 use prost::Message;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::Instant;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
 use crate::driver::actor::output::JobOutput;
 use crate::driver::actor::DriverActor;
 use crate::driver::planner::JobGraph;
 use crate::driver::state::{
-    JobDescriptor, JobStage, TaskDescriptor, TaskMode, TaskStatus, WorkerDescriptor, WorkerStatus,
+    JobDescriptor, JobStage, TaskDescriptor, TaskMode, TaskState, TaskStatus, WorkerDescriptor,
+    WorkerState,
 };
 use crate::driver::DriverEvent;
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskAttempt, TaskId, WorkerId};
+use crate::id::{JobId, TaskId, WorkerId};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::{MergedRecordBatchStream, TaskReadLocation, TaskWriteLocation};
 use crate::worker_manager::WorkerLaunchOptions;
@@ -35,7 +37,7 @@ use crate::worker_manager::WorkerLaunchOptions;
 impl DriverActor {
     pub(super) fn handle_server_ready(
         &mut self,
-        _ctx: &mut ActorContext<Self>,
+        ctx: &mut ActorContext<Self>,
         port: u16,
         signal: oneshot::Sender<()>,
     ) -> ActorAction {
@@ -45,27 +47,7 @@ impl DriverActor {
             Err(e) => return ActorAction::fail(e),
         };
         info!("driver server is ready on port {port}");
-        ActorAction::Continue
-    }
-
-    pub(super) fn handle_start_worker(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        worker_id: WorkerId,
-    ) -> ActorAction {
-        let Some(port) = self.server.port() else {
-            return ActorAction::fail("the driver server is not ready");
-        };
-        let options = WorkerLaunchOptions {
-            driver_host: self.options().driver_external_host.to_string(),
-            driver_port: self.options().driver_external_port.unwrap_or(port),
-        };
-        let worker_manager = Arc::clone(&self.worker_manager);
-        ctx.spawn(async move {
-            if let Err(e) = worker_manager.start_worker(worker_id, options).await {
-                error!("failed to start worker {worker_id}: {e}");
-            }
-        });
+        self.start_workers(ctx, self.options().worker_initial_count);
         ActorAction::Continue
     }
 
@@ -75,33 +57,94 @@ impl DriverActor {
         worker_id: WorkerId,
         host: String,
         port: u16,
+        result: oneshot::Sender<ExecutionResult<()>>,
     ) -> ActorAction {
         info!("worker {worker_id} is available at {host}:{port}");
-        let status = WorkerStatus::Running { host, port };
-        self.state.update_worker_status(worker_id, status);
-        if let Some(worker) = self.state.get_worker(worker_id) {
-            self.schedule_tasks_for_job(ctx, worker.job_id);
+        let out = if let Some(worker) = self.state.get_worker(worker_id) {
+            match worker.state {
+                WorkerState::Pending { .. } => {
+                    self.state.update_worker(
+                        worker_id,
+                        WorkerState::Running {
+                            host,
+                            port,
+                            tasks: Default::default(),
+                            jobs: Default::default(),
+                            updated_at: Instant::now(),
+                        },
+                        None,
+                    );
+                    self.schedule_idle_worker_probe(ctx, worker_id);
+                    self.schedule_tasks(ctx);
+                    Ok(())
+                }
+                WorkerState::Running { .. } => Err(ExecutionError::InternalError(format!(
+                    "worker {worker_id} is already running"
+                ))),
+                WorkerState::Stopped => Err(ExecutionError::InternalError(format!(
+                    "worker {worker_id} is stopped"
+                ))),
+                WorkerState::Failed => Err(ExecutionError::InternalError(format!(
+                    "worker {worker_id} is failed"
+                ))),
+            }
+        } else {
+            Err(ExecutionError::InvalidArgument(format!(
+                "worker {worker_id} not found"
+            )))
+        };
+        if result.send(out).is_err() {
+            warn!("failed to send worker registration result");
         }
         ActorAction::Continue
     }
 
-    pub(super) fn handle_stop_worker(
+    pub(super) fn handle_probe_pending_worker(
         &mut self,
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
     ) -> ActorAction {
         let Some(worker) = self.state.get_worker(worker_id) else {
+            warn!("worker {worker_id} not found");
             return ActorAction::Continue;
         };
-        if matches!(worker.status, WorkerStatus::Running { .. }) {
-            self.state
-                .update_worker_status(worker_id, WorkerStatus::Stopped);
-            let worker_manager = Arc::clone(&self.worker_manager);
-            ctx.spawn(async move {
-                if let Err(e) = worker_manager.stop_worker(worker_id).await {
-                    error!("failed to stop worker {worker_id}: {e}");
-                }
-            });
+        let timeout = self.options().worker_launch_timeout;
+        if let WorkerState::Pending { pending_at } = &worker.state {
+            if pending_at.elapsed() > timeout {
+                warn!("worker {worker_id} registration timeout");
+                let message = format!(
+                    "worker registration timeout after {} second(s)",
+                    timeout.as_secs()
+                );
+                self.state
+                    .update_worker(worker_id, WorkerState::Failed, Some(message));
+                self.scale_up_workers(ctx);
+            }
+        }
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_probe_idle_worker(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+    ) -> ActorAction {
+        let Some(worker) = self.state.get_worker(worker_id) else {
+            warn!("worker {worker_id} not found");
+            return ActorAction::Continue;
+        };
+        if let WorkerState::Running {
+            tasks,
+            jobs,
+            updated_at,
+            ..
+        } = &worker.state
+        {
+            let timeout = self.options().worker_max_idle_time;
+            if tasks.is_empty() && jobs.is_empty() && updated_at.elapsed() > timeout {
+                let reason = format!("worker has been idle for {} second(s)", timeout.as_secs());
+                self.stop_worker(ctx, worker_id, Some(reason));
+            }
         }
         ActorAction::Continue
     }
@@ -130,9 +173,8 @@ impl DriverActor {
         job_id: JobId,
     ) -> ActorAction {
         self.job_outputs.remove(&job_id);
-        // TODO: reuse workers
-        for (worker_id, _) in self.state.find_workers_for_job(job_id) {
-            ctx.send(DriverEvent::StopWorker { worker_id });
+        for worker_id in self.state.detach_job_from_workers(job_id) {
+            self.schedule_idle_worker_probe(ctx, worker_id);
         }
         ActorAction::Continue
     }
@@ -146,32 +188,46 @@ impl DriverActor {
         message: Option<String>,
         sequence: Option<u64>,
     ) -> ActorAction {
-        self.state
-            .update_task_status(task_id, attempt, status, message.clone(), sequence);
-        let Some(task) = self.state.get_task(task_id) else {
-            return ActorAction::warn(format!("task {task_id} not found"));
-        };
-        if sequence.is_some_and(|s| task.sequence != s) {
-            // The task status update is outdated, so we skip the remaining logic.
-            return ActorAction::Continue;
+        if let Some(sequence) = sequence {
+            if self
+                .task_sequences
+                .get(&task_id)
+                .is_some_and(|s| sequence <= *s)
+            {
+                // The task status update is outdated, so we skip the remaining logic.
+                warn!("task {task_id} sequence {sequence} is stale");
+                return ActorAction::Continue;
+            }
+            self.task_sequences.insert(task_id, sequence);
         }
-        let job_id = task.job_id;
-        match task.status {
-            TaskStatus::Running | TaskStatus::Succeeded => {
-                self.schedule_tasks_for_job(ctx, job_id);
-                self.try_update_job_output(ctx, job_id);
-            }
-            TaskStatus::Failed => {
-                // TODO: support task retry
-                let reason = format!(
-                    "task {} failed at attempt {}: {}",
-                    task_id,
-                    attempt,
-                    message.as_deref().unwrap_or("unknown reason")
+        self.update_task(ctx, task_id, attempt, status, message);
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_probe_pending_task(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        task_id: TaskId,
+    ) -> ActorAction {
+        let Some(task) = self.state.get_task(task_id) else {
+            warn!("task {task_id} not found");
+            return ActorAction::Continue;
+        };
+        if let TaskState::Pending { pending_at } = &task.state {
+            let timeout = self.options().task_launch_timeout;
+            if pending_at.elapsed() > timeout {
+                let message = format!(
+                    "task scheduling timeout after {} second(s)",
+                    timeout.as_secs()
                 );
-                self.stop_job(ctx, job_id, reason);
+                self.update_task(
+                    ctx,
+                    task_id,
+                    task.attempt,
+                    TaskStatus::Failed,
+                    Some(message),
+                );
             }
-            TaskStatus::Created | TaskStatus::Scheduled | TaskStatus::Canceled => {}
         }
         ActorAction::Continue
     }
@@ -189,8 +245,6 @@ impl DriverActor {
         );
         let graph = JobGraph::try_new(plan)?;
         debug!("job {} job graph \n{}", job_id, graph);
-        let worker_ids = self.start_workers_for_job(ctx, job_id)?;
-        let mut worker_id_selector = worker_ids.iter().cycle();
         let mut stages = vec![];
         for (s, stage) in graph.stages().iter().enumerate() {
             let last = s == graph.stages().len() - 1;
@@ -210,15 +264,20 @@ impl DriverActor {
                         stage: s,
                         partition: p,
                         attempt,
-                        worker_id: *worker_id_selector.next().unwrap(),
                         mode: TaskMode::Pipelined,
-                        status: TaskStatus::Created,
+                        state: TaskState::Pending {
+                            pending_at: Instant::now(),
+                        },
                         messages: vec![],
-                        sequence: 0,
                         channel,
                     },
                 );
+                self.task_queue.push_back(task_id);
                 tasks.push(task_id);
+                ctx.send_with_delay(
+                    DriverEvent::ProbePendingTask { task_id },
+                    self.options().task_launch_timeout,
+                );
             }
             stages.push(JobStage {
                 plan: Arc::clone(stage),
@@ -227,77 +286,260 @@ impl DriverActor {
         }
         let descriptor = JobDescriptor { stages };
         self.state.add_job(job_id, descriptor);
+        self.scale_up_workers(ctx);
+        self.schedule_tasks(ctx);
         Ok(job_id)
     }
 
-    fn start_workers_for_job(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        job_id: JobId,
-    ) -> ExecutionResult<Vec<WorkerId>> {
-        let worker_ids = (0..self.options().worker_count_per_job)
-            .map(|_| self.state.next_worker_id())
-            .collect::<ExecutionResult<Vec<_>>>()?;
-        for x in worker_ids.iter() {
-            let descriptor = WorkerDescriptor {
-                job_id,
-                status: WorkerStatus::Pending,
-            };
-            self.state.add_worker(*x, descriptor);
-            ctx.send(DriverEvent::StartWorker { worker_id: *x });
+    fn scale_up_workers(&mut self, ctx: &mut ActorContext<Self>) {
+        let slots_per_worker = self.options().worker_task_slots;
+        let active_workers = self.state.count_active_workers();
+        let used_slots = self.state.count_active_tasks();
+        let pending_slots = self.state.count_pending_tasks();
+        let available_slots = active_workers * slots_per_worker;
+        if available_slots >= used_slots + pending_slots {
+            return;
         }
-        Ok(worker_ids)
+        let missing_slots = used_slots + pending_slots - available_slots;
+        let missing_workers = (missing_slots + slots_per_worker - 1) / slots_per_worker;
+        let missing_workers = if let Some(max_workers) = self.options().worker_max_count {
+            missing_workers.min(max_workers.saturating_sub(active_workers))
+        } else {
+            missing_workers
+        };
+        self.start_workers(ctx, missing_workers);
     }
 
-    fn schedule_tasks_for_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
-        let tasks = self
-            .state
-            .find_schedulable_tasks_for_job(job_id)
-            .into_iter()
-            .map(|(task_id, task)| TaskAttempt::new(task_id, task.attempt))
-            .collect::<Vec<_>>();
-        for TaskAttempt { task_id, attempt } in tasks {
-            self.state
-                .update_task_status(task_id, attempt, TaskStatus::Scheduled, None, None);
-            if let Err(e) = self.schedule_task(ctx, task_id) {
-                ctx.send(DriverEvent::UpdateTask {
+    fn start_workers(&mut self, ctx: &mut ActorContext<Self>, count: usize) {
+        let Ok(worker_ids) = (0..count)
+            .map(|_| self.state.next_worker_id())
+            .collect::<ExecutionResult<Vec<_>>>()
+        else {
+            error!("failed to generate worker IDs");
+            ctx.send(DriverEvent::Shutdown);
+            return;
+        };
+        for &worker_id in worker_ids.iter() {
+            let descriptor = WorkerDescriptor {
+                state: WorkerState::Pending {
+                    pending_at: Instant::now(),
+                },
+                messages: vec![],
+            };
+            self.state.add_worker(worker_id, descriptor);
+            self.start_worker(ctx, worker_id);
+            ctx.send_with_delay(
+                DriverEvent::ProbePendingWorker { worker_id },
+                self.options().worker_launch_timeout,
+            );
+        }
+    }
+
+    fn start_worker(&mut self, ctx: &mut ActorContext<Self>, worker_id: WorkerId) {
+        let Some(port) = self.server.port() else {
+            error!("the driver server is not ready");
+            return;
+        };
+        let options = WorkerLaunchOptions {
+            enable_tls: self.options().enable_tls,
+            driver_external_host: self.options().driver_external_host.to_string(),
+            driver_external_port: self.options().driver_external_port.unwrap_or(port),
+        };
+        let worker_manager = Arc::clone(&self.worker_manager);
+        ctx.spawn(async move {
+            if let Err(e) = worker_manager.launch_worker(worker_id, options).await {
+                error!("failed to start worker {worker_id}: {e}");
+            }
+        });
+    }
+
+    pub fn update_task(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        task_id: TaskId,
+        attempt: usize,
+        status: TaskStatus,
+        message: Option<String>,
+    ) -> ActorAction {
+        let Some(task) = self.state.get_task(task_id) else {
+            return ActorAction::warn(format!("task {task_id} not found"));
+        };
+        let job_id = task.job_id;
+        match status {
+            TaskStatus::Running => {
+                if let Some(state) = task.state.run() {
+                    self.state.update_task(task_id, attempt, state, message);
+                } else {
+                    return ActorAction::warn(format!(
+                        "task {task_id} cannot be updated to the running state from its current state"
+                    ));
+                }
+                self.schedule_tasks(ctx);
+                self.try_update_job_output(ctx, job_id);
+            }
+            TaskStatus::Succeeded => {
+                if let Some(state) = task.state.succeed() {
+                    self.state.update_task(task_id, attempt, state, message);
+                } else {
+                    return ActorAction::warn(format!(
+                        "task {task_id} cannot be updated to the succeeded state from its current state"
+                    ));
+                }
+                if let Some(worker_id) = self.state.detach_task_from_worker(task_id) {
+                    self.schedule_idle_worker_probe(ctx, worker_id);
+                }
+                self.schedule_tasks(ctx);
+                self.try_update_job_output(ctx, job_id);
+            }
+            TaskStatus::Failed => {
+                // TODO: support task retry
+                let reason = format!(
+                    "task {} failed at attempt {}: {}",
                     task_id,
                     attempt,
-                    status: TaskStatus::Failed,
-                    message: Some(format!("failed to schedule task: {e}")),
-                    sequence: None,
-                });
+                    message.as_deref().unwrap_or("unknown reason")
+                );
+                self.state
+                    .update_task(task_id, attempt, TaskState::Failed, message);
+                if let Some(worker_id) = self.state.detach_task_from_worker(task_id) {
+                    self.schedule_idle_worker_probe(ctx, worker_id);
+                }
+                self.cancel_job(ctx, job_id, reason);
+                self.schedule_tasks(ctx);
+            }
+            TaskStatus::Canceled => {
+                let reason = format!(
+                    "task {} canceled at attempt {}: {}",
+                    task_id,
+                    attempt,
+                    message.as_deref().unwrap_or("unknown reason")
+                );
+                self.state
+                    .update_task(task_id, attempt, TaskState::Canceled, message);
+                if let Some(worker_id) = self.state.detach_task_from_worker(task_id) {
+                    self.schedule_idle_worker_probe(ctx, worker_id);
+                }
+                self.cancel_job(ctx, job_id, reason);
+                self.schedule_tasks(ctx);
             }
         }
+        ActorAction::Continue
+    }
+
+    fn schedule_idle_worker_probe(&mut self, ctx: &mut ActorContext<Self>, worker_id: WorkerId) {
+        ctx.send_with_delay(
+            DriverEvent::ProbeIdleWorker { worker_id },
+            self.options().worker_max_idle_time,
+        );
+    }
+
+    fn find_idle_task_slots(&self) -> Vec<(WorkerId, usize)> {
+        self.state
+            .list_workers()
+            .into_iter()
+            .filter_map(|(id, worker)| {
+                let count = match &worker.state {
+                    WorkerState::Running { tasks, .. } => {
+                        self.options().worker_task_slots.saturating_sub(tasks.len())
+                    }
+                    _ => 0,
+                };
+                if count > 0 {
+                    Some((id, count))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+    }
+
+    fn schedule_tasks(&mut self, ctx: &mut ActorContext<Self>) {
+        let slots = self.find_idle_task_slots();
+        let mut assigner = TaskSlotAssigner::new(slots);
+        let mut skipped_tasks = vec![];
+        while let Some(worker_id) = assigner.next() {
+            while let Some(task_id) = self.task_queue.pop_front() {
+                if !self.state.can_schedule_task(task_id) {
+                    skipped_tasks.push(task_id);
+                    continue;
+                }
+                match self.schedule_task(ctx, task_id, worker_id) {
+                    Ok(()) => break,
+                    Err(e) => {
+                        warn!("failed to schedule task {task_id} to worker {worker_id}: {e}");
+                    }
+                }
+            }
+            if self.task_queue.is_empty() {
+                break;
+            }
+        }
+        self.task_queue.extend(skipped_tasks);
     }
 
     fn schedule_task(
         &mut self,
         ctx: &mut ActorContext<Self>,
         task_id: TaskId,
+        worker_id: WorkerId,
     ) -> ExecutionResult<()> {
-        let task = self
-            .state
-            .get_task(task_id)
-            .ok_or_else(|| ExecutionError::InternalError(format!("task {task_id} not found")))?;
-        let job = self.state.get_job(task.job_id).ok_or_else(|| {
-            ExecutionError::InternalError(format!(
+        let Some(task) = self.state.get_task(task_id) else {
+            return Err(ExecutionError::InternalError(format!(
+                "task {task_id} not found"
+            )));
+        };
+        let Some(job) = self.state.get_job(task.job_id) else {
+            return Err(ExecutionError::InternalError(format!(
                 "job {} not found for task {}",
                 task.job_id, task_id
-            ))
-        })?;
-        let stage = job.stages.get(task.stage).ok_or_else(|| {
-            ExecutionError::InternalError(format!(
+            )));
+        };
+        let Some(stage) = job.stages.get(task.stage) else {
+            return Err(ExecutionError::InternalError(format!(
                 "stage {} not found for job {} and task {}",
                 task.stage, task.job_id, task_id
-            ))
-        })?;
+            )));
+        };
+        match task.state {
+            TaskState::Pending { .. } => {}
+            _ => {
+                return Err(ExecutionError::InternalError(format!(
+                    "task {task_id} cannot be scheduled in its current state"
+                )));
+            }
+        };
+        // Clear the sequence number before scheduling the task to the worker.
+        self.task_sequences.remove(&task_id);
         let attempt = task.attempt;
         let partition = task.partition;
         let channel = task.channel.clone();
-        let plan = self.rewrite_shuffle(task.job_id, job, stage.plan.clone())?;
-        let plan = self.encode_plan(plan)?;
-        let client = self.worker_client(task.worker_id)?.clone();
+        let plan = match self.rewrite_shuffle(task.job_id, job, stage.plan.clone()) {
+            Ok(x) => x,
+            Err(e) => {
+                let message = format!("failed to rewrite shuffle: {e}");
+                self.update_task(ctx, task_id, attempt, TaskStatus::Failed, Some(message));
+                return Err(ExecutionError::InternalError(e.to_string()));
+            }
+        };
+        let plan = match self.encode_plan(plan) {
+            Ok(x) => x,
+            Err(e) => {
+                let message = format!("failed to encode task plan: {e}");
+                self.update_task(ctx, task_id, attempt, TaskStatus::Failed, Some(message));
+                return Err(ExecutionError::InternalError(e.to_string()));
+            }
+        };
+        let client = match self.worker_client(worker_id) {
+            Ok(client) => client.clone(),
+            Err(e) => {
+                let message = format!("failed to get worker {worker_id} client: {e}");
+                self.update_task(ctx, task_id, attempt, TaskStatus::Failed, Some(message));
+                return Err(ExecutionError::InternalError(e.to_string()));
+            }
+        };
+        self.state
+            .update_task(task_id, attempt, TaskState::Scheduled { worker_id }, None);
+        self.state.attach_task_to_worker(task_id);
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
             if let Err(e) = client
@@ -346,13 +588,15 @@ impl DriverActor {
                                     .state
                                     .get_task(*task_id)
                                     .ok_or_else(|| exec_datafusion_err!("task {task_id} not found"))?;
-                                let worker_id = task.worker_id;
+                                let worker_id = task.state.worker_id().ok_or_else(
+                                    || exec_datafusion_err!("task {task_id} is not bound to a worker"),
+                                )?;
                                 let worker = self
                                     .state
                                     .get_worker(worker_id)
                                     .ok_or_else(|| exec_datafusion_err!("worker {worker_id} not found"))?;
-                                let (host, port) = match &worker.status {
-                                    WorkerStatus::Running { host, port } => (host.clone(), *port),
+                                let (host, port) = match &worker.state {
+                                    WorkerState::Running { host, port, .. } => (host.clone(), *port),
                                     _ => return exec_err!("worker {worker_id} is not running"),
                                 };
                                 let attempt = task.attempt;
@@ -410,7 +654,7 @@ impl DriverActor {
                         Err(e) => {
                             let reason = e.to_string();
                             let _ = result.send(Err(e));
-                            self.stop_job(ctx, job_id, reason);
+                            self.cancel_job(ctx, job_id, reason);
                             return;
                         }
                     };
@@ -420,7 +664,7 @@ impl DriverActor {
                         ReceiverStream::new(receiver),
                     ));
                     if result.send(Ok(receiver_stream)).is_err() {
-                        self.stop_job(ctx, job_id, "job output receiver dropped".to_string());
+                        self.cancel_job(ctx, job_id, "job output receiver dropped".to_string());
                         return;
                     }
                     self.job_outputs
@@ -455,10 +699,17 @@ impl DriverActor {
             .tasks
             .iter()
             .map(|task_id| {
-                self.state.get_task(*task_id).and_then(|task| {
-                    matches!(task.status, TaskStatus::Running | TaskStatus::Succeeded)
-                        .then(|| (*task_id, task.channel.clone(), task.worker_id))
-                })
+                self.state
+                    .get_task(*task_id)
+                    .and_then(|task| match task.state {
+                        // We should not consider tasks in the "scheduled" state even if the
+                        // worker ID is known at that time. This is because the task may not be
+                        // running on the worker, and the shuffle stream may not be available.
+                        TaskState::Running { worker_id } | TaskState::Succeeded { worker_id } => {
+                            Some((*task_id, task.channel.clone(), worker_id))
+                        }
+                        _ => None,
+                    })
             })
             .collect::<Option<Vec<_>>>()?
             .into_iter()
@@ -491,20 +742,31 @@ impl DriverActor {
         Some(Ok(stream))
     }
 
-    fn stop_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId, reason: String) {
+    fn cancel_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId, reason: String) {
         if let Some(output) = self.job_outputs.remove(&job_id) {
             output.fail(reason);
         }
+        for worker_id in self.state.detach_job_from_workers(job_id) {
+            self.schedule_idle_worker_probe(ctx, worker_id);
+        }
         let tasks = self
             .state
-            .find_running_tasks_for_job(job_id)
+            .find_active_tasks_for_job(job_id)
             .into_iter()
-            .map(|(task_id, task)| (task_id, task.attempt, task.worker_id))
+            .map(|(task_id, task)| (task_id, task.attempt, task.state.worker_id()))
             .collect::<Vec<_>>();
+        // The tasks are canceled, but they may remain in the task queue.
+        // This is OK, since they will be removed when the task scheduling logic runs next time.
         let tasks = tasks
             .into_iter()
             .flat_map(|(task_id, attempt, worker_id)| {
-                let client = match self.worker_client(worker_id) {
+                let reason = format!("task {task_id} attempt {attempt} canceled for job {job_id}");
+                self.state
+                    .update_task(task_id, attempt, TaskState::Canceled, Some(reason));
+                if let Some(worker_id) = self.state.detach_task_from_worker(task_id) {
+                    self.schedule_idle_worker_probe(ctx, worker_id);
+                }
+                let client = match self.worker_client(worker_id?) {
                     Ok(client) => client.clone(),
                     Err(e) => {
                         warn!("failed to stop task {task_id}: {e}");
@@ -521,5 +783,76 @@ impl DriverActor {
                 }
             }
         });
+    }
+
+    fn stop_worker(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+        reason: Option<String>,
+    ) {
+        let Some(worker) = self.state.get_worker(worker_id) else {
+            warn!("worker {worker_id} not found");
+            return;
+        };
+        match worker.state {
+            WorkerState::Pending { .. } => {
+                warn!("trying to stop pending worker {worker_id}");
+                self.state
+                    .update_worker(worker_id, WorkerState::Stopped, reason);
+            }
+            WorkerState::Running { .. } => {
+                info!("stopping worker {worker_id}");
+                let client = match self.worker_client(worker_id) {
+                    Ok(client) => client.clone(),
+                    Err(e) => {
+                        warn!("failed to stop worker {worker_id}: {e}");
+                        return;
+                    }
+                };
+                ctx.spawn(async move {
+                    if let Err(e) = client.stop_worker().await {
+                        error!("failed to stop worker {worker_id}: {e}");
+                    }
+                });
+                self.state
+                    .update_worker(worker_id, WorkerState::Stopped, reason);
+            }
+            WorkerState::Stopped | WorkerState::Failed => {}
+        }
+    }
+
+    pub(super) fn stop_all_workers(&mut self, ctx: &mut ActorContext<Self>) {
+        let worker_ids = self
+            .state
+            .list_workers()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        let reason = "stopping all workers".to_string();
+        for worker_id in worker_ids {
+            self.stop_worker(ctx, worker_id, Some(reason.clone()));
+        }
+    }
+}
+
+struct TaskSlotAssigner {
+    slots: Vec<(WorkerId, usize)>,
+}
+
+impl TaskSlotAssigner {
+    pub fn new(slots: Vec<(WorkerId, usize)>) -> Self {
+        Self { slots }
+    }
+
+    pub fn next(&mut self) -> Option<WorkerId> {
+        self.slots.iter_mut().find_map(|(worker_id, slots)| {
+            if *slots > 0 {
+                *slots -= 1;
+                Some(*worker_id)
+            } else {
+                None
+            }
+        })
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::mem;
 use std::sync::Arc;
 
@@ -10,11 +10,11 @@ use sail_server::actor::{Actor, ActorAction, ActorContext};
 use crate::codec::RemoteExecutionCodec;
 use crate::driver::actor::output::JobOutput;
 use crate::driver::state::DriverState;
-use crate::driver::{DriverEvent, DriverOptions};
-use crate::id::{JobId, WorkerId};
+use crate::driver::{DriverEvent, DriverOptions, WorkerManagerKind};
+use crate::id::{JobId, TaskId, WorkerId};
 use crate::rpc::ServerMonitor;
 use crate::worker::WorkerClient;
-use crate::worker_manager::{LocalWorkerManager, WorkerManager};
+use crate::worker_manager::{KubernetesWorkerManager, LocalWorkerManager, WorkerManager};
 
 pub struct DriverActor {
     options: DriverOptions,
@@ -23,6 +23,11 @@ pub struct DriverActor {
     pub(super) worker_manager: Arc<dyn WorkerManager>,
     pub(super) worker_clients: HashMap<WorkerId, WorkerClient>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
+    /// The queue of tasks that need to be scheduled.
+    /// A task is enqueued after all its dependencies in the previous job stage.
+    pub(super) task_queue: VecDeque<TaskId>,
+    /// The sequence number corresponding to the last task status update from the worker.
+    pub(super) task_sequences: HashMap<TaskId, u64>,
     pub(super) job_outputs: HashMap<JobId, JobOutput>,
 }
 
@@ -32,13 +37,19 @@ impl Actor for DriverActor {
     type Options = DriverOptions;
 
     fn new(options: DriverOptions) -> Self {
+        let worker_manager: Arc<dyn WorkerManager> = match options.worker_manager_kind {
+            WorkerManagerKind::Local => Arc::new(LocalWorkerManager::new()),
+            WorkerManagerKind::Kubernetes => Arc::new(KubernetesWorkerManager::new()),
+        };
         Self {
             options,
             state: DriverState::new(),
             server: ServerMonitor::new(),
-            worker_manager: Arc::new(LocalWorkerManager::new()),
+            worker_manager,
             worker_clients: HashMap::new(),
             physical_plan_codec: Box::new(RemoteExecutionCodec::new(SessionContext::default())),
+            task_queue: VecDeque::new(),
+            task_sequences: HashMap::new(),
             job_outputs: HashMap::new(),
         }
     }
@@ -57,13 +68,18 @@ impl Actor for DriverActor {
             DriverEvent::ServerReady { port, signal } => {
                 self.handle_server_ready(ctx, port, signal)
             }
-            DriverEvent::StartWorker { worker_id } => self.handle_start_worker(ctx, worker_id),
             DriverEvent::RegisterWorker {
                 worker_id,
                 host,
                 port,
-            } => self.handle_register_worker(ctx, worker_id, host, port),
-            DriverEvent::StopWorker { worker_id } => self.handle_stop_worker(ctx, worker_id),
+                result,
+            } => self.handle_register_worker(ctx, worker_id, host, port, result),
+            DriverEvent::ProbePendingWorker { worker_id } => {
+                self.handle_probe_pending_worker(ctx, worker_id)
+            }
+            DriverEvent::ProbeIdleWorker { worker_id } => {
+                self.handle_probe_idle_worker(ctx, worker_id)
+            }
             DriverEvent::ExecuteJob { plan, result } => self.handle_execute_job(ctx, plan, result),
             DriverEvent::RemoveJobOutput { job_id } => self.handle_remove_job_output(ctx, job_id),
             DriverEvent::UpdateTask {
@@ -73,14 +89,18 @@ impl Actor for DriverActor {
                 message,
                 sequence,
             } => self.handle_update_task(ctx, task_id, attempt, status, message, sequence),
+            DriverEvent::ProbePendingTask { task_id } => {
+                self.handle_probe_pending_task(ctx, task_id)
+            }
             DriverEvent::Shutdown => ActorAction::Stop,
         }
     }
 
-    async fn stop(self) {
+    async fn stop(mut self, ctx: &mut ActorContext<Self>) {
+        self.stop_all_workers(ctx);
         self.server.stop().await;
         debug!("driver server has stopped");
-        if let Err(e) = self.worker_manager.stop_all_workers().await {
+        if let Err(e) = self.worker_manager.stop().await {
             error!("encountered error while stopping workers: {e}");
         }
     }

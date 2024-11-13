@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 
 use crate::error::ExecutionResult;
 use crate::id::WorkerId;
-use crate::worker::{WorkerActor, WorkerEvent, WorkerOptions};
+use crate::worker::{WorkerActor, WorkerOptions};
 use crate::worker_manager::{WorkerLaunchOptions, WorkerManager};
 
 struct LocalWorkerManagerState {
@@ -36,16 +36,16 @@ impl LocalWorkerManager {
 
 #[tonic::async_trait]
 impl WorkerManager for LocalWorkerManager {
-    async fn start_worker(
+    async fn launch_worker(
         &self,
         id: WorkerId,
         options: WorkerLaunchOptions,
     ) -> ExecutionResult<()> {
         let options = WorkerOptions {
             worker_id: id,
-            enable_tls: false,
-            driver_host: options.driver_host,
-            driver_port: options.driver_port,
+            enable_tls: options.enable_tls,
+            driver_host: options.driver_external_host,
+            driver_port: options.driver_external_port,
             // TODO: propagate the configuration from the driver
             worker_listen_host: "127.0.0.1".to_string(),
             worker_listen_port: 0,
@@ -59,24 +59,9 @@ impl WorkerManager for LocalWorkerManager {
         Ok(())
     }
 
-    async fn stop_worker(&self, id: WorkerId) -> ExecutionResult<()> {
+    async fn stop(&self) -> ExecutionResult<()> {
         let mut state = self.state.lock().await;
-        if let Some(handle) = state.workers.remove(&id) {
-            let _ = handle.send(WorkerEvent::Shutdown).await;
-        }
-        Ok(())
-    }
-
-    async fn stop_all_workers(&self) -> ExecutionResult<()> {
-        let mut state = self.state.lock().await;
-        let handles = state
-            .workers
-            .drain()
-            .map(|(_, handle)| handle)
-            .collect::<Vec<_>>();
-        for handle in handles {
-            let _ = handle.send(WorkerEvent::Shutdown).await;
-        }
+        // TODO: return after a timeout
         state.system.join().await;
         Ok(())
     }
