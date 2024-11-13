@@ -80,7 +80,7 @@ datafusion-common = { version = "43.0.0", features = ["object_store", "pyarrow",
 datafusion-expr = "43.0.0"
 datafusion-proto = "43.0.0"
 datafusion-functions-nested = "43.0.0"
-datafusion-functions-json = { git = "https://github.com/datafusion-contrib/datafusion-functions-json.git", rev = "93a3477" }
+datafusion-functions-json = "0.43.0"
 datafusion-comet-spark-expr = { git = "https://github.com/apache/datafusion-comet.git", rev = "712658e" }
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 pyo3 = { version = "0.22.0", features = ["auto-initialize", "serde"] }
@@ -103,6 +103,15 @@ sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "0908ddb
 [patch.crates-io]
 # Override dependencies to use our forked versions.
 # You can use `path = "..."` to temporarily point to your local copy of the crates to speed up local development.
+datafusion = { git = "https://github.com/lakehq/datafusion.git", rev = "f1bd478" }
+datafusion-common = { git = "https://github.com/lakehq/datafusion.git", rev = "f1bd478" }
+datafusion-expr = { git = "https://github.com/lakehq/datafusion.git", rev = "f1bd478" }
+datafusion-proto = { git = "https://github.com/lakehq/datafusion.git", rev = "f1bd478" }
+datafusion-functions-nested = { git = "https://github.com/lakehq/datafusion.git", rev = "f1bd478" }
+#datafusion-execution = { git = "https://github.com/lakehq/datafusion.git", rev = "f1bd478" }
+datafusion-physical-expr = { git = "https://github.com/lakehq/datafusion.git", rev = "f1bd478" }
+#datafusion-physical-plan = { git = "https://github.com/lakehq/datafusion.git", rev = "f1bd478" }
+#datafusion-functions = { git = "https://github.com/lakehq/datafusion.git", rev = "f1bd478" }
 
 [profile.release]
 # https://doc.rust-lang.org/cargo/reference/profiles.html#release

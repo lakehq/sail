@@ -3,18 +3,23 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::common::{plan_datafusion_err, plan_err, Result};
+use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+use datafusion::datasource::physical_plan::{FileScanConfig, NdJsonExec};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, Volatility};
+use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::values::ValuesExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::from_proto::parse_protobuf_partitioning;
-use datafusion_proto::physical_plan::to_proto::serialize_partitioning;
+use datafusion_proto::physical_plan::to_proto::{
+    serialize_partitioning, serialize_physical_sort_expr, serialize_physical_sort_exprs,
+};
 use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
-use datafusion_proto::protobuf::PhysicalPlanNode;
+use datafusion_proto::protobuf::{PhysicalPlanNode, PhysicalSortExprNode};
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common::spec::PySparkUdfType;
@@ -167,6 +172,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partitions,
                 schema,
                 projection,
+                show_sizes,
+                sort_information,
             }) => {
                 let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
                 let schema = Arc::new((&schema).try_into()?);
@@ -176,17 +183,39 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .collect::<Result<Vec<_>>>()?;
                 let projection =
                     projection.map(|x| x.columns.into_iter().map(|c| c as usize).collect());
-                Ok(Arc::new(MemoryExec::try_new(
-                    &partitions,
-                    schema,
-                    projection,
-                )?))
+                let sort_information: Vec<LexOrdering> = sort_information
+                    .into_iter()
+                    .map(|sort_info| {
+                        sort_info
+                            .values
+                            .into_iter()
+                            .map(|x| &self.try_decode_message::<PhysicalSortExprNode>(&x))
+                            .collect::<Result<LexOrdering>>()
+                    })
+                    .collect::<Result<Vec<LexOrdering>>>()?;
+                Ok(Arc::new(
+                    MemoryExec::try_new(&partitions, schema, projection)?
+                        .with_show_sizes(show_sizes)
+                        .try_with_sort_information(sort_information)?,
+                ))
             }
             NodeKind::Values(gen::ValuesExecNode { data, schema }) => {
                 let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
                 let schema = Arc::new((&schema).try_into()?);
                 let data = read_record_batches(&data)?;
                 Ok(Arc::new(ValuesExec::try_new_from_batches(schema, data)?))
+            }
+            NodeKind::NdJson(gen::NdJsonExecNode {
+                base_config,
+                file_compression_type,
+            }) => {
+                Err(plan_datafusion_err!("NdJsonExec is not supported"))
+                // let base_config: FileScanConfig = ;
+                // let file_compression_type: FileCompressionType = ;
+                // Ok(Arc::new(NdJsonExec::new(
+                //     base_config,
+                //     file_compression_type,
+                // )?))
             }
         }
     }
@@ -271,11 +300,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 });
             let schema = self
                 .try_encode_message::<gen_datafusion_common::Schema>(schema.as_ref().try_into()?)?;
+            let sort_information = memory.sort_information();
+            let sort_information = sort_information
+                .into_iter()
+                .map(|x| self.try_encode_message::<PhysicalSortExprNode>(x.try_into()?))
+                .collect::<Result<_>>()?;
             NodeKind::Memory(gen::MemoryExecNode {
                 partitions,
                 schema,
                 projection,
+                show_sizes: memory.show_sizes(),
+                sort_information,
             })
+        } else if let Some(values) = node.as_any().downcast_ref::<ValuesExec>() {
+            let data = write_record_batches(&values.data(), &values.schema())?;
+            let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
+                values.schema().as_ref().try_into()?,
+            )?;
+            NodeKind::Values(gen::ValuesExecNode { data, schema })
         } else if let Some(values) = node.as_any().downcast_ref::<ValuesExec>() {
             let data = write_record_batches(&values.data(), &values.schema())?;
             let schema = self.try_encode_message::<gen_datafusion_common::Schema>(

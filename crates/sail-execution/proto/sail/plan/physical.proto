@@ -19,6 +19,7 @@ message ExtendedPhysicalPlanNode {
     // TODO: This can be removed once it is supported by DataFusion.
     MemoryExecNode memory = 101;
     ValuesExecNode values = 102;
+    NdJsonExecNode nd_json = 103;
   }
 }
 
@@ -105,17 +106,26 @@ message SchemaPivotExecNode {
   bytes schema = 3;
 }
 
+message SortInformation {
+  repeated bytes values = 1;
+}
+
 message MemoryExecNode {
   repeated bytes partitions = 1;
   bytes schema = 2;
   optional PhysicalProjection projection = 3;
-  // TODO: `sort_information` and `show_sizes` are missing
-  //   since there is no getter for them in the node.
+  bool show_sizes = 4;
+  repeated SortInformation sort_information = 5;
 }
 
 message ValuesExecNode {
   bytes data = 1;
   bytes schema = 2;
+}
+
+message NdJsonExecNode {
+  bytes base_config = 1;
+  bytes file_compression_type = 2;
 }
 
 message PhysicalProjection {
