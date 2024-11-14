@@ -6364,3 +6364,18 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "datafusion-ffi"
+version = "43.0.0"
+source = "git+https://github.com/lakehq/datafusion.git?rev=ca9ad9c#ca9ad9cb4f5c005adeb88f1df3d732737c71e6e6"
+
+[[patch.unused]]
+name = "datafusion-sqllogictest"
+version = "43.0.0"
+source = "git+https://github.com/lakehq/datafusion.git?rev=ca9ad9c#ca9ad9cb4f5c005adeb88f1df3d732737c71e6e6"
+
+[[patch.unused]]
+name = "datafusion-substrait"
+version = "43.0.0"
+source = "git+https://github.com/lakehq/datafusion.git?rev=ca9ad9c#ca9ad9cb4f5c005adeb88f1df3d732737c71e6e6"

@@ -3,8 +3,6 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::common::{plan_datafusion_err, plan_err, Result};
-use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
-use datafusion::datasource::physical_plan::{FileScanConfig, NdJsonExec};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, Volatility};
@@ -14,9 +12,11 @@ use datafusion::physical_plan::values::ValuesExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
-use datafusion_proto::physical_plan::from_proto::parse_protobuf_partitioning;
+use datafusion_proto::physical_plan::from_proto::{
+    parse_physical_sort_exprs, parse_protobuf_partitioning,
+};
 use datafusion_proto::physical_plan::to_proto::{
-    serialize_partitioning, serialize_physical_sort_expr, serialize_physical_sort_exprs,
+    serialize_partitioning, serialize_physical_sort_exprs,
 };
 use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
 use datafusion_proto::protobuf::{PhysicalPlanNode, PhysicalSortExprNode};
@@ -183,20 +183,21 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .collect::<Result<Vec<_>>>()?;
                 let projection =
                     projection.map(|x| x.columns.into_iter().map(|c| c as usize).collect());
-                let sort_information: Vec<LexOrdering> = sort_information
-                    .into_iter()
-                    .map(|sort_info| {
-                        sort_info
-                            .values
-                            .into_iter()
-                            .map(|x| &self.try_decode_message::<PhysicalSortExprNode>(&x))
-                            .collect::<Result<LexOrdering>>()
-                    })
-                    .collect::<Result<Vec<LexOrdering>>>()?;
+                let mut lex_ordering: Vec<LexOrdering> = vec![];
+                for sort in &sort_information {
+                    let sort_values: Vec<PhysicalSortExprNode> = sort
+                        .values
+                        .iter()
+                        .map(|x| self.try_decode_message(x))
+                        .collect::<Result<_>>()?;
+                    let sort_expr =
+                        parse_physical_sort_exprs(&sort_values, registry, &schema, self)?;
+                    lex_ordering.push(sort_expr);
+                }
                 Ok(Arc::new(
                     MemoryExec::try_new(&partitions, schema, projection)?
                         .with_show_sizes(show_sizes)
-                        .try_with_sort_information(sort_information)?,
+                        .try_with_sort_information(lex_ordering)?,
                 ))
             }
             NodeKind::Values(gen::ValuesExecNode { data, schema }) => {
@@ -206,8 +207,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ValuesExec::try_new_from_batches(schema, data)?))
             }
             NodeKind::NdJson(gen::NdJsonExecNode {
-                base_config,
-                file_compression_type,
+                base_config: _,
+                file_compression_type: _,
             }) => {
                 Err(plan_datafusion_err!("NdJsonExec is not supported"))
                 // let base_config: FileScanConfig = ;
@@ -300,11 +301,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 });
             let schema = self
                 .try_encode_message::<gen_datafusion_common::Schema>(schema.as_ref().try_into()?)?;
-            let sort_information = memory.sort_information();
-            let sort_information = sort_information
-                .into_iter()
-                .map(|x| self.try_encode_message::<PhysicalSortExprNode>(x.try_into()?))
-                .collect::<Result<_>>()?;
+            let mut sort_information = vec![];
+            for sort in memory.sort_information() {
+                let sort = serialize_physical_sort_exprs(sort.to_vec(), self)?;
+                let sort = sort
+                    .into_iter()
+                    .map(|x| self.try_encode_message(x))
+                    .collect::<Result<_>>()?;
+                let sort = gen::SortInformation { values: sort };
+                sort_information.push(sort)
+            }
             NodeKind::Memory(gen::MemoryExecNode {
                 partitions,
                 schema,
