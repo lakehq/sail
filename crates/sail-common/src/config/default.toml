@@ -1,24 +1,22 @@
 mode = "local"
 
-[driver]
-listen_host = "127.0.0.1"
-listen_port = 0
-external_host = "127.0.0.1"
-# external_port = <value>
+[cluster]
+driver_listen_host = "127.0.0.1"
+driver_listen_port = 0
+driver_external_host = "127.0.0.1"
+driver_external_port = 0
+worker_id = 0
+worker_listen_host = "127.0.0.1"
+worker_listen_port = 0
+worker_external_host = "127.0.0.1"
+worker_external_port = 0
 worker_initial_count = 4
-# worker_max_count = <value>
+worker_max_count = 0
 worker_max_idle_time_secs = 300
 worker_launch_timeout_secs = 300
 worker_task_slots = 8
 task_launch_timeout_secs = 600
 job_output_buffer = 16
-
-[worker]
-id = 1
-listen_host = "127.0.0.1"
-listen_port = 0
-external_host = "127.0.0.1"
-# external_port = <value>
 memory_stream_buffer = 16
 
 [network]
@@ -27,6 +25,12 @@ enable_tls = false
 [execution]
 batch_size = 8192
 
-[execution.parquet]
+[parquet]
 maximum_parallel_row_group_writers = 2
 maximum_buffered_record_batches_per_stream = 16
+
+[kubernetes]
+image = "sail:latest"
+image_pull_policy = "IfNotPresent"
+namespace = "default"
+worker_pod_name_prefix = "sail-worker-"

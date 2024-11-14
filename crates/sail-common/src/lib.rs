@@ -1,7 +1,6 @@
 pub mod config;
 pub mod debug;
 pub mod display;
-pub mod env;
 pub mod error;
 pub mod macros;
 pub mod object;
