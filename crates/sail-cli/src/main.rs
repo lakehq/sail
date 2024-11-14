@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // in the child process. It uses `sys.executable` to determine the location of
         // the Python interpreter. When the Sail CLI runs as a standalone binary, the
         // Python interpreter is embedded and `sys.executable` points to the Sail binary.
-        std::env::set_var(CliConfigEnv::RUN_PYTHON, "1");
+        std::env::set_var(CliConfigEnv::RUN_PYTHON, "true");
         let args = std::env::args().collect();
         match sail_cli::runner::main(args) {
             Ok(()) => {}
