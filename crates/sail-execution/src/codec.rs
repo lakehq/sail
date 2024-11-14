@@ -718,13 +718,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         };
         match expr_kind {
             ExprKind::UnKnownColumn(gen::UnKnownColumn { name }) => {
+                println!("CHECK HERE try_decode_expr INPUTS: {inputs:?}");
                 Ok(Arc::new(UnKnownColumn::new(&name)))
             }
         }
     }
 
     fn try_encode_expr(&self, node: &Arc<dyn PhysicalExpr>, buf: &mut Vec<u8>) -> Result<()> {
+        println!(
+            "CHECK HERE try_encode_expr\n\nNODE: {node:?}\nCHILDREN {:?}",
+            node.children()
+        );
         let expr_kind = if let Some(expr) = node.as_any().downcast_ref::<UnKnownColumn>() {
+            println!(
+                "CHECK HERE INNER try_encode_expr\n\nexpr: {expr:?}\nCHILDREN {:?}",
+                expr.children()
+            );
             let name = expr.name();
             ExprKind::UnKnownColumn(gen::UnKnownColumn {
                 name: name.to_string(),
