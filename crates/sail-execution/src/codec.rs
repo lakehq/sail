@@ -2,12 +2,11 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion::common::{not_impl_err, plan_datafusion_err, plan_err, Result};
+use datafusion::common::{plan_datafusion_err, plan_err, Result};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, Volatility};
-use datafusion::physical_expr::expressions::UnKnownColumn;
-use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
+use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::values::ValuesExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
@@ -57,12 +56,9 @@ use sail_python_udf::udf::pyspark_udaf::PySparkAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
-use crate::plan::gen::extended_expr_node::ExprKind;
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
-use crate::plan::gen::{
-    ExtendedAggregateUdf, ExtendedExprNode, ExtendedPhysicalPlanNode, ExtendedScalarUdf,
-};
+use crate::plan::gen::{ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf};
 use crate::plan::{gen, ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::{TaskReadLocation, TaskWriteLocation};
 
@@ -702,50 +698,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         };
         node.encode(buf)
             .map_err(|e| plan_datafusion_err!("failed to encode udf: {e}"))
-    }
-
-    fn try_decode_expr(
-        &self,
-        buf: &[u8],
-        inputs: &[Arc<dyn PhysicalExpr>],
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        let expr = ExtendedExprNode::decode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to decode expr: {e}"))?;
-        let ExtendedExprNode { expr_kind } = expr;
-        let expr_kind = match expr_kind {
-            Some(x) => x,
-            None => return plan_err!("ExtendedExprNode: no expr found for inputs: {inputs:?}"),
-        };
-        match expr_kind {
-            ExprKind::UnKnownColumn(gen::UnKnownColumn { name }) => {
-                println!("CHECK HERE try_decode_expr INPUTS: {inputs:?}");
-                Ok(Arc::new(UnKnownColumn::new(&name)))
-            }
-        }
-    }
-
-    fn try_encode_expr(&self, node: &Arc<dyn PhysicalExpr>, buf: &mut Vec<u8>) -> Result<()> {
-        println!(
-            "CHECK HERE try_encode_expr\n\nNODE: {node:?}\nCHILDREN {:?}",
-            node.children()
-        );
-        let expr_kind = if let Some(expr) = node.as_any().downcast_ref::<UnKnownColumn>() {
-            println!(
-                "CHECK HERE INNER try_encode_expr\n\nexpr: {expr:?}\nCHILDREN {:?}",
-                expr.children()
-            );
-            let name = expr.name();
-            ExprKind::UnKnownColumn(gen::UnKnownColumn {
-                name: name.to_string(),
-            })
-        } else {
-            return not_impl_err!("Unsupported physical expr: {node}");
-        };
-        let node = ExtendedExprNode {
-            expr_kind: Some(expr_kind),
-        };
-        node.encode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to encode expr: {e}"))
     }
 
     fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {

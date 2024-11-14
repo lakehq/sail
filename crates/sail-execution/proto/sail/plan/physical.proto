@@ -23,12 +23,6 @@ message ExtendedPhysicalPlanNode {
   }
 }
 
-message ExtendedExprNode {
-  oneof ExprKind {
-    UnKnownColumn un_known_column = 1;
-  }
-}
-
 message ExtendedAggregateUdf {
   oneof UdafKind {
     StandardUdaf standard = 1;
@@ -42,10 +36,6 @@ message ExtendedScalarUdf {
     WithOneAuxiliaryFieldUdf with_one_auxiliary_field = 2;
     PySparkUdf py_spark = 3;
   }
-}
-
-message UnKnownColumn {
-    string name = 1;
 }
 
 message StandardUdf {}
