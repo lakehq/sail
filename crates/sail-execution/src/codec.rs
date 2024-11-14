@@ -57,9 +57,12 @@ use sail_python_udf::udf::pyspark_udaf::PySparkAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
+use crate::plan::gen::extended_expr_node::ExprKind;
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
-use crate::plan::gen::{ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf};
+use crate::plan::gen::{
+    ExtendedAggregateUdf, ExtendedExprNode, ExtendedPhysicalPlanNode, ExtendedScalarUdf,
+};
 use crate::plan::{gen, ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::{TaskReadLocation, TaskWriteLocation};
 
@@ -81,7 +84,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         registry: &dyn FunctionRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let node = ExtendedPhysicalPlanNode::decode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to decode plan: {e:?}"))?;
+            .map_err(|e| plan_datafusion_err!("failed to decode plan: {e}"))?;
         let ExtendedPhysicalPlanNode { node_kind } = node;
         let node_kind = match node_kind {
             Some(x) => x,
@@ -338,12 +341,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             node_kind: Some(node_kind),
         };
         node.encode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to encode plan: {e:?}"))
+            .map_err(|e| plan_datafusion_err!("failed to encode plan: {e}"))
     }
 
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         let udf = ExtendedScalarUdf::decode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to decode udf: {e:?}"))?;
+            .map_err(|e| plan_datafusion_err!("failed to decode udf: {e}"))?;
         let ExtendedScalarUdf { udf_kind } = udf;
         let udf_kind = match udf_kind {
             Some(x) => x,
@@ -379,7 +382,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     })
                     .collect::<Result<_>>()?;
                 let eval_type = PySparkUdfType::try_from(eval_type)
-                    .map_err(|e| plan_datafusion_err!("failed to decode eval_type: {e:?}"))?;
+                    .map_err(|e| plan_datafusion_err!("failed to decode udf eval_type: {e}"))?;
                 let output_type =
                     self.try_decode_message::<gen_datafusion_common::ArrowType>(&output_type)?;
                 let output_type: DataType = (&output_type).try_into()?;
@@ -698,12 +701,47 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             udf_kind: Some(udf_kind),
         };
         node.encode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to encode udf: {e:?}"))
+            .map_err(|e| plan_datafusion_err!("failed to encode udf: {e}"))
+    }
+
+    fn try_decode_expr(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let expr = ExtendedExprNode::decode(buf)
+            .map_err(|e| plan_datafusion_err!("failed to decode expr: {e}"))?;
+        let ExtendedExprNode { expr_kind } = expr;
+        let expr_kind = match expr_kind {
+            Some(x) => x,
+            None => return plan_err!("ExtendedExprNode: no expr found for inputs: {inputs:?}"),
+        };
+        match expr_kind {
+            ExprKind::UnKnownColumn(gen::UnKnownColumn { name }) => {
+                Ok(Arc::new(UnKnownColumn::new(&name)))
+            }
+        }
+    }
+
+    fn try_encode_expr(&self, node: &Arc<dyn PhysicalExpr>, buf: &mut Vec<u8>) -> Result<()> {
+        let expr_kind = if let Some(expr) = node.as_any().downcast_ref::<UnKnownColumn>() {
+            let name = expr.name();
+            ExprKind::UnKnownColumn(gen::UnKnownColumn {
+                name: name.to_string(),
+            })
+        } else {
+            return not_impl_err!("Unsupported physical expr: {node}");
+        };
+        let node = ExtendedExprNode {
+            expr_kind: Some(expr_kind),
+        };
+        node.encode(buf)
+            .map_err(|e| plan_datafusion_err!("failed to encode expr: {e}"))
     }
 
     fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
         let udaf = ExtendedAggregateUdf::decode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to decode udf: {e:?}"))?;
+            .map_err(|e| plan_datafusion_err!("failed to decode udaf: {e}"))?;
         let ExtendedAggregateUdf { udaf_kind } = udaf;
         match udaf_kind {
             Some(UdafKind::PySparkAgg(gen::PySparkUdaf {
@@ -788,26 +826,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             udaf_kind: Some(udaf_kind),
         };
         node.encode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to encode udaf: {e:?}"))
-    }
-
-    fn try_decode_expr(
-        &self,
-        _buf: &[u8],
-        _inputs: &[Arc<dyn PhysicalExpr>],
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        not_impl_err!("PhysicalExtensionCodec is not provided")
-    }
-
-    fn try_encode_expr(&self, _node: &Arc<dyn PhysicalExpr>, _buf: &mut Vec<u8>) -> Result<()> {
-        not_impl_err!("PhysicalExtensionCodec is not provided")
-        // let expr_kind = if let Some(expr) = node.as_any().downcast_ref::<UnKnownColumn>() {
-        //     return not_impl_err!("Unsupported physical expr: {node:?}");
-        // } else {
-        //     return not_impl_err!("Unsupported physical expr: {node:?}");
-        // };
-        // node.encode(buf)
-        //     .map_err(|e| plan_datafusion_err!("failed to encode udaf: {e:?}"))
+            .map_err(|e| plan_datafusion_err!("failed to encode udaf: {e}"))
     }
 }
 
@@ -818,7 +837,7 @@ impl RemoteExecutionCodec {
 
     fn try_decode_show_string_style(&self, style: i32) -> Result<ShowStringStyle> {
         let style = gen::ShowStringStyle::try_from(style)
-            .map_err(|e| plan_datafusion_err!("failed to decode style: {e:?}"))?;
+            .map_err(|e| plan_datafusion_err!("failed to decode style: {e}"))?;
         let style = match style {
             gen::ShowStringStyle::Default => ShowStringStyle::Default,
             gen::ShowStringStyle::Vertical => ShowStringStyle::Vertical,
@@ -842,7 +861,7 @@ impl RemoteExecutionCodec {
         registry: &dyn FunctionRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let plan = PhysicalPlanNode::decode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to decode plan: {e:?}"))?;
+            .map_err(|e| plan_datafusion_err!("failed to decode plan: {e}"))?;
         plan.try_into_physical_plan(registry, self.context.runtime_env().as_ref(), self)
     }
 
@@ -850,7 +869,7 @@ impl RemoteExecutionCodec {
         let plan = PhysicalPlanNode::try_from_physical_plan(plan, self)?;
         let mut buffer = BytesMut::new();
         plan.encode(&mut buffer)
-            .map_err(|e| plan_datafusion_err!("failed to encode plan: {e:?}"))?;
+            .map_err(|e| plan_datafusion_err!("failed to encode plan: {e}"))?;
         Ok(buffer.freeze().into())
     }
 
@@ -1026,7 +1045,7 @@ impl RemoteExecutionCodec {
         M: Message + Default,
     {
         let message =
-            M::decode(buf).map_err(|e| plan_datafusion_err!("failed to decode message: {e:?}"))?;
+            M::decode(buf).map_err(|e| plan_datafusion_err!("failed to decode message: {e}"))?;
         Ok(message)
     }
 
@@ -1037,7 +1056,7 @@ impl RemoteExecutionCodec {
         let mut buffer = BytesMut::new();
         message
             .encode(&mut buffer)
-            .map_err(|e| plan_datafusion_err!("failed to encode message: {e:?}"))?;
+            .map_err(|e| plan_datafusion_err!("failed to encode message: {e}"))?;
         Ok(buffer.freeze().into())
     }
 }
