@@ -2,11 +2,12 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion::common::{plan_datafusion_err, plan_err, Result};
+use datafusion::common::{not_impl_err, plan_datafusion_err, plan_err, Result};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, Volatility};
-use datafusion::physical_expr::LexOrdering;
+use datafusion::physical_expr::expressions::UnKnownColumn;
+use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::values::ValuesExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
@@ -788,6 +789,25 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         };
         node.encode(buf)
             .map_err(|e| plan_datafusion_err!("failed to encode udaf: {e:?}"))
+    }
+
+    fn try_decode_expr(
+        &self,
+        _buf: &[u8],
+        _inputs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        not_impl_err!("PhysicalExtensionCodec is not provided")
+    }
+
+    fn try_encode_expr(&self, _node: &Arc<dyn PhysicalExpr>, _buf: &mut Vec<u8>) -> Result<()> {
+        not_impl_err!("PhysicalExtensionCodec is not provided")
+        // let expr_kind = if let Some(expr) = node.as_any().downcast_ref::<UnKnownColumn>() {
+        //     return not_impl_err!("Unsupported physical expr: {node:?}");
+        // } else {
+        //     return not_impl_err!("Unsupported physical expr: {node:?}");
+        // };
+        // node.encode(buf)
+        //     .map_err(|e| plan_datafusion_err!("failed to encode udaf: {e:?}"))
     }
 }
 
