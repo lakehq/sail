@@ -9,7 +9,7 @@ use datafusion::datasource::physical_plan::{ArrowExec, NdJsonExec};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, Volatility};
-use datafusion::physical_expr::LexOrdering;
+use datafusion::physical_expr::{LexOrdering, LexOrderingRef};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
@@ -389,8 +389,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             return plan_err!("unsupported physical plan node: {node:?}");
         } else if let Some(_sort_merge_join) = node.as_any().downcast_ref::<SortMergeJoinExec>() {
             return plan_err!("unsupported physical plan node: {node:?}");
-        } else if let Some(_partial_sort) = node.as_any().downcast_ref::<PartialSortExec>() {
-            return plan_err!("unsupported physical plan node: {node:?}");
+        } else if let Some(partial_sort) = node.as_any().downcast_ref::<PartialSortExec>() {
+            let expr = Some(self.try_encode_lex_ordering(partial_sort.expr())?);
+            let input = self.try_encode_plan(partial_sort.input().clone())?;
+            let common_prefix_length = partial_sort.common_prefix_length() as u64;
+            NodeKind::PartialSort(gen::PartialSortExecNode {
+                expr,
+                input,
+                common_prefix_length,
+            })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
@@ -871,7 +878,7 @@ impl RemoteExecutionCodec {
         parse_physical_sort_exprs(&lex_ordering, registry, schema, self)
     }
 
-    fn try_encode_lex_ordering(&self, lex_ordering: &LexOrdering) -> Result<gen::LexOrdering> {
+    fn try_encode_lex_ordering(&self, lex_ordering: LexOrderingRef) -> Result<gen::LexOrdering> {
         let lex_ordering = serialize_physical_sort_exprs(lex_ordering.to_vec(), self)?;
         let lex_ordering = lex_ordering
             .into_iter()
