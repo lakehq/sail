@@ -17,9 +17,15 @@ message ExtendedPhysicalPlanNode {
     ShuffleWriteExecNode shuffle_write = 4;
     SchemaPivotExecNode schema_pivot = 5;
     // TODO: This can be removed once it is supported by DataFusion.
-    MemoryExecNode memory = 101;
-    ValuesExecNode values = 102;
-    NdJsonExecNode nd_json = 103;
+    MemoryExecNode memory = 6;
+    ValuesExecNode values = 7;
+    NdJsonExecNode nd_json = 8;
+    ArrowExecNode arrow = 9;
+    WorkTableExecNode work_table = 10;
+    RecursiveQueryExecNode recursive_query = 11;
+    StreamingTableExecNode streaming_table = 12;
+    SortMergeJoinExecNode sort_merge_join = 13;
+    PartialSortExecNode partial_sort = 14;
   }
 }
 
@@ -106,7 +112,7 @@ message SchemaPivotExecNode {
   bytes schema = 3;
 }
 
-message SortInformation {
+message LexOrdering {
   repeated bytes values = 1;
 }
 
@@ -115,7 +121,7 @@ message MemoryExecNode {
   bytes schema = 2;
   optional PhysicalProjection projection = 3;
   bool show_sizes = 4;
-  repeated SortInformation sort_information = 5;
+  repeated LexOrdering sort_information = 5;
 }
 
 message ValuesExecNode {
@@ -126,6 +132,52 @@ message ValuesExecNode {
 message NdJsonExecNode {
   bytes base_config = 1;
   CompressionTypeVariant file_compression_type = 2;
+}
+
+message ArrowExecNode {
+  bytes base_config = 1;
+}
+
+message WorkTableExecNode {
+  string name = 1;
+  bytes schema = 2;
+}
+
+message RecursiveQueryExecNode {
+  string name = 1;
+  bytes static_term = 2;
+  bytes recursive_term = 3;
+  bool is_distinct = 4;
+}
+
+message StreamingTableExecNode {
+  bytes schema = 1;
+  repeated bytes partitions = 2;
+  optional PhysicalProjection projection = 3;
+  repeated LexOrdering projected_output_ordering = 4;
+  bool infinite = 5;
+  optional uint64 limit = 6;
+}
+
+message SortMergeJoinExecNode {
+  bytes left = 1;
+  bytes right = 2;
+  repeated bytes on = 3;
+  bytes filter = 4;
+  bytes join_type = 5;
+  repeated SortOptions sort_options = 6;
+  bool null_equals_null = 7;
+}
+
+message PartialSortExecNode {
+  LexOrdering expr = 1;
+  bytes input = 2;
+  uint64 common_prefix_length = 3;
+}
+
+message SortOptions {
+    bool descending = 1;
+    bool nulls_first = 2;
 }
 
 message PhysicalProjection {

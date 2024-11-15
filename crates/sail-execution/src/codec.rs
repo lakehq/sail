@@ -5,13 +5,18 @@ use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{plan_datafusion_err, plan_err, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
-use datafusion::datasource::physical_plan::NdJsonExec;
+use datafusion::datasource::physical_plan::{ArrowExec, NdJsonExec};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, Volatility};
 use datafusion::physical_expr::LexOrdering;
+use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::memory::MemoryExec;
+use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
+use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
+use datafusion::physical_plan::streaming::StreamingTableExec;
 use datafusion::physical_plan::values::ValuesExec;
+use datafusion::physical_plan::work_table::WorkTableExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
@@ -186,21 +191,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .collect::<Result<Vec<_>>>()?;
                 let projection =
                     projection.map(|x| x.columns.into_iter().map(|c| c as usize).collect());
-                let mut lex_ordering: Vec<LexOrdering> = vec![];
-                for sort in &sort_information {
-                    let sort_values: Vec<PhysicalSortExprNode> = sort
-                        .values
-                        .iter()
-                        .map(|x| self.try_decode_message(x))
-                        .collect::<Result<_>>()?;
-                    let sort_expr =
-                        parse_physical_sort_exprs(&sort_values, registry, &schema, self)?;
-                    lex_ordering.push(sort_expr);
-                }
+                let sort_information =
+                    self.try_decode_lex_orderings(&sort_information, registry, &schema)?;
                 Ok(Arc::new(
                     MemoryExec::try_new(&partitions, schema, projection)?
                         .with_show_sizes(show_sizes)
-                        .try_with_sort_information(lex_ordering)?,
+                        .try_with_sort_information(sort_information)?,
                 ))
             }
             NodeKind::Values(gen::ValuesExecNode { data, schema }) => {
@@ -225,6 +221,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     file_compression_type,
                 )))
             }
+            _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
 
@@ -308,16 +305,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 });
             let schema = self
                 .try_encode_message::<gen_datafusion_common::Schema>(schema.as_ref().try_into()?)?;
-            let mut sort_information = vec![];
-            for sort in memory.sort_information() {
-                let sort = serialize_physical_sort_exprs(sort.to_vec(), self)?;
-                let sort = sort
-                    .into_iter()
-                    .map(|x| self.try_encode_message(x))
-                    .collect::<Result<_>>()?;
-                let sort = gen::SortInformation { values: sort };
-                sort_information.push(sort)
-            }
+            let sort_information = self.try_encode_lex_orderings(memory.sort_information())?;
             NodeKind::Memory(gen::MemoryExecNode {
                 partitions,
                 schema,
@@ -346,6 +334,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 base_config,
                 file_compression_type,
             })
+        } else if let Some(_arrow) = node.as_any().downcast_ref::<ArrowExec>() {
+            return plan_err!("unsupported physical plan node: {node:?}");
+        } else if let Some(_work_table) = node.as_any().downcast_ref::<WorkTableExec>() {
+            return plan_err!("unsupported physical plan node: {node:?}");
+        } else if let Some(_recursive_query) = node.as_any().downcast_ref::<RecursiveQueryExec>() {
+            return plan_err!("unsupported physical plan node: {node:?}");
+        } else if let Some(_streaming_table) = node.as_any().downcast_ref::<StreamingTableExec>() {
+            return plan_err!("unsupported physical plan node: {node:?}");
+        } else if let Some(_sort_merge_join) = node.as_any().downcast_ref::<SortMergeJoinExec>() {
+            return plan_err!("unsupported physical plan node: {node:?}");
+        } else if let Some(_partial_sort) = node.as_any().downcast_ref::<PartialSortExec>() {
+            return plan_err!("unsupported physical plan node: {node:?}");
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
@@ -810,6 +810,57 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
 impl RemoteExecutionCodec {
     pub fn new(context: SessionContext) -> Self {
         Self { context }
+    }
+
+    fn try_decode_lex_ordering(
+        &self,
+        lex_ordering: &gen::LexOrdering,
+        registry: &dyn FunctionRegistry,
+        schema: &Schema,
+    ) -> Result<LexOrdering> {
+        let lex_ordering: Vec<PhysicalSortExprNode> = lex_ordering
+            .values
+            .iter()
+            .map(|x| self.try_decode_message(x))
+            .collect::<Result<_>>()?;
+        parse_physical_sort_exprs(&lex_ordering, registry, schema, self)
+    }
+
+    fn try_encode_lex_ordering(&self, lex_ordering: &LexOrdering) -> Result<gen::LexOrdering> {
+        let lex_ordering = serialize_physical_sort_exprs(lex_ordering.to_vec(), self)?;
+        let lex_ordering = lex_ordering
+            .into_iter()
+            .map(|x| self.try_encode_message(x))
+            .collect::<Result<_>>()?;
+        Ok(gen::LexOrdering {
+            values: lex_ordering,
+        })
+    }
+
+    fn try_decode_lex_orderings(
+        &self,
+        lex_orderings: &[gen::LexOrdering],
+        registry: &dyn FunctionRegistry,
+        schema: &Schema,
+    ) -> Result<Vec<LexOrdering>> {
+        let mut result: Vec<LexOrdering> = vec![];
+        for lex_ordering in lex_orderings {
+            let lex_ordering = self.try_decode_lex_ordering(lex_ordering, registry, schema)?;
+            result.push(lex_ordering);
+        }
+        Ok(result)
+    }
+
+    fn try_encode_lex_orderings(
+        &self,
+        lex_orderings: &[LexOrdering],
+    ) -> Result<Vec<gen::LexOrdering>> {
+        let mut result = vec![];
+        for lex_ordering in lex_orderings {
+            let lex_ordering = self.try_encode_lex_ordering(lex_ordering)?;
+            result.push(lex_ordering)
+        }
+        Ok(result)
     }
 
     fn try_decode_show_string_style(&self, style: i32) -> Result<ShowStringStyle> {
