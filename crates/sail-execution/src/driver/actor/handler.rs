@@ -236,7 +236,7 @@ impl DriverActor {
 
     fn accept_job(
         &mut self,
-        ctx: &mut ActorContext<Self>,
+        _ctx: &mut ActorContext<Self>,
         plan: Arc<dyn ExecutionPlan>,
     ) -> ExecutionResult<JobId> {
         let job_id = self.state.next_job_id()?;
@@ -267,19 +267,13 @@ impl DriverActor {
                         partition: p,
                         attempt,
                         mode: TaskMode::Pipelined,
-                        state: TaskState::Pending {
-                            pending_at: Instant::now(),
-                        },
+                        state: TaskState::Created,
                         messages: vec![],
                         channel,
                     },
                 );
                 self.task_queue.push_back(task_id);
                 tasks.push(task_id);
-                ctx.send_with_delay(
-                    DriverEvent::ProbePendingTask { task_id },
-                    self.options().task_launch_timeout,
-                );
             }
             stages.push(JobStage {
                 plan: Arc::clone(stage),
@@ -464,24 +458,59 @@ impl DriverActor {
         let slots = self.find_idle_task_slots();
         let mut assigner = TaskSlotAssigner::new(slots);
         let mut skipped_tasks = vec![];
-        while let Some(worker_id) = assigner.next() {
-            while let Some(task_id) = self.task_queue.pop_front() {
-                if !self.state.can_schedule_task(task_id) {
-                    skipped_tasks.push(task_id);
+        while let Some(task_id) = self.task_queue.pop_front() {
+            if !self.state.can_schedule_task(task_id) {
+                skipped_tasks.push(task_id);
+                continue;
+            }
+            match self.prepare_pending_task(ctx, task_id) {
+                Ok(()) => {}
+                Err(e) => {
+                    warn!("failed to prepare pending task {task_id}: {e}");
                     continue;
                 }
-                match self.schedule_task(ctx, task_id, worker_id) {
-                    Ok(()) => break,
-                    Err(e) => {
-                        warn!("failed to schedule task {task_id} to worker {worker_id}: {e}");
-                    }
+            };
+            let Some(worker_id) = assigner.next() else {
+                skipped_tasks.push(task_id);
+                // We do not break the loop even if there are no more available task slots.
+                // We want to examine all the tasks in the queue and mark eligible tasks as pending.
+                continue;
+            };
+            match self.schedule_task(ctx, task_id, worker_id) {
+                Ok(()) => {}
+                Err(e) => {
+                    warn!("failed to schedule task {task_id} to worker {worker_id}: {e}");
                 }
-            }
-            if self.task_queue.is_empty() {
-                break;
-            }
+            };
         }
         self.task_queue.extend(skipped_tasks);
+    }
+
+    fn prepare_pending_task(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        task_id: TaskId,
+    ) -> ExecutionResult<()> {
+        let Some(task) = self.state.get_task(task_id) else {
+            return Err(ExecutionError::InternalError(format!(
+                "task {task_id} not found"
+            )));
+        };
+        if matches!(task.state, TaskState::Created) {
+            self.state.update_task(
+                task_id,
+                task.attempt,
+                TaskState::Pending {
+                    pending_at: Instant::now(),
+                },
+                None,
+            );
+            ctx.send_with_delay(
+                DriverEvent::ProbePendingTask { task_id },
+                self.options().task_launch_timeout,
+            );
+        };
+        Ok(())
     }
 
     fn schedule_task(

@@ -322,29 +322,38 @@ pub enum TaskMode {
 
 #[derive(Debug, Clone)]
 pub enum TaskState {
+    /// The task has been created, but may not be eligible for scheduling.
+    Created,
+    /// The task is eligible for scheduling, but is not assigned to any worker.
     Pending {
         /// The time when the current task attempt becomes pending.
         pending_at: Instant,
     },
+    /// The task is scheduled to a worker, but its status is unknown.
     Scheduled {
         /// The worker ID to schedule the current task attempt.
         worker_id: WorkerId,
     },
+    /// The task is running on a worker.
     Running {
         /// The worker ID for running the current task attempt.
         worker_id: WorkerId,
     },
+    /// The task has succeeded.
     Succeeded {
         /// The worker ID for the task output.
         worker_id: WorkerId,
     },
+    /// The task has failed.
     Failed,
+    /// The task has been canceled.
     Canceled,
 }
 
 impl TaskState {
     pub fn run(&self) -> Option<TaskState> {
         match self {
+            TaskState::Created => None,
             TaskState::Pending { .. } => None,
             TaskState::Scheduled { worker_id } => Some(TaskState::Running {
                 worker_id: *worker_id,
@@ -358,6 +367,7 @@ impl TaskState {
 
     pub fn succeed(&self) -> Option<TaskState> {
         match self {
+            TaskState::Created => None,
             TaskState::Pending { .. } => None,
             TaskState::Scheduled { worker_id } | TaskState::Running { worker_id } => {
                 Some(TaskState::Succeeded {
