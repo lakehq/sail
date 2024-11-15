@@ -40,7 +40,6 @@ arrow-cast = { workspace = true }
 sqlparser = { workspace = true }
 serde_arrow = { workspace = true }
 phf = { workspace = true }
-mimalloc = { workspace = true }
 clap = { workspace = true }
 log = { workspace = true }
 
