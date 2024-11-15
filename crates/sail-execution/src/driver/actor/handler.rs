@@ -159,6 +159,8 @@ impl DriverActor {
             Ok(job_id) => {
                 self.job_outputs
                     .insert(job_id, JobOutput::Pending { result });
+                self.scale_up_workers(ctx);
+                self.schedule_tasks(ctx);
             }
             Err(e) => {
                 let _ = result.send(Err(e));
@@ -286,8 +288,6 @@ impl DriverActor {
         }
         let descriptor = JobDescriptor { stages };
         self.state.add_job(job_id, descriptor);
-        self.scale_up_workers(ctx);
-        self.schedule_tasks(ctx);
         Ok(job_id)
     }
 
