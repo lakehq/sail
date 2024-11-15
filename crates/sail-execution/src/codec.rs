@@ -1,15 +1,17 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::common::parsers::CompressionTypeVariant;
-use datafusion::common::{plan_datafusion_err, plan_err, Result};
+use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::physical_plan::{ArrowExec, NdJsonExec};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, Volatility};
 use datafusion::physical_expr::{LexOrdering, LexOrderingRef};
+use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
@@ -21,14 +23,17 @@ use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::from_proto::{
-    parse_physical_sort_exprs, parse_protobuf_file_scan_config, parse_protobuf_partitioning,
+    parse_physical_expr, parse_physical_sort_exprs, parse_protobuf_file_scan_config,
+    parse_protobuf_partitioning,
 };
 use datafusion_proto::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_partitioning, serialize_physical_expr,
     serialize_physical_sort_exprs,
 };
 use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
-use datafusion_proto::protobuf::{JoinType, PhysicalPlanNode, PhysicalSortExprNode};
+use datafusion_proto::protobuf::{
+    JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
+};
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common::spec::PySparkUdfType;
@@ -252,6 +257,87 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     is_distinct,
                 )?))
             }
+            NodeKind::SortMergeJoin(gen::SortMergeJoinExecNode {
+                left,
+                right,
+                on,
+                filter,
+                join_type,
+                sort_options,
+                null_equals_null,
+            }) => {
+                let left = self.try_decode_plan(&left, registry)?;
+                let right = self.try_decode_plan(&right, registry)?;
+                let on = on
+                    .into_iter()
+                    .map(|join_on| {
+                        let left = parse_physical_expr(
+                            &self.try_decode_message(&join_on.left)?,
+                            registry,
+                            &left.schema(),
+                            self,
+                        )?;
+                        let right = parse_physical_expr(
+                            &self.try_decode_message(&join_on.right)?,
+                            registry,
+                            &right.schema(),
+                            self,
+                        )?;
+                        Ok((left, right))
+                    })
+                    .collect::<Result<_>>()?;
+                let filter = if let Some(join_filter) = filter {
+                    let schema = self
+                        .try_decode_message::<gen_datafusion_common::Schema>(&join_filter.schema)?;
+                    let schema: Schema = (&schema).try_into()?;
+
+                    let expression = parse_physical_expr(
+                        &self.try_decode_message(&join_filter.expression)?,
+                        registry,
+                        &schema,
+                        self,
+                    )?;
+
+                    let column_indices = join_filter
+                        .column_indices
+                        .into_iter()
+                        .map(|idx| {
+                            let side = gen_datafusion_common::JoinSide::from_str_name(&idx.side)
+                                .ok_or_else(|| {
+                                    plan_datafusion_err!("invalid join side: {}", idx.side)
+                                })?;
+                            let side: JoinSide = side.into();
+                            Ok(ColumnIndex {
+                                index: idx.index as usize,
+                                side,
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    Some(JoinFilter::new(expression, column_indices, schema))
+                } else {
+                    None
+                };
+                let join_type = ProtoJoinType::from_str_name(&join_type)
+                    .ok_or_else(|| plan_datafusion_err!("invalid join type: {}", join_type))?;
+                let join_type: datafusion::common::JoinType = join_type.into();
+                let sort_options: Vec<SortOptions> = sort_options
+                    .into_iter()
+                    .map(|opt| SortOptions {
+                        descending: opt.descending,
+                        nulls_first: opt.nulls_first,
+                    })
+                    .collect();
+                Ok(Arc::new(SortMergeJoinExec::try_new(
+                    left,
+                    right,
+                    on,
+                    filter,
+                    join_type,
+                    sort_options,
+                    null_equals_null,
+                )?))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -428,7 +514,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     })
                 })
                 .map_or(Ok(None), |v: Result<gen::JoinFilter>| v.map(Some))?;
-            let join_type: JoinType = sort_merge_join.join_type().into();
+            let join_type: ProtoJoinType = sort_merge_join.join_type().into();
             let join_type = join_type.as_str_name().to_string();
             let sort_options = sort_merge_join
                 .sort_options()
