@@ -7,12 +7,17 @@ edition = { workspace = true }
 name = "sail"
 path = "src/main.rs"
 
+[features]
+mimalloc = ["dep:mimalloc"]
+default = ["mimalloc"]
+
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-execution = { path = "../sail-execution" }
 sail-telemetry = { path = "../sail-telemetry" }
 sail-spark-connect = { path = "../sail-spark-connect" }
 
+mimalloc = { workspace = true, optional = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }
