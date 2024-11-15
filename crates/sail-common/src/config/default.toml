@@ -1,6 +1,7 @@
 mode = "local"
 
 [cluster]
+enable_tls = false
 driver_listen_host = "127.0.0.1"
 driver_listen_port = 0
 driver_external_host = "127.0.0.1"
@@ -18,9 +19,6 @@ worker_task_slots = 8
 task_launch_timeout_secs = 600
 job_output_buffer = 16
 memory_stream_buffer = 16
-
-[network]
-enable_tls = false
 
 [execution]
 batch_size = 8192

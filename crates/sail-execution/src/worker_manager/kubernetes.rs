@@ -9,7 +9,7 @@ use k8s_openapi::Resource;
 use kube::Api;
 use rand::distributions::Uniform;
 use rand::Rng;
-use sail_common::config::{ClusterConfigEnv, NetworkConfigEnv};
+use sail_common::config::ClusterConfigEnv;
 use tokio::sync::OnceCell;
 
 use crate::error::{ExecutionError, ExecutionResult};
@@ -125,7 +125,7 @@ impl WorkerManager for KubernetesWorkerManager {
                             value_from: None,
                         },
                         EnvVar {
-                            name: NetworkConfigEnv::ENABLE_TLS.to_string(),
+                            name: ClusterConfigEnv::ENABLE_TLS.to_string(),
                             value: Some(if options.enable_tls {
                                 "true".to_string()
                             } else {

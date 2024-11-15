@@ -50,7 +50,7 @@ impl TryFrom<&AppConfig> for DriverOptions {
             }
         };
         Ok(Self {
-            enable_tls: config.network.enable_tls,
+            enable_tls: config.cluster.enable_tls,
             driver_listen_host: config.cluster.driver_listen_host.clone(),
             driver_listen_port: config.cluster.driver_listen_port,
             driver_external_host: config.cluster.driver_external_host.clone(),

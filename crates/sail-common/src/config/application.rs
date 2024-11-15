@@ -11,7 +11,6 @@ const DEFAULT_CONFIG: &str = include_str!("default.toml");
 pub struct AppConfig {
     pub mode: ExecutionMode,
     pub cluster: ClusterConfig,
-    pub network: NetworkConfig,
     pub execution: ExecutionConfig,
     pub kubernetes: KubernetesConfig,
     pub parquet: ParquetConfig,
@@ -61,6 +60,7 @@ pub enum ExecutionMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClusterConfig {
+    pub enable_tls: bool,
     pub driver_listen_host: String,
     pub driver_listen_port: u16,
     pub driver_external_host: String,
@@ -78,11 +78,6 @@ pub struct ClusterConfig {
     pub task_launch_timeout_secs: u64,
     pub job_output_buffer: usize,
     pub memory_stream_buffer: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NetworkConfig {
-    pub enable_tls: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,16 +109,10 @@ pub struct KubernetesConfig {
 pub struct ClusterConfigEnv;
 
 impl ClusterConfigEnv {
+    pub const ENABLE_TLS: &'static str = "SAIL_CLUSTER__ENABLE_TLS";
     pub const WORKER_ID: &'static str = "SAIL_CLUSTER__WORKER_ID";
     pub const WORKER_LISTEN_HOST: &'static str = "SAIL_CLUSTER__WORKER_LISTEN_HOST";
     pub const WORKER_EXTERNAL_HOST: &'static str = "SAIL_CLUSTER__WORKER_EXTERNAL_HOST";
     pub const DRIVER_EXTERNAL_HOST: &'static str = "SAIL_CLUSTER__DRIVER_EXTERNAL_HOST";
     pub const DRIVER_EXTERNAL_PORT: &'static str = "SAIL_CLUSTER__DRIVER_EXTERNAL_PORT";
-}
-
-/// Environment variables for application network configuration.
-pub struct NetworkConfigEnv;
-
-impl NetworkConfigEnv {
-    pub const ENABLE_TLS: &'static str = "SAIL_NETWORK__ENABLE_TLS";
 }
