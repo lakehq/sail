@@ -1,4 +1,5 @@
 mod application;
+mod cli;
 
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -14,3 +15,4 @@ pub struct ConfigKeyValue {
 }
 
 pub use application::*;
+pub use cli::*;

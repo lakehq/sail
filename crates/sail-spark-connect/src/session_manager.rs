@@ -87,15 +87,11 @@ impl SessionManager {
             )
             .set_usize(
                 "datafusion.execution.parquet.maximum_parallel_row_group_writers",
-                self.config
-                    .execution
-                    .parquet
-                    .maximum_parallel_row_group_writers,
+                self.config.parquet.maximum_parallel_row_group_writers,
             )
             .set_usize(
                 "datafusion.execution.parquet.maximum_buffered_record_batches_per_stream",
                 self.config
-                    .execution
                     .parquet
                     .maximum_buffered_record_batches_per_stream,
             )

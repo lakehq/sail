@@ -43,7 +43,11 @@ impl WorkerActor {
             Err(e) => return ActorAction::fail(e),
         };
         let host = self.options().worker_external_host.clone();
-        let port = self.options().worker_external_port.unwrap_or(port);
+        let port = if self.options().worker_external_port > 0 {
+            self.options().worker_external_port
+        } else {
+            port
+        };
         let client = self.driver_client.clone();
         let handle = ctx.handle().clone();
         ctx.spawn(async move {

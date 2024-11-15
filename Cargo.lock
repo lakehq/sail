@@ -4588,6 +4588,7 @@ dependencies = [
  "prost 0.13.3",
  "prost-build",
  "prost-types 0.13.3",
+ "rand",
  "sail-common",
  "sail-plan",
  "sail-python-udf",

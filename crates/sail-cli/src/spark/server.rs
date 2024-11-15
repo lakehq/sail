@@ -6,7 +6,6 @@ use sail_telemetry::telemetry::init_telemetry;
 use tokio::net::TcpListener;
 
 const SERVER_STACK_SIZE: usize = 1024 * 1024 * 8;
-const SERVER_SHUTDOWN_TIMEOUT_SECONDS: u64 = 5;
 
 /// Handles graceful shutdown by waiting for a `SIGINT` signal in [tokio].
 ///
@@ -48,12 +47,5 @@ pub fn run_spark_connect_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std
 
     fastrace::flush();
 
-    // Shutdown the runtime with a timeout.
-    // When the timeout is reached, the `main()` function returns and
-    // the process exits immediately (though the exit code is still zero).
-    // TODO: understand why some tasks are still running after the DataFusion stream is dropped.
-    runtime.shutdown_timeout(std::time::Duration::from_secs(
-        SERVER_SHUTDOWN_TIMEOUT_SECONDS,
-    ));
     Ok(())
 }

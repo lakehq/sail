@@ -18,4 +18,4 @@ pub(crate) use actor::DriverActor;
 pub(crate) use client::DriverClient;
 pub(crate) use event::DriverEvent;
 pub(crate) use gen::driver_service_client::DriverServiceClient;
-pub(crate) use options::{DriverOptions, WorkerManagerKind};
+pub(crate) use options::{DriverOptions, WorkerManagerOptions};
