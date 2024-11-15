@@ -44,6 +44,7 @@ impl TryFrom<&AppConfig> for DriverOptions {
                     image: config.kubernetes.image.clone(),
                     image_pull_policy: config.kubernetes.image_pull_policy.clone(),
                     namespace: config.kubernetes.namespace.clone(),
+                    driver_pod_name: config.kubernetes.driver_pod_name.clone(),
                     worker_pod_name_prefix: config.kubernetes.worker_pod_name_prefix.clone(),
                 })
             }

@@ -33,4 +33,5 @@ maximum_buffered_record_batches_per_stream = 16
 image = "sail:latest"
 image_pull_policy = "IfNotPresent"
 namespace = "default"
+driver_pod_name = ""
 worker_pod_name_prefix = "sail-worker-"

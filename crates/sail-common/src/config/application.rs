@@ -101,6 +101,12 @@ pub struct KubernetesConfig {
     pub image: String,
     pub image_pull_policy: String,
     pub namespace: String,
+    /// The name of the pod that runs the driver,
+    /// or empty if the driver pod name is not known.
+    /// This is used to set owner references for worker pods.
+    pub driver_pod_name: String,
+    /// The prefix of the name of worker pods.
+    /// This should usually end with a hyphen (`-`).
     pub worker_pod_name_prefix: String,
 }
 

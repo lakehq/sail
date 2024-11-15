@@ -4,14 +4,15 @@ use std::env;
 use k8s_openapi::api::core::v1::{
     Container, EnvVar, EnvVarSource, ObjectFieldSelector, Pod, PodSpec,
 };
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
+use k8s_openapi::Resource;
 use kube::Api;
 use rand::distributions::Uniform;
 use rand::Rng;
 use sail_common::config::{ClusterConfigEnv, NetworkConfigEnv};
 use tokio::sync::OnceCell;
 
-use crate::error::ExecutionResult;
+use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::WorkerId;
 use crate::worker_manager::{WorkerLaunchOptions, WorkerManager};
 
@@ -20,6 +21,7 @@ pub struct KubernetesWorkerManagerOptions {
     pub image: String,
     pub image_pull_policy: String,
     pub namespace: String,
+    pub driver_pod_name: String,
     pub worker_pod_name_prefix: String,
 }
 
@@ -59,6 +61,29 @@ impl KubernetesWorkerManager {
             .await?;
         Ok(pods)
     }
+
+    async fn get_owner_references(&self) -> ExecutionResult<Vec<OwnerReference>> {
+        if self.options.driver_pod_name.is_empty() {
+            // The driver pod name is not known.
+            return Ok(vec![]);
+        }
+        let driver = self
+            .pods()
+            .await?
+            .get(&self.options.driver_pod_name)
+            .await?;
+        Ok(vec![OwnerReference {
+            api_version: Pod::API_VERSION.to_string(),
+            kind: "Pod".to_string(),
+            name: driver.metadata.name.ok_or_else(|| {
+                ExecutionError::InternalError("driver pod name is missing".to_string())
+            })?,
+            uid: driver.metadata.uid.ok_or_else(|| {
+                ExecutionError::InternalError("driver pod UID is missing".to_string())
+            })?,
+            ..Default::default()
+        }])
+    }
 }
 
 #[tonic::async_trait]
@@ -85,6 +110,7 @@ impl WorkerManager for KubernetesWorkerManager {
                         format!("{}-{}", self.name, id),
                     ),
                 ])),
+                owner_references: Some(self.get_owner_references().await?),
                 ..Default::default()
             },
             spec: Some(PodSpec {
