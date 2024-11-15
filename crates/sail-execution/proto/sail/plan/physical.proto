@@ -125,7 +125,7 @@ message ValuesExecNode {
 
 message NdJsonExecNode {
   bytes base_config = 1;
-  bytes file_compression_type = 2;
+  CompressionTypeVariant file_compression_type = 2;
 }
 
 message PhysicalProjection {
@@ -190,4 +190,12 @@ message TaskWriteLocationDisk {
 
 message TaskWriteLocationRemote {
   string uri = 1;
+}
+
+enum CompressionTypeVariant {
+  COMPRESSION_TYPE_VARIANT_GZIP = 0;
+  COMPRESSION_TYPE_VARIANT_BZIP2 = 1;
+  COMPRESSION_TYPE_VARIANT_XZ = 2;
+  COMPRESSION_TYPE_VARIANT_ZSTD = 3;
+  COMPRESSION_TYPE_VARIANT_UNCOMPRESSED = 4;
 }

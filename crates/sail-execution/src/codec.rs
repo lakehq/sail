@@ -2,7 +2,10 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{plan_datafusion_err, plan_err, Result};
+use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+use datafusion::datasource::physical_plan::NdJsonExec;
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, Volatility};
@@ -13,10 +16,10 @@ use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::from_proto::{
-    parse_physical_sort_exprs, parse_protobuf_partitioning,
+    parse_physical_sort_exprs, parse_protobuf_file_scan_config, parse_protobuf_partitioning,
 };
 use datafusion_proto::physical_plan::to_proto::{
-    serialize_partitioning, serialize_physical_sort_exprs,
+    serialize_file_scan_config, serialize_partitioning, serialize_physical_sort_exprs,
 };
 use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
 use datafusion_proto::protobuf::{PhysicalPlanNode, PhysicalSortExprNode};
@@ -207,16 +210,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ValuesExec::try_new_from_batches(schema, data)?))
             }
             NodeKind::NdJson(gen::NdJsonExecNode {
-                base_config: _,
-                file_compression_type: _,
+                base_config,
+                file_compression_type,
             }) => {
-                Err(plan_datafusion_err!("NdJsonExec is not supported"))
-                // let base_config: FileScanConfig = ;
-                // let file_compression_type: FileCompressionType = ;
-                // Ok(Arc::new(NdJsonExec::new(
-                //     base_config,
-                //     file_compression_type,
-                // )?))
+                let base_config = parse_protobuf_file_scan_config(
+                    &self.try_decode_message(&base_config)?,
+                    registry,
+                    self,
+                )?;
+                let file_compression_type: FileCompressionType =
+                    self.try_decode_file_compression_type(file_compression_type)?;
+                Ok(Arc::new(NdJsonExec::new(
+                    base_config,
+                    file_compression_type,
+                )))
             }
         }
     }
@@ -330,6 +337,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 values.schema().as_ref().try_into()?,
             )?;
             NodeKind::Values(gen::ValuesExecNode { data, schema })
+        } else if let Some(nd_json) = node.as_any().downcast_ref::<NdJsonExec>() {
+            let base_config =
+                self.try_encode_message(serialize_file_scan_config(nd_json.base_config(), self)?)?;
+            let file_compression_type =
+                self.try_encode_file_compression_type(*nd_json.file_compression_type())?;
+            NodeKind::NdJson(gen::NdJsonExecNode {
+                base_config,
+                file_compression_type,
+            })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
@@ -814,6 +830,34 @@ impl RemoteExecutionCodec {
             ShowStringStyle::Html => gen::ShowStringStyle::Html,
         };
         Ok(style as i32)
+    }
+
+    fn try_decode_file_compression_type(&self, variant: i32) -> Result<FileCompressionType> {
+        let variant = gen::CompressionTypeVariant::try_from(variant)
+            .map_err(|e| plan_datafusion_err!("failed to decode compression type variant: {e}"))?;
+        let file_compression_type = match variant {
+            gen::CompressionTypeVariant::Gzip => CompressionTypeVariant::GZIP,
+            gen::CompressionTypeVariant::Bzip2 => CompressionTypeVariant::BZIP2,
+            gen::CompressionTypeVariant::Xz => CompressionTypeVariant::XZ,
+            gen::CompressionTypeVariant::Zstd => CompressionTypeVariant::ZSTD,
+            gen::CompressionTypeVariant::Uncompressed => CompressionTypeVariant::UNCOMPRESSED,
+        };
+        Ok(file_compression_type.into())
+    }
+
+    fn try_encode_file_compression_type(
+        &self,
+        file_compression_type: FileCompressionType,
+    ) -> Result<i32> {
+        let variant: CompressionTypeVariant = file_compression_type.into();
+        let variant = match variant {
+            CompressionTypeVariant::GZIP => gen::CompressionTypeVariant::Gzip,
+            CompressionTypeVariant::BZIP2 => gen::CompressionTypeVariant::Bzip2,
+            CompressionTypeVariant::XZ => gen::CompressionTypeVariant::Xz,
+            CompressionTypeVariant::ZSTD => gen::CompressionTypeVariant::Zstd,
+            CompressionTypeVariant::UNCOMPRESSED => gen::CompressionTypeVariant::Uncompressed,
+        };
+        Ok(variant as i32)
     }
 
     fn try_decode_plan(
