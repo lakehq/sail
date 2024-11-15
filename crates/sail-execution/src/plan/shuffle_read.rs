@@ -5,6 +5,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use datafusion::common::{exec_datafusion_err, internal_err, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::expressions::UnKnownColumn;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -29,6 +30,19 @@ pub struct ShuffleReadExec {
 
 impl ShuffleReadExec {
     pub fn new(stage: usize, schema: SchemaRef, partitioning: Partitioning) -> Self {
+        let partitioning = match partitioning {
+            Partitioning::Hash(expr, n) if expr.is_empty() => Partitioning::UnknownPartitioning(n),
+            Partitioning::Hash(expr, n) => {
+                // https://github.com/apache/arrow-datafusion/issues/5184
+                Partitioning::Hash(
+                    expr.into_iter()
+                        .filter(|e| e.as_any().downcast_ref::<UnKnownColumn>().is_none())
+                        .collect(),
+                    n,
+                )
+            }
+            _ => partitioning,
+        };
         let partition_count = partitioning.partition_count();
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),

@@ -49,7 +49,7 @@ ryu = "1.0.18"
 either = "1.12.0"
 num-traits = "0.2.19"
 serde_arrow = { version = "0.12.2", features = ["arrow-53"] }
-mimalloc = { version = "0.1.43", features = ["local_dynamic_tls"] }
+mimalloc = { version = "0.1.43", default-features = false }
 rand = "0.8.5"
 rand_chacha = "0.3.1"
 rand_distr = "0.4.3"
@@ -80,8 +80,8 @@ datafusion-common = { version = "43.0.0", features = ["object_store", "pyarrow",
 datafusion-expr = "43.0.0"
 datafusion-proto = "43.0.0"
 datafusion-functions-nested = "43.0.0"
-datafusion-functions-json = { git = "https://github.com/datafusion-contrib/datafusion-functions-json.git", rev = "93a3477" }
-datafusion-comet-spark-expr = { git = "https://github.com/apache/datafusion-comet.git", rev = "712658e" }
+datafusion-functions-json = "0.43.0"
+datafusion-comet-spark-expr = { git = "https://github.com/apache/datafusion-comet.git", rev = "9657b75" }
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 pyo3 = { version = "0.22.0", features = ["auto-initialize", "serde"] }
 # Should be the equivalent of enabling the pyarrow feature in datafusion since we already have pyo3 in the workspace
@@ -103,6 +103,30 @@ sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "0908ddb
 [patch.crates-io]
 # Override dependencies to use our forked versions.
 # You can use `path = "..."` to temporarily point to your local copy of the crates to speed up local development.
+datafusion = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-catalog = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-common = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-common-runtime = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-execution = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-expr = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-expr-common = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-ffi = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-functions = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-functions-aggregate = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-functions-aggregate-common = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-functions-nested = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-functions-window = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-functions-window-common = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-optimizer = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-physical-expr = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-physical-expr-common = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-physical-optimizer = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-physical-plan = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-proto = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-proto-common = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-sql = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-sqllogictest = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
+datafusion-substrait = { git = "https://github.com/lakehq/datafusion.git", rev = "3cbd529" }
 
 [profile.release]
 # https://doc.rust-lang.org/cargo/reference/profiles.html#release

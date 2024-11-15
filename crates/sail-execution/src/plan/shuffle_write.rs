@@ -6,6 +6,7 @@ use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use datafusion::common::{exec_datafusion_err, exec_err, plan_err, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::expressions::UnKnownColumn;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::repartition::BatchPartitioner;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -36,6 +37,19 @@ pub struct ShuffleWriteExec {
 
 impl ShuffleWriteExec {
     pub fn new(stage: usize, plan: Arc<dyn ExecutionPlan>, partitioning: Partitioning) -> Self {
+        let partitioning = match partitioning {
+            Partitioning::Hash(expr, n) if expr.is_empty() => Partitioning::UnknownPartitioning(n),
+            Partitioning::Hash(expr, n) => {
+                // https://github.com/apache/arrow-datafusion/issues/5184
+                Partitioning::Hash(
+                    expr.into_iter()
+                        .filter(|e| e.as_any().downcast_ref::<UnKnownColumn>().is_none())
+                        .collect(),
+                    n,
+                )
+            }
+            _ => partitioning,
+        };
         let input_partitioning = plan.output_partitioning().clone();
         let input_partition_count = input_partitioning.partition_count();
         let properties = PlanProperties::new(

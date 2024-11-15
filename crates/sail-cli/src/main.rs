@@ -1,6 +1,10 @@
 use sail_cli::python::run_python_interpreter;
 use sail_common::config::{CliConfig, CliConfigEnv};
 
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = CliConfig::load()?;
     if config.run_python {

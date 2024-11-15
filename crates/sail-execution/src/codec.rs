@@ -1,20 +1,38 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion::common::{plan_datafusion_err, plan_err, Result};
+use datafusion::common::parsers::CompressionTypeVariant;
+use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
+use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+use datafusion::datasource::physical_plan::{ArrowExec, NdJsonExec};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, Volatility};
+use datafusion::physical_expr::{LexOrdering, LexOrderingRef};
+use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::memory::MemoryExec;
+use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
+use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion::physical_plan::values::ValuesExec;
+use datafusion::physical_plan::work_table::WorkTableExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
-use datafusion_proto::physical_plan::from_proto::parse_protobuf_partitioning;
-use datafusion_proto::physical_plan::to_proto::serialize_partitioning;
+use datafusion_proto::physical_plan::from_proto::{
+    parse_physical_expr, parse_physical_sort_exprs, parse_protobuf_file_scan_config,
+    parse_protobuf_partitioning,
+};
+use datafusion_proto::physical_plan::to_proto::{
+    serialize_file_scan_config, serialize_partitioning, serialize_physical_expr,
+    serialize_physical_sort_exprs,
+};
 use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
-use datafusion_proto::protobuf::PhysicalPlanNode;
+use datafusion_proto::protobuf::{
+    JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
+};
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common::spec::PySparkUdfType;
@@ -75,7 +93,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         registry: &dyn FunctionRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let node = ExtendedPhysicalPlanNode::decode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to decode plan: {e:?}"))?;
+            .map_err(|e| plan_datafusion_err!("failed to decode plan: {e}"))?;
         let ExtendedPhysicalPlanNode { node_kind } = node;
         let node_kind = match node_kind {
             Some(x) => x,
@@ -167,6 +185,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partitions,
                 schema,
                 projection,
+                show_sizes,
+                sort_information,
             }) => {
                 let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
                 let schema = Arc::new((&schema).try_into()?);
@@ -176,11 +196,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .collect::<Result<Vec<_>>>()?;
                 let projection =
                     projection.map(|x| x.columns.into_iter().map(|c| c as usize).collect());
-                Ok(Arc::new(MemoryExec::try_new(
-                    &partitions,
-                    schema,
-                    projection,
-                )?))
+                let sort_information =
+                    self.try_decode_lex_orderings(&sort_information, registry, &schema)?;
+                Ok(Arc::new(
+                    MemoryExec::try_new(&partitions, schema, projection)?
+                        .with_show_sizes(show_sizes)
+                        .try_with_sort_information(sort_information)?,
+                ))
             }
             NodeKind::Values(gen::ValuesExecNode { data, schema }) => {
                 let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
@@ -188,6 +210,135 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let data = read_record_batches(&data)?;
                 Ok(Arc::new(ValuesExec::try_new_from_batches(schema, data)?))
             }
+            NodeKind::NdJson(gen::NdJsonExecNode {
+                base_config,
+                file_compression_type,
+            }) => {
+                let base_config = parse_protobuf_file_scan_config(
+                    &self.try_decode_message(&base_config)?,
+                    registry,
+                    self,
+                )?;
+                let file_compression_type: FileCompressionType =
+                    self.try_decode_file_compression_type(file_compression_type)?;
+                Ok(Arc::new(NdJsonExec::new(
+                    base_config,
+                    file_compression_type,
+                )))
+            }
+            NodeKind::Arrow(gen::ArrowExecNode { base_config }) => {
+                let base_config = parse_protobuf_file_scan_config(
+                    &self.try_decode_message(&base_config)?,
+                    registry,
+                    self,
+                )?;
+                Ok(Arc::new(ArrowExec::new(base_config)))
+            }
+            NodeKind::WorkTable(gen::WorkTableExecNode { name, schema }) => {
+                let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
+                Ok(Arc::new(WorkTableExec::new(
+                    name,
+                    Arc::new((&schema).try_into()?),
+                )))
+            }
+            NodeKind::RecursiveQuery(gen::RecursiveQueryExecNode {
+                name,
+                static_term,
+                recursive_term,
+                is_distinct,
+            }) => {
+                let static_term = self.try_decode_plan(&static_term, registry)?;
+                let recursive_term = self.try_decode_plan(&recursive_term, registry)?;
+                Ok(Arc::new(RecursiveQueryExec::try_new(
+                    name,
+                    static_term,
+                    recursive_term,
+                    is_distinct,
+                )?))
+            }
+            NodeKind::SortMergeJoin(gen::SortMergeJoinExecNode {
+                left,
+                right,
+                on,
+                filter,
+                join_type,
+                sort_options,
+                null_equals_null,
+            }) => {
+                let left = self.try_decode_plan(&left, registry)?;
+                let right = self.try_decode_plan(&right, registry)?;
+                let on = on
+                    .into_iter()
+                    .map(|join_on| {
+                        let left = parse_physical_expr(
+                            &self.try_decode_message(&join_on.left)?,
+                            registry,
+                            &left.schema(),
+                            self,
+                        )?;
+                        let right = parse_physical_expr(
+                            &self.try_decode_message(&join_on.right)?,
+                            registry,
+                            &right.schema(),
+                            self,
+                        )?;
+                        Ok((left, right))
+                    })
+                    .collect::<Result<_>>()?;
+                let filter = if let Some(join_filter) = filter {
+                    let schema = self
+                        .try_decode_message::<gen_datafusion_common::Schema>(&join_filter.schema)?;
+                    let schema: Schema = (&schema).try_into()?;
+
+                    let expression = parse_physical_expr(
+                        &self.try_decode_message(&join_filter.expression)?,
+                        registry,
+                        &schema,
+                        self,
+                    )?;
+
+                    let column_indices = join_filter
+                        .column_indices
+                        .into_iter()
+                        .map(|idx| {
+                            let side = gen_datafusion_common::JoinSide::from_str_name(&idx.side)
+                                .ok_or_else(|| {
+                                    plan_datafusion_err!("invalid join side: {}", idx.side)
+                                })?;
+                            let side: JoinSide = side.into();
+                            Ok(ColumnIndex {
+                                index: idx.index as usize,
+                                side,
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    Some(JoinFilter::new(expression, column_indices, schema))
+                } else {
+                    None
+                };
+                let join_type = ProtoJoinType::from_str_name(&join_type)
+                    .ok_or_else(|| plan_datafusion_err!("invalid join type: {}", join_type))?;
+                let join_type: datafusion::common::JoinType = join_type.into();
+                let sort_options: Vec<SortOptions> = sort_options
+                    .into_iter()
+                    .map(|opt| SortOptions {
+                        descending: opt.descending,
+                        nulls_first: opt.nulls_first,
+                    })
+                    .collect();
+                Ok(Arc::new(SortMergeJoinExec::try_new(
+                    left,
+                    right,
+                    on,
+                    filter,
+                    join_type,
+                    sort_options,
+                    null_equals_null,
+                )?))
+            }
+            // TODO: StreamingTableExec?
+            _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
 
@@ -271,10 +422,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 });
             let schema = self
                 .try_encode_message::<gen_datafusion_common::Schema>(schema.as_ref().try_into()?)?;
+            let sort_information = self.try_encode_lex_orderings(memory.sort_information())?;
             NodeKind::Memory(gen::MemoryExecNode {
                 partitions,
                 schema,
                 projection,
+                show_sizes: memory.show_sizes(),
+                sort_information,
             })
         } else if let Some(values) = node.as_any().downcast_ref::<ValuesExec>() {
             let data = write_record_batches(&values.data(), &values.schema())?;
@@ -282,19 +436,118 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 values.schema().as_ref().try_into()?,
             )?;
             NodeKind::Values(gen::ValuesExecNode { data, schema })
+        } else if let Some(nd_json) = node.as_any().downcast_ref::<NdJsonExec>() {
+            let base_config =
+                self.try_encode_message(serialize_file_scan_config(nd_json.base_config(), self)?)?;
+            let file_compression_type =
+                self.try_encode_file_compression_type(*nd_json.file_compression_type())?;
+            NodeKind::NdJson(gen::NdJsonExecNode {
+                base_config,
+                file_compression_type,
+            })
+        } else if let Some(arrow) = node.as_any().downcast_ref::<ArrowExec>() {
+            let base_config =
+                self.try_encode_message(serialize_file_scan_config(arrow.base_config(), self)?)?;
+            NodeKind::Arrow(gen::ArrowExecNode { base_config })
+        } else if let Some(work_table) = node.as_any().downcast_ref::<WorkTableExec>() {
+            let name = work_table.name().to_string();
+            let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
+                work_table.schema().as_ref().try_into()?,
+            )?;
+            NodeKind::WorkTable(gen::WorkTableExecNode { name, schema })
+        } else if let Some(recursive_query) = node.as_any().downcast_ref::<RecursiveQueryExec>() {
+            let name = recursive_query.name().to_string();
+            let static_term = self.try_encode_plan(recursive_query.static_term().clone())?;
+            let recursive_term = self.try_encode_plan(recursive_query.recursive_term().clone())?;
+            let is_distinct = recursive_query.is_distinct();
+            NodeKind::RecursiveQuery(gen::RecursiveQueryExecNode {
+                name,
+                static_term,
+                recursive_term,
+                is_distinct,
+            })
+        } else if let Some(sort_merge_join) = node.as_any().downcast_ref::<SortMergeJoinExec>() {
+            let left = self.try_encode_plan(sort_merge_join.left().clone())?;
+            let right = self.try_encode_plan(sort_merge_join.right().clone())?;
+            let on: Vec<gen::JoinOn> = sort_merge_join
+                .on()
+                .iter()
+                .map(|(left, right)| {
+                    let left = self.try_encode_message(serialize_physical_expr(left, self)?)?;
+                    let right = self.try_encode_message(serialize_physical_expr(right, self)?)?;
+                    Ok(gen::JoinOn { left, right })
+                })
+                .collect::<Result<_>>()?;
+            let filter = sort_merge_join
+                .filter()
+                .as_ref()
+                .map(|join_filter| {
+                    let expression = self.try_encode_message(serialize_physical_expr(
+                        join_filter.expression(),
+                        self,
+                    )?)?;
+                    let column_indices = join_filter
+                        .column_indices()
+                        .iter()
+                        .map(|i| {
+                            let index = i.index as u32;
+                            let side: gen_datafusion_common::JoinSide = i.side.into();
+                            let side = side.as_str_name().to_string();
+                            gen::ColumnIndex { index, side }
+                        })
+                        .collect();
+                    let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
+                        join_filter.schema().try_into()?,
+                    )?;
+                    Ok(gen::JoinFilter {
+                        expression,
+                        column_indices,
+                        schema,
+                    })
+                })
+                .map_or(Ok(None), |v: Result<gen::JoinFilter>| v.map(Some))?;
+            let join_type: ProtoJoinType = sort_merge_join.join_type().into();
+            let join_type = join_type.as_str_name().to_string();
+            let sort_options = sort_merge_join
+                .sort_options()
+                .iter()
+                .map(|x| gen::SortOptions {
+                    descending: x.descending,
+                    nulls_first: x.nulls_first,
+                })
+                .collect();
+            NodeKind::SortMergeJoin(gen::SortMergeJoinExecNode {
+                left,
+                right,
+                on,
+                filter,
+                join_type,
+                sort_options,
+                null_equals_null: sort_merge_join.null_equals_null(),
+            })
+        } else if let Some(partial_sort) = node.as_any().downcast_ref::<PartialSortExec>() {
+            let expr = Some(self.try_encode_lex_ordering(partial_sort.expr())?);
+            let input = self.try_encode_plan(partial_sort.input().clone())?;
+            let common_prefix_length = partial_sort.common_prefix_length() as u64;
+            NodeKind::PartialSort(gen::PartialSortExecNode {
+                expr,
+                input,
+                common_prefix_length,
+            })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
+        // TODO: StreamingTableExec?
         let node = ExtendedPhysicalPlanNode {
             node_kind: Some(node_kind),
         };
         node.encode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to encode plan: {e:?}"))
+            .map_err(|e| plan_datafusion_err!("failed to encode plan: {e}"))
     }
 
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         let udf = ExtendedScalarUdf::decode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to decode udf: {e:?}"))?;
+            .map_err(|e| plan_datafusion_err!("failed to decode udf: {e}"))?;
         let ExtendedScalarUdf { udf_kind } = udf;
         let udf_kind = match udf_kind {
             Some(x) => x,
@@ -330,7 +583,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     })
                     .collect::<Result<_>>()?;
                 let eval_type = PySparkUdfType::try_from(eval_type)
-                    .map_err(|e| plan_datafusion_err!("failed to decode eval_type: {e:?}"))?;
+                    .map_err(|e| plan_datafusion_err!("failed to decode udf eval_type: {e}"))?;
                 let output_type =
                     self.try_decode_message::<gen_datafusion_common::ArrowType>(&output_type)?;
                 let output_type: DataType = (&output_type).try_into()?;
@@ -649,12 +902,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             udf_kind: Some(udf_kind),
         };
         node.encode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to encode udf: {e:?}"))
+            .map_err(|e| plan_datafusion_err!("failed to encode udf: {e}"))
     }
 
     fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
         let udaf = ExtendedAggregateUdf::decode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to decode udf: {e:?}"))?;
+            .map_err(|e| plan_datafusion_err!("failed to decode udaf: {e}"))?;
         let ExtendedAggregateUdf { udaf_kind } = udaf;
         match udaf_kind {
             Some(UdafKind::PySparkAgg(gen::PySparkUdaf {
@@ -739,7 +992,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             udaf_kind: Some(udaf_kind),
         };
         node.encode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to encode udaf: {e:?}"))
+            .map_err(|e| plan_datafusion_err!("failed to encode udaf: {e}"))
     }
 }
 
@@ -748,9 +1001,60 @@ impl RemoteExecutionCodec {
         Self { context }
     }
 
+    fn try_decode_lex_ordering(
+        &self,
+        lex_ordering: &gen::LexOrdering,
+        registry: &dyn FunctionRegistry,
+        schema: &Schema,
+    ) -> Result<LexOrdering> {
+        let lex_ordering: Vec<PhysicalSortExprNode> = lex_ordering
+            .values
+            .iter()
+            .map(|x| self.try_decode_message(x))
+            .collect::<Result<_>>()?;
+        parse_physical_sort_exprs(&lex_ordering, registry, schema, self)
+    }
+
+    fn try_encode_lex_ordering(&self, lex_ordering: LexOrderingRef) -> Result<gen::LexOrdering> {
+        let lex_ordering = serialize_physical_sort_exprs(lex_ordering.to_vec(), self)?;
+        let lex_ordering = lex_ordering
+            .into_iter()
+            .map(|x| self.try_encode_message(x))
+            .collect::<Result<_>>()?;
+        Ok(gen::LexOrdering {
+            values: lex_ordering,
+        })
+    }
+
+    fn try_decode_lex_orderings(
+        &self,
+        lex_orderings: &[gen::LexOrdering],
+        registry: &dyn FunctionRegistry,
+        schema: &Schema,
+    ) -> Result<Vec<LexOrdering>> {
+        let mut result: Vec<LexOrdering> = vec![];
+        for lex_ordering in lex_orderings {
+            let lex_ordering = self.try_decode_lex_ordering(lex_ordering, registry, schema)?;
+            result.push(lex_ordering);
+        }
+        Ok(result)
+    }
+
+    fn try_encode_lex_orderings(
+        &self,
+        lex_orderings: &[LexOrdering],
+    ) -> Result<Vec<gen::LexOrdering>> {
+        let mut result = vec![];
+        for lex_ordering in lex_orderings {
+            let lex_ordering = self.try_encode_lex_ordering(lex_ordering)?;
+            result.push(lex_ordering)
+        }
+        Ok(result)
+    }
+
     fn try_decode_show_string_style(&self, style: i32) -> Result<ShowStringStyle> {
         let style = gen::ShowStringStyle::try_from(style)
-            .map_err(|e| plan_datafusion_err!("failed to decode style: {e:?}"))?;
+            .map_err(|e| plan_datafusion_err!("failed to decode style: {e}"))?;
         let style = match style {
             gen::ShowStringStyle::Default => ShowStringStyle::Default,
             gen::ShowStringStyle::Vertical => ShowStringStyle::Vertical,
@@ -768,13 +1072,41 @@ impl RemoteExecutionCodec {
         Ok(style as i32)
     }
 
+    fn try_decode_file_compression_type(&self, variant: i32) -> Result<FileCompressionType> {
+        let variant = gen::CompressionTypeVariant::try_from(variant)
+            .map_err(|e| plan_datafusion_err!("failed to decode compression type variant: {e}"))?;
+        let file_compression_type = match variant {
+            gen::CompressionTypeVariant::Gzip => CompressionTypeVariant::GZIP,
+            gen::CompressionTypeVariant::Bzip2 => CompressionTypeVariant::BZIP2,
+            gen::CompressionTypeVariant::Xz => CompressionTypeVariant::XZ,
+            gen::CompressionTypeVariant::Zstd => CompressionTypeVariant::ZSTD,
+            gen::CompressionTypeVariant::Uncompressed => CompressionTypeVariant::UNCOMPRESSED,
+        };
+        Ok(file_compression_type.into())
+    }
+
+    fn try_encode_file_compression_type(
+        &self,
+        file_compression_type: FileCompressionType,
+    ) -> Result<i32> {
+        let variant: CompressionTypeVariant = file_compression_type.into();
+        let variant = match variant {
+            CompressionTypeVariant::GZIP => gen::CompressionTypeVariant::Gzip,
+            CompressionTypeVariant::BZIP2 => gen::CompressionTypeVariant::Bzip2,
+            CompressionTypeVariant::XZ => gen::CompressionTypeVariant::Xz,
+            CompressionTypeVariant::ZSTD => gen::CompressionTypeVariant::Zstd,
+            CompressionTypeVariant::UNCOMPRESSED => gen::CompressionTypeVariant::Uncompressed,
+        };
+        Ok(variant as i32)
+    }
+
     fn try_decode_plan(
         &self,
         buf: &[u8],
         registry: &dyn FunctionRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let plan = PhysicalPlanNode::decode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to decode plan: {e:?}"))?;
+            .map_err(|e| plan_datafusion_err!("failed to decode plan: {e}"))?;
         plan.try_into_physical_plan(registry, self.context.runtime_env().as_ref(), self)
     }
 
@@ -782,7 +1114,7 @@ impl RemoteExecutionCodec {
         let plan = PhysicalPlanNode::try_from_physical_plan(plan, self)?;
         let mut buffer = BytesMut::new();
         plan.encode(&mut buffer)
-            .map_err(|e| plan_datafusion_err!("failed to encode plan: {e:?}"))?;
+            .map_err(|e| plan_datafusion_err!("failed to encode plan: {e}"))?;
         Ok(buffer.freeze().into())
     }
 
@@ -958,7 +1290,7 @@ impl RemoteExecutionCodec {
         M: Message + Default,
     {
         let message =
-            M::decode(buf).map_err(|e| plan_datafusion_err!("failed to decode message: {e:?}"))?;
+            M::decode(buf).map_err(|e| plan_datafusion_err!("failed to decode message: {e}"))?;
         Ok(message)
     }
 
@@ -969,7 +1301,7 @@ impl RemoteExecutionCodec {
         let mut buffer = BytesMut::new();
         message
             .encode(&mut buffer)
-            .map_err(|e| plan_datafusion_err!("failed to encode message: {e:?}"))?;
+            .map_err(|e| plan_datafusion_err!("failed to encode message: {e}"))?;
         Ok(buffer.freeze().into())
     }
 }
