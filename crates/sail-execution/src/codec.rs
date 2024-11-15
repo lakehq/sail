@@ -257,6 +257,36 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     is_distinct,
                 )?))
             }
+            NodeKind::StreamingTable(gen::StreamingTableExecNode {
+                schema,
+                partitions: _,
+                projection,
+                projected_output_ordering,
+                infinite,
+                limit,
+            }) => {
+                let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
+                let schema = Arc::new((&schema).try_into()?);
+                // let partitions = partitions;
+                let projection = projection.map(|x| {
+                    x.columns
+                        .into_iter()
+                        .map(|c| c as usize)
+                        .collect::<Vec<usize>>()
+                });
+                let projection: Option<&Vec<usize>> = projection.as_ref();
+                let projected_output_ordering =
+                    self.try_decode_lex_orderings(&projected_output_ordering, registry, &schema)?;
+                let limit = limit.map(|x| x as usize);
+                Ok(Arc::new(StreamingTableExec::try_new(
+                    schema,
+                    vec![],
+                    projection,
+                    projected_output_ordering,
+                    infinite,
+                    limit,
+                )?))
+            }
             NodeKind::SortMergeJoin(gen::SortMergeJoinExecNode {
                 left,
                 right,
@@ -436,12 +466,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 values.schema().as_ref().try_into()?,
             )?;
             NodeKind::Values(gen::ValuesExecNode { data, schema })
-        } else if let Some(values) = node.as_any().downcast_ref::<ValuesExec>() {
-            let data = write_record_batches(&values.data(), &values.schema())?;
-            let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
-                values.schema().as_ref().try_into()?,
-            )?;
-            NodeKind::Values(gen::ValuesExecNode { data, schema })
         } else if let Some(nd_json) = node.as_any().downcast_ref::<NdJsonExec>() {
             let base_config =
                 self.try_encode_message(serialize_file_scan_config(nd_json.base_config(), self)?)?;
@@ -472,8 +496,33 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 recursive_term,
                 is_distinct,
             })
-        } else if let Some(_streaming_table) = node.as_any().downcast_ref::<StreamingTableExec>() {
-            return plan_err!("unsupported physical plan node: {node:?}");
+        } else if let Some(streaming_table) = node.as_any().downcast_ref::<StreamingTableExec>() {
+            let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
+                streaming_table.schema().as_ref().try_into()?,
+            )?;
+            let projection =
+                streaming_table
+                    .projection()
+                    .as_ref()
+                    .map(|x| gen::PhysicalProjection {
+                        columns: x.iter().map(|c| *c as u64).collect(),
+                    });
+            let projected_output_ordering = self.try_encode_lex_orderings(
+                &streaming_table
+                    .projected_output_ordering()
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+            )?;
+            let infinite = streaming_table.is_infinite();
+            let limit = streaming_table.limit().map(|x| x as u64);
+            NodeKind::StreamingTable(gen::StreamingTableExecNode {
+                schema,
+                partitions: vec![],
+                projection,
+                projected_output_ordering,
+                infinite,
+                limit,
+            })
         } else if let Some(sort_merge_join) = node.as_any().downcast_ref::<SortMergeJoinExec>() {
             let left = self.try_encode_plan(sort_merge_join.left().clone())?;
             let right = self.try_encode_plan(sort_merge_join.right().clone())?;
