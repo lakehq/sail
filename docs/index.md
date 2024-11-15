@@ -10,7 +10,7 @@ description: >-
 Welcome to the Sail documentation!
 
 The mission of Sail is to unify stream processing, batch processing, and compute-intensive (AI) workloads.
-Currently, Sail features a drop-in replacement for Spark SQL and the Spark DataFrame API in single-process settings.
+Currently, Sail features a drop-in replacement for Spark SQL and the Spark DataFrame API in both single-host and distributed settings.
 
 You can start with the [User Guide](/guide/) to learn more about Sail.
 

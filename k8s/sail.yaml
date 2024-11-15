@@ -1,0 +1,101 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sail
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sail-spark-server
+  namespace: sail
+  labels:
+    app.kubernetes.io/name: sail
+    app.kubernetes.io/component: spark-server
+spec:
+  # We cannot have more than one replica because each Spark session is tied to a single pod.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sail
+      app.kubernetes.io/component: spark-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sail
+        app.kubernetes.io/component: spark-server
+    spec:
+      serviceAccountName: sail-user
+      containers:
+        - name: server
+          image: sail:latest
+          command: [ "sail" ]
+          args: [ "spark", "server", "--port", "50051" ]
+          ports:
+            - containerPort: 50051
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: RUST_LOG
+              value: info
+            - name: SAIL_MODE
+              value: "kubernetes-cluster"
+            - name: SAIL_CLUSTER__DRIVER_LISTEN_HOST
+              value: "0.0.0.0"
+            - name: SAIL_CLUSTER__DRIVER_EXTERNAL_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: SAIL_KUBERNETES__IMAGE
+              value: sail:latest
+            - name: SAIL_KUBERNETES__NAMESPACE
+              value: sail
+            - name: SAIL_KUBERNETES__DRIVER_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sail-spark-server
+  namespace: sail
+  labels:
+    app.kubernetes.io/name: sail
+    app.kubernetes.io/component: spark-server
+spec:
+  selector:
+    app.kubernetes.io/name: sail
+    app.kubernetes.io/component: spark-server
+  ports:
+    - protocol: TCP
+      port: 50051
+      targetPort: 50051
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sail-spark-server
+  namespace: sail
+rules:
+  - apiGroups: [ "" ]
+    resources: [ "pods" ]
+    verbs: [ "*" ]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sail-user
+  namespace: sail
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sail-spark-server
+  namespace: sail
+subjects:
+  - kind: ServiceAccount
+    name: sail-user
+    namespace: sail
+roleRef:
+  kind: Role
+  name: sail-spark-server
+  apiGroup: rbac.authorization.k8s.io

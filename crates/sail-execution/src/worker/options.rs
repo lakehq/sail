@@ -22,7 +22,7 @@ impl TryFrom<&AppConfig> for WorkerOptions {
     fn try_from(config: &AppConfig) -> ExecutionResult<Self> {
         Ok(Self {
             worker_id: config.cluster.worker_id.into(),
-            enable_tls: config.network.enable_tls,
+            enable_tls: config.cluster.enable_tls,
             driver_host: config.cluster.driver_external_host.clone(),
             driver_port: if config.cluster.driver_external_port > 0 {
                 config.cluster.driver_external_port
