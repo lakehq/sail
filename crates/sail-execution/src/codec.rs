@@ -24,10 +24,11 @@ use datafusion_proto::physical_plan::from_proto::{
     parse_physical_sort_exprs, parse_protobuf_file_scan_config, parse_protobuf_partitioning,
 };
 use datafusion_proto::physical_plan::to_proto::{
-    serialize_file_scan_config, serialize_partitioning, serialize_physical_sort_exprs,
+    serialize_file_scan_config, serialize_partitioning, serialize_physical_expr,
+    serialize_physical_sort_exprs,
 };
 use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
-use datafusion_proto::protobuf::{PhysicalPlanNode, PhysicalSortExprNode};
+use datafusion_proto::protobuf::{JoinType, PhysicalPlanNode, PhysicalSortExprNode};
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common::spec::PySparkUdfType;
@@ -387,8 +388,65 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(_streaming_table) = node.as_any().downcast_ref::<StreamingTableExec>() {
             return plan_err!("unsupported physical plan node: {node:?}");
-        } else if let Some(_sort_merge_join) = node.as_any().downcast_ref::<SortMergeJoinExec>() {
-            return plan_err!("unsupported physical plan node: {node:?}");
+        } else if let Some(sort_merge_join) = node.as_any().downcast_ref::<SortMergeJoinExec>() {
+            let left = self.try_encode_plan(sort_merge_join.left().clone())?;
+            let right = self.try_encode_plan(sort_merge_join.right().clone())?;
+            let on: Vec<gen::JoinOn> = sort_merge_join
+                .on()
+                .iter()
+                .map(|(left, right)| {
+                    let left = self.try_encode_message(serialize_physical_expr(left, self)?)?;
+                    let right = self.try_encode_message(serialize_physical_expr(right, self)?)?;
+                    Ok(gen::JoinOn { left, right })
+                })
+                .collect::<Result<_>>()?;
+            let filter = sort_merge_join
+                .filter()
+                .as_ref()
+                .map(|join_filter| {
+                    let expression = self.try_encode_message(serialize_physical_expr(
+                        join_filter.expression(),
+                        self,
+                    )?)?;
+                    let column_indices = join_filter
+                        .column_indices()
+                        .iter()
+                        .map(|i| {
+                            let index = i.index as u32;
+                            let side: gen_datafusion_common::JoinSide = i.side.into();
+                            let side = side.as_str_name().to_string();
+                            gen::ColumnIndex { index, side }
+                        })
+                        .collect();
+                    let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
+                        join_filter.schema().try_into()?,
+                    )?;
+                    Ok(gen::JoinFilter {
+                        expression,
+                        column_indices,
+                        schema,
+                    })
+                })
+                .map_or(Ok(None), |v: Result<gen::JoinFilter>| v.map(Some))?;
+            let join_type: JoinType = sort_merge_join.join_type().into();
+            let join_type = join_type.as_str_name().to_string();
+            let sort_options = sort_merge_join
+                .sort_options()
+                .iter()
+                .map(|x| gen::SortOptions {
+                    descending: x.descending,
+                    nulls_first: x.nulls_first,
+                })
+                .collect();
+            NodeKind::SortMergeJoin(gen::SortMergeJoinExecNode {
+                left,
+                right,
+                on,
+                filter,
+                join_type,
+                sort_options,
+                null_equals_null: sort_merge_join.null_equals_null(),
+            })
         } else if let Some(partial_sort) = node.as_any().downcast_ref::<PartialSortExec>() {
             let expr = Some(self.try_encode_lex_ordering(partial_sort.expr())?);
             let input = self.try_encode_plan(partial_sort.input().clone())?;

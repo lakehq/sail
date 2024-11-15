@@ -162,9 +162,9 @@ message StreamingTableExecNode {
 message SortMergeJoinExecNode {
   bytes left = 1;
   bytes right = 2;
-  repeated bytes on = 3;
-  bytes filter = 4;
-  bytes join_type = 5;
+  repeated JoinOn on = 3;
+  optional JoinFilter filter = 4;
+  string join_type = 5;
   repeated SortOptions sort_options = 6;
   bool null_equals_null = 7;
 }
@@ -173,6 +173,22 @@ message PartialSortExecNode {
   LexOrdering expr = 1;
   bytes input = 2;
   uint64 common_prefix_length = 3;
+}
+
+message JoinOn {
+  bytes left = 1;
+  bytes right = 2;
+}
+
+message JoinFilter{
+  bytes expression = 1;
+  repeated ColumnIndex column_indices = 2;
+  bytes schema = 3;
+}
+
+message ColumnIndex{
+  uint32 index = 1;
+  string side = 2;
 }
 
 message SortOptions {
