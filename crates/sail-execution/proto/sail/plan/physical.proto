@@ -23,9 +23,8 @@ message ExtendedPhysicalPlanNode {
     ArrowExecNode arrow = 9;
     WorkTableExecNode work_table = 10;
     RecursiveQueryExecNode recursive_query = 11;
-    StreamingTableExecNode streaming_table = 12;
-    SortMergeJoinExecNode sort_merge_join = 13;
-    PartialSortExecNode partial_sort = 14;
+    SortMergeJoinExecNode sort_merge_join = 12;
+    PartialSortExecNode partial_sort = 13;
   }
 }
 
@@ -148,15 +147,6 @@ message RecursiveQueryExecNode {
   bytes static_term = 2;
   bytes recursive_term = 3;
   bool is_distinct = 4;
-}
-
-message StreamingTableExecNode {
-  bytes schema = 1;
-  repeated bytes partitions = 2;
-  optional PhysicalProjection projection = 3;
-  repeated LexOrdering projected_output_ordering = 4;
-  bool infinite = 5;
-  optional uint64 limit = 6;
 }
 
 message SortMergeJoinExecNode {
