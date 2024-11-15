@@ -159,6 +159,8 @@ impl DriverActor {
             Ok(job_id) => {
                 self.job_outputs
                     .insert(job_id, JobOutput::Pending { result });
+                self.scale_up_workers(ctx);
+                self.schedule_tasks(ctx);
             }
             Err(e) => {
                 let _ = result.send(Err(e));
@@ -234,7 +236,7 @@ impl DriverActor {
 
     fn accept_job(
         &mut self,
-        ctx: &mut ActorContext<Self>,
+        _ctx: &mut ActorContext<Self>,
         plan: Arc<dyn ExecutionPlan>,
     ) -> ExecutionResult<JobId> {
         let job_id = self.state.next_job_id()?;
@@ -265,19 +267,13 @@ impl DriverActor {
                         partition: p,
                         attempt,
                         mode: TaskMode::Pipelined,
-                        state: TaskState::Pending {
-                            pending_at: Instant::now(),
-                        },
+                        state: TaskState::Created,
                         messages: vec![],
                         channel,
                     },
                 );
                 self.task_queue.push_back(task_id);
                 tasks.push(task_id);
-                ctx.send_with_delay(
-                    DriverEvent::ProbePendingTask { task_id },
-                    self.options().task_launch_timeout,
-                );
             }
             stages.push(JobStage {
                 plan: Arc::clone(stage),
@@ -286,12 +282,11 @@ impl DriverActor {
         }
         let descriptor = JobDescriptor { stages };
         self.state.add_job(job_id, descriptor);
-        self.scale_up_workers(ctx);
-        self.schedule_tasks(ctx);
         Ok(job_id)
     }
 
     fn scale_up_workers(&mut self, ctx: &mut ActorContext<Self>) {
+        let max_workers = self.options().worker_max_count;
         let slots_per_worker = self.options().worker_task_slots;
         let active_workers = self.state.count_active_workers();
         let used_slots = self.state.count_active_tasks();
@@ -301,8 +296,9 @@ impl DriverActor {
             return;
         }
         let missing_slots = used_slots + pending_slots - available_slots;
+        // round up the number of workers to the nearest integer
         let missing_workers = (missing_slots + slots_per_worker - 1) / slots_per_worker;
-        let missing_workers = if let Some(max_workers) = self.options().worker_max_count {
+        let missing_workers = if max_workers > 0 {
             missing_workers.min(max_workers.saturating_sub(active_workers))
         } else {
             missing_workers
@@ -343,7 +339,12 @@ impl DriverActor {
         let options = WorkerLaunchOptions {
             enable_tls: self.options().enable_tls,
             driver_external_host: self.options().driver_external_host.to_string(),
-            driver_external_port: self.options().driver_external_port.unwrap_or(port),
+            driver_external_port: if self.options().driver_external_port > 0 {
+                self.options().driver_external_port
+            } else {
+                port
+            },
+            memory_stream_buffer: self.options().memory_stream_buffer,
         };
         let worker_manager = Arc::clone(&self.worker_manager);
         ctx.spawn(async move {
@@ -457,24 +458,59 @@ impl DriverActor {
         let slots = self.find_idle_task_slots();
         let mut assigner = TaskSlotAssigner::new(slots);
         let mut skipped_tasks = vec![];
-        while let Some(worker_id) = assigner.next() {
-            while let Some(task_id) = self.task_queue.pop_front() {
-                if !self.state.can_schedule_task(task_id) {
-                    skipped_tasks.push(task_id);
+        while let Some(task_id) = self.task_queue.pop_front() {
+            if !self.state.can_schedule_task(task_id) {
+                skipped_tasks.push(task_id);
+                continue;
+            }
+            match self.prepare_pending_task(ctx, task_id) {
+                Ok(()) => {}
+                Err(e) => {
+                    warn!("failed to prepare pending task {task_id}: {e}");
                     continue;
                 }
-                match self.schedule_task(ctx, task_id, worker_id) {
-                    Ok(()) => break,
-                    Err(e) => {
-                        warn!("failed to schedule task {task_id} to worker {worker_id}: {e}");
-                    }
+            };
+            let Some(worker_id) = assigner.next() else {
+                skipped_tasks.push(task_id);
+                // We do not break the loop even if there are no more available task slots.
+                // We want to examine all the tasks in the queue and mark eligible tasks as pending.
+                continue;
+            };
+            match self.schedule_task(ctx, task_id, worker_id) {
+                Ok(()) => {}
+                Err(e) => {
+                    warn!("failed to schedule task {task_id} to worker {worker_id}: {e}");
                 }
-            }
-            if self.task_queue.is_empty() {
-                break;
-            }
+            };
         }
         self.task_queue.extend(skipped_tasks);
+    }
+
+    fn prepare_pending_task(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        task_id: TaskId,
+    ) -> ExecutionResult<()> {
+        let Some(task) = self.state.get_task(task_id) else {
+            return Err(ExecutionError::InternalError(format!(
+                "task {task_id} not found"
+            )));
+        };
+        if matches!(task.state, TaskState::Created) {
+            self.state.update_task(
+                task_id,
+                task.attempt,
+                TaskState::Pending {
+                    pending_at: Instant::now(),
+                },
+                None,
+            );
+            ctx.send_with_delay(
+                DriverEvent::ProbePendingTask { task_id },
+                self.options().task_launch_timeout,
+            );
+        };
+        Ok(())
     }
 
     fn schedule_task(

@@ -46,12 +46,11 @@ impl WorkerManager for LocalWorkerManager {
             enable_tls: options.enable_tls,
             driver_host: options.driver_external_host,
             driver_port: options.driver_external_port,
-            // TODO: propagate the configuration from the driver
             worker_listen_host: "127.0.0.1".to_string(),
             worker_listen_port: 0,
             worker_external_host: "127.0.0.1".to_string(),
-            worker_external_port: None,
-            memory_stream_buffer: 16,
+            worker_external_port: 0,
+            memory_stream_buffer: options.memory_stream_buffer,
         };
         let mut state = self.state.lock().await;
         let handle = state.system.spawn(options);
@@ -61,7 +60,6 @@ impl WorkerManager for LocalWorkerManager {
 
     async fn stop(&self) -> ExecutionResult<()> {
         let mut state = self.state.lock().await;
-        // TODO: return after a timeout
         state.system.join().await;
         Ok(())
     }

@@ -24,6 +24,7 @@ log = { workspace = true }
 futures = { workspace = true }
 kube = { workspace = true }
 k8s-openapi = { workspace = true }
+rand = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

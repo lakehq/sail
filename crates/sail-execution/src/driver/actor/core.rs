@@ -10,7 +10,7 @@ use sail_server::actor::{Actor, ActorAction, ActorContext};
 use crate::codec::RemoteExecutionCodec;
 use crate::driver::actor::output::JobOutput;
 use crate::driver::state::DriverState;
-use crate::driver::{DriverEvent, DriverOptions, WorkerManagerKind};
+use crate::driver::{DriverEvent, DriverOptions, WorkerManagerOptions};
 use crate::id::{JobId, TaskId, WorkerId};
 use crate::rpc::ServerMonitor;
 use crate::worker::WorkerClient;
@@ -37,9 +37,11 @@ impl Actor for DriverActor {
     type Options = DriverOptions;
 
     fn new(options: DriverOptions) -> Self {
-        let worker_manager: Arc<dyn WorkerManager> = match options.worker_manager_kind {
-            WorkerManagerKind::Local => Arc::new(LocalWorkerManager::new()),
-            WorkerManagerKind::Kubernetes => Arc::new(KubernetesWorkerManager::new()),
+        let worker_manager: Arc<dyn WorkerManager> = match &options.worker_manager {
+            WorkerManagerOptions::Local => Arc::new(LocalWorkerManager::new()),
+            WorkerManagerOptions::Kubernetes(options) => {
+                Arc::new(KubernetesWorkerManager::new(options.clone()))
+            }
         };
         Self {
             options,
@@ -100,6 +102,7 @@ impl Actor for DriverActor {
         self.stop_all_workers(ctx);
         self.server.stop().await;
         debug!("driver server has stopped");
+        // TODO: support timeout for worker manager stop
         if let Err(e) = self.worker_manager.stop().await {
             error!("encountered error while stopping workers: {e}");
         }
