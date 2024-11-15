@@ -221,6 +221,36 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     file_compression_type,
                 )))
             }
+            NodeKind::Arrow(gen::ArrowExecNode { base_config }) => {
+                let base_config = parse_protobuf_file_scan_config(
+                    &self.try_decode_message(&base_config)?,
+                    registry,
+                    self,
+                )?;
+                Ok(Arc::new(ArrowExec::new(base_config)))
+            }
+            NodeKind::WorkTable(gen::WorkTableExecNode { name, schema }) => {
+                let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
+                Ok(Arc::new(WorkTableExec::new(
+                    name,
+                    Arc::new((&schema).try_into()?),
+                )))
+            }
+            NodeKind::RecursiveQuery(gen::RecursiveQueryExecNode {
+                name,
+                static_term,
+                recursive_term,
+                is_distinct,
+            }) => {
+                let static_term = self.try_decode_plan(&static_term, registry)?;
+                let recursive_term = self.try_decode_plan(&recursive_term, registry)?;
+                Ok(Arc::new(RecursiveQueryExec::try_new(
+                    name,
+                    static_term,
+                    recursive_term,
+                    is_distinct,
+                )?))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -334,12 +364,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 base_config,
                 file_compression_type,
             })
-        } else if let Some(_arrow) = node.as_any().downcast_ref::<ArrowExec>() {
-            return plan_err!("unsupported physical plan node: {node:?}");
-        } else if let Some(_work_table) = node.as_any().downcast_ref::<WorkTableExec>() {
-            return plan_err!("unsupported physical plan node: {node:?}");
-        } else if let Some(_recursive_query) = node.as_any().downcast_ref::<RecursiveQueryExec>() {
-            return plan_err!("unsupported physical plan node: {node:?}");
+        } else if let Some(arrow) = node.as_any().downcast_ref::<ArrowExec>() {
+            let base_config =
+                self.try_encode_message(serialize_file_scan_config(arrow.base_config(), self)?)?;
+            NodeKind::Arrow(gen::ArrowExecNode { base_config })
+        } else if let Some(work_table) = node.as_any().downcast_ref::<WorkTableExec>() {
+            let name = work_table.name().to_string();
+            let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
+                work_table.schema().as_ref().try_into()?,
+            )?;
+            NodeKind::WorkTable(gen::WorkTableExecNode { name, schema })
+        } else if let Some(recursive_query) = node.as_any().downcast_ref::<RecursiveQueryExec>() {
+            let name = recursive_query.name().to_string();
+            let static_term = self.try_encode_plan(recursive_query.static_term().clone())?;
+            let recursive_term = self.try_encode_plan(recursive_query.recursive_term().clone())?;
+            let is_distinct = recursive_query.is_distinct();
+            NodeKind::RecursiveQuery(gen::RecursiveQueryExecNode {
+                name,
+                static_term,
+                recursive_term,
+                is_distinct,
+            })
         } else if let Some(_streaming_table) = node.as_any().downcast_ref::<StreamingTableExec>() {
             return plan_err!("unsupported physical plan node: {node:?}");
         } else if let Some(_sort_merge_join) = node.as_any().downcast_ref::<SortMergeJoinExec>() {
