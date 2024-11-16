@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::DataType;
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
     correlation, count, covariance, first_last, grouping, median, min_max, regr, stddev, sum,
@@ -72,6 +73,15 @@ fn kurtosis(
     args: Vec<expr::Expr>,
     agg_function_context: AggFunctionContext,
 ) -> PlanResult<expr::Expr> {
+    let args = args
+        .into_iter()
+        .map(|arg| {
+            expr::Expr::Cast(expr::Cast {
+                expr: Box::new(arg),
+                data_type: DataType::Float64,
+            })
+        })
+        .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(KurtosisFunction::new())),
         args,
@@ -125,6 +135,15 @@ fn skewness(
     args: Vec<expr::Expr>,
     agg_function_context: AggFunctionContext,
 ) -> PlanResult<expr::Expr> {
+    let args = args
+        .into_iter()
+        .map(|arg| {
+            expr::Expr::Cast(expr::Cast {
+                expr: Box::new(arg),
+                data_type: DataType::Float64,
+            })
+        })
+        .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(SkewnessFunc::new())),
         args,
