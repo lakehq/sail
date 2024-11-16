@@ -9,6 +9,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Float64Type, UInt64Type};
 use datafusion::common::ScalarValue;
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion_common::types::logical_float64;
 
 pub struct SkewnessFunc {
     name: String,
@@ -33,7 +34,7 @@ impl SkewnessFunc {
     pub fn new() -> Self {
         Self {
             name: "skewness".to_string(),
-            signature: Signature::coercible(vec![DataType::Float64], Volatility::Immutable),
+            signature: Signature::coercible(vec![logical_float64()], Volatility::Immutable),
         }
     }
 }

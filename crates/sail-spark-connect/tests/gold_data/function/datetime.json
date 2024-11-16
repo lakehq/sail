@@ -2768,7 +2768,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Error during planning: Error during planning: unix_timestamp_now does not support zero arguments. No function matches the given name and argument types 'unix_timestamp_now()'. You might need to add explicit type casts.\n\tCandidate functions:\n\tunix_timestamp_now()"
       }
     },
     {

@@ -142,6 +142,7 @@ fn hex_encode<T: AsRef<[u8]>>(data: T, lower_case: bool) -> String {
     s
 }
 
+#[allow(dead_code)]
 #[inline(always)]
 pub(super) fn hex_strings<T: AsRef<[u8]>>(data: T) -> String {
     hex_encode(data, true)

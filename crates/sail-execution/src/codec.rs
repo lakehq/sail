@@ -10,7 +10,7 @@ use datafusion::datasource::physical_plan::{ArrowExec, NdJsonExec};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, Volatility};
-use datafusion::physical_expr::{LexOrdering, LexOrderingRef};
+use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::memory::MemoryExec;
@@ -1015,7 +1015,7 @@ impl RemoteExecutionCodec {
         parse_physical_sort_exprs(&lex_ordering, registry, schema, self)
     }
 
-    fn try_encode_lex_ordering(&self, lex_ordering: LexOrderingRef) -> Result<gen::LexOrdering> {
+    fn try_encode_lex_ordering(&self, lex_ordering: &LexOrdering) -> Result<gen::LexOrdering> {
         let lex_ordering = serialize_physical_sort_exprs(lex_ordering.to_vec(), self)?;
         let lex_ordering = lex_ordering
             .into_iter()
