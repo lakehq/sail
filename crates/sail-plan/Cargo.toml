@@ -12,7 +12,6 @@ datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 datafusion-functions-json = { workspace = true }
-datafusion-comet-spark-expr = { workspace = true }
 thiserror = { workspace = true }
 tokio-stream = { workspace = true }
 async-trait = { workspace = true }
@@ -42,6 +41,7 @@ aws-config = { workspace = true }
 aws-credential-types = { workspace = true }
 hdfs-native-object-store = { workspace = true, optional = true }
 log = { workspace = true }
+twox-hash = { workspace = true }
 
 [features]
 hdfs = ["dep:hdfs-native-object-store"]

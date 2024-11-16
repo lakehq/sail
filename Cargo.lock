@@ -236,7 +236,7 @@ dependencies = [
  "arrow-data",
  "arrow-schema",
  "chrono",
- "chrono-tz 0.10.0",
+ "chrono-tz",
  "half",
  "hashbrown 0.14.5",
  "num",
@@ -1108,35 +1108,13 @@ dependencies = [
 
 [[package]]
 name = "chrono-tz"
-version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d59ae0466b83e838b81a54256c39d5d7c20b9d7daa10510a242d9b75abd5936e"
-dependencies = [
- "chrono",
- "chrono-tz-build 0.2.1",
- "phf",
-]
-
-[[package]]
-name = "chrono-tz"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd6dd8046d00723a59a2f8c5f295c515b9bb9a331ee4f8f3d4dd49e428acd3b6"
 dependencies = [
  "chrono",
- "chrono-tz-build 0.4.0",
+ "chrono-tz-build",
  "phf",
-]
-
-[[package]]
-name = "chrono-tz-build"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "433e39f13c9a060046954e0592a8d0a4bcb1040125cbf91cb8ee58964cfb350f"
-dependencies = [
- "parse-zoneinfo",
- "phf",
- "phf_codegen",
 ]
 
 [[package]]
@@ -1408,7 +1386,7 @@ dependencies = [
 [[package]]
 name = "datafusion"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "ahash",
  "apache-avro",
@@ -1453,7 +1431,7 @@ dependencies = [
  "paste",
  "pin-project-lite",
  "rand",
- "sqlparser 0.51.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "sqlparser 0.52.0",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -1466,7 +1444,7 @@ dependencies = [
 [[package]]
 name = "datafusion-catalog"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -1478,29 +1456,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "datafusion-comet-spark-expr"
-version = "0.4.0"
-source = "git+https://github.com/apache/datafusion-comet.git?rev=9657b75#9657b75f4f78333cf1ccda2433280f9075184696"
-dependencies = [
- "arrow",
- "arrow-array",
- "arrow-schema",
- "chrono",
- "chrono-tz 0.8.6",
- "datafusion",
- "datafusion-common",
- "datafusion-expr",
- "datafusion-physical-expr",
- "num",
- "regex",
- "thiserror 1.0.69",
- "twox-hash 2.0.1",
-]
-
-[[package]]
 name = "datafusion-common"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "ahash",
  "apache-avro",
@@ -1512,21 +1470,22 @@ dependencies = [
  "half",
  "hashbrown 0.14.5",
  "indexmap 2.6.0",
- "instant",
  "libc",
  "num_cpus",
  "object_store",
  "parquet",
  "paste",
  "pyo3",
- "sqlparser 0.51.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "recursive",
+ "sqlparser 0.52.0",
  "tokio",
+ "web-time",
 ]
 
 [[package]]
 name = "datafusion-common-runtime"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "log",
  "tokio",
@@ -1535,7 +1494,7 @@ dependencies = [
 [[package]]
 name = "datafusion-execution"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "arrow",
  "chrono",
@@ -1555,7 +1514,7 @@ dependencies = [
 [[package]]
 name = "datafusion-expr"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "ahash",
  "arrow",
@@ -1569,8 +1528,9 @@ dependencies = [
  "datafusion-physical-expr-common",
  "indexmap 2.6.0",
  "paste",
+ "recursive",
  "serde_json",
- "sqlparser 0.51.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "sqlparser 0.52.0",
  "strum 0.26.3",
  "strum_macros 0.26.4",
 ]
@@ -1578,7 +1538,7 @@ dependencies = [
 [[package]]
 name = "datafusion-expr-common"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -1589,7 +1549,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -1615,7 +1575,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-aggregate"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "ahash",
  "arrow",
@@ -1635,7 +1595,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-aggregate-common"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "ahash",
  "arrow",
@@ -1660,7 +1620,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-nested"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -1682,7 +1642,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-window"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "datafusion-common",
  "datafusion-expr",
@@ -1696,7 +1656,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-window-common"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "datafusion-common",
  "datafusion-physical-expr-common",
@@ -1705,7 +1665,7 @@ dependencies = [
 [[package]]
 name = "datafusion-optimizer"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1718,13 +1678,15 @@ dependencies = [
  "itertools 0.13.0",
  "log",
  "paste",
+ "recursive",
+ "regex",
  "regex-syntax",
 ]
 
 [[package]]
 name = "datafusion-physical-expr"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "ahash",
  "arrow",
@@ -1751,20 +1713,21 @@ dependencies = [
 [[package]]
 name = "datafusion-physical-expr-common"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "ahash",
  "arrow",
  "datafusion-common",
  "datafusion-expr-common",
  "hashbrown 0.14.5",
+ "itertools 0.13.0",
  "rand",
 ]
 
 [[package]]
 name = "datafusion-physical-optimizer"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -1774,12 +1737,13 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-plan",
  "itertools 0.13.0",
+ "recursive",
 ]
 
 [[package]]
 name = "datafusion-physical-plan"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "ahash",
  "arrow",
@@ -1813,7 +1777,7 @@ dependencies = [
 [[package]]
 name = "datafusion-proto"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "arrow",
  "chrono",
@@ -1828,7 +1792,7 @@ dependencies = [
 [[package]]
 name = "datafusion-proto-common"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "arrow",
  "chrono",
@@ -1840,7 +1804,7 @@ dependencies = [
 [[package]]
 name = "datafusion-sql"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -1849,8 +1813,9 @@ dependencies = [
  "datafusion-expr",
  "indexmap 2.6.0",
  "log",
+ "recursive",
  "regex",
- "sqlparser 0.51.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "sqlparser 0.52.0",
  "strum 0.26.3",
 ]
 
@@ -2837,18 +2802,6 @@ checksum = "a0c10553d664a4d0bcff9f4215d0aac67a639cc68ef660840afe309b807bc9f5"
 dependencies = [
  "block-padding",
  "generic-array",
-]
-
-[[package]]
-name = "instant"
-version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0242819d153cba4b4b05a5a8f2a7e9bbf97b6055b2a002b395c96b5ff3c0222"
-dependencies = [
- "cfg-if",
- "js-sys",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]
@@ -4052,6 +4005,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "psm"
+version = "0.1.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "200b9ff220857e53e184257720a14553b2f4aa02577d2ed9842d45d4b9654810"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "pyo3"
 version = "0.22.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4236,6 +4198,26 @@ checksum = "32cb0b9bc82b0a0876c2dd994a7e7a2683d3e7390ca40e6886785ef0c7e3ee31"
 dependencies = [
  "num-traits",
  "rand",
+]
+
+[[package]]
+name = "recursive"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0786a43debb760f491b1bc0269fe5e84155353c67482b9e60d0cfb596054b43e"
+dependencies = [
+ "recursive-proc-macro-impl",
+ "stacker",
+]
+
+[[package]]
+name = "recursive-proc-macro-impl"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76009fbe0614077fc1a2ce255e3a1881a2e3a3527097d5dc6d8212c585e7e38b"
+dependencies = [
+ "quote",
+ "syn 2.0.87",
 ]
 
 [[package]]
@@ -4557,7 +4539,7 @@ dependencies = [
  "ryu",
  "serde",
  "serde_json",
- "sqlparser 0.51.0 (git+https://github.com/lakehq/sqlparser-rs.git?rev=0908ddb)",
+ "sqlparser 0.51.0",
  "thiserror 2.0.3",
 ]
 
@@ -4602,7 +4584,6 @@ dependencies = [
  "chrono",
  "comfy-table",
  "datafusion",
- "datafusion-comet-spark-expr",
  "datafusion-common",
  "datafusion-expr",
  "datafusion-functions-json",
@@ -4629,6 +4610,7 @@ dependencies = [
  "thiserror 2.0.3",
  "tokio",
  "tokio-stream",
+ "twox-hash 2.0.1",
  "url",
 ]
 
@@ -4684,7 +4666,7 @@ dependencies = [
  "async-recursion",
  "async-stream",
  "chrono",
- "chrono-tz 0.10.0",
+ "chrono-tz",
  "clap",
  "datafusion",
  "datafusion-common",
@@ -4714,7 +4696,7 @@ dependencies = [
  "serde",
  "serde_arrow",
  "serde_json",
- "sqlparser 0.51.0 (git+https://github.com/lakehq/sqlparser-rs.git?rev=0908ddb)",
+ "sqlparser 0.51.0",
  "syn 2.0.87",
  "thiserror 2.0.3",
  "tokio",
@@ -4729,14 +4711,14 @@ name = "sail-sql"
 version = "0.2.0"
 dependencies = [
  "chrono",
- "chrono-tz 0.10.0",
+ "chrono-tz",
  "datafusion",
  "lazy_static",
  "regex",
  "sail-common",
  "serde",
  "serde_json",
- "sqlparser 0.51.0 (git+https://github.com/lakehq/sqlparser-rs.git?rev=0908ddb)",
+ "sqlparser 0.51.0",
  "thiserror 2.0.3",
 ]
 
@@ -5031,21 +5013,21 @@ checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 [[package]]
 name = "sqlparser"
 version = "0.51.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fe11944a61da0da3f592e19a45ebe5ab92dc14a779907ff1f08fbb797bfefc7"
-dependencies = [
- "log",
- "sqlparser_derive 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "sqlparser"
-version = "0.51.0"
 source = "git+https://github.com/lakehq/sqlparser-rs.git?rev=0908ddb#0908ddb0bcd0289f595dc8c236c7b91d6348c32a"
 dependencies = [
  "log",
  "serde",
  "sqlparser_derive 0.2.2 (git+https://github.com/lakehq/sqlparser-rs.git?rev=0908ddb)",
+]
+
+[[package]]
+name = "sqlparser"
+version = "0.52.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a875d8cd437cc8a97e9aeaeea352ec9a19aea99c23e9effb17757291de80b08"
+dependencies = [
+ "log",
+ "sqlparser_derive 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -5074,6 +5056,19 @@ name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
+
+[[package]]
+name = "stacker"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "799c883d55abdb5e98af1a7b3f23b9b6de8ecada0ecac058672d7635eb48ca7b"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "libc",
+ "psm",
+ "windows-sys 0.52.0",
+]
 
 [[package]]
 name = "static_assertions"
@@ -6357,14 +6352,14 @@ dependencies = [
 [[patch.unused]]
 name = "datafusion-ffi"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 
 [[patch.unused]]
 name = "datafusion-sqllogictest"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
 
 [[patch.unused]]
 name = "datafusion-substrait"
 version = "43.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=3cbd529#3cbd52943645aa3c310b6fdd68c9b0d6a03faf6a"
+source = "git+https://github.com/lakehq/datafusion.git?rev=6d8313e#6d8313ebc865f9bff007bfc04652f58b016cbc1b"
