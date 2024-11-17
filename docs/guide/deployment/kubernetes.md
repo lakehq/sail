@@ -5,6 +5,13 @@ rank: 1
 
 # Kubernetes
 
+::: info
+
+LakeSail offers flexible enterprise support options, including managing Sail on Kubernetes.<br>
+[Get in touch](https://lakesail.com/support/) to learn more.
+
+:::
+
 Sail supports distributed data processing on Kubernetes clusters.
 This guide demonstrates how to deploy Sail on a Kubernetes cluster and connect to it via Spark Connect.
 
@@ -15,8 +22,10 @@ We first need to build the Docker image for Sail. Follow the instructions from e
 ### Quick Start
 
 ::: info
-This installation method is recommended for quick deployment.
+
+This installation method is recommended for quick deployment.<br>
 Production deployments should use the installation from source method.
+
 :::
 
 In an empty directory, create a `Dockerfile` with the following content.
@@ -36,8 +45,10 @@ docker build -t sail:latest .
 ### Installation from Source
 
 ::: info
-This installation method is recommended when performance is critical for your application.
+
+This installation method is recommended when performance is critical for your application.<br>
 Be patient as the release build process may take some time.
+
 :::
 
 In an empty directory, create a `Dockerfile` with the following content.
@@ -66,7 +77,7 @@ docker/release/build-release.sh $RELEASE_TAG
 
 ::: details Installation from Source for Development Purposes
 
-To build the Docker image for development purposes, you need to build Sail from source.
+To build the Docker image for development purposes, you need to build Sail from source.<br>
 To do this, checkout the Sail [repository](https://github.com/lakehq/sail) and run the following command from the root of the project directory.
 
 ```bash
@@ -75,11 +86,16 @@ docker/dev/build-dev.sh
 
 :::
 
+## Loading the Docker Image
+
 You will then need to make the Docker image available to your Kubernetes cluster.
 The exact steps depend on your Kubernetes environment.
 For example, you may want to push the Docker image to your private Docker registry accessible from the Kubernetes cluster.
 If you are using a local Kubernetes cluster, you may want to load the Docker image into the cluster. The command varies depending on the Kubernetes distribution you are using.
-Here is an example of loading the Docker image into a local [kind](https://kind.sigs.k8s.io/) cluster.
+
+### Loading with Kind into a Local Cluster
+
+The following command creates a local Kubernetes cluster using [Kind](https://kind.sigs.k8s.io/) and loads the Docker image into the cluster.
 
 ```bash
 kind create cluster && \
