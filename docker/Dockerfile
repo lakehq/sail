@@ -62,7 +62,6 @@ RUN --mount=type=cache,target=/root/.cargo/registry,id=${TARGETPLATFORM} \
         *) echo "${RUST_PROFILE}" ;; \
     esac) && \
     echo "RUSTFLAGS: ${RUSTFLAGS}" && \
-    env RUSTFLAGS=${RUSTFLAGS} ${RELEASE_TAG:+CARGO_NET_GIT_FETCH_WITH_CLI=true} && \
     cargo build -p sail-cli --profile ${RUST_PROFILE} --bins && \
     cp /app/target/${RUST_TARGET_SUBDIR}/sail /usr/local/bin
 
