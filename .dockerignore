@@ -1,0 +1,7 @@
+# Ignore everything by default
+**
+
+# Allow only the files and directories you need
+!Cargo.toml
+!Cargo.lock
+!crates/

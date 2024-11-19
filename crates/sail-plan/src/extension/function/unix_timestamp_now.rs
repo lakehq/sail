@@ -19,7 +19,7 @@ impl Default for UnixTimestampNow {
 impl UnixTimestampNow {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(0, vec![], Volatility::Stable),
+            signature: Signature::nullary(Volatility::Stable),
         }
     }
 }

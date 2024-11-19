@@ -5,16 +5,34 @@ rank: 1
 
 # Kubernetes
 
+::: info
+
+LakeSail offers flexible enterprise support options, including managing Sail on Kubernetes.<br>
+[Get in touch](https://lakesail.com/support/) to learn more.
+
+:::
+
 Sail supports distributed data processing on Kubernetes clusters.
 This guide demonstrates how to deploy Sail on a Kubernetes cluster and connect to it via Spark Connect.
 
 ## Building the Docker Image
 
-We first need to build the Docker image for Sail. In an empty directory, create a `Dockerfile` with the following content.
+We first need to build the Docker image for Sail. Follow the instructions from either section below.
+
+### Quick Start
+
+::: info
+
+This installation method is recommended for quick deployment.<br>
+Production deployments should use the installation from source method.
+
+:::
+
+In an empty directory, create a `Dockerfile` with the following content.
 
 ::: code-group
 
-<<< ../../../docker/release/Dockerfile{docker}
+<<< ../../../docker/release/quickstart.Dockerfile{docker}
 
 :::
 
@@ -24,21 +42,65 @@ Then run the following command to build the Docker image.
 docker build -t sail:latest .
 ```
 
-::: details Building the Docker Image with the Standalone Binary
+### Installation from Source
 
-You can also create a Docker image containing the standalone Sail binary built from source. This is useful for development purposes.
+::: info
+
+This installation method is recommended when performance is critical for your application.<br>
+Be patient as the release build process may take some time.
+
+:::
+
+In an empty directory, create a `Dockerfile` with the following content.
+
+::: code-group
+
+<<< ../../../docker/Dockerfile{docker}
+
+:::
+
+Then in the same directory, create a `build-release.sh` script with the following content.
+Make sure to make the script executable by running `chmod +x build-release.sh`.
+
+::: code-group
+
+<<< ../../../docker/release/build-release.sh{shell}
+
+:::
+
+Then run the following command with the desired release tag (or commit hash) to build the Docker image.
+
+```bash
+RELEASE_TAG=v0.2
+docker/release/build-release.sh $RELEASE_TAG
+```
+
+::: details Installation from Source for Development Purposes
+
+To build the Docker image for development purposes, you need to build Sail from source.<br>
 To do this, checkout the Sail [repository](https://github.com/lakehq/sail) and run the following command from the root of the project directory.
 
 ```bash
-docker build -t sail:latest -f docker/dev/Dockerfile .
+docker/dev/build-dev.sh
 ```
 
 :::
+
+## Loading the Docker Image
 
 You will then need to make the Docker image available to your Kubernetes cluster.
 The exact steps depend on your Kubernetes environment.
 For example, you may want to push the Docker image to your private Docker registry accessible from the Kubernetes cluster.
 If you are using a local Kubernetes cluster, you may want to load the Docker image into the cluster. The command varies depending on the Kubernetes distribution you are using.
+
+### Loading with Kind into a Local Cluster
+
+The following command creates a local Kubernetes cluster using [Kind](https://kind.sigs.k8s.io/) and loads the Docker image into the cluster.
+
+```bash
+kind create cluster && \
+  kind load docker-image sail:latest
+```
 
 ## Running the Sail Server
 
@@ -88,4 +150,10 @@ All Sail worker pods will be terminated automatically as well.
 
 ```bash
 kubectl delete -f sail.yaml
+```
+
+if you created a kind cluster for testing, you can delete the cluster using the following command.
+
+```bash
+kind delete cluster
 ```

@@ -2750,7 +2750,6 @@ impl PlanResolver<'_> {
         let statement = plan::Statement::SetVariable(plan::SetVariable {
             variable: variable.into(),
             value,
-            schema: DFSchemaRef::new(DFSchema::empty()),
         });
 
         Ok(LogicalPlan::Statement(statement))
