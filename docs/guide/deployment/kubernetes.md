@@ -71,7 +71,7 @@ Make sure to make the script executable by running `chmod +x build-release.sh`.
 Then run the following command with the desired release tag (or commit hash) to build the Docker image.
 
 ```bash
-RELEASE_TAG=v0.2
+RELEASE_TAG=v0.2.0.dev0
 docker/release/build-release.sh $RELEASE_TAG
 ```
 
