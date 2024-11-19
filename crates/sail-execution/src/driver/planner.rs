@@ -6,7 +6,6 @@ use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::repartition::RepartitionExec;
-use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use crate::error::{ExecutionError, ExecutionResult};
@@ -66,10 +65,6 @@ fn build_job_graph(
         .as_any()
         .downcast_ref::<CoalescePartitionsExec>()
         .is_some()
-        || plan
-            .as_any()
-            .downcast_ref::<SortPreservingMergeExec>()
-            .is_some()
     {
         let child = get_one_child_plan(&plan)?;
         let partitioning = child.properties().output_partitioning();
