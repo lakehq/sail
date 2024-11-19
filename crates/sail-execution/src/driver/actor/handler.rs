@@ -379,6 +379,7 @@ impl DriverActor {
                 self.try_update_job_output(ctx, job_id);
             }
             TaskStatus::Succeeded => {
+                let worker_id = task.state.worker_id();
                 if let Some(state) = task.state.succeed() {
                     self.state.update_task(task_id, attempt, state, message);
                 } else {
@@ -386,7 +387,8 @@ impl DriverActor {
                         "task {task_id} cannot be updated to the succeeded state from its current state"
                     ));
                 }
-                if let Some(worker_id) = self.state.detach_task_from_worker(task_id) {
+                if let Some(worker_id) = worker_id {
+                    self.state.detach_task_from_worker(task_id, worker_id);
                     self.schedule_idle_worker_probe(ctx, worker_id);
                 }
                 self.schedule_tasks(ctx);
@@ -400,9 +402,11 @@ impl DriverActor {
                     attempt,
                     message.as_deref().unwrap_or("unknown reason")
                 );
+                let worker_id = task.state.worker_id();
                 self.state
                     .update_task(task_id, attempt, TaskState::Failed, message);
-                if let Some(worker_id) = self.state.detach_task_from_worker(task_id) {
+                if let Some(worker_id) = worker_id {
+                    self.state.detach_task_from_worker(task_id, worker_id);
                     self.schedule_idle_worker_probe(ctx, worker_id);
                 }
                 self.cancel_job(ctx, job_id, reason);
@@ -415,9 +419,11 @@ impl DriverActor {
                     attempt,
                     message.as_deref().unwrap_or("unknown reason")
                 );
+                let worker_id = task.state.worker_id();
                 self.state
                     .update_task(task_id, attempt, TaskState::Canceled, message);
-                if let Some(worker_id) = self.state.detach_task_from_worker(task_id) {
+                if let Some(worker_id) = worker_id {
+                    self.state.detach_task_from_worker(task_id, worker_id);
                     self.schedule_idle_worker_probe(ctx, worker_id);
                 }
                 self.cancel_job(ctx, job_id, reason);
@@ -799,7 +805,8 @@ impl DriverActor {
                 let reason = format!("task {task_id} attempt {attempt} canceled for job {job_id}");
                 self.state
                     .update_task(task_id, attempt, TaskState::Canceled, Some(reason));
-                if let Some(worker_id) = self.state.detach_task_from_worker(task_id) {
+                if let Some(worker_id) = worker_id {
+                    self.state.detach_task_from_worker(task_id, worker_id);
                     self.schedule_idle_worker_probe(ctx, worker_id);
                 }
                 let client = match self.worker_client(worker_id?) {

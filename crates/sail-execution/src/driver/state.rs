@@ -140,15 +140,11 @@ impl DriverState {
         }
     }
 
-    pub fn detach_task_from_worker(&mut self, task_id: TaskId) -> Option<WorkerId> {
-        let Some(task) = self.tasks.get(&task_id) else {
-            warn!("task {task_id} not found");
-            return None;
-        };
-        let Some(worker_id) = task.state.worker_id() else {
-            warn!("task {task_id} is not assigned to any worker");
-            return None;
-        };
+    pub fn detach_task_from_worker(
+        &mut self,
+        task_id: TaskId,
+        worker_id: WorkerId,
+    ) -> Option<WorkerId> {
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             warn!("worker {worker_id} not found");
             return None;
@@ -252,7 +248,7 @@ impl DriverState {
     pub fn count_pending_tasks(&self) -> usize {
         self.tasks
             .values()
-            .filter(|task| matches!(task.state, TaskState::Pending { .. }))
+            .filter(|task| matches!(task.state, TaskState::Created | TaskState::Pending { .. }))
             .count()
     }
 }
