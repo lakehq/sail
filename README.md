@@ -7,12 +7,16 @@
 The mission of Sail is to unify stream processing, batch processing, and compute-intensive (AI) workloads.
 Currently, Sail features a drop-in replacement for Spark SQL and the Spark DataFrame API in both single-host and distributed settings.
 
+## Kubernetes Deployment
+
+Please refer to the [Kubernetes Deployment Guide](https://docs.lakesail.com/sail/latest/guide/deployment/kubernetes.html) for instructions on deploying Sail on Kubernetes.
+
 ## Installation
 
 Sail is available as a Python package on PyPI. You can install it using `pip`.
 
 ```bash
-pip install pysail # ==v0.2.0.dev0 for the preview release of distributed Sail
+pip install pysail
 ```
 
 Alternatively, you can install Sail from source for better performance for your hardware architecture.
