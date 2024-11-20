@@ -25,8 +25,8 @@ We first need to build the Docker image for Sail. Please refer to the [Docker Im
 You will need to make the Docker image available to your Kubernetes cluster.
 The exact steps depend on your Kubernetes environment.
 For example, you may want to push the Docker image to your private Docker registry accessible from the Kubernetes cluster.
-If you are using a local Kubernetes cluster, you may want to load the Docker image into the cluster. The command varies depending on the Kubernetes distribution you are using.
 
+If you are using a local Kubernetes cluster, you may need to load the Docker image into the cluster. The command varies depending on the Kubernetes distribution you are using.
 Here are the examples for some well-known Kubernetes distributions.
 You can refer to their documentation for more details.
 
@@ -52,17 +52,18 @@ docker save sail:latest | k3s ctr images import -
 docker save sail:latest | microk8s images import
 ```
 
-```bash [OrbStack]
-# The Kubernetes cluster in OrbStack can use host Docker images directly.
-```
-
 :::
 
 The following sections use [kind](https://kind.sigs.k8s.io/) as an example, but you can run Sail in other Kubernetes distributions of your choice.
-Run the following commands to create a local Kubernetes cluster using kind and load the Docker image into the cluster.
+Run the following command to create a local Kubernetes cluster.
 
 ```bash
 kind create cluster
+```
+
+Then load the Docker image into the cluster.
+
+```bash
 kind load docker-image sail:latest
 ```
 
@@ -83,7 +84,7 @@ Create a file named `sail.yaml` with the following content.
 
 :::
 
-Then create the Kubernetes resources using the following command.
+Create the Kubernetes resources using the following command.
 The Sail Spark Connect server runs as a Kubernetes deployment, and the gRPC port is exposed as a Kubernetes service.
 
 ```bash
