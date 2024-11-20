@@ -21,19 +21,10 @@ In an empty directory, create a `Dockerfile` with the following content.
 
 :::
 
-In the same directory, create a `build.sh` script with the following content.
-Make sure to make the script executable by running `chmod +x build.sh`.
-
-::: code-group
-
-<<< ../../../../docker/release/build.sh{shell}
-
-:::
-
-Then run the following command with the desired release tag or branch name to build the Docker image.
+In the same directory, run the following command with the desired release tag or branch name to build the Docker image.
 
 ```bash-vue
-./build.sh {{ libVersion }}
+docker build -t sail:latest --build-arg RELEASE_TAG="{{ libVersion }}" .
 ```
 
 <script setup>
