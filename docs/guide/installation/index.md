@@ -7,8 +7,8 @@ rank: 10
 
 Sail is available as a Python package on PyPI. You can install it using `pip`.
 
-```bash
-pip install pysail
+```bash-vue
+pip install "pysail{{ `==${libVersion}` }}"
 ```
 
 ## Installation from Source
@@ -30,8 +30,8 @@ Sometimes, you may want to build Sail from source even when the pre-built wheels
 This can be useful when you want to have Sail optimized for your hardware architecture.
 For example, the following command builds Sail with all features of the current CPU enabled.
 
-```bash
-env RUSTFLAGS="-C target-cpu=native" pip install pysail -v --no-binary pysail
+```bash-vue
+env RUSTFLAGS="-C target-cpu=native" pip install "pysail{{ `==${libVersion}` }}" -v --no-binary pysail
 ```
 
 ::: info
@@ -42,3 +42,12 @@ for more information about the compiler options that can be specified via the `R
 ## Standalone Binary
 
 Please refer to the [Standalone Binary](/development/recipes/standalone-binary) guide for more information about building and running the Sail CLI as a standalone binary.
+
+<script setup>
+import { useData } from "vitepress";
+import { computed } from "vue";
+
+const { site } = useData();
+
+const libVersion = computed(() => site.value.contentProps?.libVersion);
+</script>

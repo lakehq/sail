@@ -16,14 +16,14 @@ Please refer to the [Kubernetes Deployment Guide](https://docs.lakesail.com/sail
 Sail is available as a Python package on PyPI. You can install it using `pip`.
 
 ```bash
-pip install pysail
+pip install "pysail==0.2.0.dev0"
 ```
 
 Alternatively, you can install Sail from source for better performance for your hardware architecture.
 You would need [rustup](https://rustup.rs/) and [protoc](https://protobuf.dev/) in your environment for this.
 
 ```bash
-env RUSTFLAGS="-C target-cpu=native" pip install pysail -v --no-binary pysail
+env RUSTFLAGS="-C target-cpu=native" pip install "pysail==0.2.0.dev0" -v --no-binary pysail
 ```
 
 You can follow the [Getting Started](https://docs.lakesail.com/sail/latest/guide/getting-started/) guide to learn more about Sail.

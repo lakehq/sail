@@ -9,12 +9,16 @@ In this guide, you will see how to use Sail as the compute engine for PySpark.
 
 Install the required packages in your Python environment.
 
-```bash
-pip install 'pysail[spark]'
+```bash-vue
+pip install "pysail[spark]{{ `==${libVersion}` }}"
 ```
 
 ::: info
 Please refer to the [Installation Guide](/guide/installation/) for more information about installing Sail.
+:::
+
+::: info
+The way to invoke Sail has changed since Sail 0.1. In Sail 0.2, we have introduced the `sail` command-line interface (CLI) to interact with Sail.
 :::
 
 ## Using the Sail PySpark Shell
@@ -82,3 +86,12 @@ env SPARK_CONNECT_MODE_ENABLED=1 SPARK_REMOTE="sc://localhost:50051" pyspark
 You can refer to the [Spark documentation](https://spark.apache.org/docs/latest/spark-connect-overview.html)
 for more information about Spark Connect.
 :::
+
+<script setup>
+import { useData } from "vitepress";
+import { computed } from "vue";
+
+const { site } = useData();
+
+const libVersion = computed(() => site.value.contentProps?.libVersion);
+</script>
