@@ -24,6 +24,7 @@ pub mod spark_hex_unhex;
 pub mod spark_murmur3_hash;
 pub mod spark_reverse;
 pub mod spark_unix_timestamp;
+pub mod spark_weekofyear;
 pub mod spark_xxhash64;
 pub mod struct_function;
 pub mod unix_timestamp_now;

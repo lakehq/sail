@@ -10,6 +10,7 @@ use datafusion_expr::{lit, BinaryExpr, Operator, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::spark_unix_timestamp::SparkUnixTimestamp;
+use crate::extension::function::spark_weekofyear::SparkWeekOfYear;
 use crate::extension::function::unix_timestamp_now::UnixTimestampNow;
 use crate::function::common::{Function, FunctionContext};
 use crate::utils::{spark_datetime_format_to_chrono_strftime, ItemTaker};
@@ -213,6 +214,20 @@ fn from_unixtime(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanRe
     }
 }
 
+fn weekofyear(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult<Expr> {
+    if args.len() == 1 {
+        let timezone: Arc<str> = function_context.plan_config().time_zone.clone().into();
+        Ok(Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(SparkWeekOfYear::new(timezone))),
+            args,
+        }))
+    } else {
+        Err(PlanError::invalid(format!(
+            "weekofyear requires 1 argument, got {args:?}"
+        )))
+    }
+}
+
 // FIXME: Spark displays dates and timestamps according to the session time zone.
 //  We should be setting the DataFusion config `datafusion.execution.time_zone`
 //  and casting any datetime functions that don't use the DataFusion config.
@@ -304,7 +319,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("unix_seconds", F::unknown("unix_seconds")),
         ("unix_timestamp", F::custom(unix_timestamp)),
         ("weekday", F::unknown("weekday")),
-        ("weekofyear", F::unknown("weekofyear")),
+        ("weekofyear", F::custom(weekofyear)),
         ("window", F::unknown("window")),
         ("window_time", F::unknown("window_time")),
         ("year", F::unary(|x| integer_part(x, "YEAR".to_string()))),
