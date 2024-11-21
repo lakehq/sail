@@ -59,6 +59,7 @@ use sail_plan::extension::function::spark_hex_unhex::{SparkHex, SparkUnHex};
 use sail_plan::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_plan::extension::function::spark_reverse::SparkReverse;
 use sail_plan::extension::function::spark_unix_timestamp::SparkUnixTimestamp;
+use sail_plan::extension::function::spark_weekofyear::SparkWeekOfYear;
 use sail_plan::extension::function::spark_xxhash64::SparkXxhash64;
 use sail_plan::extension::function::struct_function::StructFunction;
 use sail_plan::extension::function::unix_timestamp_now::UnixTimestampNow;
@@ -546,6 +547,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+        // TODO: Implement custom registry so we don't have this ugly mess of if-else
         let udf = ExtendedScalarUdf::decode(buf)
             .map_err(|e| plan_datafusion_err!("failed to decode udf: {e}"))?;
         let ExtendedScalarUdf { udf_kind } = udf;
@@ -726,11 +728,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
             "json_length" | "json_len" => Ok(datafusion_functions_json::udfs::json_length_udf()),
             "json_as_text" => Ok(datafusion_functions_json::udfs::json_as_text_udf()),
+            "spark_weekofyear" | "weekofyear" => match auxiliary_field {
+                Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(single)) => {
+                    let timezone = self.try_decode_message::<String>(&single.auxiliary_field)?;
+                    let timezone: Arc<str> = timezone.into();
+                    Ok(Arc::new(ScalarUDF::from(SparkWeekOfYear::new(timezone))))
+                }
+                other => {
+                    plan_err!("Expected single auxiliary field, but found {other:?} for {name}")
+                }
+            },
             _ => plan_err!("Could not find Scalar Function: {name}"),
         }
     }
 
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
+        // TODO: Implement custom registry so we don't have this ugly mess of if-else
         let udf_kind = if let Some(_func) = node
             .inner()
             .as_any()
@@ -895,6 +908,19 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.name() == "json_as_text"
         {
             UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkWeekOfYear>() {
+            let timezone = self.try_encode_message::<String>(func.timezone().to_string())?;
+            UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
+                auxiliary_field: Some(gen::AuxiliaryField {
+                    auxiliary_field: Some(
+                        gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(
+                            gen::AuxiliaryFieldSingle {
+                                auxiliary_field: timezone,
+                            },
+                        ),
+                    ),
+                }),
+            })
         } else {
             return Ok(());
         };
