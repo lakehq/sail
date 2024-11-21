@@ -10,7 +10,7 @@ In this guide, you will see how to use Sail as the compute engine for PySpark.
 Install the required packages in your Python environment.
 
 ```bash-vue
-pip install "pysail[spark]{{ `==${libVersion}` }}"
+pip install "pysail[spark]=={{ libVersion }}"
 ```
 
 ::: info

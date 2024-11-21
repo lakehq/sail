@@ -46,6 +46,16 @@ class Site {
   static libVersion(): string {
     return process.env.SAIL_VERSION || "0.0.0";
   }
+
+  /**
+   * The glob patterns to exclude source files from the documentation.
+   * @returns The list of glob patterns.
+   */
+  static srcExclude(): string[] {
+    // Exclude directories starting with an underscore. Such directories are
+    // internal (e.g. containing pages to be included in other pages).
+    return ["**/_*/**/*.md"];
+  }
 }
 
 class Analytics {
@@ -164,12 +174,20 @@ class Sidebar {
   }
 
   static async userGuide(): Promise<DefaultTheme.SidebarItem[]> {
-    const pages = await loadPages("/guide/**/*.md", this.srcDir);
+    const pages = await loadPages(
+      this.srcDir,
+      "/guide/**/*.md",
+      Site.srcExclude(),
+    );
     return Sidebar.items(TreeNode.fromPaths(pages));
   }
 
   static async development(): Promise<DefaultTheme.SidebarItem[]> {
-    const pages = await loadPages("/development/**/*.md", this.srcDir);
+    const pages = await loadPages(
+      this.srcDir,
+      "/development/**/*.md",
+      Site.srcExclude(),
+    );
     return Sidebar.items(TreeNode.fromPaths(pages));
   }
 
@@ -235,9 +253,7 @@ export default async () => {
       TransformPageData.meta(pageData);
     },
     markdown: Markdown.options(),
-    // Exclude directories starting with an underscore. Such directories are
-    // internal (e.g. containing pages to be included in other pages).
-    srcExclude: ["**/_*/**/*.md"],
+    srcExclude: Site.srcExclude(),
     ignoreDeadLinks: [
       /^https?:\/\/localhost(:\d+)?(\/.*)?$/,
       // The Python documentation is generated dynamically.

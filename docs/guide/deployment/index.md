@@ -5,6 +5,8 @@ rank: 40
 
 # Deployment
 
+<!--@include: ./_common/support.md-->
+
 <PageList :data="data" :prefix="['guide', 'deployment']" />
 
 <script setup>
