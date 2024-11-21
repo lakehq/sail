@@ -5,11 +5,13 @@ rank: 1
 
 # Quick Start
 
+<!--@include: ../_common/support.md-->
+
 You can quickly experiment with Sail by building the Docker image from the Sail Python package.
 
-::: info
-You may want to build the Sail Docker image from source for production deployments.
-Please follow [this guide](./production.md) for more information.
+::: warning
+This method is not suitable for production deployments.
+Please follow [this guide](./production.md) for more information about building the Sail Docker image from source.
 :::
 
 In an empty directory, create a `Dockerfile` with the following content.

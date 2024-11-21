@@ -5,13 +5,7 @@ rank: 2
 
 # Kubernetes
 
-::: info
-
-LakeSail offers flexible enterprise support options, including managing Sail on Kubernetes.
-
-[Get in touch](https://lakesail.com/support/) to learn more.
-
-:::
+<!--@include: ./_common/support.md-->
 
 Sail supports distributed data processing on Kubernetes clusters.
 This guide demonstrates how to deploy Sail on a Kubernetes cluster and connect to it via Spark Connect.

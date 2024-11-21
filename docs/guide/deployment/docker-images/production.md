@@ -5,13 +5,9 @@ rank: 2
 
 # Production
 
-Building the Sail Docker image from source is recommended when performance is critical for your application.
+<!--@include: ../_common/support.md-->
 
-::: info
-
-The release build may take some time to complete.
-
-:::
+Building the Sail Docker image from source is recommended for production deployments where performance is critical.
 
 In an empty directory, create a `Dockerfile` with the following content.
 
@@ -24,8 +20,12 @@ In an empty directory, create a `Dockerfile` with the following content.
 In the same directory, run the following command with the desired release tag or branch name to build the Docker image.
 
 ```bash-vue
-docker build -t sail:latest --build-arg RELEASE_TAG="{{ libVersion }}" .
+docker build -t sail:latest --build-arg RELEASE_TAG="v{{ libVersion }}" .
 ```
+
+::: info
+The release build may take some time to complete.
+:::
 
 <script setup>
 import { useData } from "vitepress";
