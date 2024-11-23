@@ -8,7 +8,7 @@ rank: 10
 Sail is available as a Python package on PyPI. You can install it using `pip`.
 
 ```bash-vue
-pip install "pysail{{ `==${libVersion}` }}"
+pip install "pysail=={{ libVersion }}"
 ```
 
 ## Installation from Source
@@ -31,7 +31,7 @@ This can be useful when you want to have Sail optimized for your hardware archit
 For example, the following command builds Sail with all features of the current CPU enabled.
 
 ```bash-vue
-env RUSTFLAGS="-C target-cpu=native" pip install "pysail{{ `==${libVersion}` }}" -v --no-binary pysail
+env RUSTFLAGS="-C target-cpu=native" pip install "pysail=={{ libVersion }}" -v --no-binary pysail
 ```
 
 ::: info

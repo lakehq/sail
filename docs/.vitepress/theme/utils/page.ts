@@ -12,19 +12,21 @@ import { PageLink } from "./link";
  * This is similar to `createContentLoader` in VitePress,
  * but we cannot use it since it relies on the VitePress configuration,
  * which may not exist when this function is called.
- * @param pattern The glob pattern to match the Markdown files.
  * @param srcDir The source directory of the documentation.
+ * @param pattern The glob pattern(s) to match the Markdown files.
+ * @param exclude The glob patterns to exclude the Markdown files.
  * @returns The list of page links.
  */
 async function loadPages(
-  pattern: string | string[],
   srcDir: string,
+  pattern: string | string[],
+  exclude?: string[],
 ): Promise<PageLink[]> {
   if (typeof pattern === "string") {
     pattern = [pattern];
   }
   pattern = pattern.map((p) => path.join(srcDir, p));
-  const files = await glob(pattern);
+  const files = await glob(pattern, { ignore: exclude });
   return await Promise.all(
     files.map(async (file) => {
       if (!file.endsWith(".md")) {

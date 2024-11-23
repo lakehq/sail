@@ -1,6 +1,3 @@
 import { createContentLoader } from "vitepress";
 
-export default createContentLoader([
-  "/development/!(index).md",
-  "/development/*/**/*.md",
-]);
+export default createContentLoader(["/development/!(index|_*/**|**/_*/**).md"]);
