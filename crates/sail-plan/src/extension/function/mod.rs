@@ -17,6 +17,7 @@ pub mod randn;
 pub mod random;
 pub mod size;
 pub mod skewness;
+pub mod spark_aes;
 pub mod spark_array;
 pub mod spark_concat;
 mod spark_hash_utils;
