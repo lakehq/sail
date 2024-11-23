@@ -86,23 +86,23 @@ impl ScalarUDFImpl for SparkAESEncrypt {
             ColumnarValue::Scalar(ScalarValue::Binary(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::BinaryView(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::FixedSizeBinary(_, Some(expr)))
-            | ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(expr))) => expr,
+            | ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(expr))) => Ok(expr.as_slice()),
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(expr)))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(expr))) => expr.as_bytes(),
-            _ => return exec_err!("First argument (expr) must be BINARY"),
-        };
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(expr))) => Ok(expr.as_bytes()),
+            other => exec_err!("First argument (expr) must be BINARY, got {other:?}"),
+        }?;
 
         let key = match &args[1] {
             ColumnarValue::Scalar(ScalarValue::Binary(Some(key)))
             | ColumnarValue::Scalar(ScalarValue::BinaryView(Some(key)))
             | ColumnarValue::Scalar(ScalarValue::FixedSizeBinary(_, Some(key)))
-            | ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(key))) => key,
+            | ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(key))) => Ok(key.as_slice()),
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(key)))
             | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(key)))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(key))) => key.as_bytes(),
-            _ => return exec_err!("Second argument (key) must be BINARY"),
-        };
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(key))) => Ok(key.as_bytes()),
+            other => exec_err!("Second argument (key) must be BINARY, got {other:?}"),
+        }?;
 
         let mode = if args.len() >= 3 {
             match &args[2] {
@@ -110,17 +110,17 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                 | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(mode)))
                 | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(mode))) => {
                     match mode.to_uppercase().as_str() {
-                        "GCM" | "" => "GCM",
-                        "CBC" => return exec_err!("CBC mode not implemented"),
-                        "ECB" => return exec_err!("ECB mode not implemented"),
-                        other => return exec_err!("Invalid encryption mode: {other}"),
+                        "GCM" | "" => Ok("GCM"),
+                        "CBC" => exec_err!("CBC mode not implemented"),
+                        "ECB" => exec_err!("ECB mode not implemented"),
+                        other => exec_err!("Invalid encryption mode: {other}"),
                     }
                 }
-                other => return exec_err!("Mode must be a STRING, got {other:?}"),
+                other => exec_err!("Mode must be a STRING, got {other:?}"),
             }
         } else {
-            "GCM"
-        };
+            Ok("GCM")
+        }?;
 
         let _padding = if args.len() >= 4 {
             match &args[3] {
@@ -128,77 +128,85 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                 | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(padding)))
                 | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(padding))) => {
                     match padding.to_string().to_uppercase().as_str() {
-                        "NONE" | "" => "NONE",
+                        "NONE" | "" => Ok("NONE"),
                         "DEFAULT" => match mode {
-                            "GCM" => "NONE",
-                            "CBC" | "ECB" => "PKCS",
-                            _ => return exec_err!("Invalid encryption mode: {mode}"),
+                            "GCM" => Ok("NONE"),
+                            "CBC" | "ECB" => Ok("PKCS"),
+                            other => exec_err!("Invalid encryption mode: {other}"),
                         },
                         "PKCS" => match mode {
-                            "GCM" => return exec_err!("PKCS padding not supported for GCM mode"),
-                            "CBC" | "ECB" => "PKCS",
-                            _ => return exec_err!("Invalid encryption mode: {mode}"),
+                            "GCM" => exec_err!("PKCS padding not supported for GCM mode"),
+                            "CBC" | "ECB" => Ok("PKCS"),
+                            other => exec_err!("Invalid encryption mode: {other}"),
                         },
-                        other => return exec_err!("Invalid padding mode: {other}"),
+                        other => exec_err!("Invalid padding mode: {other}"),
                     }
                 }
-                other => return exec_err!("Padding must be a STRING, got {other:?}"),
+                other => exec_err!("Padding must be a STRING, got {other:?}"),
             }
         } else {
-            "NONE"
-        };
+            Ok("NONE")
+        }?;
 
         let iv: Vec<u8> = if args.len() >= 5 {
             match &args[4] {
-                ColumnarValue::Scalar(ScalarValue::Binary(Some(iv))) => {
-                    match mode {
-                        "GCM" => {
-                            if iv.len() != 12 {
-                                return exec_err!("IV must be 12 bytes long for GCM mode");
-                            }
+                ColumnarValue::Scalar(ScalarValue::Binary(Some(iv))) => match mode {
+                    "GCM" => {
+                        if iv.len() != 12 {
+                            exec_err!("IV must be 12 bytes long for GCM mode")
+                        } else {
+                            Ok(iv.to_vec())
                         }
-                        "CBC" => {
-                            if iv.len() != 16 {
-                                return exec_err!("IV must be 16 bytes long for CBC mode");
-                            }
-                        }
-                        other => return exec_err!("IV not supported for {other} mode"),
                     }
-                    iv.to_vec()
-                }
-                other => return exec_err!("IV must be BINARY, got {other:?}"),
+                    "CBC" => {
+                        if iv.len() != 16 {
+                            exec_err!("IV must be 16 bytes long for CBC mode")
+                        } else {
+                            Ok(iv.to_vec())
+                        }
+                    }
+                    other => exec_err!("IV not supported for {other} mode"),
+                },
+                other => exec_err!("IV must be BINARY, got {other:?}"),
             }
         } else {
             match mode {
                 "GCM" => {
                     let mut iv = [0u8; 12];
                     OsRng.fill_bytes(&mut iv);
-                    iv.to_vec()
+                    Ok(iv.to_vec())
                 }
                 "CBC" => {
-                    return exec_err!("IV not supported for CBC mode");
-                    // let mut iv = [0u8; 16];
-                    // OsRng.fill_bytes(&mut iv);
-                    // iv.to_vec()
+                    let mut iv = [0u8; 16];
+                    OsRng.fill_bytes(&mut iv);
+                    Ok(iv.to_vec())
                 }
-                other => return exec_err!("IV not supported for {other} mode"),
+                other => exec_err!("IV not supported for {other} mode"),
             }
-        };
+        }?;
 
-        // TODO: Nonce is GenericArray<u8, U12>;
-        //  So once CBC mode is implemented, we need to handle this differently
-        let nonce = Nonce::from_slice(&iv);
+        let nonce = match mode {
+            "GCM" => Ok(Nonce::from_slice(&iv)),
+            "CBC" => {
+                // TODO: Nonce is GenericArray<u8, U12>;
+                //  So once CBC mode is implemented, we need to handle this differently
+                exec_err!("CBC mode not implemented")
+            }
+            other => exec_err!("IV not supported for {other} mode"),
+        }?;
 
         let aad = if args.len() >= 6 {
             match &args[5] {
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(aad)))
                 | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(aad)))
-                | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(aad))) => Some(aad.as_bytes()),
-                other => return exec_err!("AAD must be STRING, got {other:?}"),
+                | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(aad))) => {
+                    Ok(Some(aad.as_bytes()))
+                }
+                other => exec_err!("AAD must be STRING, got {other:?}"),
             }
         } else {
-            None
-        };
+            Ok(None)
+        }?;
 
         let ciphertext = match key.len() {
             16 => {
