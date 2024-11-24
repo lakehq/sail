@@ -1,5 +1,9 @@
 use std::any::Any;
+use std::fmt;
 
+use aes::cipher::block_padding::Pkcs7;
+use aes::cipher::{BlockEncryptMut, KeyIvInit};
+use aes::{Aes128, Aes192, Aes256};
 use aes_gcm_siv::aead::rand_core::{OsRng, RngCore};
 use aes_gcm_siv::aead::{Aead, KeyInit, Payload};
 use aes_gcm_siv::{Aes128GcmSiv, Aes256GcmSiv, AesGcmSiv, Nonce};
@@ -7,7 +11,36 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
-pub type Aes192GcmSiv = AesGcmSiv<aes::Aes192>;
+pub type Aes192GcmSiv = AesGcmSiv<Aes192>;
+
+pub fn encryption_name_to_mode(mode: &str) -> Result<EncryptionMode> {
+    match mode.trim().to_uppercase().as_str() {
+        "GCM" => Ok(EncryptionMode::GCM),
+        "CBC" => Ok(EncryptionMode::CBC),
+        "ECB" => Ok(EncryptionMode::ECB),
+        other => Err(datafusion::error::DataFusionError::Plan(format!(
+            "Invalid encryption mode, must be one of 'GCM', 'CBC', or 'ECB'. Got {other}"
+        ))),
+    }
+}
+
+#[allow(clippy::upper_case_acronyms)]
+#[derive(Debug, Clone)]
+pub enum EncryptionMode {
+    GCM,
+    CBC,
+    ECB,
+}
+
+impl fmt::Display for EncryptionMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EncryptionMode::GCM => write!(f, "GCM"),
+            EncryptionMode::CBC => write!(f, "CBC"),
+            EncryptionMode::ECB => write!(f, "ECB"),
+        }
+    }
+}
 
 /// Arguments
 ///   `expr`: The BINARY expression to be encrypted.
@@ -112,17 +145,12 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(mode)))
                 | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(mode)))
                 | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(mode))) => {
-                    match mode.to_uppercase().as_str() {
-                        "GCM" | "" => Ok("GCM"),
-                        "CBC" => exec_err!("CBC mode not implemented"),
-                        "ECB" => exec_err!("ECB mode not implemented"),
-                        other => exec_err!("Invalid encryption mode: {other}"),
-                    }
+                    encryption_name_to_mode(mode)
                 }
                 other => exec_err!("Mode must be a STRING, got {other:?}"),
             }
         } else {
-            Ok("GCM")
+            Ok(EncryptionMode::GCM)
         }?;
 
         let _padding = if args.len() >= 4 {
@@ -132,15 +160,15 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                 | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(padding))) => {
                     match padding.to_string().to_uppercase().as_str() {
                         "NONE" | "" => Ok("NONE"),
-                        "DEFAULT" => match mode {
-                            "GCM" => Ok("NONE"),
-                            "CBC" | "ECB" => Ok("PKCS"),
-                            other => exec_err!("Invalid encryption mode: {other}"),
+                        "DEFAULT" => match &mode {
+                            EncryptionMode::GCM => Ok("NONE"),
+                            EncryptionMode::CBC | EncryptionMode::ECB => Ok("PKCS"),
                         },
-                        "PKCS" => match mode {
-                            "GCM" => exec_err!("PKCS padding not supported for GCM mode"),
-                            "CBC" | "ECB" => Ok("PKCS"),
-                            other => exec_err!("Invalid encryption mode: {other}"),
+                        "PKCS" => match &mode {
+                            EncryptionMode::GCM => {
+                                exec_err!("PKCS padding not supported for GCM mode")
+                            }
+                            EncryptionMode::CBC | EncryptionMode::ECB => Ok("PKCS"),
                         },
                         other => exec_err!("Invalid padding mode: {other}"),
                     }
@@ -151,100 +179,126 @@ impl ScalarUDFImpl for SparkAESEncrypt {
             Ok("NONE")
         }?;
 
-        let iv: Vec<u8> = if args.len() >= 5 {
+        let iv: Option<Vec<u8>> = if args.len() >= 5 {
             match &args[4] {
-                ColumnarValue::Scalar(ScalarValue::Binary(Some(iv))) => match mode {
-                    "GCM" => {
+                ColumnarValue::Scalar(ScalarValue::Binary(Some(iv))) => match &mode {
+                    EncryptionMode::GCM => {
                         if iv.len() != 12 {
                             exec_err!("IV must be 12 bytes long for GCM mode")
                         } else {
-                            Ok(iv.to_vec())
+                            Ok(Some(iv.to_vec()))
                         }
                     }
-                    "CBC" => {
+                    EncryptionMode::CBC => {
                         if iv.len() != 16 {
                             exec_err!("IV must be 16 bytes long for CBC mode")
                         } else {
-                            Ok(iv.to_vec())
+                            Ok(Some(iv.to_vec()))
                         }
                     }
-                    other => exec_err!("IV not supported for {other} mode"),
+                    EncryptionMode::ECB => exec_err!("IV not supported for ECB mode"),
                 },
                 other => exec_err!("IV must be BINARY, got {other:?}"),
             }
         } else {
-            match mode {
-                "GCM" => {
+            match &mode {
+                EncryptionMode::GCM => {
                     let mut iv = [0u8; 12];
                     OsRng.fill_bytes(&mut iv);
-                    Ok(iv.to_vec())
+                    Ok(Some(iv.to_vec()))
                 }
-                "CBC" => {
+                EncryptionMode::CBC => {
                     let mut iv = [0u8; 16];
                     OsRng.fill_bytes(&mut iv);
-                    Ok(iv.to_vec())
+                    Ok(Some(iv.to_vec()))
                 }
-                other => exec_err!("IV not supported for {other} mode"),
+                EncryptionMode::ECB => Ok(None),
             }
-        }?;
-
-        let nonce = match mode {
-            "GCM" => Ok(Nonce::from_slice(&iv)),
-            "CBC" => {
-                // TODO: Nonce is GenericArray<u8, U12>;
-                //  So once CBC mode is implemented, we need to handle this differently
-                exec_err!("CBC mode not implemented")
-            }
-            other => exec_err!("IV not supported for {other} mode"),
         }?;
 
         let aad = if args.len() >= 6 {
             match &args[5] {
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(aad)))
                 | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(aad)))
-                | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(aad))) => {
-                    Ok(Some(aad.as_bytes()))
-                }
+                | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(aad))) => match &mode {
+                    EncryptionMode::GCM => Ok(Some(aad.as_bytes())),
+                    _ => exec_err!("AAD is only supported for GCM mode"),
+                },
                 other => exec_err!("AAD must be STRING, got {other:?}"),
             }
         } else {
             Ok(None)
         }?;
 
-        let ciphertext = match key.len() {
-            16 => {
-                let cipher = Aes128GcmSiv::new_from_slice(key)
-                    .map_err(|e| exec_datafusion_err!("Error creating AES-128 cipher: {e}"))?;
-                match aad {
-                    Some(aad) => cipher.encrypt(nonce, Payload { msg: expr, aad }),
-                    None => cipher.encrypt(nonce, expr),
-                }
-            }
-            24 => {
-                let cipher = Aes192GcmSiv::new_from_slice(key)
-                    .map_err(|e| exec_datafusion_err!("Error creating AES-192 cipher: {e}"))?;
-                match aad {
-                    Some(aad) => cipher.encrypt(nonce, Payload { msg: expr, aad }),
-                    None => cipher.encrypt(nonce, expr),
-                }
-            }
-            32 => {
-                let cipher = Aes256GcmSiv::new_from_slice(key)
-                    .map_err(|e| exec_datafusion_err!("Error creating AES-256 cipher: {e}"))?;
-                match aad {
-                    Some(aad) => cipher.encrypt(nonce, Payload { msg: expr, aad }),
-                    None => cipher.encrypt(nonce, expr),
-                }
-            }
-            other => {
-                return exec_err!("Key length must be 16, 24, or 32 bytes, got {other}");
-            }
-        }
-        .map_err(|e| exec_datafusion_err!("Encryption error: {e}"))?;
+        let ciphertext = match &mode {
+            EncryptionMode::GCM => {
+                let iv = iv
+                    .as_ref()
+                    .ok_or_else(|| exec_datafusion_err!("IV must be provided for GCM mode"))?;
+                let nonce = Nonce::from_slice(iv);
 
-        // Combine nonce and ciphertext for output. The same nonce is used for decryption.
-        let mut result = iv.to_vec();
-        result.extend_from_slice(&ciphertext);
-        Ok(ColumnarValue::Scalar(ScalarValue::Binary(Some(result))))
+                let result = match key.len() {
+                    16 => {
+                        let cipher = Aes128GcmSiv::new_from_slice(key).map_err(|e| {
+                            exec_datafusion_err!("Error creating AES-128 cipher: {e}")
+                        })?;
+                        let result = match aad {
+                            Some(aad) => cipher.encrypt(nonce, Payload { msg: expr, aad }),
+                            None => cipher.encrypt(nonce, expr),
+                        }
+                        .map_err(|e| exec_datafusion_err!("GCM Encryption error: {e}"))?;
+                        Ok(result)
+                    }
+                    24 => {
+                        let cipher = Aes192GcmSiv::new_from_slice(key).map_err(|e| {
+                            exec_datafusion_err!("Error creating AES-192 cipher: {e}")
+                        })?;
+                        let result = match aad {
+                            Some(aad) => cipher.encrypt(nonce, Payload { msg: expr, aad }),
+                            None => cipher.encrypt(nonce, expr),
+                        }
+                        .map_err(|e| exec_datafusion_err!("GCM Encryption error: {e}"))?;
+                        Ok(result)
+                    }
+                    32 => {
+                        let cipher = Aes256GcmSiv::new_from_slice(key).map_err(|e| {
+                            exec_datafusion_err!("Error creating AES-256 cipher: {e}")
+                        })?;
+                        let result = match aad {
+                            Some(aad) => cipher.encrypt(nonce, Payload { msg: expr, aad }),
+                            None => cipher.encrypt(nonce, expr),
+                        }
+                        .map_err(|e| exec_datafusion_err!("GCM Encryption error: {e}"))?;
+                        Ok(result)
+                    }
+                    other => exec_err!("Key length must be 16, 24, or 32 bytes, got {other}"),
+                }
+                .map_err(|e| exec_datafusion_err!("GCM Encryption error: {e}"))?;
+
+                let mut ciphertext = iv.to_vec();
+                ciphertext.extend_from_slice(&result);
+                Ok(ciphertext)
+            }
+            EncryptionMode::CBC => {
+                let iv = iv
+                    .as_ref()
+                    .ok_or_else(|| exec_datafusion_err!("IV must be provided for CBC mode"))?;
+                match key.len() {
+                    16 => cbc::Encryptor::<Aes128>::new_from_slices(key, iv)
+                        .map_err(|e| exec_datafusion_err!("Error creating AES-128 cipher: {e}"))
+                        .map(|enc| enc.encrypt_padded_vec_mut::<Pkcs7>(expr)),
+                    24 => cbc::Encryptor::<Aes192>::new_from_slices(key, iv)
+                        .map_err(|e| exec_datafusion_err!("Error creating AES-192 cipher: {e}"))
+                        .map(|enc| enc.encrypt_padded_vec_mut::<Pkcs7>(expr)),
+                    32 => cbc::Encryptor::<Aes256>::new_from_slices(key, iv)
+                        .map_err(|e| exec_datafusion_err!("Error creating AES-256 cipher: {e}"))
+                        .map(|enc| enc.encrypt_padded_vec_mut::<Pkcs7>(expr)),
+                    other => exec_err!("Key length must be 16, 24, or 32 bytes, got {other}"),
+                }
+            }
+            EncryptionMode::ECB => exec_err!("ECB mode not implemented for aes_encrypt"),
+        }?;
+
+        Ok(ColumnarValue::Scalar(ScalarValue::Binary(Some(ciphertext))))
     }
 }

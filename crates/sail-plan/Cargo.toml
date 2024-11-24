@@ -44,6 +44,7 @@ log = { workspace = true }
 twox-hash = { workspace = true }
 aes = { workspace = true }
 aes-gcm-siv = { workspace = true }
+cbc = { workspace = true }
 
 [features]
 hdfs = ["dep:hdfs-native-object-store"]

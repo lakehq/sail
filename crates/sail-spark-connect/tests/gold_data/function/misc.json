@@ -173,7 +173,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: CBC mode not implemented"
+        "failure": "error in DataFusion: Arrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
       }
     },
     {
@@ -195,7 +195,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: ECB mode not implemented"
+        "failure": "error in DataFusion: Execution error: ECB mode not implemented for aes_encrypt"
       }
     },
     {
@@ -217,7 +217,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: CBC mode not implemented"
+        "failure": "error in DataFusion: Arrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
       }
     },
     {
