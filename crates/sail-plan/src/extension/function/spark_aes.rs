@@ -30,7 +30,10 @@ pub type Aes192GcmSiv = AesGcmSiv<aes::Aes192>;
 ///                          The value of each pad byte is the number of bytes being padded.
 ///   `iv`: An optional STRING expression providing an initialization vector (IV) for GCM or CBC modes.
 ///         `iv`, when specified, must be 12-bytes long for GCM and 16 bytes for CBC.
+///          If not provided, a random vector will be generated and prepended to the output.
 ///   `aad`: An optional STRING expression providing authenticated additional data (AAD) in GCM mode.
+///          Optional additional authenticated data (AAD) is only supported for GCM.
+///          If provided for encryption, the identical AAD value must be provided for decryption.
 
 #[derive(Debug)]
 pub struct SparkAESEncrypt {
