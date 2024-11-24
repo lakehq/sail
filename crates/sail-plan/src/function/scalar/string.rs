@@ -76,11 +76,13 @@ fn to_binary(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> Plan
 }
 
 fn base64(expr: expr::Expr) -> expr::Expr {
+    // FIXME: Write our own UDF for base64
     let format = expr::Expr::Literal(ScalarValue::Utf8(Some("base64".to_string())));
     expr_fn::encode(expr, format)
 }
 
 fn unbase64(expr: expr::Expr) -> expr::Expr {
+    // FIXME: Write our own UDF for unbase64
     let format = expr::Expr::Literal(ScalarValue::Utf8(Some("base64".to_string())));
     expr_fn::decode(expr, format)
 }

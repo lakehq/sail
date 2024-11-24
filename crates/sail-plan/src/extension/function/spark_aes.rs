@@ -86,7 +86,7 @@ impl Default for SparkAESEncrypt {
 impl SparkAESEncrypt {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::variadic_any(Volatility::Volatile),
         }
     }
 }
@@ -391,8 +391,7 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                     .as_ref()
                     .ok_or_else(|| exec_datafusion_err!("IV must be provided for GCM mode"))?;
                 let nonce = Nonce::from_slice(iv);
-
-                let result = match key.len() {
+                match key.len() {
                     16 => {
                         let cipher = Aes128GcmSiv::new_from_slice(key).map_err(|e| {
                             exec_datafusion_err!("Error creating AES-128 cipher: {e}")
@@ -428,11 +427,7 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                     }
                     other => exec_err!("Key length must be 16, 24, or 32 bytes, got {other}"),
                 }
-                .map_err(|e| exec_datafusion_err!("GCM Encryption error: {e}"))?;
-
-                let mut ciphertext = iv.to_vec();
-                ciphertext.extend_from_slice(&result);
-                Ok(ciphertext)
+                .map_err(|e| exec_datafusion_err!("GCM Encryption error: {e}"))
             }
             EncryptionMode::CBC => {
                 let iv = iv
