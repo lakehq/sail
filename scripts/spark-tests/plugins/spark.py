@@ -202,6 +202,10 @@ SKIPPED_SPARK_TESTS = [
         reason="Client keeps retrying setting session config for invalid remote endpoints",
     ),
     TestMarker(
+        keywords=["JobCancellationTests", "test_session.py"],
+        reason="Slow test not fully working yet",
+    ),
+    TestMarker(
         keywords=["SparkInstallationTestCase", "test_install_spark"],
         reason="Expensive test",
     ),

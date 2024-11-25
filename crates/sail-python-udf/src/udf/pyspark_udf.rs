@@ -7,18 +7,18 @@ use datafusion::arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::common::Result;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use pyo3::intern;
-use pyo3::prelude::*;
+use pyo3::prelude::{PyAnyMethods, PyTypeMethods};
 use pyo3::types::{PyIterator, PyList, PyTuple};
+use pyo3::{Bound, PyAny, Python};
 use sail_common::spec;
 
 use crate::cereal::pyspark_udf::PySparkUdfObject;
 use crate::cereal::PythonFunction;
 use crate::error::PyUdfResult;
-use crate::udf::{
-    build_pyarrow_array_kwargs, build_pyarrow_to_pandas_kwargs, get_pyarrow_array_function,
-    get_pyarrow_output_data_type, get_python_builtins_list_function,
-    get_python_builtins_str_function, get_udf_name,
+use crate::udf::get_udf_name;
+use crate::utils::builtins::PyBuiltins;
+use crate::utils::pyarrow::{
+    to_pyarrow_data_type, PyArrow, PyArrowArray, PyArrowArrayOptions, PyArrowToPandasOptions,
 };
 
 #[derive(Debug)]
@@ -110,41 +110,39 @@ fn call_arrow_udf(
     args: Vec<ArrayRef>,
     output_type: &DataType,
 ) -> PyUdfResult<ArrayData> {
-    let pyarrow_module_array = get_pyarrow_array_function(py)?;
-    let builtins_list = get_python_builtins_list_function(py)?;
-    let python_function = function.function(py)?;
-    let pyarrow_output_data_type = get_pyarrow_output_data_type(output_type, py)?;
-    let pyarrow_array_kwargs = build_pyarrow_array_kwargs(py, pyarrow_output_data_type, true)?;
-    let pyarrow_to_pandas_kwargs = build_pyarrow_to_pandas_kwargs(py)?;
+    let udf = function.function(py)?;
+    let pyarrow_array = PyArrow::array(
+        py,
+        PyArrowArrayOptions {
+            r#type: Some(to_pyarrow_data_type(py, output_type)?),
+            from_pandas: Some(true),
+        },
+    )?;
+    let pyarrow_array_to_pandas = PyArrowArray::to_pandas(
+        py,
+        PyArrowToPandasOptions {
+            use_pandas_nullable_types: true,
+        },
+    )?;
 
     let py_args = args
         .iter()
         .map(|arg| {
-            let arg = arg
-                .into_data()
-                .to_pyarrow(py)?
-                .call_method_bound(
-                    py,
-                    intern!(py, "to_pandas"),
-                    (),
-                    Some(&pyarrow_to_pandas_kwargs),
-                )?
-                .clone_ref(py)
-                .into_bound(py);
+            let arg = arg.into_data().to_pyarrow(py)?.clone_ref(py).into_bound(py);
+            let arg = pyarrow_array_to_pandas.call1((arg,))?;
             Ok(arg)
         })
         .collect::<PyUdfResult<Vec<_>>>()?;
     let py_args = PyTuple::new_bound(py, &py_args);
 
-    let results = python_function.call1((py.None(), (py_args,)))?;
-    let results = builtins_list.call1((results,))?.get_item(0)?;
+    let result = udf.call1((py.None(), (py_args,)))?;
+    let result = PyBuiltins::list(py)?.call1((result,))?.get_item(0)?;
 
-    let results_data = results.get_item(0)?;
-    let _results_datatype = results.get_item(1)?;
-    let results_data = pyarrow_module_array.call((results_data,), Some(&pyarrow_array_kwargs))?;
+    let data = result.get_item(0)?;
+    let _data_type = result.get_item(1)?;
+    let data = pyarrow_array.call1((data,))?;
 
-    let array_data = ArrayData::from_pyarrow_bound(&results_data)?;
-    Ok(array_data)
+    Ok(ArrayData::from_pyarrow_bound(&data)?)
 }
 
 fn call_pandas_udf(
@@ -153,41 +151,39 @@ fn call_pandas_udf(
     args: Vec<ArrayRef>,
     output_type: &DataType,
 ) -> PyUdfResult<ArrayData> {
-    let pyarrow_module_array = get_pyarrow_array_function(py)?;
-    let builtins_list = get_python_builtins_list_function(py)?;
-    let python_function = function.function(py)?;
-    let pyarrow_output_data_type = get_pyarrow_output_data_type(output_type, py)?;
-    let pyarrow_array_kwargs = build_pyarrow_array_kwargs(py, pyarrow_output_data_type, true)?;
-    let pyarrow_to_pandas_kwargs = build_pyarrow_to_pandas_kwargs(py)?;
+    let udf = function.function(py)?;
+    let pyarrow_array = PyArrow::array(
+        py,
+        PyArrowArrayOptions {
+            r#type: Some(to_pyarrow_data_type(py, output_type)?),
+            from_pandas: Some(true),
+        },
+    )?;
+    let pyarrow_array_to_pandas = PyArrowArray::to_pandas(
+        py,
+        PyArrowToPandasOptions {
+            use_pandas_nullable_types: true,
+        },
+    )?;
 
     let py_args = args
         .iter()
         .map(|arg| {
-            let arg = arg
-                .into_data()
-                .to_pyarrow(py)?
-                .call_method_bound(
-                    py,
-                    intern!(py, "to_pandas"),
-                    (),
-                    Some(&pyarrow_to_pandas_kwargs),
-                )?
-                .clone_ref(py)
-                .into_bound(py);
+            let arg = arg.into_data().to_pyarrow(py)?.clone_ref(py).into_bound(py);
+            let arg = pyarrow_array_to_pandas.call1((arg,))?;
             Ok(arg)
         })
         .collect::<PyUdfResult<Vec<_>>>()?;
     let py_args = PyTuple::new_bound(py, &py_args);
 
-    let results = python_function.call1((py.None(), (py_args,)))?;
-    let results = builtins_list.call1((results,))?.get_item(0)?;
+    let result = udf.call1((py.None(), (py_args,)))?;
+    let result = PyBuiltins::list(py)?.call1((result,))?.get_item(0)?;
 
-    let results_data = results.get_item(0)?;
-    let _results_datatype = results.get_item(1)?;
-    let results_data = pyarrow_module_array.call((results_data,), Some(&pyarrow_array_kwargs))?;
+    let data = result.get_item(0)?;
+    let _data_type = result.get_item(1)?;
+    let data = pyarrow_array.call1((data,))?;
 
-    let array_data = ArrayData::from_pyarrow_bound(&results_data)?;
-    Ok(array_data)
+    Ok(ArrayData::from_pyarrow_bound(&data)?)
 }
 
 fn call_udf(
@@ -198,22 +194,23 @@ fn call_udf(
     deterministic: bool,
     output_type: &DataType,
 ) -> PyUdfResult<ArrayData> {
-    let pyarrow_module_array = get_pyarrow_array_function(py)?;
-    let builtins_list = get_python_builtins_list_function(py)?;
-    let builtins_str = get_python_builtins_str_function(py)?;
-    let python_function = function.function(py)?;
-    let pyarrow_output_data_type = get_pyarrow_output_data_type(output_type, py)?;
-    let pyarrow_array_kwargs = build_pyarrow_array_kwargs(py, pyarrow_output_data_type, false)?;
+    let udf = function.function(py)?;
+    let py_list = PyBuiltins::list(py)?;
+    let py_str = PyBuiltins::str(py)?;
+    let pyarrow_array = PyArrow::array(
+        py,
+        PyArrowArrayOptions {
+            r#type: Some(to_pyarrow_data_type(py, output_type)?),
+            from_pandas: Some(false),
+        },
+    )?;
+    let pyarrow_array_to_pylist = PyArrowArray::to_pylist(py)?;
 
     let py_args_columns_list = args
         .iter()
         .map(|arg| {
-            let arg = arg
-                .into_data()
-                .to_pyarrow(py)?
-                .call_method0(py, intern!(py, "to_pylist"))?
-                .clone_ref(py)
-                .into_bound(py);
+            let arg = arg.into_data().to_pyarrow(py)?.clone_ref(py).into_bound(py);
+            let arg = pyarrow_array_to_pylist.call1((arg,))?;
             Ok(arg)
         })
         .collect::<PyUdfResult<Vec<_>>>()?;
@@ -226,8 +223,8 @@ fn call_udf(
     let results = py_args
         .map(|py_arg| -> PyUdfResult<Bound<PyAny>> {
             let py_arg = py_arg?;
-            let result = python_function.call1((py.None(), (py_arg,)))?;
-            let result = builtins_list.call1((result,))?.get_item(0)?;
+            let result = udf.call1((py.None(), (py_arg,)))?;
+            let result = py_list.call1((result,))?.get_item(0)?;
 
             if matches!(eval_type, spec::PySparkUdfType::Batched)
                 && deterministic
@@ -239,7 +236,7 @@ fn call_udf(
                 let result_type = result.get_type();
                 let result_data_type_name = result_type.name()?;
                 if result_data_type_name != "str" {
-                    let result = builtins_str.call1((result,))?;
+                    let result = py_str.call1((result,))?;
                     return Ok(result);
                 } else {
                     already_str = true;
@@ -249,7 +246,7 @@ fn call_udf(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let results = pyarrow_module_array.call((results,), Some(&pyarrow_array_kwargs))?;
+    let results = pyarrow_array.call1((results,))?;
     Ok(ArrayData::from_pyarrow_bound(&results)?)
 }
 
@@ -260,17 +257,19 @@ fn call_udf_no_args(
     deterministic: bool,
     output_type: &DataType,
 ) -> PyUdfResult<ArrayData> {
-    let pyarrow_module_array = get_pyarrow_array_function(py)?;
-    let builtins_list = get_python_builtins_list_function(py)?;
-    let builtins_str = get_python_builtins_str_function(py)?;
-    let python_function = function.function(py)?;
-    let pyarrow_output_data_type = get_pyarrow_output_data_type(output_type, py)?;
-    let pyarrow_array_kwargs = build_pyarrow_array_kwargs(py, pyarrow_output_data_type, false)?;
+    let udf = function.function(py)?;
+    let py_list = PyBuiltins::list(py)?;
+    let py_str = PyBuiltins::str(py)?;
+    let pyarrow_array = PyArrow::array(
+        py,
+        PyArrowArrayOptions {
+            r#type: Some(to_pyarrow_data_type(py, output_type)?),
+            from_pandas: Some(false),
+        },
+    )?;
 
-    let result = python_function.call1((py.None(), (PyList::empty_bound(py),)))?;
-
-    let result = builtins_list.call1((result,))?.get_item(0)?;
-
+    let result = udf.call1((py.None(), (PyList::empty_bound(py),)))?;
+    let result = py_list.call1((result,))?.get_item(0)?;
     let result_type = result.get_type();
     let result_data_type_name = result_type.name()?;
 
@@ -279,12 +278,12 @@ fn call_udf_no_args(
         && *output_type == DataType::Utf8
         && result_data_type_name != "str"
     {
-        builtins_str.call1((result,))?
+        py_str.call1((result,))?
     } else {
         result
     };
 
-    let result = pyarrow_module_array.call(([result],), Some(&pyarrow_array_kwargs))?;
+    let result = pyarrow_array.call1(([result],))?;
     Ok(ArrayData::from_pyarrow_bound(&result)?)
 }
 
