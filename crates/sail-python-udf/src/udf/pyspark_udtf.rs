@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, ArrayRef};
+use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::pyarrow::*;
 use datafusion::arrow::record_batch::RecordBatch;
@@ -27,7 +27,7 @@ use crate::config::SparkUdfConfig;
 use crate::error::PyUdfResult;
 use crate::utils::builtins::PyBuiltins;
 use crate::utils::pyarrow::{
-    to_pyarrow_schema, PyArrowArray, PyArrowRecordBatch, PyArrowToPandasOptions,
+    to_pyarrow_array, to_pyarrow_schema, PyArrowArray, PyArrowRecordBatch, PyArrowToPandasOptions,
 };
 
 #[derive(Debug, Clone)]
@@ -241,7 +241,7 @@ fn apply_pyspark_arrow_function(
     let py_args = args
         .iter()
         .map(|arg| {
-            let arg = arg.into_data().to_pyarrow(py)?.clone_ref(py).into_bound(py);
+            let arg = to_pyarrow_array(py, arg)?;
             let arg = pyarrow_array_to_pandas.call1((arg,))?;
             Ok(arg)
         })
@@ -275,7 +275,7 @@ fn apply_pyspark_function(
     let py_args = args
         .iter()
         .map(|arg| {
-            let arg = arg.into_data().to_pyarrow(py)?.clone_ref(py).into_bound(py);
+            let arg = to_pyarrow_array(py, arg)?;
             let arg = pyarrow_array_to_pylist.call1((arg,))?;
             Ok(arg)
         })

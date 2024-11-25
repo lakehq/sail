@@ -1,3 +1,4 @@
+use datafusion::arrow::array::{Array, ArrayRef};
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::pyarrow::ToPyArrow;
 use pyo3::prelude::{PyAnyMethods, PyModule};
@@ -8,6 +9,16 @@ use pyo3::{intern, Bound, PyAny, Python};
 use crate::error::PyUdfResult;
 use crate::utils::std::PyFunctools;
 
+/// Converts an Arrow array to a PyArrow array.
+pub fn to_pyarrow_array<'py>(py: Python<'py>, array: &ArrayRef) -> PyUdfResult<Bound<'py, PyAny>> {
+    Ok(array
+        .into_data()
+        .to_pyarrow(py)?
+        .clone_ref(py)
+        .into_bound(py))
+}
+
+/// Converts an Arrow data type to a PyArrow data type.
 pub fn to_pyarrow_data_type<'py>(
     py: Python<'py>,
     data_type: &DataType,
@@ -15,6 +26,7 @@ pub fn to_pyarrow_data_type<'py>(
     Ok(data_type.to_pyarrow(py)?.clone_ref(py).into_bound(py))
 }
 
+/// Converts an Arrow schema to a PyArrow schema.
 pub fn to_pyarrow_schema<'py>(
     py: Python<'py>,
     schema: &SchemaRef,
@@ -22,6 +34,7 @@ pub fn to_pyarrow_schema<'py>(
     Ok(schema.to_pyarrow(py)?.clone_ref(py).into_bound(py))
 }
 
+/// Methods for working with the `pyarrow` module.
 pub struct PyArrow;
 
 impl PyArrow {
@@ -29,6 +42,7 @@ impl PyArrow {
         Ok(PyModule::import_bound(py, intern!(py, "pyarrow"))?)
     }
 
+    /// Creates a partial function for `pyarrow.array()`.
     pub fn array<'py>(
         py: Python<'py>,
         options: PyArrowArrayOptions,
@@ -52,6 +66,7 @@ pub struct PyArrowArrayOptions<'py> {
     pub from_pandas: Option<bool>,
 }
 
+/// Methods for working with the `pyarrow.Array` class.
 pub struct PyArrowArray;
 
 impl PyArrowArray {
@@ -59,6 +74,7 @@ impl PyArrowArray {
         Ok(PyArrow::module(py)?.getattr(intern!(py, "Array"))?)
     }
 
+    /// Creates a partial function for `pyarrow.Array.to_pandas()`.
     pub fn to_pandas(py: Python, options: PyArrowToPandasOptions) -> PyUdfResult<Bound<PyAny>> {
         let func = Self::class(py)?.getattr(intern!(py, "to_pandas"))?;
         let kwargs = get_pyarrow_to_pandas_kwargs(py, options)?;
@@ -66,12 +82,14 @@ impl PyArrowArray {
         Ok(func)
     }
 
+    /// Creates a partial function for `pyarrow.Array.to_pylist()`.
     pub fn to_pylist(py: Python) -> PyUdfResult<Bound<PyAny>> {
         let func = Self::class(py)?.getattr(intern!(py, "to_pylist"))?;
         Ok(func)
     }
 }
 
+/// Methods for working with the `pyarrow.RecordBatch` class.
 pub struct PyArrowRecordBatch;
 
 impl PyArrowRecordBatch {
@@ -79,6 +97,7 @@ impl PyArrowRecordBatch {
         Ok(PyArrow::module(py)?.getattr(intern!(py, "RecordBatch"))?)
     }
 
+    /// Creates a partial function for `pyarrow.RecordBatch.from_pandas()`.
     pub fn from_pandas<'py>(
         py: Python<'py>,
         schema: Option<Bound<'py, PyAny>>,
@@ -92,6 +111,7 @@ impl PyArrowRecordBatch {
         Ok(func)
     }
 
+    /// Creates a partial function for `pyarrow.RecordBatch.from_pylist()`.
     pub fn from_pylist<'py>(
         py: Python<'py>,
         schema: Option<Bound<'py, PyAny>>,
@@ -105,6 +125,7 @@ impl PyArrowRecordBatch {
         Ok(func)
     }
 
+    /// Creates a partial function for `pyarrow.RecordBatch.to_pandas()`.
     pub fn to_pandas(py: Python, options: PyArrowToPandasOptions) -> PyUdfResult<Bound<PyAny>> {
         let func = Self::class(py)?.getattr(intern!(py, "to_pandas"))?;
         let kwargs = get_pyarrow_to_pandas_kwargs(py, options)?;

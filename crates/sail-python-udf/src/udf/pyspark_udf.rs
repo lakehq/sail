@@ -1,9 +1,9 @@
 use std::any::Any;
 use std::sync::OnceLock;
 
-use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
+use datafusion::arrow::array::{make_array, ArrayData, ArrayRef};
 use datafusion::arrow::datatypes::DataType;
-use datafusion::arrow::pyarrow::{FromPyArrow, ToPyArrow};
+use datafusion::arrow::pyarrow::FromPyArrow;
 use datafusion::common::Result;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -18,7 +18,8 @@ use crate::error::PyUdfResult;
 use crate::udf::get_udf_name;
 use crate::utils::builtins::PyBuiltins;
 use crate::utils::pyarrow::{
-    to_pyarrow_data_type, PyArrow, PyArrowArray, PyArrowArrayOptions, PyArrowToPandasOptions,
+    to_pyarrow_array, to_pyarrow_data_type, PyArrow, PyArrowArray, PyArrowArrayOptions,
+    PyArrowToPandasOptions,
 };
 
 #[derive(Debug)]
@@ -104,6 +105,7 @@ impl PySparkUDF {
     }
 }
 
+// TODO: `call_arrow_udf` and `call_pandas_udf` are identical.
 fn call_arrow_udf(
     py: Python,
     function: &PySparkUdfObject,
@@ -128,7 +130,7 @@ fn call_arrow_udf(
     let py_args = args
         .iter()
         .map(|arg| {
-            let arg = arg.into_data().to_pyarrow(py)?.clone_ref(py).into_bound(py);
+            let arg = to_pyarrow_array(py, arg)?;
             let arg = pyarrow_array_to_pandas.call1((arg,))?;
             Ok(arg)
         })
@@ -169,7 +171,7 @@ fn call_pandas_udf(
     let py_args = args
         .iter()
         .map(|arg| {
-            let arg = arg.into_data().to_pyarrow(py)?.clone_ref(py).into_bound(py);
+            let arg = to_pyarrow_array(py, arg)?;
             let arg = pyarrow_array_to_pandas.call1((arg,))?;
             Ok(arg)
         })
@@ -209,7 +211,7 @@ fn call_udf(
     let py_args_columns_list = args
         .iter()
         .map(|arg| {
-            let arg = arg.into_data().to_pyarrow(py)?.clone_ref(py).into_bound(py);
+            let arg = to_pyarrow_array(py, arg)?;
             let arg = pyarrow_array_to_pylist.call1((arg,))?;
             Ok(arg)
         })
