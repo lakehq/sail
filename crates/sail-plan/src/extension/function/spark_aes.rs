@@ -391,7 +391,7 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                     .as_ref()
                     .ok_or_else(|| exec_datafusion_err!("IV must be provided for GCM mode"))?;
                 let nonce = Nonce::from_slice(iv);
-                match key.len() {
+                let result = match key.len() {
                     16 => {
                         let cipher = Aes128GcmSiv::new_from_slice(key).map_err(|e| {
                             exec_datafusion_err!("Error creating AES-128 cipher: {e}")
@@ -427,13 +427,16 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                     }
                     other => exec_err!("Key length must be 16, 24, or 32 bytes, got {other}"),
                 }
-                .map_err(|e| exec_datafusion_err!("GCM Encryption error: {e}"))
+                .map_err(|e| exec_datafusion_err!("GCM Encryption error: {e}"))?;
+                let mut ciphertext = iv.to_vec();
+                ciphertext.extend_from_slice(&result);
+                Ok(ciphertext)
             }
             EncryptionMode::CBC => {
                 let iv = iv
                     .as_ref()
                     .ok_or_else(|| exec_datafusion_err!("IV must be provided for CBC mode"))?;
-                match key.len() {
+                let result = match key.len() {
                     16 => cbc::Encryptor::<Aes128>::new_from_slices(key, iv)
                         .map_err(|e| exec_datafusion_err!("Error creating AES-128 cipher: {e}"))
                         .map(|enc| enc.encrypt_padded_vec_mut::<Pkcs7>(expr)),
@@ -444,7 +447,10 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                         .map_err(|e| exec_datafusion_err!("Error creating AES-256 cipher: {e}"))
                         .map(|enc| enc.encrypt_padded_vec_mut::<Pkcs7>(expr)),
                     other => exec_err!("Key length must be 16, 24, or 32 bytes, got {other}"),
-                }
+                }?;
+                let mut ciphertext = iv.to_vec();
+                ciphertext.extend_from_slice(&result);
+                Ok(ciphertext)
             }
             EncryptionMode::ECB => exec_err!("ECB mode not implemented for aes_encrypt"),
         }?;
