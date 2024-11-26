@@ -19,6 +19,7 @@ pub mod size;
 pub mod skewness;
 pub mod spark_aes;
 pub mod spark_array;
+pub mod spark_base64;
 pub mod spark_concat;
 mod spark_hash_utils;
 pub mod spark_hex_unhex;

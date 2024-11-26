@@ -9,6 +9,7 @@ use datafusion_expr::{expr, lit, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::levenshtein::Levenshtein;
+use crate::extension::function::spark_base64::SparkBase64;
 use crate::function::common::{Function, FunctionContext};
 use crate::utils::ItemTaker;
 
@@ -73,12 +74,6 @@ fn to_binary(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> Plan
         };
     }
     Err(PlanError::invalid("to_binary requires 1 or 2 arguments"))
-}
-
-fn base64(expr: expr::Expr) -> expr::Expr {
-    // FIXME: Write our own UDF for base64
-    let format = expr::Expr::Literal(ScalarValue::Utf8(Some("base64".to_string())));
-    expr_fn::encode(expr, format)
 }
 
 fn unbase64(expr: expr::Expr) -> expr::Expr {
@@ -273,7 +268,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
 
     vec![
         ("ascii", F::unary(ascii)),
-        ("base64", F::unary(base64)),
+        ("base64", F::udf(SparkBase64::new())),
         ("bit_length", F::unary(bit_length)),
         ("btrim", F::var_arg(expr_fn::btrim)),
         ("char", F::unary(expr_fn::chr)),
