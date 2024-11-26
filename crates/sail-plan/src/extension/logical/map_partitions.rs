@@ -15,7 +15,7 @@ pub(crate) struct MapPartitionsNode {
     input: Arc<LogicalPlan>,
     input_names: Vec<String>,
     output_names: Vec<String>,
-    func: Arc<dyn MapIterUDF>,
+    udf: Arc<dyn MapIterUDF>,
     schema: DFSchemaRef,
 }
 
@@ -24,14 +24,14 @@ impl MapPartitionsNode {
         input: Arc<LogicalPlan>,
         input_names: Vec<String>,
         output_names: Vec<String>,
-        func: Arc<dyn MapIterUDF>,
+        udf: Arc<dyn MapIterUDF>,
     ) -> Result<Self> {
-        let schema = rename_schema(&func.output_schema(), &output_names)?;
+        let schema = rename_schema(&udf.output_schema(), &output_names)?;
         Ok(Self {
             input,
             input_names,
             output_names,
-            func,
+            udf,
             schema: Arc::new(schema.try_into()?),
         })
     }
@@ -40,8 +40,8 @@ impl MapPartitionsNode {
         &self.input_names
     }
 
-    pub fn function(&self) -> &Arc<dyn MapIterUDF> {
-        &self.func
+    pub fn udf(&self) -> &Arc<dyn MapIterUDF> {
+        &self.udf
     }
 }
 
@@ -52,7 +52,7 @@ impl PartialEq for MapPartitionsNode {
         self.input == other.input
             && self.input_names == other.input_names
             && self.output_names == other.output_names
-            && self.func.as_ref() == other.func.as_ref()
+            && self.udf.as_ref() == other.udf.as_ref()
             && self.schema == other.schema
     }
 }
@@ -62,7 +62,7 @@ struct MapPartitionsNodeOrd<'a> {
     input: &'a Arc<LogicalPlan>,
     input_names: &'a Vec<String>,
     output_names: &'a Vec<String>,
-    func: &'a Arc<dyn MapIterUDF>,
+    udf: &'a Arc<dyn MapIterUDF>,
 }
 
 impl<'a> From<&'a MapPartitionsNode> for MapPartitionsNodeOrd<'a> {
@@ -71,7 +71,7 @@ impl<'a> From<&'a MapPartitionsNode> for MapPartitionsNodeOrd<'a> {
             input: &node.input,
             input_names: &node.input_names,
             output_names: &node.output_names,
-            func: &node.func,
+            udf: &node.udf,
         }
     }
 }

@@ -49,7 +49,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 Arc::new(MapPartitionsExec::new(
                     physical_inputs.one()?,
                     node.input_names().to_vec(),
-                    node.function().clone(),
+                    node.udf().clone(),
                     node.schema().inner().clone(),
                 ))
             } else if let Some(node) = node.as_any().downcast_ref::<SortWithinPartitionsNode>() {
