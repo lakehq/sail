@@ -7,7 +7,8 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream};
-use datafusion_common::{DataFusionError, Result};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion_common::{exec_err, DataFusionError, Result};
 use futures::{Stream, StreamExt};
 use pyo3::exceptions::{PyRuntimeError, PyStopIteration};
 use pyo3::prelude::PyAnyMethods;
@@ -185,19 +186,23 @@ impl MapIterFormat {
 #[pyclass]
 struct PyMapIterInputStream {
     format: MapIterFormat,
-    receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<Result<RecordBatch>>>>,
+    state: Arc<tokio::sync::Mutex<PyMapIterInputStreamState>>,
     handle: Handle,
 }
 
 impl PyMapIterInputStream {
     pub fn new(
         format: MapIterFormat,
-        receiver: mpsc::Receiver<Result<RecordBatch>>,
+        input: SendableRecordBatchStream,
+        signal: oneshot::Receiver<()>,
         handle: Handle,
     ) -> Self {
         Self {
             format,
-            receiver: Arc::new(tokio::sync::Mutex::new(receiver)),
+            state: Arc::new(tokio::sync::Mutex::new(PyMapIterInputStreamState {
+                input,
+                signal,
+            })),
             handle,
         }
     }
@@ -210,17 +215,17 @@ impl PyMapIterInputStream {
     }
 
     fn __next__(self_: PyRefMut<'_, Self>) -> PyResult<PyObject> {
-        let receiver = Arc::clone(&self_.receiver);
+        let state = Arc::clone(&self_.state);
         let handle = self_.handle.clone();
         let format = self_.format;
         self_
             .py()
             .allow_threads(|| {
                 handle.block_on(async {
-                    receiver
+                    state
                         .lock()
                         .await
-                        .recv()
+                        .next()
                         .await
                         .map(|x| x.map_err(|e| PyRuntimeError::new_err(e.to_string())))
                 })
@@ -234,22 +239,34 @@ impl PyMapIterInputStream {
     }
 }
 
+struct PyMapIterInputStreamState {
+    input: SendableRecordBatchStream,
+    signal: oneshot::Receiver<()>,
+}
+
+impl PyMapIterInputStreamState {
+    async fn next(&mut self) -> Option<Result<RecordBatch>> {
+        select! {
+            x = self.input.next() => x,
+            _ = &mut self.signal => Some(exec_err!("stop signal received for the Python map iterator")),
+        }
+    }
+}
+
 enum MapIterStreamState {
     Running {
         signal: oneshot::Sender<()>,
         python_task: std::thread::JoinHandle<()>,
     },
-    Finished,
+    Stopped,
 }
 
 struct MapIterStream {
-    output: Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>,
-    output_schema: SchemaRef,
+    inner: SendableRecordBatchStream,
     state: MapIterStreamState,
 }
 
 impl MapIterStream {
-    const INPUT_CHANNEL_BUFFER: usize = 16;
     const OUTPUT_CHANNEL_BUFFER: usize = 16;
 
     pub fn new(
@@ -258,7 +275,6 @@ impl MapIterStream {
         format: MapIterFormat,
         output_schema: SchemaRef,
     ) -> Self {
-        let (input_tx, input_rx) = mpsc::channel(Self::INPUT_CHANNEL_BUFFER);
         let (output_tx, output_rx) = mpsc::channel(Self::OUTPUT_CHANNEL_BUFFER);
         let (signal_tx, signal_rx) = oneshot::channel();
         let handle = Handle::current();
@@ -271,7 +287,8 @@ impl MapIterStream {
                     py,
                     format,
                     function,
-                    input_rx,
+                    input,
+                    signal_rx,
                     output_tx.clone(),
                     output_schema_for_python,
                     handle,
@@ -283,19 +300,11 @@ impl MapIterStream {
                 }
             }
         });
-        // We do not store the handle to the task since it will stop on its own
-        // when the signal is received.
-        tokio::task::spawn(async move {
-            // Spawn input task on a separate thread to prevent blocking the current thread
-            // which is also used to receive the stop signal.
-            select! {
-                _ = tokio::task::spawn(Self::run_input_task(input, input_tx)) => {}
-                _ = signal_rx => {}
-            }
-        });
         Self {
-            output: Box::pin(ReceiverStream::new(output_rx)),
-            output_schema,
+            inner: Box::pin(RecordBatchStreamAdapter::new(
+                output_schema,
+                ReceiverStream::new(output_rx),
+            )),
             state: MapIterStreamState::Running {
                 signal: signal_tx,
                 python_task,
@@ -303,23 +312,13 @@ impl MapIterStream {
         }
     }
 
-    async fn run_input_task(
-        mut input: SendableRecordBatchStream,
-        sender: mpsc::Sender<Result<RecordBatch>>,
-    ) {
-        while let Some(x) = input.next().await {
-            if sender.send(x).await.is_err() {
-                break;
-            }
-        }
-    }
-
     fn run_python_task(
         py: Python,
         format: MapIterFormat,
         function: PySparkUdfObject,
-        input_rx: mpsc::Receiver<Result<RecordBatch>>,
-        output_tx: mpsc::Sender<Result<RecordBatch>>,
+        input: SendableRecordBatchStream,
+        signal: oneshot::Receiver<()>,
+        sender: mpsc::Sender<Result<RecordBatch>>,
         output_schema: SchemaRef,
         handle: Handle,
     ) -> PyUdfResult<()> {
@@ -328,7 +327,7 @@ impl MapIterStream {
         // We could have wrap each record batch in a single-element list and call the UDF
         // for each record batch, but that does not work if the user wants to maintain state
         // across record batches.
-        let input = PyMapIterInputStream::new(format, input_rx, handle);
+        let input = PyMapIterInputStream::new(format, input, signal, handle);
         let input = input.into_py(py);
         let output = udf.call1((py.None(), input))?;
         for x in output.iter()? {
@@ -342,7 +341,7 @@ impl MapIterStream {
             if py
                 .allow_threads(|| {
                     let out = out.map_err(|e| DataFusionError::External(e.into()));
-                    output_tx.blocking_send(out)
+                    sender.blocking_send(out)
                 })
                 .is_err()
             {
@@ -355,7 +354,7 @@ impl MapIterStream {
 
 impl Drop for MapIterStream {
     fn drop(&mut self) {
-        let state = std::mem::replace(&mut self.state, MapIterStreamState::Finished);
+        let state = std::mem::replace(&mut self.state, MapIterStreamState::Stopped);
         match state {
             MapIterStreamState::Running {
                 signal,
@@ -367,7 +366,7 @@ impl Drop for MapIterStream {
                 // So we can join the Python task without waiting indefinitely.
                 let _ = python_task.join();
             }
-            MapIterStreamState::Finished => {}
+            MapIterStreamState::Stopped => {}
         }
     }
 }
@@ -376,12 +375,12 @@ impl Stream for MapIterStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.output.as_mut().poll_next(cx)
+        self.inner.as_mut().poll_next(cx)
     }
 }
 
 impl RecordBatchStream for MapIterStream {
     fn schema(&self) -> SchemaRef {
-        self.output_schema.clone()
+        self.inner.schema()
     }
 }
