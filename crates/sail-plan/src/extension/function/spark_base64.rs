@@ -1,10 +1,11 @@
 use std::any::Any;
+use std::sync::Arc;
 
-use base64::engine::general_purpose::STANDARD_NO_PAD;
+use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use datafusion::arrow::array::{
-    BinaryArray, BinaryViewArray, FixedSizeBinaryArray, LargeBinaryArray, LargeStringArray,
-    StringArray, StringViewArray,
+    BinaryArray, BinaryBuilder, BinaryViewArray, FixedSizeBinaryArray, LargeBinaryArray,
+    LargeBinaryBuilder, LargeStringArray, StringArray, StringViewArray,
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result, ScalarValue};
@@ -24,7 +25,7 @@ impl Default for SparkBase64 {
 impl SparkBase64 {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(1, Volatility::Immutable),
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }
@@ -72,72 +73,81 @@ impl ScalarUDFImpl for SparkBase64 {
             );
         }
 
-        let expr = match &args[0] {
+        let results = match &args[0] {
             ColumnarValue::Scalar(ScalarValue::Binary(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::BinaryView(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::FixedSizeBinary(_, Some(expr)))
-            | ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(expr))) => Ok(expr.as_slice()),
+            | ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(expr))) => {
+                let results = vec![STANDARD.encode(expr.as_slice())];
+                Ok(results)
+            }
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(expr)))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(expr))) => Ok(expr.as_bytes()),
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(expr))) => {
+                let results = vec![STANDARD.encode(expr.as_bytes())];
+                Ok(results)
+            }
             ColumnarValue::Array(array) => {
-                if array.len() != 1 {
-                    return exec_err!(
-                        "Spark `base64`: Expr requires a single value, got {array:?}"
-                    );
+                let len = array.len();
+                let mut results = Vec::with_capacity(len);
+
+                for i in 0..len {
+                    let value =  match array.data_type() {
+                        DataType::Binary => {
+                            let array = array.as_any().downcast_ref::<BinaryArray>()
+                                .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to BinaryArray"))?;
+                            Ok(array.value(i))
+                        },
+                        DataType::BinaryView => {
+                            let array = array.as_any().downcast_ref::<BinaryViewArray>()
+                                .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to LargeBinaryArray"))?;
+                            Ok(array.value(i))
+                        },
+                        DataType::FixedSizeBinary(_) => {
+                            let array = array.as_any().downcast_ref::<FixedSizeBinaryArray>()
+                                .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to FixedSizeBinaryArray"))?;
+                            Ok(array.value(i))
+                        },
+                        DataType::LargeBinary => {
+                            let array = array.as_any().downcast_ref::<LargeBinaryArray>()
+                                .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to LargeBinaryArray"))?;
+                            Ok(array.value(i))
+                        },
+                        DataType::Utf8 => {
+                            let array = array.as_any().downcast_ref::<StringArray>()
+                                .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to StringArray"))?;
+                            Ok(array.value(i).as_bytes())
+                        },
+                        DataType::LargeUtf8 => {
+                            let array = array.as_any().downcast_ref::<LargeStringArray>()
+                                .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to LargeStringArray"))?;
+                            Ok(array.value(i).as_bytes())
+                        },
+                        DataType::Utf8View => {
+                            let array = array.as_any().downcast_ref::<StringViewArray>()
+                                .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to StringViewArray"))?;
+                            Ok(array.value(i).as_bytes())
+                        },
+                        other => exec_err!("Spark `base64`: Expr array must be BINARY or STRING, got array of type {other}")
+                    }?;
+                    results.push(STANDARD.encode(value));
                 }
-                match array.data_type() {
-                    DataType::Binary => {
-                        let array = array.as_any().downcast_ref::<BinaryArray>()
-                            .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to BinaryArray"))?;
-                        Ok(array.value(0))
-                    },
-                    DataType::BinaryView => {
-                        let array = array.as_any().downcast_ref::<BinaryViewArray>()
-                            .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to LargeBinaryArray"))?;
-                        Ok(array.value(0))
-                    },
-                    DataType::FixedSizeBinary(_) => {
-                        let array = array.as_any().downcast_ref::<FixedSizeBinaryArray>()
-                            .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to FixedSizeBinaryArray"))?;
-                        Ok(array.value(0))
-                    },
-                    DataType::LargeBinary => {
-                        let array = array.as_any().downcast_ref::<LargeBinaryArray>()
-                            .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to LargeBinaryArray"))?;
-                        Ok(array.value(0))
-                    },
-                    DataType::Utf8 => {
-                        let array = array.as_any().downcast_ref::<StringArray>()
-                            .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to StringArray"))?;
-                        Ok(array.value(0).as_bytes())
-                    },
-                    DataType::LargeUtf8 => {
-                        let array = array.as_any().downcast_ref::<LargeStringArray>()
-                            .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to LargeStringArray"))?;
-                        Ok(array.value(0).as_bytes())
-                    },
-                    DataType::Utf8View => {
-                        let array = array.as_any().downcast_ref::<StringViewArray>()
-                            .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to StringViewArray"))?;
-                        Ok(array.value(0).as_bytes())
-                    },
-                    other => exec_err!("Spark `base64`: Expr array must be BINARY or STRING, got array of type {other}")
-                }
+                Ok(results)
             }
             other => exec_err!("Spark `base64`: Expr must be BINARY or STRING, got {other:?}"),
         }?;
 
-        let result = STANDARD_NO_PAD.encode(expr);
         match args[0].data_type() {
             DataType::Utf8
             | DataType::Utf8View
             | DataType::Binary
             | DataType::FixedSizeBinary(_)
-            | DataType::BinaryView => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result)))),
-            DataType::LargeUtf8 | DataType::LargeBinary => {
-                Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(result))))
+            | DataType::BinaryView => {
+                Ok(ColumnarValue::Array(Arc::new(StringArray::from(results))))
             }
+            DataType::LargeUtf8 | DataType::LargeBinary => Ok(ColumnarValue::Array(Arc::new(
+                LargeStringArray::from(results),
+            ))),
             _ => plan_err!(
                 "1st argument should be String or Binary, got {}",
                 args[0].data_type()
@@ -160,7 +170,10 @@ impl Default for SparkUnbase64 {
 impl SparkUnbase64 {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(1, Volatility::Immutable),
+            signature: Signature::variadic(
+                vec![DataType::Utf8View, DataType::Utf8, DataType::LargeUtf8],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -201,73 +214,84 @@ impl ScalarUDFImpl for SparkUnbase64 {
             );
         }
 
-        let expr = match &args[0] {
+        let results = match &args[0] {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(expr)))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(expr))) => Ok(expr.as_str()),
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(expr))) => {
+                let results = vec![STANDARD.decode(expr.as_str()).map_err(|e| {
+                    exec_datafusion_err!("Spark `unbase64`: to decode base64 string: {e}")
+                })?];
+                Ok(results)
+            }
             ColumnarValue::Array(array) => {
-                if array.len() != 1 {
-                    return exec_err!(
-                        "Spark `unbase64`: Expr requires a single value, got {array:?}"
-                    );
-                }
-                match array.data_type() {
-                    DataType::Utf8 => {
-                        let array =
-                            array
-                                .as_any()
-                                .downcast_ref::<StringArray>()
-                                .ok_or_else(|| {
-                                    exec_datafusion_err!(
+                let len = array.len();
+                let mut results = Vec::with_capacity(len);
+
+                for i in 0..len {
+                    let value = match array.data_type() {
+                        DataType::Utf8 => {
+                            let array =
+                                array
+                                    .as_any()
+                                    .downcast_ref::<StringArray>()
+                                    .ok_or_else(|| {
+                                        exec_datafusion_err!(
                                         "Spark `unbase64`: Failed to downcast Expr to StringArray"
                                     )
+                                    })?;
+                            Ok(array.value(i))
+                        }
+                        DataType::LargeUtf8 => {
+                            let array = array
+                                .as_any()
+                                .downcast_ref::<LargeStringArray>()
+                                .ok_or_else(|| {
+                                    exec_datafusion_err!(
+                                        "Spark `unbase64`: Failed to downcast Expr to LargeStringArray"
+                                    )
                                 })?;
-                        Ok(array.value(0))
-                    }
-                    DataType::LargeUtf8 => {
-                        let array = array
-                            .as_any()
-                            .downcast_ref::<LargeStringArray>()
-                            .ok_or_else(|| {
-                                exec_datafusion_err!(
-                                    "Spark `unbase64`: Failed to downcast Expr to LargeStringArray"
-                                )
-                            })?;
-                        Ok(array.value(0))
-                    }
-                    DataType::Utf8View => {
-                        let array = array
-                            .as_any()
-                            .downcast_ref::<StringViewArray>()
-                            .ok_or_else(|| {
-                                exec_datafusion_err!(
-                                    "Spark `unbase64`: Failed to downcast Expr to StringViewArray"
-                                )
-                            })?;
-                        Ok(array.value(0))
-                    }
-                    other => exec_err!(
-                        "Spark `unbase64`: Expr array must be STRING, got array of type {other}"
-                    ),
+                            Ok(array.value(i))
+                        }
+                        DataType::Utf8View => {
+                            let array = array
+                                .as_any()
+                                .downcast_ref::<StringViewArray>()
+                                .ok_or_else(|| {
+                                    exec_datafusion_err!(
+                                        "Spark `unbase64`: Failed to downcast Expr to StringViewArray"
+                                    )
+                                })?;
+                            Ok(array.value(i))
+                        }
+                        other => exec_err!(
+                            "Spark `unbase64`: Expr array must be STRING, got array of type {other}"
+                        ),
+                    }?;
+                    results.push(STANDARD.decode(value).map_err(|e| {
+                        exec_datafusion_err!("Spark `unbase64`: to decode base64 string: {e}")
+                    })?);
                 }
+                Ok(results)
             }
             other => exec_err!("Spark `unbase64`: Expr must be STRING, got {other:?}"),
         }?;
 
-        let result = STANDARD_NO_PAD
-            .decode(expr)
-            .map_err(|e| exec_datafusion_err!("Spark `unbase64`: to decode base64 string: {e}"))?;
         match args[0].data_type() {
             DataType::Utf8 | DataType::Utf8View => {
-                Ok(ColumnarValue::Scalar(ScalarValue::Binary(Some(result))))
+                let mut builder = BinaryBuilder::new();
+                for value in results {
+                    builder.append_value(value.as_slice());
+                }
+                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
             }
-            DataType::LargeUtf8 => Ok(ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(
-                result,
-            )))),
-            _ => plan_err!(
-                "1st argument should be String or Binary, got {}",
-                args[0].data_type()
-            ),
+            DataType::LargeUtf8 => {
+                let mut builder = LargeBinaryBuilder::new();
+                for value in results {
+                    builder.append_value(value.as_slice());
+                }
+                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+            }
+            _ => plan_err!("1st argument should be String, got {}", args[0].data_type()),
         }
     }
 }
