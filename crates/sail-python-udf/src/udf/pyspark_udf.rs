@@ -1,9 +1,9 @@
 use std::any::Any;
 use std::sync::OnceLock;
 
-use datafusion::arrow::array::{make_array, ArrayData, ArrayRef};
+use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
 use datafusion::arrow::datatypes::DataType;
-use datafusion::arrow::pyarrow::FromPyArrow;
+use datafusion::arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::common::Result;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -17,10 +17,7 @@ use crate::cereal::PythonFunction;
 use crate::error::PyUdfResult;
 use crate::udf::get_udf_name;
 use crate::utils::builtins::PyBuiltins;
-use crate::utils::pyarrow::{
-    to_pyarrow_array, to_pyarrow_data_type, PyArrow, PyArrowArray, PyArrowArrayOptions,
-    PyArrowToPandasOptions,
-};
+use crate::utils::pyarrow::{PyArrow, PyArrowArray, PyArrowArrayOptions, PyArrowToPandasOptions};
 
 #[derive(Debug)]
 pub struct PySparkUDF {
@@ -116,7 +113,7 @@ fn call_arrow_udf(
     let pyarrow_array = PyArrow::array(
         py,
         PyArrowArrayOptions {
-            r#type: Some(to_pyarrow_data_type(py, output_type)?),
+            r#type: Some(output_type.to_pyarrow(py)?),
             from_pandas: Some(true),
         },
     )?;
@@ -130,7 +127,7 @@ fn call_arrow_udf(
     let py_args = args
         .iter()
         .map(|arg| {
-            let arg = to_pyarrow_array(py, arg)?;
+            let arg = arg.into_data().to_pyarrow(py)?;
             let arg = pyarrow_array_to_pandas.call1((arg,))?;
             Ok(arg)
         })
@@ -157,7 +154,7 @@ fn call_pandas_udf(
     let pyarrow_array = PyArrow::array(
         py,
         PyArrowArrayOptions {
-            r#type: Some(to_pyarrow_data_type(py, output_type)?),
+            r#type: Some(output_type.to_pyarrow(py)?),
             from_pandas: Some(true),
         },
     )?;
@@ -171,7 +168,7 @@ fn call_pandas_udf(
     let py_args = args
         .iter()
         .map(|arg| {
-            let arg = to_pyarrow_array(py, arg)?;
+            let arg = arg.into_data().to_pyarrow(py)?;
             let arg = pyarrow_array_to_pandas.call1((arg,))?;
             Ok(arg)
         })
@@ -202,7 +199,7 @@ fn call_udf(
     let pyarrow_array = PyArrow::array(
         py,
         PyArrowArrayOptions {
-            r#type: Some(to_pyarrow_data_type(py, output_type)?),
+            r#type: Some(output_type.to_pyarrow(py)?),
             from_pandas: Some(false),
         },
     )?;
@@ -211,7 +208,7 @@ fn call_udf(
     let py_args_columns_list = args
         .iter()
         .map(|arg| {
-            let arg = to_pyarrow_array(py, arg)?;
+            let arg = arg.into_data().to_pyarrow(py)?;
             let arg = pyarrow_array_to_pylist.call1((arg,))?;
             Ok(arg)
         })
@@ -265,7 +262,7 @@ fn call_udf_no_args(
     let pyarrow_array = PyArrow::array(
         py,
         PyArrowArrayOptions {
-            r#type: Some(to_pyarrow_data_type(py, output_type)?),
+            r#type: Some(output_type.to_pyarrow(py)?),
             from_pandas: Some(false),
         },
     )?;

@@ -4,7 +4,7 @@ use std::sync::{Arc, OnceLock};
 use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef, AsArray};
 use datafusion::arrow::compute::concat;
 use datafusion::arrow::datatypes::{DataType, Field};
-use datafusion::arrow::pyarrow::FromPyArrow;
+use datafusion::arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::common::Result;
 use datafusion::logical_expr::{Accumulator, Signature, Volatility};
 use datafusion_common::utils::array_into_list_array;
@@ -21,10 +21,7 @@ use crate::cereal::PythonFunction;
 use crate::error::PyUdfResult;
 use crate::udf::get_udf_name;
 use crate::utils::builtins::PyBuiltins;
-use crate::utils::pyarrow::{
-    to_pyarrow_array, to_pyarrow_data_type, PyArrow, PyArrowArray, PyArrowArrayOptions,
-    PyArrowToPandasOptions,
-};
+use crate::utils::pyarrow::{PyArrow, PyArrowArray, PyArrowArrayOptions, PyArrowToPandasOptions};
 
 #[derive(Debug)]
 pub struct PySparkAggregateUDF {
@@ -172,7 +169,7 @@ fn call_pandas_udaf(
     let pyarrow_array = PyArrow::array(
         py,
         PyArrowArrayOptions {
-            r#type: Some(to_pyarrow_data_type(py, output_type)?),
+            r#type: Some(output_type.to_pyarrow(py)?),
             from_pandas: Some(true),
         },
     )?;
@@ -186,7 +183,7 @@ fn call_pandas_udaf(
     let py_args = args
         .iter()
         .map(|arg| {
-            let arg = to_pyarrow_array(py, arg)?;
+            let arg = arg.into_data().to_pyarrow(py)?;
             let arg = pyarrow_array_to_pandas.call1((arg,))?;
             Ok(arg)
         })

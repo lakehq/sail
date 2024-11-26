@@ -1,16 +1,25 @@
 use std::cmp::Ordering;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::pyarrow::{FromPyArrow, ToPyArrow};
-use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion_common::Result;
-use futures::{StreamExt, TryStreamExt};
+use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream};
+use datafusion_common::{DataFusionError, Result};
+use futures::{Stream, StreamExt};
+use pyo3::exceptions::{PyRuntimeError, PyStopIteration};
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyList;
-use pyo3::{intern, PyResult, Python};
+use pyo3::{
+    intern, pyclass, pymethods, Bound, IntoPy, PyAny, PyObject, PyRef, PyRefMut, PyResult, Python,
+};
 use sail_common::udf::MapIterUDF;
+use tokio::runtime::Handle;
+use tokio::select;
+use tokio::sync::{mpsc, oneshot};
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::cereal::pyspark_udf::PySparkUdfObject;
 use crate::cereal::PythonFunction;
@@ -18,14 +27,14 @@ use crate::config::SparkUdfConfig;
 use crate::error::PyUdfResult;
 use crate::udf::get_udf_name;
 use crate::utils::builtins::PyBuiltins;
-use crate::utils::pyarrow::{to_pyarrow_schema, PyArrowRecordBatch, PyArrowToPandasOptions};
+use crate::utils::pyarrow::{PyArrowRecordBatch, PyArrowToPandasOptions};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PySparkMapIterUDF {
+    format: MapIterFormat,
     function_name: String,
     function: Vec<u8>,
     output_schema: SchemaRef,
-    use_arrow: bool,
     spark_udf_config: SparkUdfConfig,
     #[allow(dead_code)]
     deterministic: bool,
@@ -35,20 +44,20 @@ pub struct PySparkMapIterUDF {
 
 impl PySparkMapIterUDF {
     pub fn new(
+        format: MapIterFormat,
         function_name: String,
         function: Vec<u8>,
         output_schema: SchemaRef,
-        use_arrow: bool,
         spark_udf_config: SparkUdfConfig,
         deterministic: bool,
         is_barrier: bool,
     ) -> Self {
         let function_name = get_udf_name(&function_name, &function);
         Self {
+            format,
             function_name,
             function,
             output_schema,
-            use_arrow,
             spark_udf_config,
             deterministic,
             is_barrier,
@@ -58,9 +67,9 @@ impl PySparkMapIterUDF {
 
 #[derive(PartialEq, PartialOrd)]
 struct PySparkMapIterUDFOrd<'a> {
+    format: MapIterFormat,
     function_name: &'a String,
     function: &'a Vec<u8>,
-    use_arrow: bool,
     deterministic: bool,
     is_barrier: bool,
 }
@@ -68,9 +77,9 @@ struct PySparkMapIterUDFOrd<'a> {
 impl<'a> From<&'a PySparkMapIterUDF> for PySparkMapIterUDFOrd<'a> {
     fn from(udf: &'a PySparkMapIterUDF) -> Self {
         Self {
+            format: udf.format,
             function_name: &udf.function_name,
             function: &udf.function,
-            use_arrow: udf.use_arrow,
             deterministic: udf.deterministic,
             is_barrier: udf.is_barrier,
         }
@@ -90,112 +99,289 @@ impl MapIterUDF for PySparkMapIterUDF {
 
     fn invoke(&self, input: SendableRecordBatchStream) -> Result<SendableRecordBatchStream> {
         let function = PySparkUdfObject::load(&self.function)?;
-        let output_schema = self.output_schema.clone();
-        let use_arrow = self.use_arrow;
-        let output = input
-            .map(move |x| {
-                x.and_then(|batch| {
-                    Python::with_gil(|py| -> Result<_> {
-                        let out = if use_arrow {
-                            call_arrow_map_iter_udf(py, &function, batch)?
-                        } else {
-                            call_pandas_map_iter_udf(py, &function, &output_schema, batch)?
-                        };
-                        let out: Vec<Result<_>> = out.into_iter().map(Ok).collect();
-                        Ok(out)
-                    })
-                    .map(futures::stream::iter)
-                })
-            })
-            .try_flatten();
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
+        Ok(Box::pin(MapIterStream::new(
+            input,
+            function,
+            self.format,
             self.output_schema.clone(),
-            output,
         )))
     }
 }
 
-fn call_arrow_map_iter_udf(
-    py: Python,
-    function: &PySparkUdfObject,
-    batch: RecordBatch,
-) -> PyUdfResult<Vec<RecordBatch>> {
-    let udf = function.function(py)?;
-    let input = batch.to_pyarrow(py)?;
-    let input = PyList::new_bound(py, vec![input]);
-    let output = udf.call1((py.None(), (input,)))?;
-    let output = output
-        .iter()?
-        .map(|x| {
-            let data = x.and_then(|x| x.get_item(0))?;
-            if data.len()? == 0 {
-                return Ok(None);
-            }
-            Ok(Some(RecordBatch::from_pyarrow_bound(&data)?))
-        })
-        .filter_map(|x| x.transpose())
-        .collect::<PyUdfResult<Vec<_>>>()?;
-    Ok(output)
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub enum MapIterFormat {
+    Pandas,
+    Arrow,
 }
 
-fn call_pandas_map_iter_udf(
-    py: Python,
-    function: &PySparkUdfObject,
-    output_schema: &SchemaRef,
-    batch: RecordBatch,
-) -> PyUdfResult<Vec<RecordBatch>> {
-    let udf = function.function(py)?;
-    let columns = output_schema
-        .fields()
-        .iter()
-        .map(|x| x.name().clone())
-        .collect::<Vec<_>>();
-    let pyarrow_schema = to_pyarrow_schema(py, output_schema)?;
-    let pyarrow_record_batch_from_pandas =
-        PyArrowRecordBatch::from_pandas(py, Some(pyarrow_schema))?;
-    let pyarrow_record_batch_to_pandas = PyArrowRecordBatch::to_pandas(
-        py,
-        PyArrowToPandasOptions {
-            // The PySpark unit tests do not expect Pandas nullable types.
-            use_pandas_nullable_types: false,
-        },
-    )?;
-    let py_str = PyBuiltins::str(py)?;
-    let py_isinstance = PyBuiltins::isinstance(py)?;
-    let input = batch.to_pyarrow(py)?;
-    let input = pyarrow_record_batch_to_pandas.call1((input,))?;
-    let input = PyList::new_bound(py, vec![input]);
-    let output = udf.call1((py.None(), (input,)))?;
-    let output = output
-        .iter()?
-        .map(|x| {
-            let data = x.and_then(|x| x.get_item(0))?;
-            if data.len()? == 0 {
-                return Ok(None);
-            }
-            let data = if data
+impl MapIterFormat {
+    fn record_batch_to_py(&self, py: Python, batch: RecordBatch) -> PyResult<PyObject> {
+        let batch = batch.to_pyarrow(py)?;
+        match self {
+            MapIterFormat::Pandas => Self::pyarrow_to_pandas(py, batch),
+            MapIterFormat::Arrow => Ok(batch),
+        }
+    }
+
+    fn record_batch_from_py_bound(
+        &self,
+        batch: Bound<PyAny>,
+        schema: &SchemaRef,
+    ) -> PyResult<RecordBatch> {
+        let batch = match self {
+            MapIterFormat::Pandas => Self::pyarrow_from_pandas_bound(batch, schema)?,
+            MapIterFormat::Arrow => batch,
+        };
+        RecordBatch::from_pyarrow_bound(&batch)
+    }
+
+    fn pyarrow_to_pandas(py: Python, batch: PyObject) -> PyResult<PyObject> {
+        let converter = PyArrowRecordBatch::to_pandas(
+            py,
+            PyArrowToPandasOptions {
+                // The PySpark unit tests do not expect Pandas nullable types.
+                use_pandas_nullable_types: false,
+            },
+        )?;
+        Ok(converter.call1((batch,))?.into())
+    }
+
+    fn pyarrow_from_pandas_bound<'py>(
+        df: Bound<'py, PyAny>,
+        schema: &SchemaRef,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let py = df.py();
+        let py_str = PyBuiltins::str(py)?;
+        let py_isinstance = PyBuiltins::isinstance(py)?;
+        let has_str_columns = df
+            .getattr(intern!(py, "columns"))?
+            .iter()?
+            .map(|c| py_isinstance.call1((c?, &py_str))?.extract())
+            .collect::<PyResult<Vec<bool>>>()?
+            .iter()
+            .any(|x| *x);
+        let df = if has_str_columns {
+            df
+        } else {
+            let columns = schema
+                .fields()
+                .iter()
+                .map(|x| x.name().clone())
+                .collect::<Vec<_>>();
+            let truncated = df
                 .getattr(intern!(py, "columns"))?
                 .iter()?
-                .map(|c| py_isinstance.call1((c?, &py_str))?.extract())
-                .collect::<PyResult<Vec<bool>>>()?
-                .iter()
-                .any(|x| *x)
+                .take(columns.len())
+                .collect::<PyResult<Vec<_>>>()?;
+            let df = df.get_item(truncated)?;
+            df.setattr(intern!(py, "columns"), columns.clone())?;
+            df
+        };
+        let converter = PyArrowRecordBatch::from_pandas(py, Some(schema.to_pyarrow(py)?))?;
+        converter.call1((df,))
+    }
+}
+
+#[pyclass]
+struct PyMapIterInputStream {
+    format: MapIterFormat,
+    receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<Result<RecordBatch>>>>,
+    handle: Handle,
+}
+
+impl PyMapIterInputStream {
+    pub fn new(
+        format: MapIterFormat,
+        receiver: mpsc::Receiver<Result<RecordBatch>>,
+        handle: Handle,
+    ) -> Self {
+        Self {
+            format,
+            receiver: Arc::new(tokio::sync::Mutex::new(receiver)),
+            handle,
+        }
+    }
+}
+
+#[pymethods]
+impl PyMapIterInputStream {
+    fn __iter__(self_: PyRef<Self>) -> PyRef<Self> {
+        self_
+    }
+
+    fn __next__(self_: PyRefMut<'_, Self>) -> PyResult<PyObject> {
+        let receiver = Arc::clone(&self_.receiver);
+        let handle = self_.handle.clone();
+        let format = self_.format;
+        self_
+            .py()
+            .allow_threads(|| {
+                handle.block_on(async {
+                    receiver
+                        .lock()
+                        .await
+                        .recv()
+                        .await
+                        .map(|x| x.map_err(|e| PyRuntimeError::new_err(e.to_string())))
+                })
+            })
+            .map(|x| {
+                let batch = x.and_then(|x| format.record_batch_to_py(self_.py(), x))?;
+                let batch = PyList::new_bound(self_.py(), vec![batch]);
+                Ok(batch.into())
+            })
+            .unwrap_or(Err(PyStopIteration::new_err("")))
+    }
+}
+
+enum MapIterStreamState {
+    Running {
+        signal: oneshot::Sender<()>,
+        python_task: std::thread::JoinHandle<()>,
+    },
+    Finished,
+}
+
+struct MapIterStream {
+    output: Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>,
+    output_schema: SchemaRef,
+    state: MapIterStreamState,
+}
+
+impl MapIterStream {
+    const INPUT_CHANNEL_BUFFER: usize = 16;
+    const OUTPUT_CHANNEL_BUFFER: usize = 16;
+
+    pub fn new(
+        input: SendableRecordBatchStream,
+        function: PySparkUdfObject,
+        format: MapIterFormat,
+        output_schema: SchemaRef,
+    ) -> Self {
+        let (input_tx, input_rx) = mpsc::channel(Self::INPUT_CHANNEL_BUFFER);
+        let (output_tx, output_rx) = mpsc::channel(Self::OUTPUT_CHANNEL_BUFFER);
+        let (signal_tx, signal_rx) = oneshot::channel();
+        let handle = Handle::current();
+        let output_schema_for_python = output_schema.clone();
+        // We have to spawn a thread instead of spawning a tokio task
+        // due to the blocking operation inside the input iterator.
+        let python_task = std::thread::spawn(move || {
+            match Python::with_gil(|py| {
+                Self::run_python_task(
+                    py,
+                    format,
+                    function,
+                    input_rx,
+                    output_tx.clone(),
+                    output_schema_for_python,
+                    handle,
+                )
+            }) {
+                Ok(()) => {}
+                Err(e) => {
+                    let _ = output_tx.blocking_send(Err(e.into()));
+                }
+            }
+        });
+        // We do not store the handle to the task since it will stop on its own
+        // when the signal is received.
+        tokio::task::spawn(async move {
+            // Spawn input task on a separate thread to prevent blocking the current thread
+            // which is also used to receive the stop signal.
+            select! {
+                _ = tokio::task::spawn(Self::run_input_task(input, input_tx)) => {}
+                _ = signal_rx => {}
+            }
+        });
+        Self {
+            output: Box::pin(ReceiverStream::new(output_rx)),
+            output_schema,
+            state: MapIterStreamState::Running {
+                signal: signal_tx,
+                python_task,
+            },
+        }
+    }
+
+    async fn run_input_task(
+        mut input: SendableRecordBatchStream,
+        sender: mpsc::Sender<Result<RecordBatch>>,
+    ) {
+        while let Some(x) = input.next().await {
+            if sender.send(x).await.is_err() {
+                break;
+            }
+        }
+    }
+
+    fn run_python_task(
+        py: Python,
+        format: MapIterFormat,
+        function: PySparkUdfObject,
+        input_rx: mpsc::Receiver<Result<RecordBatch>>,
+        output_tx: mpsc::Sender<Result<RecordBatch>>,
+        output_schema: SchemaRef,
+        handle: Handle,
+    ) -> PyUdfResult<()> {
+        let udf = function.function(py)?;
+        // Create a Python iterator from the input record batch stream and call the UDF.
+        // We could have wrap each record batch in a single-element list and call the UDF
+        // for each record batch, but that does not work if the user wants to maintain state
+        // across record batches.
+        let input = PyMapIterInputStream::new(format, input_rx, handle);
+        let input = input.into_py(py);
+        let output = udf.call1((py.None(), input))?;
+        for x in output.iter()? {
+            let data = x.and_then(|x| x.get_item(0))?;
+            // Ignore empty record batches since the PySpark unit tests expect them to be ignored
+            // even if they have incompatible schemas.
+            if data.len()? == 0 {
+                continue;
+            }
+            let out = format.record_batch_from_py_bound(data, &output_schema);
+            if py
+                .allow_threads(|| {
+                    let out = out.map_err(|e| DataFusionError::External(e.into()));
+                    output_tx.blocking_send(out)
+                })
+                .is_err()
             {
-                data
-            } else {
-                let selected = data
-                    .getattr(intern!(py, "columns"))?
-                    .iter()?
-                    .take(columns.len())
-                    .collect::<PyResult<Vec<_>>>()?;
-                let data = data.get_item(selected)?;
-                data.setattr(intern!(py, "columns"), columns.clone())?;
-                data
-            };
-            let data = pyarrow_record_batch_from_pandas.call1((data,))?;
-            Ok(Some(RecordBatch::from_pyarrow_bound(&data)?))
-        })
-        .filter_map(|x| x.transpose())
-        .collect::<PyUdfResult<Vec<_>>>()?;
-    Ok(output)
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for MapIterStream {
+    fn drop(&mut self) {
+        let state = std::mem::replace(&mut self.state, MapIterStreamState::Finished);
+        match state {
+            MapIterStreamState::Running {
+                signal,
+                python_task,
+            } => {
+                let _ = signal.send(());
+                // Once the input task completes, the input sender is dropped and
+                // the input receiver will no longer receive data.
+                // So we can join the Python task without waiting indefinitely.
+                let _ = python_task.join();
+            }
+            MapIterStreamState::Finished => {}
+        }
+    }
+}
+
+impl Stream for MapIterStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.output.as_mut().poll_next(cx)
+    }
+}
+
+impl RecordBatchStream for MapIterStream {
+    fn schema(&self) -> SchemaRef {
+        self.output_schema.clone()
+    }
 }

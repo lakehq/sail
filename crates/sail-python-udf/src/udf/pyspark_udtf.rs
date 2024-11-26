@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::ArrayRef;
+use datafusion::arrow::array::{Array, ArrayRef};
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::pyarrow::*;
 use datafusion::arrow::record_batch::RecordBatch;
@@ -26,9 +26,7 @@ use crate::cereal::PythonFunction;
 use crate::config::SparkUdfConfig;
 use crate::error::PyUdfResult;
 use crate::utils::builtins::PyBuiltins;
-use crate::utils::pyarrow::{
-    to_pyarrow_array, to_pyarrow_schema, PyArrowArray, PyArrowRecordBatch, PyArrowToPandasOptions,
-};
+use crate::utils::pyarrow::{PyArrowArray, PyArrowRecordBatch, PyArrowToPandasOptions};
 
 #[derive(Debug, Clone)]
 pub struct PySparkUserDefinedTable {
@@ -241,7 +239,7 @@ fn apply_pyspark_arrow_function(
     let py_args = args
         .iter()
         .map(|arg| {
-            let arg = to_pyarrow_array(py, arg)?;
+            let arg = arg.into_data().to_pyarrow(py)?;
             let arg = pyarrow_array_to_pandas.call1((arg,))?;
             Ok(arg)
         })
@@ -267,15 +265,14 @@ fn apply_pyspark_function(
 ) -> PyUdfResult<RecordBatch> {
     let udtf = python_function.function(py)?;
     let py_list = PyBuiltins::list(py)?;
-    let pyarrow_schema = to_pyarrow_schema(py, schema)?;
     let pyarrow_array_to_pylist = PyArrowArray::to_pylist(py)?;
     let pyarrow_record_batch_from_pylist =
-        PyArrowRecordBatch::from_pylist(py, Some(pyarrow_schema))?;
+        PyArrowRecordBatch::from_pylist(py, Some(schema.to_pyarrow(py)?))?;
 
     let py_args = args
         .iter()
         .map(|arg| {
-            let arg = to_pyarrow_array(py, arg)?;
+            let arg = arg.into_data().to_pyarrow(py)?;
             let arg = pyarrow_array_to_pylist.call1((arg,))?;
             Ok(arg)
         })
@@ -307,9 +304,8 @@ fn apply_pyspark_function_no_args(
 ) -> PyUdfResult<RecordBatch> {
     let udtf = python_function.function(py)?;
     let py_list = PyBuiltins::list(py)?;
-    let pyarrow_schema = to_pyarrow_schema(py, schema)?;
     let pyarrow_record_batch_from_pylist =
-        PyArrowRecordBatch::from_pylist(py, Some(pyarrow_schema))?;
+        PyArrowRecordBatch::from_pylist(py, Some(schema.to_pyarrow(py)?))?;
 
     let results = udtf.call1((py.None(), (PyList::empty_bound(py),)))?;
     let results = py_list.call1((results,))?.get_item(0)?;

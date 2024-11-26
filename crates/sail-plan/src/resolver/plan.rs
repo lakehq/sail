@@ -37,7 +37,7 @@ use sail_common::spec;
 use sail_common::spec::PySparkUdfType;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_python_udf::cereal::pyspark_udf::build_pyspark_udf_payload;
-use sail_python_udf::udf::pyspark_map_iter_udf::PySparkMapIterUDF;
+use sail_python_udf::udf::pyspark_map_iter_udf::{MapIterFormat, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
 use sail_python_udf::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
@@ -1605,31 +1605,24 @@ impl PlanResolver<'_> {
             1,
             &self.config.spark_udf_config,
         )?;
-        let func = match eval_type {
-            PySparkUdfType::MapPandasIter => PySparkMapIterUDF::new(
-                function_name,
-                python_bytes,
-                output_schema,
-                false,
-                self.config.spark_udf_config.clone(),
-                deterministic,
-                is_barrier,
-            ),
-            PySparkUdfType::MapArrowIter => PySparkMapIterUDF::new(
-                function_name,
-                python_bytes,
-                output_schema,
-                true,
-                self.config.spark_udf_config.clone(),
-                deterministic,
-                is_barrier,
-            ),
+        let format = match eval_type {
+            PySparkUdfType::MapPandasIter => MapIterFormat::Pandas,
+            PySparkUdfType::MapArrowIter => MapIterFormat::Arrow,
             _ => {
                 return Err(PlanError::invalid(
                     "only MapPandasIter UDF is supported in MapPartitions",
                 ));
             }
         };
+        let func = PySparkMapIterUDF::new(
+            format,
+            function_name,
+            python_bytes,
+            output_schema,
+            self.config.spark_udf_config.clone(),
+            deterministic,
+            is_barrier,
+        );
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(MapPartitionsNode::try_new(
                 Arc::new(input),
