@@ -17,10 +17,10 @@ use tokio_stream::StreamExt;
 use crate::utils::ItemTaker;
 
 #[derive(Debug, Clone)]
-pub(crate) struct MapPartitionsExec {
+pub struct MapPartitionsExec {
     input: Arc<dyn ExecutionPlan>,
     input_names: Vec<String>,
-    func: Arc<dyn MapIterUDF>,
+    udf: Arc<dyn MapIterUDF>,
     properties: PlanProperties,
 }
 
@@ -28,9 +28,11 @@ impl MapPartitionsExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         input_names: Vec<String>,
-        func: Arc<dyn MapIterUDF>,
+        udf: Arc<dyn MapIterUDF>,
         schema: SchemaRef,
     ) -> Self {
+        // The plan output schema can be different from the output schema of the UDF
+        // due to field renaming.
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             input.output_partitioning().clone(),
@@ -39,9 +41,21 @@ impl MapPartitionsExec {
         Self {
             input,
             input_names,
-            func,
+            udf,
             properties,
         }
+    }
+
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+
+    pub fn input_names(&self) -> &[String] {
+        &self.input_names
+    }
+
+    pub fn udf(&self) -> &Arc<dyn MapIterUDF> {
+        &self.udf
     }
 }
 
@@ -92,7 +106,7 @@ impl ExecutionPlan for MapPartitionsExec {
     ) -> Result<SendableRecordBatchStream> {
         let input = rename_physical_plan(self.input.clone(), &self.input_names)?;
         let stream = input.execute(partition, context)?;
-        let output = self.func.invoke(stream)?;
+        let output = self.udf.invoke(stream)?;
         let schema = self.schema().clone();
         let output = output.map(move |x| {
             x.and_then(|batch| {

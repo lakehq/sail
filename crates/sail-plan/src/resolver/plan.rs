@@ -37,7 +37,7 @@ use sail_common::spec;
 use sail_common::spec::PySparkUdfType;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_python_udf::cereal::pyspark_udf::build_pyspark_udf_payload;
-use sail_python_udf::udf::pyspark_map_iter_udf::{MapIterFormat, PySparkMapIterUDF};
+use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterFormat, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
 use sail_python_udf::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
@@ -1563,12 +1563,12 @@ impl PlanResolver<'_> {
         &self,
         input: spec::QueryPlan,
         function: spec::CommonInlineUserDefinedFunction,
-        is_barrier: bool,
+        _is_barrier: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let spec::CommonInlineUserDefinedFunction {
             function_name,
-            deterministic,
+            deterministic: _,
             arguments,
             function,
         } = function;
@@ -1606,23 +1606,15 @@ impl PlanResolver<'_> {
             &self.config.spark_udf_config,
         )?;
         let format = match eval_type {
-            PySparkUdfType::MapPandasIter => MapIterFormat::Pandas,
-            PySparkUdfType::MapArrowIter => MapIterFormat::Arrow,
+            PySparkUdfType::MapPandasIter => PySparkMapIterFormat::Pandas,
+            PySparkUdfType::MapArrowIter => PySparkMapIterFormat::Arrow,
             _ => {
                 return Err(PlanError::invalid(
                     "only MapPandasIter UDF is supported in MapPartitions",
                 ));
             }
         };
-        let func = PySparkMapIterUDF::new(
-            format,
-            function_name,
-            python_bytes,
-            output_schema,
-            self.config.spark_udf_config.clone(),
-            deterministic,
-            is_barrier,
-        );
+        let func = PySparkMapIterUDF::new(format, function_name, python_bytes, output_schema);
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(MapPartitionsNode::try_new(
                 Arc::new(input),

@@ -24,7 +24,6 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::cereal::pyspark_udf::PySparkUdfObject;
 use crate::cereal::PythonFunction;
-use crate::config::SparkUdfConfig;
 use crate::error::PyUdfResult;
 use crate::udf::get_udf_name;
 use crate::utils::builtins::PyBuiltins;
@@ -32,26 +31,18 @@ use crate::utils::pyarrow::{PyArrowRecordBatch, PyArrowToPandasOptions};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PySparkMapIterUDF {
-    format: MapIterFormat,
+    format: PySparkMapIterFormat,
     function_name: String,
     function: Vec<u8>,
     output_schema: SchemaRef,
-    spark_udf_config: SparkUdfConfig,
-    #[allow(dead_code)]
-    deterministic: bool,
-    #[allow(dead_code)]
-    is_barrier: bool,
 }
 
 impl PySparkMapIterUDF {
     pub fn new(
-        format: MapIterFormat,
+        format: PySparkMapIterFormat,
         function_name: String,
         function: Vec<u8>,
         output_schema: SchemaRef,
-        spark_udf_config: SparkUdfConfig,
-        deterministic: bool,
-        is_barrier: bool,
     ) -> Self {
         let function_name = get_udf_name(&function_name, &function);
         Self {
@@ -59,20 +50,27 @@ impl PySparkMapIterUDF {
             function_name,
             function,
             output_schema,
-            spark_udf_config,
-            deterministic,
-            is_barrier,
         }
+    }
+
+    pub fn format(&self) -> PySparkMapIterFormat {
+        self.format
+    }
+
+    pub fn function_name(&self) -> &str {
+        &self.function_name
+    }
+
+    pub fn function(&self) -> &[u8] {
+        &self.function
     }
 }
 
 #[derive(PartialEq, PartialOrd)]
 struct PySparkMapIterUDFOrd<'a> {
-    format: MapIterFormat,
+    format: PySparkMapIterFormat,
     function_name: &'a String,
     function: &'a Vec<u8>,
-    deterministic: bool,
-    is_barrier: bool,
 }
 
 impl<'a> From<&'a PySparkMapIterUDF> for PySparkMapIterUDFOrd<'a> {
@@ -81,8 +79,6 @@ impl<'a> From<&'a PySparkMapIterUDF> for PySparkMapIterUDFOrd<'a> {
             format: udf.format,
             function_name: &udf.function_name,
             function: &udf.function,
-            deterministic: udf.deterministic,
-            is_barrier: udf.is_barrier,
         }
     }
 }
@@ -110,17 +106,17 @@ impl MapIterUDF for PySparkMapIterUDF {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Hash)]
-pub enum MapIterFormat {
+pub enum PySparkMapIterFormat {
     Pandas,
     Arrow,
 }
 
-impl MapIterFormat {
+impl PySparkMapIterFormat {
     fn record_batch_to_py(&self, py: Python, batch: RecordBatch) -> PyResult<PyObject> {
         let batch = batch.to_pyarrow(py)?;
         match self {
-            MapIterFormat::Pandas => Self::pyarrow_to_pandas(py, batch),
-            MapIterFormat::Arrow => Ok(batch),
+            PySparkMapIterFormat::Pandas => Self::pyarrow_to_pandas(py, batch),
+            PySparkMapIterFormat::Arrow => Ok(batch),
         }
     }
 
@@ -130,8 +126,8 @@ impl MapIterFormat {
         schema: &SchemaRef,
     ) -> PyResult<RecordBatch> {
         let batch = match self {
-            MapIterFormat::Pandas => Self::pyarrow_from_pandas_bound(batch, schema)?,
-            MapIterFormat::Arrow => batch,
+            PySparkMapIterFormat::Pandas => Self::pyarrow_from_pandas_bound(batch, schema)?,
+            PySparkMapIterFormat::Arrow => batch,
         };
         RecordBatch::from_pyarrow_bound(&batch)
     }
@@ -183,16 +179,30 @@ impl MapIterFormat {
     }
 }
 
+struct PyMapIterInputStreamState {
+    input: SendableRecordBatchStream,
+    signal: oneshot::Receiver<()>,
+}
+
+impl PyMapIterInputStreamState {
+    async fn next(&mut self) -> Option<Result<RecordBatch>> {
+        select! {
+            x = self.input.next() => x,
+            _ = &mut self.signal => Some(exec_err!("stop signal received for the Python map iterator")),
+        }
+    }
+}
+
 #[pyclass]
 struct PyMapIterInputStream {
-    format: MapIterFormat,
+    format: PySparkMapIterFormat,
     state: Arc<tokio::sync::Mutex<PyMapIterInputStreamState>>,
     handle: Handle,
 }
 
 impl PyMapIterInputStream {
     pub fn new(
-        format: MapIterFormat,
+        format: PySparkMapIterFormat,
         input: SendableRecordBatchStream,
         signal: oneshot::Receiver<()>,
         handle: Handle,
@@ -239,20 +249,6 @@ impl PyMapIterInputStream {
     }
 }
 
-struct PyMapIterInputStreamState {
-    input: SendableRecordBatchStream,
-    signal: oneshot::Receiver<()>,
-}
-
-impl PyMapIterInputStreamState {
-    async fn next(&mut self) -> Option<Result<RecordBatch>> {
-        select! {
-            x = self.input.next() => x,
-            _ = &mut self.signal => Some(exec_err!("stop signal received for the Python map iterator")),
-        }
-    }
-}
-
 enum MapIterStreamState {
     Running {
         signal: oneshot::Sender<()>,
@@ -272,7 +268,7 @@ impl MapIterStream {
     pub fn new(
         input: SendableRecordBatchStream,
         function: PySparkUdfObject,
-        format: MapIterFormat,
+        format: PySparkMapIterFormat,
         output_schema: SchemaRef,
     ) -> Self {
         let (output_tx, output_rx) = mpsc::channel(Self::OUTPUT_CHANNEL_BUFFER);
@@ -314,7 +310,7 @@ impl MapIterStream {
 
     fn run_python_task(
         py: Python,
-        format: MapIterFormat,
+        format: PySparkMapIterFormat,
         function: PySparkUdfObject,
         input: SendableRecordBatchStream,
         signal: oneshot::Receiver<()>,
@@ -361,9 +357,10 @@ impl Drop for MapIterStream {
                 python_task,
             } => {
                 let _ = signal.send(());
-                // Once the input task completes, the input sender is dropped and
-                // the input receiver will no longer receive data.
-                // So we can join the Python task without waiting indefinitely.
+                // This may block indefinitely waiting for the Python UDF
+                // to finish processing all input batches received before the stop signal.
+                // Unfortunately, there is no reliable way to abort the thread cleanly,
+                // so we have to wait for it to finish.
                 let _ = python_task.join();
             }
             MapIterStreamState::Stopped => {}
