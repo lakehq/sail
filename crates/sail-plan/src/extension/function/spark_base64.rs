@@ -24,7 +24,7 @@ impl Default for SparkBase64 {
 impl SparkBase64 {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::any(1, Volatility::Immutable),
         }
     }
 }
@@ -138,6 +138,132 @@ impl ScalarUDFImpl for SparkBase64 {
             DataType::LargeUtf8 | DataType::LargeBinary => {
                 Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(result))))
             }
+            _ => plan_err!(
+                "1st argument should be String or Binary, got {}",
+                args[0].data_type()
+            ),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SparkUnbase64 {
+    signature: Signature,
+}
+
+impl Default for SparkUnbase64 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SparkUnbase64 {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::string(1, Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for SparkUnbase64 {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "spark_unbase64"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types.len() != 1 {
+            return plan_err!(
+                "{} expects 1 argument, but got {}",
+                self.name(),
+                arg_types.len()
+            );
+        }
+        match arg_types[0] {
+            DataType::Utf8 | DataType::Utf8View => Ok(DataType::Binary),
+            DataType::LargeUtf8 => Ok(DataType::LargeBinary),
+            _ => plan_err!("1st argument should be String, got {}", arg_types[0]),
+        }
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        if args.len() != 1 {
+            return exec_err!(
+                "Spark `unbase64` function requires 1 argument, got {:?}",
+                args
+            );
+        }
+
+        let expr = match &args[0] {
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(expr)))
+            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(expr)))
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(expr))) => Ok(expr.as_str()),
+            ColumnarValue::Array(array) => {
+                if array.len() != 1 {
+                    return exec_err!(
+                        "Spark `unbase64`: Expr requires a single value, got {array:?}"
+                    );
+                }
+                match array.data_type() {
+                    DataType::Utf8 => {
+                        let array =
+                            array
+                                .as_any()
+                                .downcast_ref::<StringArray>()
+                                .ok_or_else(|| {
+                                    exec_datafusion_err!(
+                                        "Spark `unbase64`: Failed to downcast Expr to StringArray"
+                                    )
+                                })?;
+                        Ok(array.value(0))
+                    }
+                    DataType::LargeUtf8 => {
+                        let array = array
+                            .as_any()
+                            .downcast_ref::<LargeStringArray>()
+                            .ok_or_else(|| {
+                                exec_datafusion_err!(
+                                    "Spark `unbase64`: Failed to downcast Expr to LargeStringArray"
+                                )
+                            })?;
+                        Ok(array.value(0))
+                    }
+                    DataType::Utf8View => {
+                        let array = array
+                            .as_any()
+                            .downcast_ref::<StringViewArray>()
+                            .ok_or_else(|| {
+                                exec_datafusion_err!(
+                                    "Spark `unbase64`: Failed to downcast Expr to StringViewArray"
+                                )
+                            })?;
+                        Ok(array.value(0))
+                    }
+                    other => exec_err!(
+                        "Spark `unbase64`: Expr array must be STRING, got array of type {other}"
+                    ),
+                }
+            }
+            other => exec_err!("Spark `unbase64`: Expr must be STRING, got {other:?}"),
+        }?;
+
+        let result = STANDARD_NO_PAD
+            .decode(expr)
+            .map_err(|e| exec_datafusion_err!("Spark `unbase64`: to decode base64 string: {e}"))?;
+        match args[0].data_type() {
+            DataType::Utf8 | DataType::Utf8View => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Binary(Some(result))))
+            }
+            DataType::LargeUtf8 => Ok(ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(
+                result,
+            )))),
             _ => plan_err!(
                 "1st argument should be String or Binary, got {}",
                 args[0].data_type()
