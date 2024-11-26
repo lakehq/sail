@@ -54,6 +54,7 @@ use sail_plan::extension::function::random::Random;
 use sail_plan::extension::function::size::Size;
 use sail_plan::extension::function::skewness::SkewnessFunc;
 use sail_plan::extension::function::spark_array::SparkArray;
+use sail_plan::extension::function::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_plan::extension::function::spark_concat::SparkConcat;
 use sail_plan::extension::function::spark_hex_unhex::{SparkHex, SparkUnHex};
 use sail_plan::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
@@ -738,6 +739,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     plan_err!("Expected single auxiliary field, but found {other:?} for {name}")
                 }
             },
+            "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
+            "spark_unbase64" | "unbase64" => Ok(Arc::new(ScalarUDF::from(SparkUnbase64::new()))),
             _ => plan_err!("Could not find Scalar Function: {name}"),
         }
     }
@@ -921,6 +924,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     ),
                 }),
             })
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkBase64>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkUnbase64>() {
+            UdfKind::Standard(gen::StandardUdf {})
         } else {
             return Ok(());
         };
