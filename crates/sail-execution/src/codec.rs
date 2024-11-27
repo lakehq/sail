@@ -36,6 +36,7 @@ use datafusion_proto::protobuf::{
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common::spec::PySparkUdfType;
+use sail_common::udf::MapIterUDF;
 use sail_common::utils::{read_record_batches, write_record_batches};
 use sail_plan::extension::function::array::{ArrayEmptyToNull, ArrayItemWithPosition, MapToArray};
 use sail_plan::extension::function::array_min_max::{ArrayMax, ArrayMin};
@@ -66,14 +67,20 @@ use sail_plan::extension::function::struct_function::StructFunction;
 use sail_plan::extension::function::unix_timestamp_now::UnixTimestampNow;
 use sail_plan::extension::function::update_struct_field::UpdateStructField;
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
-use sail_plan::extension::physical::{RangeExec, SchemaPivotExec, ShowStringExec};
+use sail_plan::extension::physical::{
+    MapPartitionsExec, RangeExec, SchemaPivotExec, ShowStringExec,
+};
+use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterFormat, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_udaf::PySparkAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
+use crate::plan::gen::extended_map_iter_udf::MapIterUdfKind;
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
-use crate::plan::gen::{ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf};
+use crate::plan::gen::{
+    ExtendedAggregateUdf, ExtendedMapIterUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf,
+};
 use crate::plan::{gen, ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::{TaskReadLocation, TaskWriteLocation};
 
@@ -145,6 +152,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(SchemaPivotExec::new(
                     self.try_decode_plan(&input, registry)?,
                     names,
+                    Arc::new((&schema).try_into()?),
+                )))
+            }
+            NodeKind::MapPartitions(gen::MapPartitionsExecNode {
+                input,
+                input_names,
+                udf,
+                schema,
+            }) => {
+                let Some(udf) = udf else {
+                    return plan_err!("no UDF found for MapPartitionsExec");
+                };
+                let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
+                Ok(Arc::new(MapPartitionsExec::new(
+                    self.try_decode_plan(&input, registry)?,
+                    input_names,
+                    self.try_decode_map_iter_udf(udf)?,
                     Arc::new((&schema).try_into()?),
                 )))
             }
@@ -375,6 +399,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::SchemaPivot(gen::SchemaPivotExecNode {
                 input: self.try_encode_plan(schema_pivot.input().clone())?,
                 names: schema_pivot.names().to_vec(),
+                schema,
+            })
+        } else if let Some(map_partitions) = node.as_any().downcast_ref::<MapPartitionsExec>() {
+            let udf = self.try_encode_map_iter_udf(map_partitions.udf().as_ref())?;
+            let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
+                map_partitions.schema().as_ref().try_into()?,
+            )?;
+            NodeKind::MapPartitions(gen::MapPartitionsExecNode {
+                input: self.try_encode_plan(map_partitions.input().clone())?,
+                input_names: map_partitions.input_names().to_vec(),
+                udf: Some(udf),
                 schema,
             })
         } else if let Some(shuffle_read) = node.as_any().downcast_ref::<ShuffleReadExec>() {
@@ -1034,6 +1069,52 @@ impl RemoteExecutionCodec {
         Self { context }
     }
 
+    fn try_decode_map_iter_udf(&self, udf: ExtendedMapIterUdf) -> Result<Arc<dyn MapIterUDF>> {
+        let ExtendedMapIterUdf { map_iter_udf_kind } = udf;
+        let map_iter_udf_kind = match map_iter_udf_kind {
+            Some(x) => x,
+            None => return plan_err!("ExtendedMapIterUdf: no UDF found"),
+        };
+        let udf: Arc<dyn MapIterUDF> = match map_iter_udf_kind {
+            MapIterUdfKind::PySpark(gen::PySparkMapIterUdf {
+                format,
+                function_name,
+                function,
+                output_schema,
+            }) => {
+                let output_schema =
+                    self.try_decode_message::<gen_datafusion_common::Schema>(&output_schema)?;
+                Arc::new(PySparkMapIterUDF::new(
+                    self.try_decode_pyspark_map_iter_format(format)?,
+                    function_name,
+                    function,
+                    Arc::new((&output_schema).try_into()?),
+                ))
+            }
+        };
+        Ok(udf)
+    }
+
+    fn try_encode_map_iter_udf(&self, udf: &dyn MapIterUDF) -> Result<ExtendedMapIterUdf> {
+        let map_iter_udf_kind =
+            if let Some(func) = udf.dyn_object_as_any().downcast_ref::<PySparkMapIterUDF>() {
+                let output_schema = self.try_encode_message::<gen_datafusion_common::Schema>(
+                    func.output_schema().as_ref().try_into()?,
+                )?;
+                MapIterUdfKind::PySpark(gen::PySparkMapIterUdf {
+                    format: self.try_encode_pyspark_map_iter_format(func.format())?,
+                    function_name: func.function_name().to_string(),
+                    function: func.function().to_vec(),
+                    output_schema,
+                })
+            } else {
+                return plan_err!("unknown MapIterUDF type");
+            };
+        Ok(ExtendedMapIterUdf {
+            map_iter_udf_kind: Some(map_iter_udf_kind),
+        })
+    }
+
     fn try_decode_lex_ordering(
         &self,
         lex_ordering: &gen::LexOrdering,
@@ -1103,6 +1184,24 @@ impl RemoteExecutionCodec {
             ShowStringStyle::Html => gen::ShowStringStyle::Html,
         };
         Ok(style as i32)
+    }
+
+    fn try_decode_pyspark_map_iter_format(&self, format: i32) -> Result<PySparkMapIterFormat> {
+        let format = gen::PySparkMapIterFormat::try_from(format)
+            .map_err(|e| plan_datafusion_err!("failed to decode pyspark map iter format: {e}"))?;
+        let format = match format {
+            gen::PySparkMapIterFormat::Arrow => PySparkMapIterFormat::Arrow,
+            gen::PySparkMapIterFormat::Pandas => PySparkMapIterFormat::Pandas,
+        };
+        Ok(format)
+    }
+
+    fn try_encode_pyspark_map_iter_format(&self, format: PySparkMapIterFormat) -> Result<i32> {
+        let format = match format {
+            PySparkMapIterFormat::Arrow => gen::PySparkMapIterFormat::Arrow,
+            PySparkMapIterFormat::Pandas => gen::PySparkMapIterFormat::Pandas,
+        };
+        Ok(format as i32)
     }
 
     fn try_decode_file_compression_type(&self, variant: i32) -> Result<FileCompressionType> {

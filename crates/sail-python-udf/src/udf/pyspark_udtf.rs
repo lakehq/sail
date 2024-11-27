@@ -15,9 +15,9 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::DataFusionError;
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{Expr, TableType};
-use pyo3::intern;
-use pyo3::prelude::*;
+use pyo3::prelude::{PyAnyMethods, PyListMethods};
 use pyo3::types::{PyDict, PyIterator, PyList, PyTuple};
+use pyo3::{Bound, PyAny, Python};
 use sail_common::spec::TableFunctionDefinition;
 use sail_common::utils::cast_record_batch;
 
@@ -25,11 +25,8 @@ use crate::cereal::pyspark_udtf::{deserialize_pyspark_udtf, PySparkUdtfObject};
 use crate::cereal::PythonFunction;
 use crate::config::SparkUdfConfig;
 use crate::error::PyUdfResult;
-use crate::udf::{
-    build_pyarrow_record_batch_kwargs, build_pyarrow_to_pandas_kwargs,
-    get_pyarrow_record_batch_from_pandas_function, get_pyarrow_record_batch_from_pylist_function,
-    get_pyarrow_schema, get_python_builtins_list_function,
-};
+use crate::utils::builtins::PyBuiltins;
+use crate::utils::pyarrow::{PyArrowArray, PyArrowRecordBatch, PyArrowToPandasOptions};
 
 #[derive(Debug, Clone)]
 pub struct PySparkUserDefinedTable {
@@ -91,24 +88,28 @@ pub struct PySparkUDTF {
     deterministic: bool,
 }
 
+#[derive(PartialEq, PartialOrd)]
+struct PySparkUDTFOrd<'a> {
+    return_type: &'a DataType,
+    table_function_definition: &'a TableFunctionDefinition,
+    spark_udf_config: &'a SparkUdfConfig,
+    deterministic: &'a bool,
+}
+
+impl<'a> From<&'a PySparkUDTF> for PySparkUDTFOrd<'a> {
+    fn from(udtf: &'a PySparkUDTF) -> Self {
+        Self {
+            return_type: &udtf.return_type,
+            table_function_definition: &udtf.table_function_definition,
+            spark_udf_config: &udtf.spark_udf_config,
+            deterministic: &udtf.deterministic,
+        }
+    }
+}
+
 impl PartialOrd for PySparkUDTF {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.return_type.partial_cmp(&other.return_type) {
-            Some(Ordering::Equal) => match self
-                .table_function_definition
-                .partial_cmp(&other.table_function_definition)
-            {
-                Some(Ordering::Equal) => match self
-                    .spark_udf_config
-                    .partial_cmp(&other.spark_udf_config)
-                {
-                    Some(Ordering::Equal) => self.deterministic.partial_cmp(&other.deterministic),
-                    cmp => cmp,
-                },
-                cmp => cmp,
-            },
-            cmp => cmp,
-        }
+        PySparkUDTFOrd::from(self).partial_cmp(&other.into())
     }
 }
 
@@ -127,122 +128,6 @@ impl PySparkUDTF {
             spark_udf_config,
             deterministic,
         }
-    }
-
-    fn apply_pyspark_arrow_function(
-        &self,
-        args: &[ArrayRef],
-        python_function: PySparkUdtfObject,
-    ) -> PyUdfResult<RecordBatch> {
-        Python::with_gil(|py| {
-            let python_function = python_function.function(py)?;
-            let builtins_list = get_python_builtins_list_function(py)?;
-            let record_batch_from_pandas = get_pyarrow_record_batch_from_pandas_function(py)?;
-            let pyarrow_to_pandas_kwargs = build_pyarrow_to_pandas_kwargs(py)?;
-
-            let py_args = args
-                .iter()
-                .map(|arg| {
-                    let arg = arg
-                        .into_data()
-                        .to_pyarrow(py)?
-                        .call_method_bound(
-                            py,
-                            intern!(py, "to_pandas"),
-                            (),
-                            Some(&pyarrow_to_pandas_kwargs),
-                        )?
-                        .clone_ref(py)
-                        .into_bound(py);
-                    Ok(arg)
-                })
-                .collect::<PyUdfResult<Vec<_>>>()?;
-            let py_args = PyList::new_bound(py, &py_args);
-
-            let results = python_function.call1((py.None(), (py_args,)))?;
-            let results = builtins_list.call1((results,))?.get_item(0)?;
-
-            let results_data = results.get_item(0)?;
-            let _results_datatype = results.get_item(1)?;
-
-            let record_batch = record_batch_from_pandas.call1((results_data,))?;
-            let record_batch = RecordBatch::from_pyarrow_bound(&record_batch)?;
-
-            Ok(record_batch)
-        })
-    }
-
-    fn apply_pyspark_function(
-        &self,
-        args: &[ArrayRef],
-        python_function: PySparkUdtfObject,
-    ) -> PyUdfResult<RecordBatch> {
-        Python::with_gil(|py| {
-            let python_function = python_function.function(py)?;
-            let builtins_list = get_python_builtins_list_function(py)?;
-            let record_batch_from_pylist = get_pyarrow_record_batch_from_pylist_function(py)?;
-            let pyarrow_schema = get_pyarrow_schema(&self.return_schema, py)?;
-            let pyarrow_record_batch_kwargs =
-                build_pyarrow_record_batch_kwargs(py, pyarrow_schema)?;
-
-            let py_args = args
-                .iter()
-                .map(|arg| {
-                    let arg = arg
-                        .into_data()
-                        .to_pyarrow(py)?
-                        .call_method0(py, intern!(py, "to_pylist"))?
-                        .clone_ref(py)
-                        .into_bound(py);
-                    Ok(arg)
-                })
-                .collect::<PyUdfResult<Vec<_>>>()?;
-            let py_args = PyTuple::new_bound(py, &py_args);
-            let py_args = py.eval_bound("zip", None, None)?.call1(&py_args)?;
-            let py_args = PyIterator::from_bound_object(&py_args)?;
-
-            let results = PyList::empty_bound(py);
-            for py_arg in py_args {
-                let py_arg = py_arg?;
-                let result = python_function.call1((py.None(), (py_arg,)))?;
-                let result = builtins_list.call1((result,))?.get_item(0)?;
-                let result = builtins_list.call1((result,))?;
-                let result = list_of_tuples_to_list_of_dicts(py, &result, &self.return_schema)?;
-                for item in result.iter() {
-                    results.append(item)?;
-                }
-            }
-            let record_batch =
-                record_batch_from_pylist.call((results,), Some(&pyarrow_record_batch_kwargs))?;
-            let record_batch = RecordBatch::from_pyarrow_bound(&record_batch)?;
-
-            Ok(record_batch)
-        })
-    }
-
-    fn apply_pyspark_function_no_args(
-        &self,
-        python_function: PySparkUdtfObject,
-    ) -> PyUdfResult<RecordBatch> {
-        Python::with_gil(|py| {
-            let python_function = python_function.function(py)?;
-            let builtins_list = get_python_builtins_list_function(py)?;
-            let record_batch_from_pylist = get_pyarrow_record_batch_from_pylist_function(py)?;
-            let pyarrow_schema = get_pyarrow_schema(&self.return_schema, py)?;
-            let pyarrow_record_batch_kwargs =
-                build_pyarrow_record_batch_kwargs(py, pyarrow_schema)?;
-
-            let results = python_function.call1((py.None(), (PyList::empty_bound(py),)))?;
-            let results = builtins_list.call1((results,))?.get_item(0)?;
-            let results = builtins_list.call1((results,))?;
-            let results = list_of_tuples_to_list_of_dicts(py, &results, &self.return_schema)?;
-
-            let record_batch =
-                record_batch_from_pylist.call((results,), Some(&pyarrow_record_batch_kwargs))?;
-            let record_batch = RecordBatch::from_pyarrow_bound(&record_batch)?;
-
-            Ok(record_batch)
-        })
     }
 }
 
@@ -269,9 +154,11 @@ impl TableFunctionImpl for PySparkUDTF {
 
         if exprs.is_empty() {
             let batches: RecordBatch = if eval_type.is_arrow_udf() {
-                self.apply_pyspark_arrow_function(&[], python_function)?
+                Python::with_gil(|py| apply_pyspark_arrow_function(py, &[], python_function))?
             } else {
-                self.apply_pyspark_function_no_args(python_function)?
+                Python::with_gil(|py| {
+                    apply_pyspark_function_no_args(py, python_function, &self.return_schema)
+                })?
             };
             return Ok(Arc::new(PySparkUserDefinedTable::try_new(
                 self.return_schema.clone(),
@@ -320,9 +207,11 @@ impl TableFunctionImpl for PySparkUDTF {
         }
 
         let batches: RecordBatch = if eval_type.is_arrow_udf() {
-            self.apply_pyspark_arrow_function(&input_arrays, python_function)?
+            Python::with_gil(|py| apply_pyspark_arrow_function(py, &input_arrays, python_function))?
         } else {
-            self.apply_pyspark_function(&input_arrays, python_function)?
+            Python::with_gil(|py| {
+                apply_pyspark_function(py, &input_arrays, python_function, &self.return_schema)
+            })?
         };
 
         Ok(Arc::new(PySparkUserDefinedTable::try_new(
@@ -330,6 +219,103 @@ impl TableFunctionImpl for PySparkUDTF {
             vec![batches],
         )?))
     }
+}
+
+fn apply_pyspark_arrow_function(
+    py: Python,
+    args: &[ArrayRef],
+    python_function: PySparkUdtfObject,
+) -> PyUdfResult<RecordBatch> {
+    let udtf = python_function.function(py)?;
+    let py_list = PyBuiltins::list(py)?;
+    let record_batch_from_pandas = PyArrowRecordBatch::from_pandas(py, None)?;
+    let pyarrow_array_to_pandas = PyArrowArray::to_pandas(
+        py,
+        PyArrowToPandasOptions {
+            use_pandas_nullable_types: true,
+        },
+    )?;
+
+    let py_args = args
+        .iter()
+        .map(|arg| {
+            let arg = arg.into_data().to_pyarrow(py)?;
+            let arg = pyarrow_array_to_pandas.call1((arg,))?;
+            Ok(arg)
+        })
+        .collect::<PyUdfResult<Vec<_>>>()?;
+    let py_args = PyList::new_bound(py, &py_args);
+
+    let result = udtf.call1((py.None(), (py_args,)))?;
+    let result = py_list.call1((result,))?.get_item(0)?;
+
+    let data = result.get_item(0)?;
+    let _data_type = result.get_item(1)?;
+
+    let record_batch = record_batch_from_pandas.call1((data,))?;
+    let record_batch = RecordBatch::from_pyarrow_bound(&record_batch)?;
+    Ok(record_batch)
+}
+
+fn apply_pyspark_function(
+    py: Python,
+    args: &[ArrayRef],
+    python_function: PySparkUdtfObject,
+    schema: &SchemaRef,
+) -> PyUdfResult<RecordBatch> {
+    let udtf = python_function.function(py)?;
+    let py_list = PyBuiltins::list(py)?;
+    let pyarrow_array_to_pylist = PyArrowArray::to_pylist(py)?;
+    let pyarrow_record_batch_from_pylist =
+        PyArrowRecordBatch::from_pylist(py, Some(schema.to_pyarrow(py)?))?;
+
+    let py_args = args
+        .iter()
+        .map(|arg| {
+            let arg = arg.into_data().to_pyarrow(py)?;
+            let arg = pyarrow_array_to_pylist.call1((arg,))?;
+            Ok(arg)
+        })
+        .collect::<PyUdfResult<Vec<_>>>()?;
+    let py_args = PyTuple::new_bound(py, &py_args);
+    let py_args = py.eval_bound("zip", None, None)?.call1(&py_args)?;
+    let py_args = PyIterator::from_bound_object(&py_args)?;
+
+    let results = PyList::empty_bound(py);
+    for py_arg in py_args {
+        let py_arg = py_arg?;
+        let result = udtf.call1((py.None(), (py_arg,)))?;
+        let result = py_list.call1((result,))?.get_item(0)?;
+        let result = py_list.call1((result,))?;
+        let result = list_of_tuples_to_list_of_dicts(py, &result, schema)?;
+        for item in result.iter() {
+            results.append(item)?;
+        }
+    }
+    let record_batch = pyarrow_record_batch_from_pylist.call1((results,))?;
+    let record_batch = RecordBatch::from_pyarrow_bound(&record_batch)?;
+    Ok(record_batch)
+}
+
+fn apply_pyspark_function_no_args(
+    py: Python,
+    python_function: PySparkUdtfObject,
+    schema: &SchemaRef,
+) -> PyUdfResult<RecordBatch> {
+    let udtf = python_function.function(py)?;
+    let py_list = PyBuiltins::list(py)?;
+    let pyarrow_record_batch_from_pylist =
+        PyArrowRecordBatch::from_pylist(py, Some(schema.to_pyarrow(py)?))?;
+
+    let results = udtf.call1((py.None(), (PyList::empty_bound(py),)))?;
+    let results = py_list.call1((results,))?.get_item(0)?;
+    let results = py_list.call1((results,))?;
+    let results = list_of_tuples_to_list_of_dicts(py, &results, schema)?;
+
+    let record_batch = pyarrow_record_batch_from_pylist.call1((results,))?;
+    let record_batch = RecordBatch::from_pyarrow_bound(&record_batch)?;
+
+    Ok(record_batch)
 }
 
 fn list_of_tuples_to_list_of_dicts<'py>(

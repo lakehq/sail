@@ -8,6 +8,8 @@ pub type PyUdfResult<T> = Result<T, PyUdfError>;
 pub enum PyUdfError {
     #[error("error in Python: {0}")]
     PythonError(#[from] PyErr),
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
 }
@@ -22,6 +24,7 @@ impl From<PyUdfError> for DataFusionError {
     fn from(error: PyUdfError) -> Self {
         match error {
             PyUdfError::PythonError(e) => DataFusionError::External(e.into()),
+            PyUdfError::IoError(e) => DataFusionError::External(e.into()),
             PyUdfError::InvalidArgument(message) => DataFusionError::Plan(message),
         }
     }

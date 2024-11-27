@@ -9,8 +9,9 @@ use datafusion_common::{internal_err, Result};
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
 
 use crate::extension::logical::{
-    RangeNode, SchemaPivotNode, ShowStringNode, SortWithinPartitionsNode,
+    MapPartitionsNode, RangeNode, SchemaPivotNode, ShowStringNode, SortWithinPartitionsNode,
 };
+use crate::extension::physical::map_partitions::MapPartitionsExec;
 use crate::extension::physical::range::RangeExec;
 use crate::extension::physical::schema_pivot::SchemaPivotExec;
 use crate::extension::physical::show_string::ShowStringExec;
@@ -42,6 +43,13 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     node.names().to_vec(),
                     node.limit(),
                     node.format().clone(),
+                    node.schema().inner().clone(),
+                ))
+            } else if let Some(node) = node.as_any().downcast_ref::<MapPartitionsNode>() {
+                Arc::new(MapPartitionsExec::new(
+                    physical_inputs.one()?,
+                    node.input_names().to_vec(),
+                    node.udf().clone(),
                     node.schema().inner().clone(),
                 ))
             } else if let Some(node) = node.as_any().downcast_ref::<SortWithinPartitionsNode>() {
