@@ -54,7 +54,9 @@ use sail_plan::extension::function::randn::Randn;
 use sail_plan::extension::function::random::Random;
 use sail_plan::extension::function::size::Size;
 use sail_plan::extension::function::skewness::SkewnessFunc;
-use sail_plan::extension::function::spark_aes::{SparkAESDecrypt, SparkAESEncrypt};
+use sail_plan::extension::function::spark_aes::{
+    SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
+};
 use sail_plan::extension::function::spark_array::SparkArray;
 use sail_plan::extension::function::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_plan::extension::function::spark_concat::SparkConcat;
@@ -780,8 +782,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_aes_encrypt" | "aes_encrypt" => {
                 Ok(Arc::new(ScalarUDF::from(SparkAESEncrypt::new())))
             }
+            "spark_try_aes_encrypt" | "try_aes_encrypt" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryAESEncrypt::new())))
+            }
             "spark_aes_decrypt" | "aes_decrypt" => {
                 Ok(Arc::new(ScalarUDF::from(SparkAESDecrypt::new())))
+            }
+            "spark_try_aes_decrypt" | "try_aes_decrypt" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryAESDecrypt::new())))
             }
             _ => plan_err!("Could not find Scalar Function: {name}"),
         }
@@ -972,7 +980,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::Standard(gen::StandardUdf {})
         } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkAESEncrypt>() {
             UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkTryAESEncrypt>() {
+            UdfKind::Standard(gen::StandardUdf {})
         } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkAESDecrypt>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkTryAESDecrypt>() {
             UdfKind::Standard(gen::StandardUdf {})
         } else {
             return Ok(());

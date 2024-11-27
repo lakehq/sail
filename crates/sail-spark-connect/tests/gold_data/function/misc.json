@@ -920,7 +920,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_aes_decrypt"
+        "success": "ok"
       }
     },
     {
@@ -942,7 +942,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_aes_decrypt"
+        "success": "ok"
       }
     },
     {

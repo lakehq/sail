@@ -552,7 +552,7 @@ impl Default for SparkAESDecrypt {
 impl SparkAESDecrypt {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Volatile),
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }
@@ -920,5 +920,97 @@ impl ScalarUDFImpl for SparkAESDecrypt {
         }?;
 
         Ok(ColumnarValue::Scalar(ScalarValue::Binary(Some(result))))
+    }
+}
+
+#[derive(Debug)]
+pub struct SparkTryAESEncrypt {
+    signature: Signature,
+}
+
+impl Default for SparkTryAESEncrypt {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SparkTryAESEncrypt {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Volatile),
+        }
+    }
+}
+
+impl ScalarUDFImpl for SparkTryAESEncrypt {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "spark_try_aes_encrypt"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Binary)
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        #[allow(deprecated)] // TODO use invoke_batch
+        let result = SparkAESEncrypt::new().invoke(args);
+        match result {
+            Ok(result) => Ok(result),
+            Err(_) => Ok(ColumnarValue::Scalar(ScalarValue::Binary(None))),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SparkTryAESDecrypt {
+    signature: Signature,
+}
+
+impl Default for SparkTryAESDecrypt {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SparkTryAESDecrypt {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for SparkTryAESDecrypt {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "spark_try_aes_decrypt"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Binary)
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        #[allow(deprecated)] // TODO use invoke_batch
+        let result = SparkAESDecrypt::new().invoke(args);
+        match result {
+            Ok(result) => Ok(result),
+            Err(_) => Ok(ColumnarValue::Scalar(ScalarValue::Binary(None))),
+        }
     }
 }
