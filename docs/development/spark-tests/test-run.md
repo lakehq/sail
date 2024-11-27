@@ -27,6 +27,17 @@ Use the following commands to build and run the Spark Connect server powered by 
 scripts/spark-tests/run-server.sh
 ```
 
+::: warning
+The command above starts the server in the `default` Hatch environment.
+There are a few PySpark UDF tests that would fail in this setup, since they import testing UDFs available only in the **patched** PySpark library (installed in the `test` Hatch environment).
+
+To work with these tests, run `hatch shell test` to enter the `test` environment before running the server.
+However, this is not recommended in the general development workflow, as it may [pollute the build cache](../recipes/reducing-build-time.md).
+
+The GitHub Actions workflow runs the server in the `test` environment (using the pre-built package from an earlier step),
+so this is not an issue.
+:::
+
 ## Running the Tests
 
 After running the Spark Connect server, start another terminal and use the following command to run the Spark tests.
