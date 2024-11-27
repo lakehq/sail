@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow::datatypes::DataType;
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes as adt;
 use datafusion::dataframe::DataFrame;
@@ -33,15 +34,18 @@ use datafusion_expr::{
     Operator, ScalarUDF, TryCast, WriteOp,
 };
 use sail_common::spec;
+use sail_common::spec::PySparkUdfType;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
+use sail_python_udf::cereal::pyspark_udf::build_pyspark_udf_payload;
+use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterFormat, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
 use sail_python_udf::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
-    CatalogCommand, CatalogCommandNode, CatalogTableFunction, RangeNode, ShowStringFormat,
-    ShowStringNode, ShowStringStyle, SortWithinPartitionsNode,
+    CatalogCommand, CatalogCommandNode, CatalogTableFunction, MapPartitionsNode, RangeNode,
+    ShowStringFormat, ShowStringNode, ShowStringStyle, SortWithinPartitionsNode,
 };
 use crate::extension::source::rename::RenameTableProvider;
 use crate::resolver::expression::NamedExpr;
@@ -1557,12 +1561,68 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_map_partitions(
         &self,
-        _input: spec::QueryPlan,
-        _function: spec::CommonInlineUserDefinedFunction,
+        input: spec::QueryPlan,
+        function: spec::CommonInlineUserDefinedFunction,
         _is_barrier: bool,
-        _state: &mut PlanResolverState,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        Err(PlanError::todo("map partitions"))
+        let spec::CommonInlineUserDefinedFunction {
+            function_name,
+            deterministic: _,
+            arguments,
+            function,
+        } = function;
+        let input = self
+            .resolve_query_project(Some(input), arguments, state)
+            .await?;
+        let input_names = state.get_field_names(input.schema().inner())?;
+        let (output_type, eval_type, command, python_version) = match function {
+            spec::FunctionDefinition::PythonUdf {
+                output_type,
+                eval_type,
+                command,
+                python_version,
+            } => (output_type, eval_type, command, python_version),
+            _ => {
+                return Err(PlanError::invalid("UDF function type must be Python UDF"));
+            }
+        };
+        let output_type = self.resolve_data_type(output_type)?;
+        let output_schema = match output_type {
+            DataType::Struct(fields) => Arc::new(adt::Schema::new(fields)),
+            _ => {
+                return Err(PlanError::invalid(
+                    "MapPartitions UDF output type must be struct",
+                ))
+            }
+        };
+        let output_names = state.register_fields(&output_schema);
+        let python_bytes: Vec<u8> = build_pyspark_udf_payload(
+            &python_version,
+            &command,
+            eval_type,
+            // MapPartitions UDF has the iterator as the only argument
+            1,
+            &self.config.spark_udf_config,
+        )?;
+        let format = match eval_type {
+            PySparkUdfType::MapPandasIter => PySparkMapIterFormat::Pandas,
+            PySparkUdfType::MapArrowIter => PySparkMapIterFormat::Arrow,
+            _ => {
+                return Err(PlanError::invalid(
+                    "only MapPandasIter UDF is supported in MapPartitions",
+                ));
+            }
+        };
+        let func = PySparkMapIterUDF::new(format, function_name, python_bytes, output_schema);
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(MapPartitionsNode::try_new(
+                Arc::new(input),
+                input_names,
+                output_names,
+                Arc::new(func),
+            )?),
+        }))
     }
 
     async fn resolve_query_collect_metrics(

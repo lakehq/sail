@@ -217,16 +217,27 @@ pub(crate) struct ShowStringNode {
     format: ShowStringFormat,
 }
 
+#[derive(PartialEq, PartialOrd)]
+struct ShowStringNodeOrd<'a> {
+    // names is part of schema so we skip that
+    input: &'a Arc<LogicalPlan>,
+    limit: usize,
+    format: &'a ShowStringFormat,
+}
+
+impl<'a> From<&'a ShowStringNode> for ShowStringNodeOrd<'a> {
+    fn from(node: &'a ShowStringNode) -> Self {
+        Self {
+            input: &node.input,
+            limit: node.limit,
+            format: &node.format,
+        }
+    }
+}
+
 impl PartialOrd for ShowStringNode {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        // names is part of schema so we skip that
-        match self.format.partial_cmp(&other.format) {
-            Some(Ordering::Equal) => match self.limit.partial_cmp(&other.limit) {
-                Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
-                cmp => cmp,
-            },
-            cmp => cmp,
-        }
+        ShowStringNodeOrd::from(self).partial_cmp(&other.into())
     }
 }
 

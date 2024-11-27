@@ -11,8 +11,10 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
+use datafusion_common::{exec_err, internal_datafusion_err, DataFusionError, Result};
 use futures::{Stream, StreamExt};
+
+use crate::utils::ItemTaker;
 
 #[derive(Debug, Clone)]
 pub struct SchemaPivotExec {
@@ -90,14 +92,13 @@ impl ExecutionPlan for SchemaPivotExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.len() != 1 {
-            return internal_err!("SchemaPivotExec should have one child");
-        }
-        Ok(Arc::new(Self::new(
-            children[0].clone(),
-            self.names.clone(),
-            self.schema.clone(),
-        )))
+        let input = children
+            .one()
+            .map_err(|_| internal_datafusion_err!("SchemaPivotExec should have one child"))?;
+        Ok(Arc::new(Self {
+            input,
+            ..self.as_ref().clone()
+        }))
     }
 
     fn execute(

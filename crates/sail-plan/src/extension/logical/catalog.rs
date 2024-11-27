@@ -35,15 +35,26 @@ pub(crate) struct CatalogCommandNode {
     config: Arc<PlanConfig>,
 }
 
+#[derive(PartialEq, PartialOrd)]
+struct CatalogCommandNodeOrd<'a> {
+    name: &'a String,
+    command: &'a CatalogCommand,
+    config: &'a Arc<PlanConfig>,
+}
+
+impl<'a> From<&'a CatalogCommandNode> for CatalogCommandNodeOrd<'a> {
+    fn from(node: &'a CatalogCommandNode) -> Self {
+        Self {
+            name: &node.name,
+            command: &node.command,
+            config: &node.config,
+        }
+    }
+}
+
 impl PartialOrd for CatalogCommandNode {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.name.partial_cmp(&other.name) {
-            Some(Ordering::Equal) => match self.config.partial_cmp(&other.config) {
-                Some(Ordering::Equal) => self.command.partial_cmp(&other.command),
-                cmp => cmp,
-            },
-            cmp => cmp,
-        }
+        CatalogCommandNodeOrd::from(self).partial_cmp(&other.into())
     }
 }
 
@@ -182,100 +193,290 @@ pub(crate) enum CatalogCommand {
     },
 }
 
-// Used for comparing `CatalogCommand` in `PartialOrd` implementation.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
-struct CatalogCommandHelper(CatalogCommand);
+#[derive(PartialEq, PartialOrd)]
+enum CatalogCommandOrd<'a> {
+    CurrentCatalog,
+    SetCurrentCatalog {
+        catalog_name: &'a String,
+    },
+    ListCatalogs {
+        catalog_pattern: &'a Option<String>,
+    },
+    CurrentDatabase,
+    SetCurrentDatabase {
+        database_name: &'a String,
+    },
+    CreateDatabase {
+        database: &'a SchemaReference,
+        if_not_exists: bool,
+        comment: &'a Option<String>,
+        location: &'a Option<String>,
+        properties: &'a Vec<(String, String)>,
+    },
+    DatabaseExists {
+        database: &'a SchemaReference,
+    },
+    GetDatabase {
+        database: &'a SchemaReference,
+    },
+    ListDatabases {
+        catalog: &'a Option<String>,
+        database_pattern: &'a Option<String>,
+    },
+    DropDatabase {
+        database: &'a SchemaReference,
+        if_exists: bool,
+        cascade: bool,
+    },
+    CreateTable {
+        table: &'a TableReference,
+        comment: &'a Option<String>,
+        column_defaults: &'a Vec<(String, Expr)>,
+        constraints: &'a Constraints,
+        location: &'a String,
+        file_format: &'a String,
+        table_partition_cols: &'a Vec<String>,
+        file_sort_order: &'a Vec<Vec<Sort>>,
+        if_not_exists: bool,
+        or_replace: bool,
+        unbounded: bool,
+        options: &'a Vec<(String, String)>,
+        definition: &'a Option<String>,
+        copy_to_plan: &'a Option<Arc<LogicalPlan>>,
+    },
+    TableExists {
+        table: &'a TableReference,
+    },
+    GetTable {
+        table: &'a TableReference,
+    },
+    ListTables {
+        database: &'a Option<SchemaReference>,
+        table_pattern: &'a Option<String>,
+    },
+    DropTable {
+        table: &'a TableReference,
+        if_exists: bool,
+        purge: bool,
+    },
+    ListColumns {
+        table: &'a TableReference,
+    },
+    FunctionExists {
+        function: &'a TableReference,
+    },
+    GetFunction {
+        function: &'a TableReference,
+    },
+    ListFunctions {
+        database: &'a Option<SchemaReference>,
+        function_pattern: &'a Option<String>,
+    },
+    DropFunction {
+        function: &'a TableReference,
+        if_exists: bool,
+        is_temporary: bool,
+    },
+    RegisterFunction {
+        udf: &'a ScalarUDF,
+    },
+    RegisterTableFunction {
+        name: &'a String,
+        // We have to be explicit about the UDTF types we support.
+        // We cannot use `Arc<dyn TableFunctionImpl>` because it does not implement `Eq` and `Hash`.
+        udtf: &'a CatalogTableFunction,
+    },
+    DropTemporaryView {
+        view_name: &'a String,
+        is_global: bool,
+        if_exists: bool,
+    },
+    DropView {
+        view: &'a TableReference,
+        if_exists: bool,
+    },
+    CreateTemporaryView {
+        input: &'a Arc<LogicalPlan>,
+        view_name: &'a String,
+        is_global: bool,
+        replace: bool,
+        definition: &'a Option<String>,
+    },
+    CreateView {
+        input: &'a Arc<LogicalPlan>,
+        view: &'a TableReference,
+        replace: bool,
+        definition: &'a Option<String>,
+    },
+}
+
+impl<'a> From<&'a CatalogCommand> for CatalogCommandOrd<'a> {
+    fn from(command: &'a CatalogCommand) -> Self {
+        match command {
+            CatalogCommand::CurrentCatalog => CatalogCommandOrd::CurrentCatalog,
+            CatalogCommand::SetCurrentCatalog { catalog_name } => {
+                CatalogCommandOrd::SetCurrentCatalog { catalog_name }
+            }
+            CatalogCommand::ListCatalogs { catalog_pattern } => {
+                CatalogCommandOrd::ListCatalogs { catalog_pattern }
+            }
+            CatalogCommand::CurrentDatabase => CatalogCommandOrd::CurrentDatabase,
+            CatalogCommand::SetCurrentDatabase { database_name } => {
+                CatalogCommandOrd::SetCurrentDatabase { database_name }
+            }
+            CatalogCommand::CreateDatabase {
+                database,
+                if_not_exists,
+                comment,
+                location,
+                properties,
+            } => CatalogCommandOrd::CreateDatabase {
+                database,
+                if_not_exists: *if_not_exists,
+                comment,
+                location,
+                properties,
+            },
+            CatalogCommand::DatabaseExists { database } => {
+                CatalogCommandOrd::DatabaseExists { database }
+            }
+            CatalogCommand::GetDatabase { database } => CatalogCommandOrd::GetDatabase { database },
+            CatalogCommand::ListDatabases {
+                catalog,
+                database_pattern,
+            } => CatalogCommandOrd::ListDatabases {
+                catalog,
+                database_pattern,
+            },
+            CatalogCommand::DropDatabase {
+                database,
+                if_exists,
+                cascade,
+            } => CatalogCommandOrd::DropDatabase {
+                database,
+                if_exists: *if_exists,
+                cascade: *cascade,
+            },
+            CatalogCommand::CreateTable {
+                table,
+                // ignore schema in comparison
+                schema: _,
+                comment,
+                column_defaults,
+                constraints,
+                location,
+                file_format,
+                table_partition_cols,
+                file_sort_order,
+                if_not_exists,
+                or_replace,
+                unbounded,
+                options,
+                definition,
+                copy_to_plan,
+            } => CatalogCommandOrd::CreateTable {
+                table,
+                comment,
+                column_defaults,
+                constraints,
+                location,
+                file_format,
+                table_partition_cols,
+                file_sort_order,
+                if_not_exists: *if_not_exists,
+                or_replace: *or_replace,
+                unbounded: *unbounded,
+                options,
+                definition,
+                copy_to_plan,
+            },
+            CatalogCommand::TableExists { table } => CatalogCommandOrd::TableExists { table },
+            CatalogCommand::GetTable { table } => CatalogCommandOrd::GetTable { table },
+            CatalogCommand::ListTables {
+                database,
+                table_pattern,
+            } => CatalogCommandOrd::ListTables {
+                database,
+                table_pattern,
+            },
+            CatalogCommand::DropTable {
+                table,
+                if_exists,
+                purge,
+            } => CatalogCommandOrd::DropTable {
+                table,
+                if_exists: *if_exists,
+                purge: *purge,
+            },
+            CatalogCommand::ListColumns { table } => CatalogCommandOrd::ListColumns { table },
+            CatalogCommand::FunctionExists { function } => {
+                CatalogCommandOrd::FunctionExists { function }
+            }
+            CatalogCommand::GetFunction { function } => CatalogCommandOrd::GetFunction { function },
+            CatalogCommand::ListFunctions {
+                database,
+                function_pattern,
+            } => CatalogCommandOrd::ListFunctions {
+                database,
+                function_pattern,
+            },
+            CatalogCommand::DropFunction {
+                function,
+                if_exists,
+                is_temporary,
+            } => CatalogCommandOrd::DropFunction {
+                function,
+                if_exists: *if_exists,
+                is_temporary: *is_temporary,
+            },
+            CatalogCommand::RegisterFunction { udf } => CatalogCommandOrd::RegisterFunction { udf },
+            CatalogCommand::RegisterTableFunction { name, udtf } => {
+                CatalogCommandOrd::RegisterTableFunction { name, udtf }
+            }
+            CatalogCommand::DropTemporaryView {
+                view_name,
+                is_global,
+                if_exists,
+            } => CatalogCommandOrd::DropTemporaryView {
+                view_name,
+                is_global: *is_global,
+                if_exists: *if_exists,
+            },
+            CatalogCommand::DropView { view, if_exists } => CatalogCommandOrd::DropView {
+                view,
+                if_exists: *if_exists,
+            },
+            CatalogCommand::CreateTemporaryView {
+                input,
+                view_name,
+                is_global,
+                replace,
+                definition,
+            } => CatalogCommandOrd::CreateTemporaryView {
+                input,
+                view_name,
+                is_global: *is_global,
+                replace: *replace,
+                definition,
+            },
+            CatalogCommand::CreateView {
+                input,
+                view,
+                replace,
+                definition,
+            } => CatalogCommandOrd::CreateView {
+                input,
+                view,
+                replace: *replace,
+                definition,
+            },
+        }
+    }
+}
+
 impl PartialOrd for CatalogCommand {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match (self, other) {
-            (
-                CatalogCommand::CreateTable {
-                    table: t1,
-                    schema: _, // ignore schema
-                    comment: c1,
-                    column_defaults: cd1,
-                    constraints: cons1,
-                    location: l1,
-                    file_format: f1,
-                    table_partition_cols: tp1,
-                    file_sort_order: fs1,
-                    if_not_exists: i1,
-                    or_replace: o1,
-                    unbounded: u1,
-                    options: opt1,
-                    definition: d1,
-                    copy_to_plan: cp1,
-                },
-                CatalogCommand::CreateTable {
-                    table: t2,
-                    schema: _, // ignore schema
-                    comment: c2,
-                    column_defaults: cd2,
-                    constraints: cons2,
-                    location: l2,
-                    file_format: f2,
-                    table_partition_cols: tp2,
-                    file_sort_order: fs2,
-                    if_not_exists: i2,
-                    or_replace: o2,
-                    unbounded: u2,
-                    options: opt2,
-                    definition: d2,
-                    copy_to_plan: cp2,
-                },
-            ) => match t1.partial_cmp(t2) {
-                Some(Ordering::Equal) => match c1.partial_cmp(c2) {
-                    Some(Ordering::Equal) => match cd1.partial_cmp(cd2) {
-                        Some(Ordering::Equal) => match cons1.partial_cmp(cons2) {
-                            Some(Ordering::Equal) => match l1.partial_cmp(l2) {
-                                Some(Ordering::Equal) => match f1.partial_cmp(f2) {
-                                    Some(Ordering::Equal) => match tp1.partial_cmp(tp2) {
-                                        Some(Ordering::Equal) => match fs1.partial_cmp(fs2) {
-                                            Some(Ordering::Equal) => match i1.partial_cmp(i2) {
-                                                Some(Ordering::Equal) => match o1.partial_cmp(o2) {
-                                                    Some(Ordering::Equal) => {
-                                                        match u1.partial_cmp(u2) {
-                                                            Some(Ordering::Equal) => match opt1
-                                                                .partial_cmp(opt2)
-                                                            {
-                                                                Some(Ordering::Equal) => {
-                                                                    match d1.partial_cmp(d2) {
-                                                                        Some(Ordering::Equal) => {
-                                                                            cp1.partial_cmp(cp2)
-                                                                        }
-                                                                        cmp => cmp,
-                                                                    }
-                                                                }
-                                                                cmp => cmp,
-                                                            },
-                                                            cmp => cmp,
-                                                        }
-                                                    }
-                                                    cmp => cmp,
-                                                },
-                                                cmp => cmp,
-                                            },
-                                            cmp => cmp,
-                                        },
-                                        cmp => cmp,
-                                    },
-                                    cmp => cmp,
-                                },
-                                cmp => cmp,
-                            },
-                            cmp => cmp,
-                        },
-                        cmp => cmp,
-                    },
-                    cmp => cmp,
-                },
-                cmp => cmp,
-            },
-            // For all other cases, use the default derived comparison
-            _ => {
-                CatalogCommandHelper(self.clone()).partial_cmp(&CatalogCommandHelper(other.clone()))
-            }
-        }
+        CatalogCommandOrd::from(self).partial_cmp(&other.into())
     }
 }
 

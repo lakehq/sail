@@ -16,15 +16,16 @@ message ExtendedPhysicalPlanNode {
     ShuffleReadExecNode shuffle_read = 3;
     ShuffleWriteExecNode shuffle_write = 4;
     SchemaPivotExecNode schema_pivot = 5;
+    MapPartitionsExecNode map_partitions = 6;
     // TODO: This can be removed once it is supported by DataFusion.
-    MemoryExecNode memory = 6;
-    ValuesExecNode values = 7;
-    NdJsonExecNode nd_json = 8;
-    ArrowExecNode arrow = 9;
-    WorkTableExecNode work_table = 10;
-    RecursiveQueryExecNode recursive_query = 11;
-    SortMergeJoinExecNode sort_merge_join = 12;
-    PartialSortExecNode partial_sort = 13;
+    MemoryExecNode memory = 7;
+    ValuesExecNode values = 8;
+    NdJsonExecNode nd_json = 9;
+    ArrowExecNode arrow = 10;
+    WorkTableExecNode work_table = 11;
+    RecursiveQueryExecNode recursive_query = 12;
+    SortMergeJoinExecNode sort_merge_join = 13;
+    PartialSortExecNode partial_sort = 14;
   }
 }
 
@@ -40,6 +41,12 @@ message ExtendedScalarUdf {
     StandardUdf standard = 1;
     WithOneAuxiliaryFieldUdf with_one_auxiliary_field = 2;
     PySparkUdf py_spark = 3;
+  }
+}
+
+message ExtendedMapIterUdf {
+  oneof MapIterUdfKind {
+    PySparkMapIterUdf py_spark = 1;
   }
 }
 
@@ -82,6 +89,18 @@ message PySparkUdaf {
   bytes python_bytes = 5;
 }
 
+message PySparkMapIterUdf {
+  PySparkMapIterFormat format = 1;
+  string function_name = 2;
+  bytes function = 3;
+  bytes output_schema = 4;
+}
+
+enum PySparkMapIterFormat {
+  PY_SPARK_MAP_ITER_FORMAT_PANDAS = 0;
+  PY_SPARK_MAP_ITER_FORMAT_ARROW = 1;
+}
+
 message RangeExecNode {
   int64 start = 1;
   int64 end = 2;
@@ -109,6 +128,13 @@ message SchemaPivotExecNode {
   bytes input = 1;
   repeated string names = 2;
   bytes schema = 3;
+}
+
+message MapPartitionsExecNode {
+  bytes input = 1;
+  repeated string input_names = 2;
+  ExtendedMapIterUdf udf = 3;
+  bytes schema = 4;
 }
 
 message LexOrdering {

@@ -4637,9 +4637,12 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "futures",
  "pyo3",
  "sail-common",
  "thiserror 2.0.3",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
