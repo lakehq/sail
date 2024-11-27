@@ -2,11 +2,12 @@ use std::any::Any;
 use std::fmt;
 
 use aes::cipher::block_padding::Pkcs7;
+use aes::cipher::consts::U12;
 use aes::cipher::{BlockEncryptMut, KeyIvInit};
 use aes::{Aes128, Aes192, Aes256};
-use aes_gcm_siv::aead::rand_core::{OsRng, RngCore};
-use aes_gcm_siv::aead::{Aead, KeyInit, Payload};
-use aes_gcm_siv::{Aes128GcmSiv, Aes256GcmSiv, AesGcmSiv, Nonce};
+use aes_gcm::aead::rand_core::{OsRng, RngCore};
+use aes_gcm::aead::{Aead, KeyInit, Payload};
+use aes_gcm::{Aes128Gcm, Aes256Gcm, AesGcm, Nonce};
 use datafusion::arrow::array::{
     BinaryArray, BinaryViewArray, FixedSizeBinaryArray, LargeBinaryArray, LargeStringArray,
     StringArray, StringViewArray,
@@ -15,7 +16,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
-pub type Aes192GcmSiv = AesGcmSiv<Aes192>;
+pub type Aes192Gcm = AesGcm<Aes192, U12>;
 
 pub fn encryption_name_to_mode(mode: &str) -> Result<EncryptionMode> {
     match mode.trim().to_uppercase().as_str() {
@@ -393,7 +394,7 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                 let nonce = Nonce::from_slice(iv);
                 let result = match key.len() {
                     16 => {
-                        let cipher = Aes128GcmSiv::new_from_slice(key).map_err(|e| {
+                        let cipher = Aes128Gcm::new_from_slice(key).map_err(|e| {
                             exec_datafusion_err!("Error creating AES-128 cipher: {e}")
                         })?;
                         let result = match aad {
@@ -404,7 +405,7 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                         Ok(result)
                     }
                     24 => {
-                        let cipher = Aes192GcmSiv::new_from_slice(key).map_err(|e| {
+                        let cipher = Aes192Gcm::new_from_slice(key).map_err(|e| {
                             exec_datafusion_err!("Error creating AES-192 cipher: {e}")
                         })?;
                         let result = match aad {
@@ -415,7 +416,7 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                         Ok(result)
                     }
                     32 => {
-                        let cipher = Aes256GcmSiv::new_from_slice(key).map_err(|e| {
+                        let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| {
                             exec_datafusion_err!("Error creating AES-256 cipher: {e}")
                         })?;
                         let result = match aad {

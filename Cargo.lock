@@ -45,18 +45,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "aes-gcm-siv"
-version = "0.11.1"
+name = "aes-gcm"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae0784134ba9375416d469ec31e7c5f9fa94405049cf08c5ce5b4698be673e0d"
+checksum = "831010a0f742e1209b3bcea8fab6a8e149051ba6099432c8cb2cc117dec3ead1"
 dependencies = [
  "aead",
  "aes",
  "cipher",
  "ctr",
- "polyval",
+ "ghash",
  "subtle",
- "zeroize",
 ]
 
 [[package]]
@@ -2197,6 +2196,16 @@ dependencies = [
  "libc",
  "wasi",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "ghash"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0d8a4362ccb29cb0b265253fb0a2728f592895ee6854fd9bc13f2ffda266ff1"
+dependencies = [
+ "opaque-debug",
+ "polyval",
 ]
 
 [[package]]
@@ -4629,7 +4638,7 @@ name = "sail-plan"
 version = "0.2.0"
 dependencies = [
  "aes",
- "aes-gcm-siv",
+ "aes-gcm",
  "arrow",
  "arrow-cast",
  "async-recursion",
