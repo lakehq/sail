@@ -38,7 +38,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry/ \
     --mount=type=cache,target=/app/target/ \
     RUST_TARGET_SUBDIR=$(case "${RUST_PROFILE}" in \
         dev|test) echo "debug" ;; \
-        release|prod|bench) echo "release" ;; \
+        release|bench) echo "release" ;; \
         *) echo "${RUST_PROFILE}" ;; \
     esac) && \
     cargo build -p sail-cli --profile ${RUST_PROFILE} --bins && \

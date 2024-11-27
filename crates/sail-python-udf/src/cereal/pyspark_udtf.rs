@@ -90,24 +90,24 @@ pub fn build_pyspark_udtf_payload(
         let mut config_data: Vec<u8> = Vec::new();
         for config in configs {
             if let Some(value) = &config.value {
-                config_data.extend(&(config.key.len() as i32).to_be_bytes()); // len of the key
+                config_data.extend(&(config.key.len() as i32).to_be_bytes()); // length of the key
                 config_data.extend(config.key.as_bytes());
-                config_data.extend(&(value.len() as i32).to_be_bytes()); // len of the value
+                config_data.extend(&(value.len() as i32).to_be_bytes()); // length of the value
                 config_data.extend(value.as_bytes());
                 num_config += 1;
             }
         }
-        data.extend(&num_config.to_be_bytes()); // num_config
+        data.extend(&num_config.to_be_bytes()); // number of configuration options
         data.extend(&config_data);
     }
     let num_args: i32 = num_args
         .try_into()
         .map_err(|e| plan_datafusion_err!("num_args: {e}"))?;
-    data.extend(&num_args.to_be_bytes()); // num_args
+    data.extend(&num_args.to_be_bytes()); // number of arguments
     for index in 0..num_args {
-        data.extend(&index.to_be_bytes()); // arg_offsets
+        data.extend(&index.to_be_bytes()); // argument offset
     }
-    data.extend(&(command.len() as i32).to_be_bytes()); // len of the function
+    data.extend(&(command.len() as i32).to_be_bytes()); // length of the function
     data.extend_from_slice(command);
 
     Python::with_gil(|py| -> PyUdfResult<_> {

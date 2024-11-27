@@ -14,6 +14,7 @@ use datafusion::datasource::file_format::{format_as_file_type, FileFormat, FileF
 use datafusion::datasource::function::TableFunction;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
+use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::logical_expr::{logical_plan as plan, Expr, Extension, LogicalPlan, UNNAMED_TABLE};
 use datafusion_common::config::{ConfigFileType, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -30,14 +31,15 @@ use datafusion_expr::utils::{
     find_aggregate_exprs,
 };
 use datafusion_expr::{
-    build_join_schema, col, lit, when, BinaryExpr, DmlStatement, ExprSchemable, LogicalPlanBuilder,
-    Operator, ScalarUDF, TryCast, WriteOp,
+    build_join_schema, col, expr, lit, when, AggregateUDF, BinaryExpr, DmlStatement, ExprSchemable,
+    LogicalPlanBuilder, Operator, ScalarUDF, TryCast, WriteOp,
 };
 use sail_common::spec;
 use sail_common::spec::PySparkUdfType;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_python_udf::cereal::pyspark_udf::build_pyspark_udf_payload;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterFormat, PySparkMapIterUDF};
+use sail_python_udf::udf::pyspark_udaf::{PySparkAggFormat, PySparkAggregateUDF};
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
 use sail_python_udf::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
 
@@ -1602,7 +1604,7 @@ impl PlanResolver<'_> {
             &command,
             eval_type,
             // MapPartitions UDF has the iterator as the only argument
-            1,
+            &[0],
             &self.config.spark_udf_config,
         )?;
         let format = match eval_type {
@@ -1645,10 +1647,152 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_group_map(
         &self,
-        _map: spec::GroupMap,
-        _state: &mut PlanResolverState,
+        map: spec::GroupMap,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        Err(PlanError::todo("group map"))
+        let spec::GroupMap {
+            input,
+            grouping_expressions: grouping,
+            function,
+            sorting_expressions,
+            initial_input,
+            initial_grouping_expressions,
+            is_map_groups_with_state,
+            output_mode,
+            timeout_conf,
+        } = map;
+        // The following fields are not used in PySpark,
+        // so there is no plan to support them.
+        if !sorting_expressions.is_empty() {
+            return Err(PlanError::invalid(
+                "sorting expressions not supported in group map",
+            ));
+        }
+        if initial_input.is_some() {
+            return Err(PlanError::invalid(
+                "initial input not supported in group map",
+            ));
+        }
+        if !initial_grouping_expressions.is_empty() {
+            return Err(PlanError::invalid(
+                "initial grouping expressions not supported in group map",
+            ));
+        }
+        if is_map_groups_with_state.is_some() {
+            return Err(PlanError::invalid(
+                "is map groups with state not supported in group map",
+            ));
+        }
+        if output_mode.is_some() {
+            return Err(PlanError::invalid("output mode not supported in group map"));
+        }
+        if timeout_conf.is_some() {
+            return Err(PlanError::invalid(
+                "timeout configuration not supported in group map",
+            ));
+        }
+
+        let spec::CommonInlineUserDefinedFunction {
+            function_name,
+            deterministic,
+            arguments,
+            function,
+        } = function;
+        let (output_type, eval_type, command, python_version) = match function {
+            spec::FunctionDefinition::PythonUdf {
+                output_type,
+                eval_type,
+                command,
+                python_version,
+            } => (output_type, eval_type, command, python_version),
+            _ => {
+                return Err(PlanError::invalid("UDF function type must be Python UDF"));
+            }
+        };
+        let output_type = self.resolve_data_type(output_type)?;
+        let output_fields = match output_type {
+            DataType::Struct(fields) => fields,
+            _ => {
+                return Err(PlanError::invalid(
+                    "GroupMap UDF output type must be struct",
+                ))
+            }
+        };
+        let udf_output_type = DataType::List(Arc::new(adt::Field::new(
+            "item",
+            DataType::Struct(output_fields.clone()),
+            false,
+        )));
+        if !matches!(eval_type, PySparkUdfType::GroupedMapPandas) {
+            return Err(PlanError::invalid(
+                "only MapPandasIter UDF is supported in MapPartitions",
+            ));
+        }
+        let input = self.resolve_query_plan(*input, state).await?;
+        let schema = input.schema();
+        let args = self
+            .resolve_named_expressions(arguments, schema, state)
+            .await?;
+        let grouping = self
+            .resolve_named_expressions(grouping, schema, state)
+            .await?;
+        let (args, offsets) = resolve_group_map_argument_offsets(&args, &grouping)?;
+        let input_names = args
+            .iter()
+            .map(|x| Ok(x.name.clone().one()?))
+            .collect::<PlanResult<Vec<_>>>()?;
+        let args = args.iter().map(|x| x.expr.clone()).collect::<Vec<_>>();
+        let group_exprs = grouping.iter().map(|x| x.expr.clone()).collect::<Vec<_>>();
+        let input_types = args
+            .iter()
+            .map(|arg| {
+                let (data_type, _) = arg.data_type_and_nullable(schema)?;
+                Ok(data_type)
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        let python_bytes: Vec<u8> = build_pyspark_udf_payload(
+            &python_version,
+            &command,
+            eval_type,
+            &offsets,
+            &self.config.spark_udf_config,
+        )?;
+        let udaf = PySparkAggregateUDF::new(
+            PySparkAggFormat::GroupMap,
+            function_name.to_owned(),
+            deterministic,
+            input_names,
+            input_types,
+            udf_output_type,
+            python_bytes,
+            true,
+        );
+        let aggregate_expr = Expr::AggregateFunction(expr::AggregateFunction {
+            func: Arc::new(AggregateUDF::from(udaf)),
+            args,
+            distinct: false,
+            filter: None,
+            order_by: None,
+            null_treatment: None,
+        });
+        let output_name = aggregate_expr.name_for_alias()?;
+        let output_col = Column::new_unqualified(&output_name);
+        let plan = LogicalPlanBuilder::from(input)
+            .aggregate(group_exprs, vec![aggregate_expr])?
+            .project(vec![Expr::Column(output_col.clone())])?
+            .unnest_column(output_col.clone())?
+            .project(
+                output_fields
+                    .iter()
+                    .map(|f| {
+                        let expr = Expr::Column(output_col.clone()).field(f.name());
+                        let name = state.register_field(f.name());
+                        Ok(expr.alias(name))
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?,
+            )?
+            .build()?;
+        Ok(plan)
     }
 
     async fn resolve_query_co_group_map(
@@ -3200,4 +3344,42 @@ fn rebase_expression(expr: Expr, base: &[Expr], plan: &LogicalPlan) -> PlanResul
             }
         })
         .data()?)
+}
+
+/// Resolves argument offsets for group map operations.
+/// Returns the deduplicated argument expressions and the offset array.
+/// The result offset array `offsets` has the following layout.
+///   `offsets[0]`: the length of the offset array.
+///   `offsets[1]`: the number of grouping (key) expressions.
+///   `offsets[2..offsets[1]+2]`: the offsets of the grouping (key) expressions.
+///   `offsets[offsets[1]+2..offsets[0]]`: the offsets of the data (value) expressions.
+/// See also:
+///   org.apache.spark.sql.execution.python.PandasGroupUtils#resolveArgOffsets
+fn resolve_group_map_argument_offsets(
+    exprs: &[NamedExpr],
+    grouping_exprs: &[NamedExpr],
+) -> PlanResult<(Vec<NamedExpr>, Vec<usize>)> {
+    let mut out = exprs.to_vec();
+    let mut key_offsets = vec![];
+    let mut value_offsets = vec![];
+    for expr in grouping_exprs {
+        if let Some(pos) = exprs.iter().position(|x| x == expr) {
+            key_offsets.push(pos);
+        } else {
+            let pos = out.len();
+            out.push(expr.clone());
+            key_offsets.push(pos);
+        }
+    }
+    for i in 0..exprs.len() {
+        if !key_offsets.contains(&i) {
+            value_offsets.push(i);
+        }
+    }
+    let mut offsets = Vec::with_capacity(2 + key_offsets.len() + value_offsets.len());
+    offsets.push(2 + key_offsets.len() + value_offsets.len());
+    offsets.push(key_offsets.len());
+    offsets.extend(key_offsets);
+    offsets.extend(value_offsets);
+    Ok((out, offsets))
 }

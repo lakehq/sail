@@ -82,11 +82,18 @@ message PySparkUdf {
 }
 
 message PySparkUdaf {
-  string function_name = 1;
-  bool deterministic = 2;
-  repeated bytes input_types = 3;
-  bytes output_type = 4;
-  bytes python_bytes = 5;
+  PySparkAggFormat format = 1;
+  string function_name = 2;
+  bool deterministic = 3;
+  repeated string input_names = 4;
+  repeated bytes input_types = 5;
+  bytes output_type = 6;
+  bytes python_bytes = 7;
+}
+
+enum PySparkAggFormat {
+  PY_SPARK_AGG_FORMAT_GROUP_AGG = 0;
+  PY_SPARK_AGG_FORMAT_GROUP_MAP = 1;
 }
 
 message PySparkMapIterUdf {

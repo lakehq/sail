@@ -228,7 +228,7 @@ fn apply_pyspark_arrow_function(
 ) -> PyUdfResult<RecordBatch> {
     let udtf = python_function.function(py)?;
     let py_list = PyBuiltins::list(py)?;
-    let record_batch_from_pandas = PyArrowRecordBatch::from_pandas(py, None)?;
+    let pyarrow_record_batch_from_pandas = PyArrowRecordBatch::from_pandas(py, None)?;
     let pyarrow_array_to_pandas = PyArrowArray::to_pandas(
         py,
         PyArrowToPandasOptions {
@@ -252,7 +252,7 @@ fn apply_pyspark_arrow_function(
     let data = result.get_item(0)?;
     let _data_type = result.get_item(1)?;
 
-    let record_batch = record_batch_from_pandas.call1((data,))?;
+    let record_batch = pyarrow_record_batch_from_pandas.call1((data,))?;
     let record_batch = RecordBatch::from_pyarrow_bound(&record_batch)?;
     Ok(record_batch)
 }

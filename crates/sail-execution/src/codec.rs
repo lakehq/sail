@@ -69,7 +69,7 @@ use sail_plan::extension::physical::{
     MapPartitionsExec, RangeExec, SchemaPivotExec, ShowStringExec,
 };
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterFormat, PySparkMapIterUDF};
-use sail_python_udf::udf::pyspark_udaf::PySparkAggregateUDF;
+use sail_python_udf::udf::pyspark_udaf::{PySparkAggFormat, PySparkAggregateUDF};
 use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
@@ -946,8 +946,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let ExtendedAggregateUdf { udaf_kind } = udaf;
         match udaf_kind {
             Some(UdafKind::PySparkAgg(gen::PySparkUdaf {
+                format,
                 function_name,
                 deterministic,
+                input_names,
                 input_types,
                 output_type,
                 python_bytes,
@@ -965,8 +967,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     self.try_decode_message::<gen_datafusion_common::ArrowType>(&output_type)?;
                 let output_type: DataType = (&output_type).try_into()?;
                 let udaf = PySparkAggregateUDF::new(
+                    self.try_decode_pyspark_agg_format(format)?,
                     function_name.to_owned(),
                     deterministic,
+                    input_names,
                     input_types,
                     output_type,
                     python_bytes,
@@ -1004,8 +1008,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             )?;
             let deterministic = matches!(func.signature().volatility, Volatility::Immutable);
             UdafKind::PySparkAgg(gen::PySparkUdaf {
+                format: self.try_encode_pyspark_agg_format(func.format())?,
                 function_name: func.function_name().to_string(),
                 deterministic,
+                input_names: func.input_names().to_vec(),
                 input_types,
                 output_type,
                 python_bytes: func.python_bytes().to_vec(),
@@ -1151,6 +1157,24 @@ impl RemoteExecutionCodec {
             ShowStringStyle::Html => gen::ShowStringStyle::Html,
         };
         Ok(style as i32)
+    }
+
+    fn try_decode_pyspark_agg_format(&self, format: i32) -> Result<PySparkAggFormat> {
+        let format = gen::PySparkAggFormat::try_from(format)
+            .map_err(|e| plan_datafusion_err!("failed to decode pyspark agg format: {e}"))?;
+        let format = match format {
+            gen::PySparkAggFormat::GroupAgg => PySparkAggFormat::GroupAgg,
+            gen::PySparkAggFormat::GroupMap => PySparkAggFormat::GroupMap,
+        };
+        Ok(format)
+    }
+
+    fn try_encode_pyspark_agg_format(&self, format: PySparkAggFormat) -> Result<i32> {
+        let format = match format {
+            PySparkAggFormat::GroupAgg => gen::PySparkAggFormat::GroupAgg,
+            PySparkAggFormat::GroupMap => gen::PySparkAggFormat::GroupMap,
+        };
+        Ok(format as i32)
     }
 
     fn try_decode_pyspark_map_iter_format(&self, format: i32) -> Result<PySparkMapIterFormat> {

@@ -71,7 +71,7 @@ pub fn build_pyspark_udf_payload(
     python_version: &str,
     command: &[u8],
     eval_type: spec::PySparkUdfType,
-    num_args: usize,
+    arg_offsets: &[usize],
     spark_udf_config: &SparkUdfConfig,
 ) -> Result<Vec<u8>> {
     check_python_udf_version(python_version)?;
@@ -89,26 +89,30 @@ pub fn build_pyspark_udf_payload(
         let mut config_data: Vec<u8> = Vec::new();
         for config in configs {
             if let Some(value) = &config.value {
-                config_data.extend(&(config.key.len() as i32).to_be_bytes()); // len of the key
+                config_data.extend(&(config.key.len() as i32).to_be_bytes()); // length of the key
                 config_data.extend(config.key.as_bytes());
-                config_data.extend(&(value.len() as i32).to_be_bytes()); // len of the value
+                config_data.extend(&(value.len() as i32).to_be_bytes()); // length of the value
                 config_data.extend(value.as_bytes());
                 num_config += 1;
             }
         }
-        data.extend(&num_config.to_be_bytes()); // num_config
+        data.extend(&num_config.to_be_bytes()); // number of configuration options
         data.extend(&config_data);
     }
-    data.extend(&1i32.to_be_bytes()); // num_udfs
-    let num_args: i32 = num_args
+    data.extend(&1i32.to_be_bytes()); // number of UDFs
+    let num_arg_offsets: i32 = arg_offsets
+        .len()
         .try_into()
-        .map_err(|e| plan_datafusion_err!("num_args: {e}"))?;
-    data.extend(&num_args.to_be_bytes()); // num_args
-    for index in 0..num_args {
-        data.extend(&index.to_be_bytes()); // arg_offsets
+        .map_err(|e| plan_datafusion_err!("num args: {e}"))?;
+    data.extend(&num_arg_offsets.to_be_bytes()); // number of argument offsets
+    for offset in arg_offsets {
+        let offset: i32 = (*offset)
+            .try_into()
+            .map_err(|e| plan_datafusion_err!("arg offset: {e}"))?;
+        data.extend(&offset.to_be_bytes()); // argument offset
     }
-    data.extend(&1i32.to_be_bytes()); // num functions
-    data.extend(&(command.len() as i32).to_be_bytes()); // len of the function
+    data.extend(&1i32.to_be_bytes()); // number of functions
+    data.extend(&(command.len() as i32).to_be_bytes()); // length of the function
     data.extend_from_slice(command);
 
     Ok(data)
