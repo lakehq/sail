@@ -54,6 +54,7 @@ use sail_plan::extension::function::randn::Randn;
 use sail_plan::extension::function::random::Random;
 use sail_plan::extension::function::size::Size;
 use sail_plan::extension::function::skewness::SkewnessFunc;
+use sail_plan::extension::function::spark_aes::{SparkAESDecrypt, SparkAESEncrypt};
 use sail_plan::extension::function::spark_array::SparkArray;
 use sail_plan::extension::function::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_plan::extension::function::spark_concat::SparkConcat;
@@ -776,6 +777,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             },
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_unbase64" | "unbase64" => Ok(Arc::new(ScalarUDF::from(SparkUnbase64::new()))),
+            "spark_aes_encrypt" | "aes_encrypt" => {
+                Ok(Arc::new(ScalarUDF::from(SparkAESEncrypt::new())))
+            }
+            "spark_aes_decrypt" | "aes_decrypt" => {
+                Ok(Arc::new(ScalarUDF::from(SparkAESDecrypt::new())))
+            }
             _ => plan_err!("Could not find Scalar Function: {name}"),
         }
     }
@@ -962,6 +969,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkBase64>() {
             UdfKind::Standard(gen::StandardUdf {})
         } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkUnbase64>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkAESEncrypt>() {
+            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkAESDecrypt>() {
             UdfKind::Standard(gen::StandardUdf {})
         } else {
             return Ok(());

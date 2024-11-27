@@ -7,7 +7,7 @@ use datafusion_expr::{expr, lit, Operator, ScalarUDF};
 use crate::catalog::CatalogManager;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::raise_error::RaiseError;
-use crate::extension::function::spark_aes::SparkAESEncrypt;
+use crate::extension::function::spark_aes::{SparkAESDecrypt, SparkAESEncrypt};
 use crate::function::common::{Function, FunctionContext};
 use crate::utils::ItemTaker;
 
@@ -83,7 +83,7 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
     vec![
-        ("aes_decrypt", F::unknown("aes_decrypt")),
+        ("aes_decrypt", F::udf(SparkAESDecrypt::new())),
         ("aes_encrypt", F::udf(SparkAESEncrypt::new())),
         ("assert_true", F::custom(assert_true)),
         ("bitmap_bit_position", F::unknown("bitmap_bit_position")),

@@ -10,6 +10,7 @@ use datafusion_expr::{expr, lit, ScalarUDF};
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::levenshtein::Levenshtein;
 use crate::extension::function::spark_base64::{SparkBase64, SparkUnbase64};
+use crate::extension::function::spark_hex_unhex::SparkUnHex;
 use crate::function::common::{Function, FunctionContext};
 use crate::utils::ItemTaker;
 
@@ -53,21 +54,44 @@ fn concat_ws(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> Plan
 }
 
 fn to_binary(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
-    let hex_format = expr::Expr::Literal(ScalarValue::Utf8(Some("hex".to_string())));
     if args.len() == 1 {
         let expr = args.one()?;
-        let format = hex_format;
-        return Ok(expr_fn::decode(expr, format));
+        return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(SparkUnHex::new())),
+            args: vec![expr],
+        }));
     }
     if args.len() == 2 {
         let (expr, format) = args.two()?;
         return match format {
             expr::Expr::Literal(ScalarValue::Utf8(Some(ref s)))
-                if s.to_lowercase() == "utf-8" || s.to_lowercase() == "utf8" =>
+            | expr::Expr::Literal(ScalarValue::Utf8View(Some(ref s)))
+            | expr::Expr::Literal(ScalarValue::LargeUtf8(Some(ref s)))
+                if s.trim().to_lowercase() == "utf-8" || s.trim().to_lowercase() == "utf8" =>
             {
                 Ok(expr::Expr::Cast(expr::Cast {
                     expr: Box::new(expr),
                     data_type: DataType::Binary,
+                }))
+            }
+            expr::Expr::Literal(ScalarValue::Utf8(Some(ref s)))
+            | expr::Expr::Literal(ScalarValue::Utf8View(Some(ref s)))
+            | expr::Expr::Literal(ScalarValue::LargeUtf8(Some(ref s)))
+                if s.trim().to_lowercase() == "hex" =>
+            {
+                Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                    func: Arc::new(ScalarUDF::from(SparkUnHex::new())),
+                    args: vec![expr],
+                }))
+            }
+            expr::Expr::Literal(ScalarValue::Utf8(Some(ref s)))
+            | expr::Expr::Literal(ScalarValue::Utf8View(Some(ref s)))
+            | expr::Expr::Literal(ScalarValue::LargeUtf8(Some(ref s)))
+                if s.trim().to_lowercase() == "base64" =>
+            {
+                Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+                    func: Arc::new(ScalarUDF::from(SparkUnbase64::new())),
+                    args: vec![expr],
                 }))
             }
             _ => Ok(expr_fn::decode(expr, format)),
