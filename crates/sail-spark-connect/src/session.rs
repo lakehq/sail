@@ -13,7 +13,7 @@ use crate::config::SparkRuntimeConfig;
 use crate::error::{SparkError, SparkResult};
 use crate::executor::Executor;
 use crate::spark::config::{
-    SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH,
+    SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH, SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES,
     SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY, SPARK_SQL_GLOBAL_TEMP_DATABASE,
     SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME,
     SPARK_SQL_SESSION_TIME_ZONE, SPARK_SQL_SOURCES_DEFAULT, SPARK_SQL_WAREHOUSE_DIR,
@@ -79,6 +79,11 @@ impl SparkExtension {
             .get(SPARK_SQL_SESSION_TIME_ZONE)?
             .map(|x| x.to_string())
             .unwrap_or_else(|| "UTC".into());
+        let arrow_use_large_var_types = state
+            .config
+            .get(SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES)?
+            .map(|x| x.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
         let spark_udf_config = SparkUdfConfig {
             timezone: ConfigKeyValue {
                 key: "spark.sql.session.timeZone".to_string(),
@@ -132,6 +137,7 @@ impl SparkExtension {
             time_zone,
             // TODO: get the default timestamp type from configuration
             timestamp_type: TimestampType::TimestampLtz,
+            arrow_use_large_var_types,
             plan_formatter: Arc::new(DefaultPlanFormatter),
             spark_udf_config,
             default_bounded_table_file_format,

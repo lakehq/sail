@@ -1718,8 +1718,7 @@ impl PlanResolver<'_> {
                 ))
             }
         };
-        let udf_output_type = DataType::List(Arc::new(adt::Field::new(
-            "item",
+        let udf_output_type = DataType::List(Arc::new(adt::Field::new_list_field(
             DataType::Struct(output_fields.clone()),
             false,
         )));

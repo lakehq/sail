@@ -68,8 +68,8 @@ impl ScalarUDFImpl for SparkArray {
                     expr_type = DataType::Int32;
                 }
 
-                Ok(DataType::List(Arc::new(Field::new(
-                    "item", expr_type, true,
+                Ok(DataType::List(Arc::new(Field::new_list_field(
+                    expr_type, true,
                 ))))
             }
         }
@@ -114,7 +114,7 @@ impl ScalarUDFImpl for SparkArray {
 
 // Empty array is a special case that is useful for many other array functions
 pub(super) fn empty_array_type() -> DataType {
-    DataType::List(Arc::new(Field::new("item", DataType::Int32, true)))
+    DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)))
 }
 
 /// `make_array_inner` is the implementation of the `make_array` function.
@@ -222,7 +222,7 @@ fn array_array<O: OffsetSizeTrait>(args: &[ArrayRef], data_type: DataType) -> Re
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new("item", data_type, true)),
+        Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::new(offsets.into()),
         make_array(data),
         None,

@@ -21,6 +21,8 @@ pub struct PlanConfig<F: ?Sized = dyn PlanFormatter> {
     pub time_zone: String,
     /// The default timestamp type.
     pub timestamp_type: TimestampType,
+    /// Whether to use large variable types in Arrow.
+    pub arrow_use_large_var_types: bool,
     /// The plan formatter.
     pub plan_formatter: Arc<F>,
     // TODO: Revisit how to handle spark_udf_config
@@ -42,6 +44,7 @@ impl Default for PlanConfig {
         Self {
             time_zone: "UTC".to_string(),
             timestamp_type: TimestampType::TimestampLtz,
+            arrow_use_large_var_types: false,
             plan_formatter: Arc::new(DefaultPlanFormatter),
             spark_udf_config: SparkUdfConfig {
                 timezone: ConfigKeyValue {

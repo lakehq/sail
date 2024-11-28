@@ -275,7 +275,7 @@ fn call_pandas_group_map_udf(
     };
     let array = StructArray::from(batch);
     let array = ListArray::new(
-        Arc::new(Field::new("item", array.data_type().clone(), false)),
+        Arc::new(Field::new_list_field(array.data_type().clone(), false)),
         OffsetBuffer::from_lengths(vec![array.len()]),
         Arc::new(array),
         None,
@@ -392,7 +392,7 @@ impl Accumulator for PySparkAggregateUDFAccumulator {
             .map(|(input, data_type)| {
                 let input = input.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
                 let input = if input.is_empty() {
-                    ListArray::new_null(Arc::new(Field::new("item", data_type.clone(), true)), 0)
+                    ListArray::new_null(Arc::new(Field::new_list_field(data_type.clone(), true)), 0)
                 } else {
                     array_into_list_array(concat(&input)?, true)
                 };
