@@ -750,7 +750,7 @@ impl PlanResolver<'_> {
                 };
                 let output_type: DataType = self.resolve_data_type(output_type.clone())?;
 
-                let python_bytes: Vec<u8> = build_pyspark_udf_payload(
+                let payload: Vec<u8> = build_pyspark_udf_payload(
                     python_version,
                     command,
                     *eval_type,
@@ -770,7 +770,7 @@ impl PlanResolver<'_> {
                     *eval_type,
                     input_types,
                     output_type,
-                    python_bytes,
+                    payload,
                     true,
                 );
 
@@ -937,7 +937,7 @@ impl PlanResolver<'_> {
                     };
                     let output_type = self.resolve_data_type(output_type)?;
 
-                    let python_bytes: Vec<u8> = build_pyspark_udf_payload(
+                    let payload: Vec<u8> = build_pyspark_udf_payload(
                         &python_version,
                         &command,
                         eval_type,
@@ -957,7 +957,7 @@ impl PlanResolver<'_> {
                                 argument_names.clone(),
                                 input_types,
                                 output_type,
-                                python_bytes,
+                                payload,
                                 true,
                             );
                             let udaf = AggregateUDF::from(udaf);
@@ -1221,7 +1221,7 @@ impl PlanResolver<'_> {
         };
         let output_type = self.resolve_data_type(output_type)?;
 
-        let python_bytes: Vec<u8> = build_pyspark_udf_payload(
+        let payload: Vec<u8> = build_pyspark_udf_payload(
             &python_version,
             &command,
             eval_type,
@@ -1249,7 +1249,7 @@ impl PlanResolver<'_> {
                     eval_type,
                     input_types,
                     output_type,
-                    python_bytes,
+                    payload,
                     true,
                 );
                 expr::Expr::ScalarFunction(expr::ScalarFunction {
@@ -1265,7 +1265,7 @@ impl PlanResolver<'_> {
                     argument_names.clone(),
                     input_types,
                     output_type,
-                    python_bytes,
+                    payload,
                     true,
                 );
                 expr::Expr::AggregateFunction(expr::AggregateFunction {

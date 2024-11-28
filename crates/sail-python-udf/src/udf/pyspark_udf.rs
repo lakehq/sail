@@ -1,19 +1,16 @@
 use std::any::Any;
-use std::sync::OnceLock;
 
 use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::common::Result;
-use datafusion_common::DataFusionError;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use pyo3::prelude::{PyAnyMethods, PyTypeMethods};
 use pyo3::types::{PyIterator, PyList, PyTuple};
-use pyo3::{Bound, PyAny, Python};
+use pyo3::{Bound, PyAny, PyObject, Python};
 use sail_common::spec;
 
 use crate::cereal::pyspark_udf::PySparkUdfObject;
-use crate::cereal::PythonFunction;
 use crate::error::PyUdfResult;
 use crate::udf::get_udf_name;
 use crate::utils::builtins::PyBuiltins;
@@ -30,8 +27,7 @@ pub struct PySparkUDF {
     eval_type: spec::PySparkUdfType,
     input_types: Vec<DataType>,
     output_type: DataType,
-    python_bytes: Vec<u8>,
-    python_function: OnceLock<Result<PySparkUdfObject>>,
+    python_function: PySparkUdfObject,
 }
 
 impl PySparkUDF {
@@ -41,11 +37,11 @@ impl PySparkUDF {
         eval_type: spec::PySparkUdfType,
         input_types: Vec<DataType>,
         output_type: DataType,
-        python_bytes: Vec<u8>,
+        function: Vec<u8>,
         construct_udf_name: bool,
     ) -> Self {
         let function_name = if construct_udf_name {
-            get_udf_name(&function_name, &python_bytes)
+            get_udf_name(&function_name, &function)
         } else {
             function_name
         };
@@ -63,8 +59,7 @@ impl PySparkUDF {
             input_types,
             output_type,
             eval_type,
-            python_bytes,
-            python_function: OnceLock::new(),
+            python_function: PySparkUdfObject::new(function),
         }
     }
 
@@ -88,28 +83,19 @@ impl PySparkUDF {
         &self.output_type
     }
 
-    pub fn python_bytes(&self) -> &[u8] {
-        &self.python_bytes
-    }
-
-    pub fn python_function(&self) -> Result<&PySparkUdfObject> {
-        self.python_function
-            .get_or_init(|| -> Result<PySparkUdfObject> {
-                Ok(PySparkUdfObject::load(&self.python_bytes)?)
-            })
-            .as_ref()
-            .map_err(|e| DataFusionError::Internal(format!("Python function error: {e}")))
+    pub fn function(&self) -> &[u8] {
+        self.python_function.data()
     }
 }
 
 // TODO: `call_arrow_udf` and `call_pandas_udf` are identical.
 fn call_arrow_udf(
     py: Python,
-    function: &PySparkUdfObject,
+    udf: PyObject,
     args: Vec<ArrayRef>,
     output_type: &DataType,
 ) -> PyUdfResult<ArrayData> {
-    let udf = function.function(py)?;
+    let udf = udf.into_bound(py);
     let pyarrow_array = PyArrow::array(
         py,
         PyArrowArrayOptions {
@@ -146,11 +132,11 @@ fn call_arrow_udf(
 
 fn call_pandas_udf(
     py: Python,
-    function: &PySparkUdfObject,
+    udf: PyObject,
     args: Vec<ArrayRef>,
     output_type: &DataType,
 ) -> PyUdfResult<ArrayData> {
-    let udf = function.function(py)?;
+    let udf = udf.into_bound(py);
     let pyarrow_array = PyArrow::array(
         py,
         PyArrowArrayOptions {
@@ -187,13 +173,13 @@ fn call_pandas_udf(
 
 fn call_udf(
     py: Python,
-    function: &PySparkUdfObject,
+    udf: PyObject,
     args: Vec<ArrayRef>,
     eval_type: spec::PySparkUdfType,
     deterministic: bool,
     output_type: &DataType,
 ) -> PyUdfResult<ArrayData> {
-    let udf = function.function(py)?;
+    let udf = udf.into_bound(py);
     let py_list = PyBuiltins::list(py)?;
     let py_str = PyBuiltins::str(py)?;
     let pyarrow_array = PyArrow::array(
@@ -251,12 +237,12 @@ fn call_udf(
 
 fn call_udf_no_args(
     py: Python,
-    function: &PySparkUdfObject,
+    udf: PyObject,
     eval_type: spec::PySparkUdfType,
     deterministic: bool,
     output_type: &DataType,
 ) -> PyUdfResult<ArrayData> {
-    let udf = function.function(py)?;
+    let udf = udf.into_bound(py);
     let py_list = PyBuiltins::list(py)?;
     let py_str = PyBuiltins::str(py)?;
     let pyarrow_array = PyArrow::array(
@@ -304,36 +290,33 @@ impl ScalarUDFImpl for PySparkUDF {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        // We intentionally call self.python_function() in invoke() instead of in the constructor.
-        // This is because the Sail Driver may serialize the UDF in `try_encode_udf`.
-        let python_function = self.python_function()?;
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(args)?;
-
-        let array_data = if self.eval_type.is_arrow_udf() {
-            Python::with_gil(|py| call_arrow_udf(py, python_function, args, &self.output_type))?
-        } else if self.eval_type.is_pandas_udf() {
-            Python::with_gil(|py| call_pandas_udf(py, python_function, args, &self.output_type))?
-        } else {
-            Python::with_gil(|py| {
+        let array_data = Python::with_gil(|py| {
+            let udf = self.python_function.get(py)?;
+            if self.eval_type.is_arrow_udf() {
+                call_arrow_udf(py, udf, args, &self.output_type)
+            } else if self.eval_type.is_pandas_udf() {
+                call_pandas_udf(py, udf, args, &self.output_type)
+            } else {
                 call_udf(
                     py,
-                    python_function,
+                    udf,
                     args,
                     self.eval_type,
                     self.deterministic,
                     &self.output_type,
                 )
-            })?
-        };
+            }
+        })?;
         Ok(ColumnarValue::Array(make_array(array_data)))
     }
 
     fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
-        let python_function = self.python_function()?;
         let array_data = Python::with_gil(|py| {
+            let udf = self.python_function.get(py)?;
             call_udf_no_args(
                 py,
-                python_function,
+                udf,
                 self.eval_type,
                 self.deterministic,
                 &self.output_type,

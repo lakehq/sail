@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use datafusion::arrow::array::{
     make_array, new_empty_array, Array, ArrayData, ArrayRef, AsArray, ListArray, RecordBatch,
@@ -12,16 +12,15 @@ use datafusion::common::Result;
 use datafusion::logical_expr::{Accumulator, Signature, Volatility};
 use datafusion_common::arrow::buffer::OffsetBuffer;
 use datafusion_common::utils::array_into_list_array;
-use datafusion_common::{exec_err, DataFusionError, ScalarValue};
+use datafusion_common::{exec_err, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::AggregateUDFImpl;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyTuple;
-use pyo3::{intern, Bound, Python};
+use pyo3::{intern, Bound, PyObject, Python};
 
 use crate::cereal::pyspark_udf::PySparkUdfObject;
-use crate::cereal::PythonFunction;
 use crate::error::{PyUdfError, PyUdfResult};
 use crate::udf::get_udf_name;
 use crate::utils::builtins::PyBuiltins;
@@ -52,8 +51,7 @@ pub struct PySparkAggregateUDF {
     input_names: Vec<String>,
     input_types: Vec<DataType>,
     output_type: DataType,
-    python_bytes: Vec<u8>,
-    python_function: OnceLock<Result<PySparkUdfObject>>,
+    python_function: PySparkUdfObject,
 }
 
 impl PySparkAggregateUDF {
@@ -64,11 +62,11 @@ impl PySparkAggregateUDF {
         input_names: Vec<String>,
         input_types: Vec<DataType>,
         output_type: DataType,
-        python_bytes: Vec<u8>,
+        function: Vec<u8>,
         construct_udf_name: bool,
     ) -> Self {
         let function_name = if construct_udf_name {
-            get_udf_name(&function_name, &python_bytes)
+            get_udf_name(&function_name, &function)
         } else {
             function_name
         };
@@ -86,8 +84,7 @@ impl PySparkAggregateUDF {
             input_names,
             input_types,
             output_type,
-            python_bytes,
-            python_function: OnceLock::new(),
+            python_function: PySparkUdfObject::new(function),
         }
     }
 
@@ -111,17 +108,8 @@ impl PySparkAggregateUDF {
         &self.output_type
     }
 
-    pub fn python_bytes(&self) -> &[u8] {
-        &self.python_bytes
-    }
-
-    pub fn python_function(&self) -> Result<&PySparkUdfObject> {
-        self.python_function
-            .get_or_init(|| -> Result<PySparkUdfObject> {
-                Ok(PySparkUdfObject::load(&self.python_bytes)?)
-            })
-            .as_ref()
-            .map_err(|e| DataFusionError::Internal(format!("Aggregate Python function error: {e}")))
+    pub fn function(&self) -> &[u8] {
+        self.python_function.data()
     }
 }
 
@@ -143,15 +131,13 @@ impl AggregateUDFImpl for PySparkAggregateUDF {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        // We intentionally call self.python_function() in accumulator() instead of in the constructor.
-        // This is because the Sail Driver may serialize the UDAF in `try_encode_udaf`.
-        let python_function = self.python_function()?;
+        let udf = Python::with_gil(|py| self.python_function.get(py))?;
         if acc_args.is_distinct {
             return exec_err!("distinct is not supported for aggregate UDFs");
         }
         Ok(Box::new(PySparkAggregateUDFAccumulator::new(
             self.format,
-            python_function.clone(),
+            udf,
             self.input_names.clone(),
             self.input_types.clone(),
             self.output_type.clone(),
@@ -178,7 +164,7 @@ impl AggregateUDFImpl for PySparkAggregateUDF {
 #[derive(Debug)]
 struct PySparkAggregateUDFAccumulator {
     format: PySparkAggFormat,
-    python_function: PySparkUdfObject,
+    udf: PyObject,
     input_names: Vec<String>,
     input_types: Vec<DataType>,
     inputs: Vec<Vec<ArrayRef>>,
@@ -188,7 +174,7 @@ struct PySparkAggregateUDFAccumulator {
 impl PySparkAggregateUDFAccumulator {
     fn new(
         format: PySparkAggFormat,
-        python_function: PySparkUdfObject,
+        udf: PyObject,
         input_names: Vec<String>,
         input_types: Vec<DataType>,
         output_type: DataType,
@@ -196,7 +182,7 @@ impl PySparkAggregateUDFAccumulator {
         let num_inputs = input_names.len();
         Self {
             format,
-            python_function,
+            udf,
             input_names,
             input_types,
             inputs: vec![vec![]; num_inputs],
@@ -207,12 +193,12 @@ impl PySparkAggregateUDFAccumulator {
 
 fn call_pandas_group_agg_udf(
     py: Python,
-    function: &PySparkUdfObject,
+    udf: PyObject,
     input_names: &[String],
     args: Vec<ArrayRef>,
     output_type: &DataType,
 ) -> PyUdfResult<ArrayData> {
-    let udf = function.function(py)?;
+    let udf = udf.into_bound(py);
     let pyarrow_array = PyArrow::array(
         py,
         PyArrowArrayOptions {
@@ -235,13 +221,13 @@ fn call_pandas_group_agg_udf(
 
 fn call_pandas_group_map_udf(
     py: Python,
-    function: &PySparkUdfObject,
+    udf: PyObject,
     input_names: &[String],
     args: Vec<ArrayRef>,
     output_type: &DataType,
     column_match: ColumnMatch,
 ) -> PyUdfResult<ArrayData> {
-    let udf = function.function(py)?;
+    let udf = udf.into_bound(py);
     let schema = match output_type {
         DataType::List(field) => match field.data_type() {
             DataType::Struct(fields) => Arc::new(Schema::new(fields.clone())),
@@ -337,30 +323,29 @@ impl Accumulator for PySparkAggregateUDFAccumulator {
                 Ok(input)
             })
             .collect::<Result<Vec<_>>>()?;
-        let array_data = Python::with_gil(|py| match self.format {
-            PySparkAggFormat::GroupAgg => call_pandas_group_agg_udf(
-                py,
-                &self.python_function,
-                &self.input_names,
-                inputs,
-                &self.output_type,
-            ),
-            PySparkAggFormat::GroupMap => call_pandas_group_map_udf(
-                py,
-                &self.python_function,
-                &self.input_names,
-                inputs,
-                &self.output_type,
-                ColumnMatch::ByName,
-            ),
-            PySparkAggFormat::GroupMapLegacy => call_pandas_group_map_udf(
-                py,
-                &self.python_function,
-                &self.input_names,
-                inputs,
-                &self.output_type,
-                ColumnMatch::ByPosition,
-            ),
+        let array_data = Python::with_gil(|py| {
+            let udf = self.udf.clone_ref(py);
+            match self.format {
+                PySparkAggFormat::GroupAgg => {
+                    call_pandas_group_agg_udf(py, udf, &self.input_names, inputs, &self.output_type)
+                }
+                PySparkAggFormat::GroupMap => call_pandas_group_map_udf(
+                    py,
+                    udf,
+                    &self.input_names,
+                    inputs,
+                    &self.output_type,
+                    ColumnMatch::ByName,
+                ),
+                PySparkAggFormat::GroupMapLegacy => call_pandas_group_map_udf(
+                    py,
+                    udf,
+                    &self.input_names,
+                    inputs,
+                    &self.output_type,
+                    ColumnMatch::ByPosition,
+                ),
+            }
         })?;
         let array = make_array(array_data);
         if array.len() != 1 {

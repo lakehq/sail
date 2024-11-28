@@ -78,7 +78,7 @@ message PySparkUdf {
   int32 eval_type = 3;
   repeated bytes input_types = 4;
   bytes output_type = 5;
-  bytes python_bytes = 6;
+  bytes function = 6;
 }
 
 message PySparkUdaf {
@@ -88,7 +88,7 @@ message PySparkUdaf {
   repeated string input_names = 4;
   repeated bytes input_types = 5;
   bytes output_type = 6;
-  bytes python_bytes = 7;
+  bytes function = 7;
 }
 
 enum PySparkAggFormat {

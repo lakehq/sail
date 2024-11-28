@@ -21,7 +21,6 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::cereal::pyspark_udf::PySparkUdfObject;
-use crate::cereal::PythonFunction;
 use crate::error::PyUdfResult;
 use crate::udf::get_udf_name;
 use crate::utils::pandas::PandasDataFrame;
@@ -93,7 +92,7 @@ impl MapIterUDF for PySparkMapIterUDF {
     }
 
     fn invoke(&self, input: SendableRecordBatchStream) -> Result<SendableRecordBatchStream> {
-        let function = PySparkUdfObject::load(&self.function)?;
+        let function = Python::with_gil(|py| PySparkUdfObject::load(py, &self.function))?;
         Ok(Box::pin(MapIterStream::new(
             input,
             function,
@@ -244,7 +243,7 @@ impl MapIterStream {
 
     pub fn new(
         input: SendableRecordBatchStream,
-        function: PySparkUdfObject,
+        function: PyObject,
         format: PySparkMapIterFormat,
         output_schema: SchemaRef,
     ) -> Self {
@@ -288,14 +287,14 @@ impl MapIterStream {
     fn run_python_task(
         py: Python,
         format: PySparkMapIterFormat,
-        function: PySparkUdfObject,
+        function: PyObject,
         input: SendableRecordBatchStream,
         signal: oneshot::Receiver<()>,
         sender: mpsc::Sender<Result<RecordBatch>>,
         output_schema: SchemaRef,
         handle: Handle,
     ) -> PyUdfResult<()> {
-        let udf = function.function(py)?;
+        let udf = function.into_bound(py);
         // Create a Python iterator from the input record batch stream and call the UDF.
         // We could have wrap each record batch in a single-element list and call the UDF
         // for each record batch, but that does not work if the user wants to maintain state

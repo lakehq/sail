@@ -606,7 +606,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_types,
                 eval_type,
                 output_type,
-                python_bytes,
+                function,
             }) => {
                 let input_types: Vec<DataType> = input_types
                     .iter()
@@ -628,7 +628,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     eval_type,
                     input_types,
                     output_type,
-                    python_bytes,
+                    function,
                     false,
                 );
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -921,7 +921,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 eval_type: (*func.eval_type()).into(),
                 input_types,
                 output_type,
-                python_bytes: func.python_bytes().to_vec(),
+                function: func.function().to_vec(),
             })
         } else if let Some(_func) = node.inner().as_any().downcast_ref::<OverlayFunc>() {
             UdfKind::Standard(gen::StandardUdf {})
@@ -952,7 +952,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_names,
                 input_types,
                 output_type,
-                python_bytes,
+                function,
             })) => {
                 let input_types: Vec<DataType> = input_types
                     .iter()
@@ -973,7 +973,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input_names,
                     input_types,
                     output_type,
-                    python_bytes,
+                    function,
                     false,
                 );
                 Ok(Arc::new(AggregateUDF::from(udaf)))
@@ -1014,7 +1014,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_names: func.input_names().to_vec(),
                 input_types,
                 output_type,
-                python_bytes: func.python_bytes().to_vec(),
+                function: func.function().to_vec(),
             })
         } else if let Some(_func) = node.inner().as_any().downcast_ref::<KurtosisFunction>() {
             UdafKind::Standard(gen::StandardUdaf {})

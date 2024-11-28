@@ -1599,7 +1599,7 @@ impl PlanResolver<'_> {
             }
         };
         let output_names = state.register_fields(&output_schema);
-        let python_bytes: Vec<u8> = build_pyspark_udf_payload(
+        let payload: Vec<u8> = build_pyspark_udf_payload(
             &python_version,
             &command,
             eval_type,
@@ -1616,7 +1616,7 @@ impl PlanResolver<'_> {
                 ));
             }
         };
-        let func = PySparkMapIterUDF::new(format, function_name, python_bytes, output_schema);
+        let func = PySparkMapIterUDF::new(format, function_name, payload, output_schema);
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(MapPartitionsNode::try_new(
                 Arc::new(input),
@@ -1749,7 +1749,7 @@ impl PlanResolver<'_> {
                 Ok(data_type)
             })
             .collect::<PlanResult<Vec<_>>>()?;
-        let python_bytes: Vec<u8> = build_pyspark_udf_payload(
+        let payload: Vec<u8> = build_pyspark_udf_payload(
             &python_version,
             &command,
             eval_type,
@@ -1775,7 +1775,7 @@ impl PlanResolver<'_> {
             input_names,
             input_types,
             udf_output_type,
-            python_bytes,
+            payload,
             true,
         );
         let aggregate_expr = Expr::AggregateFunction(expr::AggregateFunction {
