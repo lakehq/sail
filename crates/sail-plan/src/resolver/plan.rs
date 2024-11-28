@@ -1757,8 +1757,20 @@ impl PlanResolver<'_> {
             &offsets,
             &self.config.spark_udf_config,
         )?;
+        let format = if self
+            .config
+            .spark_udf_config
+            .pandas_grouped_map_assign_columns_by_name
+            .value
+            .as_ref()
+            .is_some_and(|x| x.eq_ignore_ascii_case("false"))
+        {
+            PySparkAggFormat::GroupMapLegacy
+        } else {
+            PySparkAggFormat::GroupMap
+        };
         let udaf = PySparkAggregateUDF::new(
-            PySparkAggFormat::GroupMap,
+            format,
             function_name.to_owned(),
             deterministic,
             input_names,
@@ -3352,7 +3364,7 @@ fn rebase_expression(expr: Expr, base: &[Expr], plan: &LogicalPlan) -> PlanResul
 ///   `offsets[0]`: the length of the offset array.
 ///   `offsets[1]`: the number of grouping (key) expressions.
 ///   `offsets[2..offsets[1]+2]`: the offsets of the grouping (key) expressions.
-///   `offsets[offsets[1]+2..offsets[0]]`: the offsets of the data (value) expressions.
+///   `offsets[offsets[1]+2..offsets[0]+1]`: the offsets of the data (value) expressions.
 /// See also:
 ///   org.apache.spark.sql.execution.python.PandasGroupUtils#resolveArgOffsets
 fn resolve_group_map_argument_offsets(
@@ -3372,12 +3384,10 @@ fn resolve_group_map_argument_offsets(
         }
     }
     for i in 0..exprs.len() {
-        if !key_offsets.contains(&i) {
-            value_offsets.push(i);
-        }
+        value_offsets.push(i);
     }
     let mut offsets = Vec::with_capacity(2 + key_offsets.len() + value_offsets.len());
-    offsets.push(2 + key_offsets.len() + value_offsets.len());
+    offsets.push(1 + key_offsets.len() + value_offsets.len());
     offsets.push(key_offsets.len());
     offsets.extend(key_offsets);
     offsets.extend(value_offsets);

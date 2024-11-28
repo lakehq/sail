@@ -18,5 +18,4 @@ impl PyBuiltins {
 
     define_py_builtin!(list);
     define_py_builtin!(str);
-    define_py_builtin!(isinstance);
 }

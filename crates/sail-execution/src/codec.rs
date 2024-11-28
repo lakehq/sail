@@ -1165,6 +1165,7 @@ impl RemoteExecutionCodec {
         let format = match format {
             gen::PySparkAggFormat::GroupAgg => PySparkAggFormat::GroupAgg,
             gen::PySparkAggFormat::GroupMap => PySparkAggFormat::GroupMap,
+            gen::PySparkAggFormat::GroupMapLegacy => PySparkAggFormat::GroupMapLegacy,
         };
         Ok(format)
     }
@@ -1173,6 +1174,7 @@ impl RemoteExecutionCodec {
         let format = match format {
             PySparkAggFormat::GroupAgg => gen::PySparkAggFormat::GroupAgg,
             PySparkAggFormat::GroupMap => gen::PySparkAggFormat::GroupMap,
+            PySparkAggFormat::GroupMapLegacy => gen::PySparkAggFormat::GroupMapLegacy,
         };
         Ok(format as i32)
     }

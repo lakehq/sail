@@ -13,9 +13,7 @@ use futures::{Stream, StreamExt};
 use pyo3::exceptions::{PyRuntimeError, PyStopIteration};
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyList;
-use pyo3::{
-    intern, pyclass, pymethods, Bound, IntoPy, PyAny, PyObject, PyRef, PyRefMut, PyResult, Python,
-};
+use pyo3::{pyclass, pymethods, Bound, IntoPy, PyAny, PyObject, PyRef, PyRefMut, PyResult, Python};
 use sail_common::udf::MapIterUDF;
 use tokio::runtime::Handle;
 use tokio::select;
@@ -26,7 +24,7 @@ use crate::cereal::pyspark_udf::PySparkUdfObject;
 use crate::cereal::PythonFunction;
 use crate::error::PyUdfResult;
 use crate::udf::get_udf_name;
-use crate::utils::builtins::PyBuiltins;
+use crate::utils::pandas::PandasDataFrame;
 use crate::utils::pyarrow::{PyArrowRecordBatch, PyArrowToPandasOptions};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -148,31 +146,10 @@ impl PySparkMapIterFormat {
         schema: &SchemaRef,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = df.py();
-        let py_str = PyBuiltins::str(py)?;
-        let py_isinstance = PyBuiltins::isinstance(py)?;
-        let has_str_columns = df
-            .getattr(intern!(py, "columns"))?
-            .iter()?
-            .map(|c| py_isinstance.call1((c?, &py_str))?.extract())
-            .collect::<PyResult<Vec<bool>>>()?
-            .iter()
-            .any(|x| *x);
-        let df = if has_str_columns {
+        let df = if PandasDataFrame::has_string_columns(&df)? {
             df
         } else {
-            let columns = schema
-                .fields()
-                .iter()
-                .map(|x| x.name().clone())
-                .collect::<Vec<_>>();
-            let truncated = df
-                .getattr(intern!(py, "columns"))?
-                .iter()?
-                .take(columns.len())
-                .collect::<PyResult<Vec<_>>>()?;
-            let df = df.get_item(truncated)?;
-            df.setattr(intern!(py, "columns"), columns.clone())?;
-            df
+            PandasDataFrame::rename_columns_by_position(&df, schema)?
         };
         let converter = PyArrowRecordBatch::from_pandas(py, Some(schema.to_pyarrow(py)?))?;
         converter.call1((df,))
@@ -330,7 +307,7 @@ impl MapIterStream {
             let data = x.and_then(|x| x.get_item(0))?;
             // Ignore empty record batches since the PySpark unit tests expect them to be ignored
             // even if they have incompatible schemas.
-            if data.len()? == 0 {
+            if data.is_empty()? {
                 continue;
             }
             let out = format.record_batch_from_py_bound(data, &output_schema);

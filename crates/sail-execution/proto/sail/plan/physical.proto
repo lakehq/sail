@@ -94,6 +94,7 @@ message PySparkUdaf {
 enum PySparkAggFormat {
   PY_SPARK_AGG_FORMAT_GROUP_AGG = 0;
   PY_SPARK_AGG_FORMAT_GROUP_MAP = 1;
+  PY_SPARK_AGG_FORMAT_GROUP_MAP_LEGACY = 2;
 }
 
 message PySparkMapIterUdf {

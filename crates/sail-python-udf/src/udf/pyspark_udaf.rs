@@ -2,7 +2,8 @@ use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
 use datafusion::arrow::array::{
-    make_array, Array, ArrayData, ArrayRef, AsArray, ListArray, RecordBatch, StructArray,
+    make_array, new_empty_array, Array, ArrayData, ArrayRef, AsArray, ListArray, RecordBatch,
+    StructArray,
 };
 use datafusion::arrow::compute::concat;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -24,14 +25,23 @@ use crate::cereal::PythonFunction;
 use crate::error::{PyUdfError, PyUdfResult};
 use crate::udf::get_udf_name;
 use crate::utils::builtins::PyBuiltins;
+use crate::utils::pandas::PandasDataFrame;
 use crate::utils::pyarrow::{
     PyArrow, PyArrowArray, PyArrowArrayOptions, PyArrowRecordBatch, PyArrowToPandasOptions,
 };
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Copy, Clone)]
 pub enum PySparkAggFormat {
     GroupAgg,
     GroupMap,
+    /// The legacy group map behavior that matches returned columns by position.
+    GroupMapLegacy,
+}
+
+enum ColumnMatch {
+    ByName,
+    ByPosition,
 }
 
 #[derive(Debug)]
@@ -143,6 +153,7 @@ impl AggregateUDFImpl for PySparkAggregateUDF {
             self.format,
             python_function.clone(),
             self.input_names.clone(),
+            self.input_types.clone(),
             self.output_type.clone(),
         )))
     }
@@ -169,6 +180,7 @@ struct PySparkAggregateUDFAccumulator {
     format: PySparkAggFormat,
     python_function: PySparkUdfObject,
     input_names: Vec<String>,
+    input_types: Vec<DataType>,
     inputs: Vec<Vec<ArrayRef>>,
     output_type: DataType,
 }
@@ -178,6 +190,7 @@ impl PySparkAggregateUDFAccumulator {
         format: PySparkAggFormat,
         python_function: PySparkUdfObject,
         input_names: Vec<String>,
+        input_types: Vec<DataType>,
         output_type: DataType,
     ) -> Self {
         let num_inputs = input_names.len();
@@ -185,6 +198,7 @@ impl PySparkAggregateUDFAccumulator {
             format,
             python_function,
             input_names,
+            input_types,
             inputs: vec![vec![]; num_inputs],
             output_type,
         }
@@ -225,6 +239,7 @@ fn call_pandas_group_map_udf(
     input_names: &[String],
     args: Vec<ArrayRef>,
     output_type: &DataType,
+    column_match: ColumnMatch,
 ) -> PyUdfResult<ArrayData> {
     let udf = function.function(py)?;
     let schema = match output_type {
@@ -244,8 +259,20 @@ fn call_pandas_group_map_udf(
 
     let data = result.get_item(0)?;
     let _data_type = result.get_item(1)?;
-    let data = pyarrow_record_batch_from_pandas.call1((data,))?;
-    let batch = RecordBatch::from_pyarrow_bound(&data)?;
+
+    let batch = if data.is_empty()? {
+        RecordBatch::new_empty(schema.clone())
+    } else {
+        let data = if matches!(column_match, ColumnMatch::ByName)
+            && PandasDataFrame::has_string_columns(&data)?
+        {
+            data
+        } else {
+            PandasDataFrame::rename_columns_by_position(&data, &schema)?
+        };
+        let batch = pyarrow_record_batch_from_pandas.call1((data,))?;
+        RecordBatch::from_pyarrow_bound(&batch)?
+    };
     let array = StructArray::from(batch);
     let array = ListArray::new(
         Arc::new(Field::new("item", array.data_type().clone(), false)),
@@ -299,9 +326,14 @@ impl Accumulator for PySparkAggregateUDFAccumulator {
         let inputs = self
             .inputs
             .iter()
-            .map(|input| {
+            .zip(&self.input_types)
+            .map(|(input, data_type)| {
                 let input = input.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
-                let input = concat(&input)?;
+                let input = if input.is_empty() {
+                    new_empty_array(data_type)
+                } else {
+                    concat(&input)?
+                };
                 Ok(input)
             })
             .collect::<Result<Vec<_>>>()?;
@@ -319,6 +351,15 @@ impl Accumulator for PySparkAggregateUDFAccumulator {
                 &self.input_names,
                 inputs,
                 &self.output_type,
+                ColumnMatch::ByName,
+            ),
+            PySparkAggFormat::GroupMapLegacy => call_pandas_group_map_udf(
+                py,
+                &self.python_function,
+                &self.input_names,
+                inputs,
+                &self.output_type,
+                ColumnMatch::ByPosition,
             ),
         })?;
         let array = make_array(array_data);
@@ -347,9 +388,14 @@ impl Accumulator for PySparkAggregateUDFAccumulator {
         let state = self
             .inputs
             .iter()
-            .map(|input| {
+            .zip(&self.input_types)
+            .map(|(input, data_type)| {
                 let input = input.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
-                let input = array_into_list_array(concat(&input)?, true);
+                let input = if input.is_empty() {
+                    ListArray::new_null(Arc::new(Field::new("item", data_type.clone(), true)), 0)
+                } else {
+                    array_into_list_array(concat(&input)?, true)
+                };
                 Ok(ScalarValue::List(Arc::new(input)))
             })
             .collect::<Result<Vec<_>>>()?;
