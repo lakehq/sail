@@ -22,7 +22,6 @@ use pyo3::{intern, Bound, PyObject, Python};
 
 use crate::cereal::pyspark_udf::PySparkUdfObject;
 use crate::error::{PyUdfError, PyUdfResult};
-use crate::udf::get_udf_name;
 use crate::utils::builtins::PyBuiltins;
 use crate::utils::pandas::PandasDataFrame;
 use crate::utils::pyarrow::{
@@ -63,13 +62,7 @@ impl PySparkAggregateUDF {
         input_types: Vec<DataType>,
         output_type: DataType,
         function: Vec<u8>,
-        construct_udf_name: bool,
     ) -> Self {
-        let function_name = if construct_udf_name {
-            get_udf_name(&function_name, &function)
-        } else {
-            function_name
-        };
         let signature = Signature::exact(
             input_types.clone(),
             match deterministic {

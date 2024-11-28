@@ -12,7 +12,6 @@ use sail_common::spec;
 
 use crate::cereal::pyspark_udf::PySparkUdfObject;
 use crate::error::PyUdfResult;
-use crate::udf::get_udf_name;
 use crate::utils::builtins::PyBuiltins;
 use crate::utils::pyarrow::{PyArrow, PyArrowArray, PyArrowArrayOptions, PyArrowToPandasOptions};
 
@@ -38,13 +37,7 @@ impl PySparkUDF {
         input_types: Vec<DataType>,
         output_type: DataType,
         function: Vec<u8>,
-        construct_udf_name: bool,
     ) -> Self {
-        let function_name = if construct_udf_name {
-            get_udf_name(&function_name, &function)
-        } else {
-            function_name
-        };
         Self {
             signature: Signature::exact(
                 input_types.clone(),

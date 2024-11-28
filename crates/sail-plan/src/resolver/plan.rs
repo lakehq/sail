@@ -38,6 +38,7 @@ use sail_common::spec;
 use sail_common::spec::PySparkUdfType;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_python_udf::cereal::pyspark_udf::build_pyspark_udf_payload;
+use sail_python_udf::udf::get_udf_name;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterFormat, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_udaf::{PySparkAggFormat, PySparkAggregateUDF};
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
@@ -1616,7 +1617,12 @@ impl PlanResolver<'_> {
                 ));
             }
         };
-        let func = PySparkMapIterUDF::new(format, function_name, payload, output_schema);
+        let func = PySparkMapIterUDF::new(
+            format,
+            get_udf_name(&function_name, &payload),
+            payload,
+            output_schema,
+        );
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(MapPartitionsNode::try_new(
                 Arc::new(input),
@@ -1770,13 +1776,12 @@ impl PlanResolver<'_> {
         };
         let udaf = PySparkAggregateUDF::new(
             format,
-            function_name.to_owned(),
+            get_udf_name(&function_name, &payload),
             deterministic,
             input_names,
             input_types,
             udf_output_type,
             payload,
-            true,
         );
         let aggregate_expr = Expr::AggregateFunction(expr::AggregateFunction {
             func: Arc::new(AggregateUDF::from(udaf)),

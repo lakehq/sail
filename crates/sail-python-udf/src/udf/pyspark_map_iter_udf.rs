@@ -22,7 +22,6 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::cereal::pyspark_udf::PySparkUdfObject;
 use crate::error::PyUdfResult;
-use crate::udf::get_udf_name;
 use crate::utils::pandas::PandasDataFrame;
 use crate::utils::pyarrow::{PyArrowRecordBatch, PyArrowToPandasOptions};
 
@@ -41,7 +40,6 @@ impl PySparkMapIterUDF {
         function: Vec<u8>,
         output_schema: SchemaRef,
     ) -> Self {
-        let function_name = get_udf_name(&function_name, &function);
         Self {
             format,
             function_name,

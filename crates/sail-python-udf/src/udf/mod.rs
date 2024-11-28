@@ -4,16 +4,15 @@ pub mod pyspark_udf;
 pub mod pyspark_udtf;
 pub mod unresolved_pyspark_udf;
 
-use std::hash::{DefaultHasher, Hash, Hasher};
+use sha2::{Digest, Sha256};
 
-/// Generates a unique function name by combining the base name with a hash of the Python function's bytes.
+/// Generates a unique function name by combining the base name with a hash of the Python function payload.
 /// Without this, lambda functions with the name `<lambda>` will be treated as the same function
 /// by logical plan optimization rules (e.g. common sub-expression elimination), resulting in
 /// incorrect logical plans.
-pub fn get_udf_name(function_name: &str, function_bytes: &[u8]) -> String {
-    // FIXME: Hash collision is possible
-    let mut hasher = DefaultHasher::new();
-    function_bytes.hash(&mut hasher);
-    let hash = hasher.finish();
-    format!("{function_name}@0x{hash:x}")
+pub fn get_udf_name(name: &str, payload: &[u8]) -> String {
+    // Hash collision is possible in theory, but nearly impossible in practice
+    // since we use a strong hash function here.
+    let hash = hex::encode(Sha256::digest(payload));
+    format!("{name}@{hash}")
 }

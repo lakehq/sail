@@ -623,13 +623,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     self.try_decode_message::<gen_datafusion_common::ArrowType>(&output_type)?;
                 let output_type: DataType = (&output_type).try_into()?;
                 let udf = PySparkUDF::new(
-                    function_name.to_owned(),
+                    function_name,
                     deterministic,
                     eval_type,
                     input_types,
                     output_type,
                     function,
-                    false,
                 );
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
@@ -968,13 +967,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let output_type: DataType = (&output_type).try_into()?;
                 let udaf = PySparkAggregateUDF::new(
                     self.try_decode_pyspark_agg_format(format)?,
-                    function_name.to_owned(),
+                    function_name,
                     deterministic,
                     input_names,
                     input_types,
                     output_type,
                     function,
-                    false,
                 );
                 Ok(Arc::new(AggregateUDF::from(udaf)))
             }
