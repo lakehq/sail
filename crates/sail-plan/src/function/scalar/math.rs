@@ -167,7 +167,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("cot", F::unary(expr_fn::cot)),
         ("csc", F::unknown("csc")),
         ("degrees", F::unary(expr_fn::degrees)),
-        ("div", F::unknown("div")),
+        ("div", F::binary(spark_divide)),
         ("e", F::unknown("e")),
         ("exp", F::unary(expr_fn::exp)),
         ("expm1", F::custom(expm1)),
