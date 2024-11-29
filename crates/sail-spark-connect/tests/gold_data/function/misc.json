@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: aes_decrypt"
+        "success": "ok"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: aes_decrypt"
+        "failure": "error in DataFusion: Execution error: Spark `aes_decrypt`: CBC Decryption error: Unpad Error"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: aes_decrypt"
+        "success": "ok"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: aes_decrypt"
+        "success": "ok"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: aes_decrypt"
+        "success": "ok"
       }
     },
     {
@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: aes_decrypt"
+        "success": "ok"
       }
     },
     {
@@ -173,7 +173,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: aes_encrypt"
+        "success": "ok"
       }
     },
     {
@@ -195,7 +195,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: aes_encrypt"
+        "success": "ok"
       }
     },
     {
@@ -217,7 +217,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: aes_encrypt"
+        "success": "ok"
       }
     },
     {
@@ -239,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: aes_encrypt"
+        "success": "ok"
       }
     },
     {
@@ -613,7 +613,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: aes_encrypt"
+        "success": "ok"
       }
     },
     {
@@ -635,7 +635,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: aes_encrypt"
+        "success": "ok"
       }
     },
     {
@@ -920,7 +920,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_aes_decrypt"
+        "success": "ok"
       }
     },
     {
@@ -942,7 +942,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_aes_decrypt"
+        "success": "ok"
       }
     },
     {

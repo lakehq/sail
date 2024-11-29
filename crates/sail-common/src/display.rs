@@ -794,9 +794,14 @@ impl DisplayIndex for &StringViewArray {
 impl<O: OffsetSizeTrait> DisplayIndex for &GenericBinaryArray<O> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let v = self.value(idx);
-        for byte in v {
-            write!(f, "{byte:02x}")?;
+        write!(f, "[")?;
+        for (i, byte) in v.iter().enumerate() {
+            if i > 0 {
+                write!(f, " ")?;
+            }
+            write!(f, "{byte:02X}")?;
         }
+        write!(f, "]")?;
         Ok(())
     }
 }
@@ -804,9 +809,14 @@ impl<O: OffsetSizeTrait> DisplayIndex for &GenericBinaryArray<O> {
 impl DisplayIndex for &BinaryViewArray {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let v = self.value(idx);
-        for byte in v {
-            write!(f, "{byte:02x}")?;
+        write!(f, "[")?;
+        for (i, byte) in v.iter().enumerate() {
+            if i > 0 {
+                write!(f, " ")?;
+            }
+            write!(f, "{byte:02X}")?;
         }
+        write!(f, "]")?;
         Ok(())
     }
 }
@@ -814,9 +824,14 @@ impl DisplayIndex for &BinaryViewArray {
 impl DisplayIndex for &FixedSizeBinaryArray {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let v = self.value(idx);
-        for byte in v {
-            write!(f, "{byte:02x}")?;
+        write!(f, "[")?;
+        for (i, byte) in v.iter().enumerate() {
+            if i > 0 {
+                write!(f, " ")?;
+            }
+            write!(f, "{byte:02X}")?;
         }
+        write!(f, "]")?;
         Ok(())
     }
 }

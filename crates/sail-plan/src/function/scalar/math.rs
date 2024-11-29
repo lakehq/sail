@@ -37,6 +37,19 @@ fn minus(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResu
     }
 }
 
+/// Spark always preforms floating-point division.
+fn spark_divide(left: expr::Expr, right: expr::Expr) -> expr::Expr {
+    let expr = expr::Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(left),
+        op: Operator::Divide,
+        right: Box::new(right),
+    });
+    expr::Expr::Cast(expr::Cast {
+        expr: Box::new(expr),
+        data_type: DataType::Float64,
+    })
+}
+
 fn ceil(num: expr::Expr) -> expr::Expr {
     expr::Expr::Cast(expr::Cast {
         expr: Box::new(expr_fn::ceil(num)),
@@ -134,7 +147,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("*", F::binary_op(Operator::Multiply)),
         ("+", F::custom(plus)),
         ("-", F::custom(minus)),
-        ("/", F::binary_op(Operator::Divide)),
+        ("/", F::binary(spark_divide)),
         ("abs", F::unary(expr_fn::abs)),
         ("acos", F::unary(expr_fn::acos)),
         ("acosh", F::unary(expr_fn::acosh)),
@@ -154,7 +167,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("cot", F::unary(expr_fn::cot)),
         ("csc", F::unknown("csc")),
         ("degrees", F::unary(expr_fn::degrees)),
-        ("div", F::unknown("div")),
+        ("div", F::binary(spark_divide)),
         ("e", F::unknown("e")),
         ("exp", F::unary(expr_fn::exp)),
         ("expm1", F::custom(expm1)),
