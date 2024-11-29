@@ -1,19 +1,16 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::*;
+use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{
-    ArrowDictionaryKeyType, ArrowNativeType, DataType, Int16Type, Int32Type, Int64Type, Int8Type,
-    TimeUnit,
-};
-/// [Credit]: <https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/spark_hash.rs>
-
-/// This includes utilities for hashing and murmur3 hashing.
-use datafusion::arrow::{
-    compute::take,
-    datatypes::{ArrowNativeTypeOp, UInt16Type, UInt32Type, UInt64Type, UInt8Type},
+    ArrowDictionaryKeyType, ArrowNativeType, ArrowNativeTypeOp, DataType, Int16Type, Int32Type,
+    Int64Type, Int8Type, TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use datafusion::error::{DataFusionError, Result};
 use twox_hash::XxHash64;
+
+// [Credit]: <https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/spark_hash.rs>
+// This includes utilities for hashing and murmur3 hashing.
 
 #[inline]
 pub(crate) fn spark_compatible_xxhash64<T: AsRef<[u8]>>(data: T, seed: u64) -> u64 {

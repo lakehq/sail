@@ -19,7 +19,7 @@ impl CatalogMetadata {
     }
 }
 
-impl<'a> CatalogManager<'a> {
+impl CatalogManager<'_> {
     pub(crate) fn default_catalog(&self) -> Result<String> {
         let state = self.ctx.state_ref();
         let state = state.read();

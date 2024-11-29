@@ -51,7 +51,7 @@ pub struct FormatOptions<'a> {
     duration_format: DurationFormat,
 }
 
-impl<'a> Default for FormatOptions<'a> {
+impl Default for FormatOptions<'_> {
     fn default() -> Self {
         Self::new()
     }
@@ -142,7 +142,7 @@ pub struct ValueFormatter<'a> {
     formatter: &'a ArrayFormatter<'a>,
 }
 
-impl<'a> ValueFormatter<'a> {
+impl ValueFormatter<'_> {
     /// Writes this value to the provided [`Write`]
     ///
     /// Note: this ignores [`FormatOptions::with_display_error`] and
@@ -163,7 +163,7 @@ impl<'a> ValueFormatter<'a> {
     }
 }
 
-impl<'a> Display for ValueFormatter<'a> {
+impl Display for ValueFormatter<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self.formatter.format.write(self.idx, f) {
             Ok(()) => Ok(()),
@@ -371,7 +371,7 @@ impl<'a, F: DisplayIndexState<'a> + Array> DisplayIndex for ArrayFormat<'a, F> {
     }
 }
 
-impl<'a> DisplayIndex for &'a BooleanArray {
+impl DisplayIndex for &BooleanArray {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         write!(f, "{}", self.value(idx))?;
         Ok(())
@@ -428,7 +428,7 @@ primitive_display!(Int8Type, Int16Type, Int32Type, Int64Type);
 primitive_display!(UInt8Type, UInt16Type, UInt32Type, UInt64Type);
 primitive_display_float!(Float32Type, Float64Type);
 
-impl<'a> DisplayIndex for &'a PrimitiveArray<Float16Type> {
+impl DisplayIndex for &PrimitiveArray<Float16Type> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         write!(f, "{}", self.value(idx))?;
         Ok(())
@@ -625,7 +625,7 @@ duration_display!(duration_ms_to_duration, DurationMillisecondType, 3);
 duration_display!(duration_us_to_duration, DurationMicrosecondType, 6);
 duration_display!(duration_ns_to_duration, DurationNanosecondType, 9);
 
-impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
+impl DisplayIndex for &PrimitiveArray<IntervalYearMonthType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let interval = self.value(idx) as f64;
         let years = (interval / 12_f64).floor();
@@ -636,7 +636,7 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalYearMonthType> {
     }
 }
 
-impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
+impl DisplayIndex for &PrimitiveArray<IntervalDayTimeType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value = self.value(idx);
         let mut prefix = "";
@@ -659,7 +659,7 @@ impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalDayTimeType> {
     }
 }
 
-impl<'a> DisplayIndex for &'a PrimitiveArray<IntervalMonthDayNanoType> {
+impl DisplayIndex for &PrimitiveArray<IntervalMonthDayNanoType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value = self.value(idx);
         let mut prefix = "";
@@ -691,7 +691,7 @@ struct NanosecondsFormatter<'a> {
     prefix: &'a str,
 }
 
-impl<'a> Display for NanosecondsFormatter<'a> {
+impl Display for NanosecondsFormatter<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut prefix = self.prefix;
 
@@ -734,7 +734,7 @@ struct MillisecondsFormatter<'a> {
     prefix: &'a str,
 }
 
-impl<'a> Display for MillisecondsFormatter<'a> {
+impl Display for MillisecondsFormatter<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut prefix = self.prefix;
 
@@ -777,46 +777,61 @@ impl<'a> Display for MillisecondsFormatter<'a> {
     }
 }
 
-impl<'a, O: OffsetSizeTrait> DisplayIndex for &'a GenericStringArray<O> {
+impl<O: OffsetSizeTrait> DisplayIndex for &GenericStringArray<O> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         write!(f, "{}", self.value(idx))?;
         Ok(())
     }
 }
 
-impl<'a> DisplayIndex for &'a StringViewArray {
+impl DisplayIndex for &StringViewArray {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         write!(f, "{}", self.value(idx))?;
         Ok(())
     }
 }
 
-impl<'a, O: OffsetSizeTrait> DisplayIndex for &'a GenericBinaryArray<O> {
+impl<O: OffsetSizeTrait> DisplayIndex for &GenericBinaryArray<O> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let v = self.value(idx);
-        for byte in v {
-            write!(f, "{byte:02x}")?;
+        write!(f, "[")?;
+        for (i, byte) in v.iter().enumerate() {
+            if i > 0 {
+                write!(f, " ")?;
+            }
+            write!(f, "{byte:02X}")?;
         }
+        write!(f, "]")?;
         Ok(())
     }
 }
 
-impl<'a> DisplayIndex for &'a BinaryViewArray {
+impl DisplayIndex for &BinaryViewArray {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let v = self.value(idx);
-        for byte in v {
-            write!(f, "{byte:02x}")?;
+        write!(f, "[")?;
+        for (i, byte) in v.iter().enumerate() {
+            if i > 0 {
+                write!(f, " ")?;
+            }
+            write!(f, "{byte:02X}")?;
         }
+        write!(f, "]")?;
         Ok(())
     }
 }
 
-impl<'a> DisplayIndex for &'a FixedSizeBinaryArray {
+impl DisplayIndex for &FixedSizeBinaryArray {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let v = self.value(idx);
-        for byte in v {
-            write!(f, "{byte:02x}")?;
+        write!(f, "[")?;
+        for (i, byte) in v.iter().enumerate() {
+            if i > 0 {
+                write!(f, " ")?;
+            }
+            write!(f, "{byte:02X}")?;
         }
+        write!(f, "]")?;
         Ok(())
     }
 }

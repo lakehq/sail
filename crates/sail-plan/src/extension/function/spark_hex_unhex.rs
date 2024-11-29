@@ -3,7 +3,8 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    as_dictionary_array, as_largestring_array, as_string_array, OffsetSizeTrait, StringArray,
+    as_dictionary_array, as_largestring_array, as_string_array, BinaryBuilder, OffsetSizeTrait,
+    StringArray,
 };
 use datafusion::arrow::datatypes::{DataType, Int32Type};
 use datafusion::logical_expr::TypeSignature::Exact;
@@ -119,7 +120,7 @@ impl ScalarUDFImpl for SparkUnHex {
     }
 }
 
-/// [Credit]: <https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/scalar_funcs/hex.rs>
+// [Credit]: <https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/scalar_funcs/hex.rs>
 
 fn hex_int64(num: i64) -> String {
     format!("{:X}", num)
@@ -252,7 +253,7 @@ pub fn spark_hex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
     }
 }
 
-/// [Credit]: <https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/scalar_funcs/unhex.rs>
+// [Credit]: <https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/scalar_funcs/unhex.rs>
 
 /// Helper function to convert a hex digit to a binary value.
 fn unhex_digit(c: u8) -> Result<u8, DataFusionError> {
@@ -300,7 +301,7 @@ fn spark_unhex_inner<T: OffsetSizeTrait>(
             let string_array = as_generic_string_array::<T>(array)?;
 
             let mut encoded = Vec::new();
-            let mut builder = arrow::array::BinaryBuilder::new();
+            let mut builder = BinaryBuilder::new();
 
             for item in string_array.iter() {
                 if let Some(s) = item {

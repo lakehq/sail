@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::expr;
+use datafusion_expr::{expr, ScalarUDF};
 
 use crate::error::PlanResult;
+use crate::extension::function::spark_hex_unhex::SparkHex;
 use crate::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
 use crate::extension::function::spark_xxhash64::SparkXxhash64;
 use crate::function::common::{Function, FunctionContext};
@@ -10,7 +13,7 @@ use crate::utils::ItemTaker;
 
 fn sha2(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
     let (expr, bit_length) = args.two()?;
-    Ok(match bit_length {
+    let result = match bit_length {
         expr::Expr::Literal(ScalarValue::Int32(Some(0)))
         | expr::Expr::Literal(ScalarValue::Int32(Some(256))) => expr_fn::sha256(expr),
         expr::Expr::Literal(ScalarValue::Int32(Some(224))) => expr_fn::sha224(expr),
@@ -21,7 +24,12 @@ fn sha2(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResul
                 "The second argument of sha2 must be a literal integer.",
             ))
         }
-    })
+    };
+    let hex = expr::Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(SparkHex::new())),
+        args: vec![result],
+    });
+    Ok(expr_fn::lower(hex))
 }
 
 pub(super) fn list_built_in_hash_functions() -> Vec<(&'static str, Function)> {

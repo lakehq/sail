@@ -1,5 +1,5 @@
 use datafusion::functions::expr_fn;
-use datafusion_expr::{expr, Operator};
+use datafusion_expr::{expr, not, Operator};
 
 use crate::error::PlanResult;
 use crate::function::common::{Function, FunctionContext};
@@ -57,7 +57,7 @@ pub(super) fn list_built_in_predicate_functions() -> Vec<(&'static str, Function
     use crate::function::common::FunctionBuilder as F;
 
     vec![
-        ("!", F::unknown("!")),
+        ("!", F::unary(not)),
         ("!=", F::binary_op(Operator::NotEq)),
         ("<", F::binary_op(Operator::Lt)),
         ("<=", F::binary_op(Operator::LtEq)),
@@ -80,7 +80,7 @@ pub(super) fn list_built_in_predicate_functions() -> Vec<(&'static str, Function
         ),
         ("isnull", F::unary(|x| expr::Expr::IsNull(Box::new(x)))),
         ("like", F::binary(like)),
-        ("not", F::unary(|x| expr::Expr::Not(Box::new(x)))),
+        ("not", F::unary(not)),
         ("or", F::binary_op(Operator::Or)),
         ("regexp", F::binary(rlike)),
         ("regexp_like", F::binary(rlike)),

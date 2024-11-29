@@ -297,7 +297,7 @@ impl DriverActor {
         }
         let missing_slots = used_slots + pending_slots - available_slots;
         // round up the number of workers to the nearest integer
-        let missing_workers = (missing_slots + slots_per_worker - 1) / slots_per_worker;
+        let missing_workers = missing_slots.div_ceil(slots_per_worker);
         let missing_workers = if max_workers > 0 {
             missing_workers.min(max_workers.saturating_sub(active_workers))
         } else {
