@@ -1948,7 +1948,6 @@ impl PlanResolver<'_> {
         let grouping = self
             .resolve_named_expressions(grouping, schema, state)
             .await?;
-
         let args: Vec<_> = schema
             .columns()
             .into_iter()
@@ -1966,7 +1965,13 @@ impl PlanResolver<'_> {
             .map(|x| Ok(x.name.clone().one()?))
             .collect::<PlanResult<Vec<_>>>()?;
         let args = args.into_iter().map(|x| x.expr).collect::<Vec<_>>();
-        let grouping = grouping.into_iter().map(|x| x.expr).collect::<Vec<_>>();
+        let group_exprs = grouping
+            .into_iter()
+            .map(|x| {
+                let name = x.name.clone().one()?;
+                Ok(x.expr.clone().alias(state.register_field(name)))
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
         let input_types = Self::resolve_expression_types(&args, plan.schema())?;
         let input_fields = input_names
             .iter()
@@ -1998,10 +2003,14 @@ impl PlanResolver<'_> {
         let resolved_agg_name = state.register_field(&agg_name);
         let agg_col =
             Expr::Column(Column::new_unqualified(&agg_name)).alias(resolved_agg_name.clone());
+        let grouping = group_exprs
+            .iter()
+            .map(|x| Ok(Expr::Column(Column::new_unqualified(x.name_for_alias()?))))
+            .collect::<PlanResult<Vec<_>>>()?;
         let mut projections = grouping.clone();
         projections.push(agg_col);
         let plan = LogicalPlanBuilder::new(plan)
-            .aggregate(grouping.clone(), vec![agg])?
+            .aggregate(group_exprs, vec![agg])?
             .project(projections)?
             .build()?;
         dbg!(&plan);
