@@ -1,10 +1,25 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use sail_common::config::ConfigKeyValue;
+use sail_plan::config::{PlanConfig, TimestampType};
+use sail_plan::formatter::DefaultPlanFormatter;
+use sail_python_udf::config::SparkUdfConfig;
 
 use crate::error::{SparkError, SparkResult};
-use crate::spark::config::SPARK_CONFIG;
+use crate::spark::config::{
+    SPARK_CONFIG, SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH,
+    SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES,
+    SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY, SPARK_SQL_GLOBAL_TEMP_DATABASE,
+    SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME,
+    SPARK_SQL_SESSION_TIME_ZONE, SPARK_SQL_SOURCES_DEFAULT, SPARK_SQL_WAREHOUSE_DIR,
+};
 use crate::spark::connect as sc;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
+pub struct ConfigKeyValue {
+    pub key: String,
+    pub value: Option<String>,
+}
 
 impl From<sc::KeyValue> for ConfigKeyValue {
     fn from(kv: sc::KeyValue) -> Self {
@@ -147,5 +162,91 @@ impl SparkRuntimeConfig {
             .flat_map(|x| Self::get_warning(x.as_str()))
             .map(|x| x.to_string())
             .collect()
+    }
+}
+
+impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
+    type Error = SparkError;
+
+    fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
+        let mut output = PlanConfig::default();
+
+        if let Some(value) = config
+            .get(SPARK_SQL_SESSION_TIME_ZONE)?
+            .map(|x| x.to_string())
+        {
+            output.time_zone = value;
+        }
+
+        if let Some(value) = config
+            .get(SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES)?
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.arrow_use_large_var_types = value;
+        }
+
+        if let Some(value) = config
+            .get(SPARK_SQL_SOURCES_DEFAULT)?
+            .map(|x| x.to_string())
+        {
+            output.default_bounded_table_file_format = value;
+        }
+
+        if let Some(value) = config.get(SPARK_SQL_WAREHOUSE_DIR)? {
+            output.default_warehouse_directory = value.to_string();
+        }
+
+        if let Some(value) = config.get(SPARK_SQL_GLOBAL_TEMP_DATABASE)? {
+            output.global_temp_database = value.to_string();
+        }
+
+        // TODO: get the default timestamp type from configuration
+        output.timestamp_type = TimestampType::TimestampLtz;
+        output.plan_formatter = Arc::new(DefaultPlanFormatter);
+        output.spark_udf_config = SparkUdfConfig::try_from(config)?;
+
+        Ok(output)
+    }
+}
+
+impl TryFrom<&SparkRuntimeConfig> for SparkUdfConfig {
+    type Error = SparkError;
+
+    fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
+        let mut output = SparkUdfConfig::default();
+
+        if let Some(value) = config
+            .get(SPARK_SQL_SESSION_TIME_ZONE)?
+            .map(|x| x.to_string())
+        {
+            output.timezone = value;
+        }
+
+        if let Some(value) = config
+            .get(SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME)?
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.pandas_grouped_map_assign_columns_by_name = value;
+        }
+
+        if let Some(value) = config
+            .get(SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY)?
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.pandas_convert_to_arrow_array_safely = value;
+        }
+
+        if let Some(value) = config
+            .get(SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH)?
+            .map(|x| x.parse::<usize>())
+            .transpose()?
+        {
+            output.arrow_max_records_per_batch = value;
+        }
+
+        Ok(output)
     }
 }

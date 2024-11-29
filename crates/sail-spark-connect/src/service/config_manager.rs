@@ -1,9 +1,8 @@
 use chrono::{Offset, Utc};
 use chrono_tz::Tz;
 use datafusion::prelude::SessionContext;
-use sail_common::config::ConfigKeyValue;
 
-use crate::config::SparkRuntimeConfig;
+use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
 use crate::error::{SparkError, SparkResult};
 use crate::session::SparkExtension;
 use crate::spark::config::SPARK_SQL_SESSION_TIME_ZONE;

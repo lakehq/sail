@@ -38,28 +38,19 @@ pub fn build_pyspark_udtf_payload(
     eval_type: spec::PySparkUdfType,
     num_args: usize,
     return_type: &DataType,
-    spark_udf_config: &SparkUdfConfig,
+    config: &SparkUdfConfig,
 ) -> PyUdfResult<Vec<u8>> {
     let mut data: Vec<u8> = Vec::new();
     data.extend(&i32::from(eval_type).to_be_bytes()); // Add eval_type for extraction in visit_bytes
     if eval_type.is_arrow_udf() {
-        let configs = [
-            &spark_udf_config.timezone,
-            &spark_udf_config.pandas_convert_to_arrow_array_safely,
-        ];
-        let mut num_config: i32 = 0;
-        let mut config_data: Vec<u8> = Vec::new();
-        for config in configs {
-            if let Some(value) = &config.value {
-                config_data.extend(&(config.key.len() as i32).to_be_bytes()); // length of the key
-                config_data.extend(config.key.as_bytes());
-                config_data.extend(&(value.len() as i32).to_be_bytes()); // length of the value
-                config_data.extend(value.as_bytes());
-                num_config += 1;
-            }
+        let config = config.to_key_value_pairs();
+        data.extend((config.len() as i32).to_be_bytes()); // number of configuration options
+        for (key, value) in config {
+            data.extend(&(key.len() as i32).to_be_bytes()); // length of the key
+            data.extend(key.as_bytes());
+            data.extend(&(value.len() as i32).to_be_bytes()); // length of the value
+            data.extend(value.as_bytes());
         }
-        data.extend(&num_config.to_be_bytes()); // number of configuration options
-        data.extend(&config_data);
     }
     let num_args: i32 = num_args
         .try_into()

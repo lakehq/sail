@@ -1756,13 +1756,10 @@ impl PlanResolver<'_> {
             &offsets,
             &self.config.spark_udf_config,
         )?;
-        let legacy = self
+        let legacy = !self
             .config
             .spark_udf_config
-            .pandas_grouped_map_assign_columns_by_name
-            .value
-            .as_ref()
-            .is_some_and(|x| x.eq_ignore_ascii_case("false"));
+            .pandas_grouped_map_assign_columns_by_name;
         let format = if legacy {
             PySparkAggFormat::GroupMapLegacy
         } else {
@@ -1895,13 +1892,10 @@ impl PlanResolver<'_> {
             &offsets,
             &self.config.spark_udf_config,
         )?;
-        let legacy = self
+        let legacy = !self
             .config
             .spark_udf_config
-            .pandas_grouped_map_assign_columns_by_name
-            .value
-            .as_ref()
-            .is_some_and(|x| x.eq_ignore_ascii_case("false"));
+            .pandas_grouped_map_assign_columns_by_name;
         let udf = PySparkCoGroupMapUDF::try_new(
             get_udf_name(&function_name, &payload),
             deterministic,
