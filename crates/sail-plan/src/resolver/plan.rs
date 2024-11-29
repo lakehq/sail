@@ -1842,7 +1842,6 @@ impl PlanResolver<'_> {
             .zip(right.grouping.iter())
             .map(|(left, right)| left.clone().eq(right.clone()))
             .collect::<Vec<_>>();
-        dbg!(&on);
         let offsets: Vec<usize> = left
             .offsets
             .into_iter()
@@ -1927,7 +1926,6 @@ impl PlanResolver<'_> {
                     .collect::<PlanResult<Vec<_>>>()?,
             )?
             .build()?;
-        dbg!("co-group plan", &plan);
         Ok(plan)
     }
 
@@ -2007,7 +2005,6 @@ impl PlanResolver<'_> {
             .aggregate(group_exprs, vec![agg])?
             .project(projections)?
             .build()?;
-        dbg!(&plan);
         Ok(CoGroupMapData {
             plan,
             grouping,

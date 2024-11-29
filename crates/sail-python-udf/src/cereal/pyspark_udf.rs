@@ -44,6 +44,8 @@ impl PySparkUdfObject {
 
     pub fn load(py: Python, data: &[u8]) -> PyUdfResult<PyObject> {
         if data.is_empty() {
+            // FIXME: This is hacky. We should create a dedicated UDF/UDAF when the Python function
+            //   is not needed (e.g. for the no-op UDAF), rather than using a dummy Python function.
             return Ok(py.None());
         }
         // build_pyspark_udf_payload adds eval_type to the beginning of the payload

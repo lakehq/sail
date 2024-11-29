@@ -11,7 +11,6 @@ use datafusion::arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::common::Result;
 use datafusion::logical_expr::{Accumulator, Signature, Volatility};
 use datafusion_common::arrow::buffer::OffsetBuffer;
-use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
@@ -384,11 +383,14 @@ impl Accumulator for PySparkAggregateUDFAccumulator {
             .iter()
             .zip(&self.input_types)
             .map(|(input, data_type)| {
+                let field = Arc::new(Field::new_list_field(data_type.clone(), true));
                 let input = input.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
                 let input = if input.is_empty() {
-                    ListArray::new_null(Arc::new(Field::new_list_field(data_type.clone(), true)), 0)
+                    ListArray::new_null(field, 0)
                 } else {
-                    array_into_list_array(concat(&input)?, true)
+                    let values = concat(&input)?;
+                    let offsets = OffsetBuffer::from_lengths([values.len()]);
+                    ListArray::new(field, offsets, values, None)
                 };
                 Ok(ScalarValue::List(Arc::new(input)))
             })
