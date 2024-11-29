@@ -64,31 +64,30 @@ impl fmt::Display for EncryptionMode {
 }
 
 /// Arguments
-///   `expr`: The BINARY expression to be encrypted.
-///   `key`: A BINARY expression. The key to be used to encrypt expr. It must be 16, 24, or 32 bytes long.
-///        The algorithm depends on the length of the `key`:
-///          - 16 bytes: AES-128
-///          - 24 bytes: AES-192
-///          - 32 bytes: AES-256
-///   `mode`: An optional STRING expression describing the encryption mode.
-///           `mode` must be one of (case-insensitive):
-///             - 'GCM': Use Galois/Counter Mode (GCM). This is the default.
-///             - 'CBC': Use Cipher-Block Chaining (CBC) mode.
-///             - 'ECB': Use Electronic CodeBook (ECB) mode.
-///   `padding`: (USELESS) An optional STRING expression describing how encryption handles padding of the value to key length.
-///              `padding` must be one of (case-insensitive):
-///                - 'NONE': Uses no padding. Valid only for 'GCM'.
-///                - 'DEFAULT': Uses 'NONE' for 'GCM' and 'PKCS' for 'ECB', and 'CBC' mode.
-///                - 'PKCS': Uses Public Key Cryptography Standards (PKCS) padding. Valid only for 'ECB' and 'CBC'.
-///                          PKCS padding adds between 1 and key-length number of bytes to pad expr to a multiple of key length.
-///                          The value of each pad byte is the number of bytes being padded.
-///   `iv`: An optional STRING expression providing an initialization vector (IV) for GCM or CBC modes.
-///         `iv`, when specified, must be 12-bytes long for GCM and 16 bytes for CBC.
-///          If not provided, a random vector will be generated and prepended to the output.
-///   `aad`: An optional STRING expression providing authenticated additional data (AAD) in GCM mode.
-///          Optional additional authenticated data (AAD) is only supported for GCM.
-///          If provided for encryption, the identical AAD value must be provided for decryption.
-
+///   - `expr`: The BINARY expression to be encrypted.
+///   - `key`: A BINARY expression. The key to be used to encrypt expr. It must be 16, 24, or 32 bytes long.
+///     The algorithm depends on the length of the `key`:
+///     - 16 bytes: AES-128
+///     - 24 bytes: AES-192
+///     - 32 bytes: AES-256
+///   - `mode`: An optional STRING expression describing the encryption mode.
+///     `mode` must be one of (case-insensitive):
+///     - `GCM`: Use Galois/Counter Mode (GCM). This is the default.
+///     - `CBC`: Use Cipher-Block Chaining (CBC) mode.
+///     - `ECB`: Use Electronic CodeBook (ECB) mode.
+///   - `padding`: (USELESS) An optional STRING expression describing how encryption handles padding of the value to key length.
+///     `padding` must be one of (case-insensitive):
+///     - `NONE`: Uses no padding. Valid only for `GCM`.
+///     - `DEFAULT`: Uses `NONE` for `GCM` and `PKCS` for `ECB`, and `CBC` mode.
+///     - `PKCS`: Uses Public Key Cryptography Standards (PKCS) padding. Valid only for `ECB` and `CBC`.
+///       PKCS padding adds between 1 and key-length number of bytes to pad expr to a multiple of key length.
+///       The value of each pad byte is the number of bytes being padded.
+///   - `iv`: An optional STRING expression providing an initialization vector (IV) for GCM or CBC modes.
+///     `iv`, when specified, must be 12-bytes long for GCM and 16 bytes for CBC.
+///     If not provided, a random vector will be generated and prepended to the output.
+///   - `aad`: An optional STRING expression providing authenticated additional data (AAD) in GCM mode.
+///     Optional additional authenticated data (AAD) is only supported for GCM.
+///     If provided for encryption, the identical AAD value must be provided for decryption.
 #[derive(Debug)]
 pub struct SparkAESEncrypt {
     signature: Signature,
