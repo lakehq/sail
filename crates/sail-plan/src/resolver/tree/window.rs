@@ -25,7 +25,7 @@ impl<'s> PlanRewriter<'s> for WindowRewriter<'s> {
     }
 }
 
-impl<'s> TreeNodeRewriter for WindowRewriter<'s> {
+impl TreeNodeRewriter for WindowRewriter<'_> {
     type Node = Expr;
 
     fn f_up(&mut self, node: Expr) -> Result<Transformed<Expr>> {

@@ -60,7 +60,7 @@ impl ShowStringFormat {
         }
     }
 
-    fn get_formatters<'a>(&'a self, batch: &'a RecordBatch) -> Result<Vec<ArrayFormatter>> {
+    fn get_formatters<'a>(&'a self, batch: &'a RecordBatch) -> Result<Vec<ArrayFormatter<'a>>> {
         let options = FormatOptions::default().with_null("NULL");
         Ok(batch
             .columns()

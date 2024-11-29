@@ -51,7 +51,7 @@ impl<'s> PlanRewriter<'s> for ExplodeRewriter<'s> {
     }
 }
 
-impl<'s> TreeNodeRewriter for ExplodeRewriter<'s> {
+impl TreeNodeRewriter for ExplodeRewriter<'_> {
     type Node = Expr;
 
     fn f_up(&mut self, node: Expr) -> Result<Transformed<Expr>> {
