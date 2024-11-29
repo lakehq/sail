@@ -43,6 +43,9 @@ impl PySparkUdfObject {
     }
 
     pub fn load(py: Python, data: &[u8]) -> PyUdfResult<PyObject> {
+        if data.is_empty() {
+            return Ok(py.None());
+        }
         // build_pyspark_udf_payload adds eval_type to the beginning of the payload
         let (eval_type_bytes, v) = data.split_at(size_of::<i32>());
         let eval_type = i32::from_be_bytes(

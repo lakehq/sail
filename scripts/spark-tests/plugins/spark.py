@@ -213,6 +213,26 @@ SKIPPED_SPARK_TESTS = [
         keywords=["test_python_segfault", "test_worker.py"],
         reason="SPARK-46130: Flaky with Python 3.12",
     ),
+    TestMarker(
+        # This is fixed in Spark 3.5.2, so we can re-enable it when we upgrade.
+        keywords=["test_parity_pandas_cogrouped_map.py", "test_apply_in_pandas_not_returning_pandas_dataframe"],
+        reason="SPARK-45065: Not working with Pandas 2.x",
+    ),
+    TestMarker(
+        keywords=[
+            "test_parity_pandas_cogrouped_map.py",
+            "test_apply_in_pandas_returning_no_column_names_and_wrong_amount",
+        ],
+        reason="Buggy test",
+    ),
+    TestMarker(
+        keywords=["test_parity_pandas_cogrouped_map.py", "test_apply_in_pandas_returning_wrong_column_names"],
+        reason="Buggy test",
+    ),
+    TestMarker(
+        keywords=["test_parity_pandas_cogrouped_map.py", "test_with_local_data"],
+        reason="Flaky test",
+    ),
 ]
 
 

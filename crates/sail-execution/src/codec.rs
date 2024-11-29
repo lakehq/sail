@@ -1161,6 +1161,7 @@ impl RemoteExecutionCodec {
         let format = gen::PySparkAggFormat::try_from(format)
             .map_err(|e| plan_datafusion_err!("failed to decode pyspark agg format: {e}"))?;
         let format = match format {
+            gen::PySparkAggFormat::NoOp => PySparkAggFormat::NoOp,
             gen::PySparkAggFormat::GroupAgg => PySparkAggFormat::GroupAgg,
             gen::PySparkAggFormat::GroupMap => PySparkAggFormat::GroupMap,
             gen::PySparkAggFormat::GroupMapLegacy => PySparkAggFormat::GroupMapLegacy,
@@ -1170,6 +1171,7 @@ impl RemoteExecutionCodec {
 
     fn try_encode_pyspark_agg_format(&self, format: PySparkAggFormat) -> Result<i32> {
         let format = match format {
+            PySparkAggFormat::NoOp => gen::PySparkAggFormat::NoOp,
             PySparkAggFormat::GroupAgg => gen::PySparkAggFormat::GroupAgg,
             PySparkAggFormat::GroupMap => gen::PySparkAggFormat::GroupMap,
             PySparkAggFormat::GroupMapLegacy => gen::PySparkAggFormat::GroupMapLegacy,

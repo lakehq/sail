@@ -1,6 +1,6 @@
 use datafusion::arrow::datatypes::SchemaRef;
 use pyo3::prelude::PyAnyMethods;
-use pyo3::types::PyString;
+use pyo3::types::{PyList, PyString};
 use pyo3::{intern, Bound, PyAny, PyResult};
 
 /// Methods for working with the `pandas.DataFrame` class.
@@ -36,5 +36,16 @@ impl PandasDataFrame {
         let df = df.get_item(truncated)?;
         df.setattr(intern!(py, "columns"), columns)?;
         Ok(df)
+    }
+
+    /// Converts the columns of a Pandas DataFrame to a Python list of Pandas Series.
+    pub fn to_series_list<'py>(df: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        let py = df.py();
+        let columns = df.getattr(intern!(py, "columns"))?;
+        let items = columns
+            .iter()?
+            .map(|c| df.get_item(c?))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(PyList::new_bound(py, items).into_any())
     }
 }

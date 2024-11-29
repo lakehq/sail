@@ -22,24 +22,20 @@ use pyo3::{intern, Bound, PyObject, Python};
 
 use crate::cereal::pyspark_udf::PySparkUdfObject;
 use crate::error::{PyUdfError, PyUdfResult};
+use crate::udf::ColumnMatch;
 use crate::utils::builtins::PyBuiltins;
 use crate::utils::pandas::PandasDataFrame;
 use crate::utils::pyarrow::{
     PyArrow, PyArrowArray, PyArrowArrayOptions, PyArrowRecordBatch, PyArrowToPandasOptions,
 };
 
-#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Copy, Clone)]
 pub enum PySparkAggFormat {
+    NoOp,
     GroupAgg,
     GroupMap,
     /// The legacy group map behavior that matches returned columns by position.
     GroupMapLegacy,
-}
-
-enum ColumnMatch {
-    ByName,
-    ByPosition,
 }
 
 #[derive(Debug)]
@@ -190,7 +186,7 @@ fn call_pandas_group_agg_udf(
     input_names: &[String],
     args: Vec<ArrayRef>,
     output_type: &DataType,
-) -> PyUdfResult<ArrayData> {
+) -> PyUdfResult<ArrayRef> {
     let udf = udf.into_bound(py);
     let pyarrow_array = PyArrow::array(
         py,
@@ -209,7 +205,7 @@ fn call_pandas_group_agg_udf(
     let _data_type = result.get_item(1)?;
     let data = pyarrow_array.call1((data,))?;
 
-    Ok(ArrayData::from_pyarrow_bound(&data)?)
+    Ok(make_array(ArrayData::from_pyarrow_bound(&data)?))
 }
 
 fn call_pandas_group_map_udf(
@@ -219,7 +215,7 @@ fn call_pandas_group_map_udf(
     args: Vec<ArrayRef>,
     output_type: &DataType,
     column_match: ColumnMatch,
-) -> PyUdfResult<ArrayData> {
+) -> PyUdfResult<ArrayRef> {
     let udf = udf.into_bound(py);
     let schema = match output_type {
         DataType::List(field) => match field.data_type() {
@@ -259,7 +255,27 @@ fn call_pandas_group_map_udf(
         Arc::new(array),
         None,
     );
-    Ok(array.into_data())
+    Ok(Arc::new(array))
+}
+
+fn call_no_op_udf(args: Vec<ArrayRef>, output_type: &DataType) -> PyUdfResult<ArrayRef> {
+    let schema = match output_type {
+        DataType::List(field) => match field.data_type() {
+            DataType::Struct(fields) => Arc::new(Schema::new(fields.clone())),
+            _ => return Err(PyUdfError::invalid("no-op UDF output type")),
+        },
+        _ => return Err(PyUdfError::invalid("no-op UDF output type")),
+    };
+    let batch =
+        RecordBatch::try_new(schema, args).map_err(|e| PyUdfError::invalid(e.to_string()))?;
+    let array = StructArray::from(batch);
+    let array = ListArray::new(
+        Arc::new(Field::new_list_field(array.data_type().clone(), false)),
+        OffsetBuffer::from_lengths(vec![array.len()]),
+        Arc::new(array),
+        None,
+    );
+    Ok(Arc::new(array))
 }
 
 fn get_pandas_udf_arguments<'py>(
@@ -316,9 +332,10 @@ impl Accumulator for PySparkAggregateUDFAccumulator {
                 Ok(input)
             })
             .collect::<Result<Vec<_>>>()?;
-        let array_data = Python::with_gil(|py| {
+        let array = Python::with_gil(|py| {
             let udf = self.udf.clone_ref(py);
             match self.format {
+                PySparkAggFormat::NoOp => call_no_op_udf(inputs, &self.output_type),
                 PySparkAggFormat::GroupAgg => {
                     call_pandas_group_agg_udf(py, udf, &self.input_names, inputs, &self.output_type)
                 }
@@ -340,7 +357,6 @@ impl Accumulator for PySparkAggregateUDFAccumulator {
                 ),
             }
         })?;
-        let array = make_array(array_data);
         if array.len() != 1 {
             return exec_err!("expected a single value, got {}", array.len());
         }
