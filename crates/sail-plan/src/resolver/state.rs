@@ -146,7 +146,7 @@ impl<'a> QueryScope<'a> {
     }
 }
 
-impl<'a> Drop for QueryScope<'a> {
+impl Drop for QueryScope<'_> {
     fn drop(&mut self) {
         self.state.outer_query_schema = self.previous_outer_query_schema.take();
     }
@@ -171,7 +171,7 @@ impl<'a> CteScope<'a> {
     }
 }
 
-impl<'a> Drop for CteScope<'a> {
+impl Drop for CteScope<'_> {
     fn drop(&mut self) {
         self.state.ctes = std::mem::take(&mut self.previous_ctes);
     }
