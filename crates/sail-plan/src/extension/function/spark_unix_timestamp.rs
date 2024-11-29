@@ -67,13 +67,15 @@ impl ScalarUDFImpl for SparkUnixTimestamp {
                 )?
                 .cast_to(&DataType::Int64, None),
             #[allow(deprecated)] // TODO use invoke_batch
-            DataType::Utf8 => ToTimestampSecondsFunc::new()
-                .invoke(args)?
-                .cast_to(
-                    &DataType::Timestamp(TimeUnit::Second, Some(self.timezone.clone())),
-                    None,
-                )?
-                .cast_to(&DataType::Int64, None),
+            DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => {
+                ToTimestampSecondsFunc::new()
+                    .invoke(args)?
+                    .cast_to(
+                        &DataType::Timestamp(TimeUnit::Second, Some(self.timezone.clone())),
+                        None,
+                    )?
+                    .cast_to(&DataType::Int64, None)
+            }
             other => {
                 exec_err!("spark_unix_timestamp function unsupported data type: {other}")
             }

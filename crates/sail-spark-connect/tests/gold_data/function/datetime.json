@@ -2812,7 +2812,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: weekofyear"
+        "success": "ok"
       }
     },
     {

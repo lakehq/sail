@@ -3,7 +3,8 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    as_dictionary_array, as_largestring_array, as_string_array, OffsetSizeTrait, StringArray,
+    as_dictionary_array, as_largestring_array, as_string_array, BinaryBuilder, OffsetSizeTrait,
+    StringArray,
 };
 use datafusion::arrow::datatypes::{DataType, Int32Type};
 use datafusion::logical_expr::TypeSignature::Exact;
@@ -300,7 +301,7 @@ fn spark_unhex_inner<T: OffsetSizeTrait>(
             let string_array = as_generic_string_array::<T>(array)?;
 
             let mut encoded = Vec::new();
-            let mut builder = arrow::array::BinaryBuilder::new();
+            let mut builder = BinaryBuilder::new();
 
             for item in string_array.iter() {
                 if let Some(s) = item {
