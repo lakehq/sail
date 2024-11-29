@@ -96,6 +96,10 @@ impl PySparkCoGroupMapUDF {
         self.python_function.data()
     }
 
+    pub fn legacy(&self) -> bool {
+        self.legacy
+    }
+
     fn validate_input(data: &ArrayRef, data_type: &DataType) -> Result<()> {
         if data.data_type() == data_type {
             Ok(())
