@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+use std::num::ParseIntError;
+use std::str::ParseBoolError;
 use std::sync::PoisonError;
 
 use arrow::error::ArrowError;
@@ -141,6 +143,18 @@ impl<T> From<SendError<T>> for SparkError {
 impl From<JoinError> for SparkError {
     fn from(error: JoinError) -> Self {
         SparkError::InternalError(error.to_string())
+    }
+}
+
+impl From<ParseBoolError> for SparkError {
+    fn from(error: ParseBoolError) -> Self {
+        SparkError::InvalidArgument(error.to_string())
+    }
+}
+
+impl From<ParseIntError> for SparkError {
+    fn from(error: ParseIntError) -> Self {
+        SparkError::InvalidArgument(error.to_string())
     }
 }
 

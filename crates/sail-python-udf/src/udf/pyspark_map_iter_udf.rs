@@ -13,9 +13,7 @@ use futures::{Stream, StreamExt};
 use pyo3::exceptions::{PyRuntimeError, PyStopIteration};
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyList;
-use pyo3::{
-    intern, pyclass, pymethods, Bound, IntoPy, PyAny, PyObject, PyRef, PyRefMut, PyResult, Python,
-};
+use pyo3::{pyclass, pymethods, Bound, IntoPy, PyAny, PyObject, PyRef, PyRefMut, PyResult, Python};
 use sail_common::udf::MapIterUDF;
 use tokio::runtime::Handle;
 use tokio::select;
@@ -23,10 +21,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::cereal::pyspark_udf::PySparkUdfObject;
-use crate::cereal::PythonFunction;
 use crate::error::PyUdfResult;
-use crate::udf::get_udf_name;
-use crate::utils::builtins::PyBuiltins;
+use crate::utils::pandas::PandasDataFrame;
 use crate::utils::pyarrow::{PyArrowRecordBatch, PyArrowToPandasOptions};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -44,7 +40,6 @@ impl PySparkMapIterUDF {
         function: Vec<u8>,
         output_schema: SchemaRef,
     ) -> Self {
-        let function_name = get_udf_name(&function_name, &function);
         Self {
             format,
             function_name,
@@ -95,7 +90,7 @@ impl MapIterUDF for PySparkMapIterUDF {
     }
 
     fn invoke(&self, input: SendableRecordBatchStream) -> Result<SendableRecordBatchStream> {
-        let function = PySparkUdfObject::load(&self.function)?;
+        let function = Python::with_gil(|py| PySparkUdfObject::load(py, &self.function))?;
         Ok(Box::pin(MapIterStream::new(
             input,
             function,
@@ -148,31 +143,10 @@ impl PySparkMapIterFormat {
         schema: &SchemaRef,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = df.py();
-        let py_str = PyBuiltins::str(py)?;
-        let py_isinstance = PyBuiltins::isinstance(py)?;
-        let has_str_columns = df
-            .getattr(intern!(py, "columns"))?
-            .iter()?
-            .map(|c| py_isinstance.call1((c?, &py_str))?.extract())
-            .collect::<PyResult<Vec<bool>>>()?
-            .iter()
-            .any(|x| *x);
-        let df = if has_str_columns {
+        let df = if PandasDataFrame::has_string_columns(&df)? {
             df
         } else {
-            let columns = schema
-                .fields()
-                .iter()
-                .map(|x| x.name().clone())
-                .collect::<Vec<_>>();
-            let truncated = df
-                .getattr(intern!(py, "columns"))?
-                .iter()?
-                .take(columns.len())
-                .collect::<PyResult<Vec<_>>>()?;
-            let df = df.get_item(truncated)?;
-            df.setattr(intern!(py, "columns"), columns.clone())?;
-            df
+            PandasDataFrame::rename_columns_by_position(&df, schema)?
         };
         let converter = PyArrowRecordBatch::from_pandas(py, Some(schema.to_pyarrow(py)?))?;
         converter.call1((df,))
@@ -267,7 +241,7 @@ impl MapIterStream {
 
     pub fn new(
         input: SendableRecordBatchStream,
-        function: PySparkUdfObject,
+        function: PyObject,
         format: PySparkMapIterFormat,
         output_schema: SchemaRef,
     ) -> Self {
@@ -311,14 +285,14 @@ impl MapIterStream {
     fn run_python_task(
         py: Python,
         format: PySparkMapIterFormat,
-        function: PySparkUdfObject,
+        function: PyObject,
         input: SendableRecordBatchStream,
         signal: oneshot::Receiver<()>,
         sender: mpsc::Sender<Result<RecordBatch>>,
         output_schema: SchemaRef,
         handle: Handle,
     ) -> PyUdfResult<()> {
-        let udf = function.function(py)?;
+        let udf = function.into_bound(py);
         // Create a Python iterator from the input record batch stream and call the UDF.
         // We could have wrap each record batch in a single-element list and call the UDF
         // for each record batch, but that does not work if the user wants to maintain state
@@ -330,7 +304,7 @@ impl MapIterStream {
             let data = x.and_then(|x| x.get_item(0))?;
             // Ignore empty record batches since the PySpark unit tests expect them to be ignored
             // even if they have incompatible schemas.
-            if data.len()? == 0 {
+            if data.is_empty()? {
                 continue;
             }
             let out = format.record_batch_from_py_bound(data, &output_schema);

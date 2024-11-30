@@ -3,21 +3,12 @@ use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 
 use datafusion::prelude::SessionContext;
-use sail_common::config::ConfigKeyValue;
 use sail_execution::job::JobRunner;
-use sail_plan::config::{PlanConfig, TimestampType};
-use sail_plan::formatter::DefaultPlanFormatter;
-use sail_python_udf::config::SparkUdfConfig;
+use sail_plan::config::PlanConfig;
 
-use crate::config::SparkRuntimeConfig;
+use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
 use crate::error::{SparkError, SparkResult};
 use crate::executor::Executor;
-use crate::spark::config::{
-    SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH,
-    SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY, SPARK_SQL_GLOBAL_TEMP_DATABASE,
-    SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME,
-    SPARK_SQL_SESSION_TIME_ZONE, SPARK_SQL_SOURCES_DEFAULT, SPARK_SQL_WAREHOUSE_DIR,
-};
 
 pub(crate) const DEFAULT_SPARK_SCHEMA: &str = "default";
 pub(crate) const DEFAULT_SPARK_CATALOG: &str = "spark_catalog";
@@ -74,75 +65,11 @@ impl SparkExtension {
 
     pub(crate) fn plan_config(&self) -> SparkResult<Arc<PlanConfig>> {
         let state = self.state.lock()?;
-        let time_zone = state
-            .config
-            .get(SPARK_SQL_SESSION_TIME_ZONE)?
-            .map(|x| x.to_string())
-            .unwrap_or_else(|| "UTC".into());
-        let spark_udf_config = SparkUdfConfig {
-            timezone: ConfigKeyValue {
-                key: "spark.sql.session.timeZone".to_string(),
-                value: Some(time_zone.clone()),
-            },
-            // FIXME: pandas_window_bound_types is not a proper Spark configuration.
-            pandas_window_bound_types: ConfigKeyValue {
-                key: "pandas_window_bound_types".to_string(),
-                value: None,
-            },
-            pandas_grouped_map_assign_columns_by_name: ConfigKeyValue {
-                key: SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME
-                    .to_string(),
-                value: state
-                    .config
-                    .get(SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME)?
-                    .map(|s| s.to_string()),
-            },
-            pandas_convert_to_arrow_array_safely: ConfigKeyValue {
-                key: SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY.to_string(),
-                value: state
-                    .config
-                    .get(SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY)?
-                    .map(|s| s.to_string()),
-            },
-            arrow_max_records_per_batch: ConfigKeyValue {
-                key: SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH.to_string(),
-                value: state
-                    .config
-                    .get(SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH)?
-                    .map(|s| s.to_string()),
-            },
-        };
-        let default_bounded_table_file_format = state
-            .config
-            .get(SPARK_SQL_SOURCES_DEFAULT)?
-            .map(|x| x.to_string())
-            .unwrap_or_else(|| PlanConfig::default().default_bounded_table_file_format);
-        let default_warehouse_directory = state
-            .config
-            .get(SPARK_SQL_WAREHOUSE_DIR)?
-            .map(|x| x.to_string())
-            .unwrap_or_else(|| PlanConfig::default().default_warehouse_directory);
-        let global_temp_database = state
-            .config
-            .get(SPARK_SQL_GLOBAL_TEMP_DATABASE)?
-            .map(|x| x.to_string())
-            .unwrap_or_else(|| PlanConfig::default().global_temp_database);
-        let plan_config_default = PlanConfig::default();
-        Ok(Arc::new(PlanConfig {
-            time_zone,
-            // TODO: get the default timestamp type from configuration
-            timestamp_type: TimestampType::TimestampLtz,
-            plan_formatter: Arc::new(DefaultPlanFormatter),
-            spark_udf_config,
-            default_bounded_table_file_format,
-            default_warehouse_directory,
-            global_temp_database,
-            session_user_id: self
-                .user_id()
-                .unwrap_or(&plan_config_default.session_user_id)
-                .to_string(),
-            ..plan_config_default
-        }))
+        let mut config = PlanConfig::try_from(&state.config)?;
+        if let Some(user_id) = self.user_id() {
+            config.session_user_id = user_id.to_string();
+        }
+        Ok(Arc::new(config))
     }
 
     pub(crate) fn get_config(&self, keys: Vec<String>) -> SparkResult<Vec<ConfigKeyValue>> {

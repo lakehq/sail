@@ -1,6 +1,7 @@
 use arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use sail_common::error::CommonError;
+use sail_python_udf::error::PyUdfError;
 use thiserror::Error;
 
 pub type PlanResult<T> = Result<T, PlanError>;
@@ -55,6 +56,18 @@ impl From<CommonError> for PlanError {
             CommonError::InvalidArgument(message) => PlanError::InvalidArgument(message),
             CommonError::NotSupported(message) => PlanError::NotSupported(message),
             CommonError::InternalError(message) => PlanError::InternalError(message),
+        }
+    }
+}
+
+impl From<PyUdfError> for PlanError {
+    fn from(error: PyUdfError) -> Self {
+        match error {
+            PyUdfError::PythonError(e) => {
+                PlanError::DataFusionError(DataFusionError::External(e.into()))
+            }
+            PyUdfError::IoError(e) => PlanError::DataFusionError(DataFusionError::IoError(e)),
+            PyUdfError::InvalidArgument(message) => PlanError::InvalidArgument(message),
         }
     }
 }

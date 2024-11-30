@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
-use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
@@ -73,8 +73,9 @@ use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
 use sail_plan::extension::physical::{
     MapPartitionsExec, RangeExec, SchemaPivotExec, ShowStringExec,
 };
+use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterFormat, PySparkMapIterUDF};
-use sail_python_udf::udf::pyspark_udaf::PySparkAggregateUDF;
+use sail_python_udf::udf::pyspark_udaf::{PySparkAggFormat, PySparkAggregateUDF};
 use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
@@ -119,11 +120,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 num_partitions,
                 schema,
             }) => {
-                let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
+                let schema = self.try_decode_schema(&schema)?;
                 Ok(Arc::new(RangeExec::new(
                     Range { start, end, step },
                     num_partitions as usize,
-                    Arc::new((&schema).try_into()?),
+                    Arc::new(schema),
                 )))
             }
             NodeKind::ShowString(gen::ShowStringExecNode {
@@ -134,7 +135,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 truncate,
                 schema,
             }) => {
-                let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
+                let schema = self.try_decode_schema(&schema)?;
                 Ok(Arc::new(ShowStringExec::new(
                     self.try_decode_plan(&input, registry)?,
                     names,
@@ -143,7 +144,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         self.try_decode_show_string_style(style)?,
                         truncate as usize,
                     ),
-                    Arc::new((&schema).try_into()?),
+                    Arc::new(schema),
                 )))
             }
             NodeKind::SchemaPivot(gen::SchemaPivotExecNode {
@@ -151,11 +152,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 names,
                 schema,
             }) => {
-                let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
+                let schema = self.try_decode_schema(&schema)?;
                 Ok(Arc::new(SchemaPivotExec::new(
                     self.try_decode_plan(&input, registry)?,
                     names,
-                    Arc::new((&schema).try_into()?),
+                    Arc::new(schema),
                 )))
             }
             NodeKind::MapPartitions(gen::MapPartitionsExecNode {
@@ -167,12 +168,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let Some(udf) = udf else {
                     return plan_err!("no UDF found for MapPartitionsExec");
                 };
-                let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
+                let schema = self.try_decode_schema(&schema)?;
                 Ok(Arc::new(MapPartitionsExec::new(
                     self.try_decode_plan(&input, registry)?,
                     input_names,
                     self.try_decode_map_iter_udf(udf)?,
-                    Arc::new((&schema).try_into()?),
+                    Arc::new(schema),
                 )))
             }
             NodeKind::ShuffleRead(gen::ShuffleReadExecNode {
@@ -181,15 +182,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partitioning,
                 locations,
             }) => {
-                let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
-                let schema: SchemaRef = Arc::new((&schema).try_into()?);
+                let schema = self.try_decode_schema(&schema)?;
                 let partitioning =
                     self.try_decode_partitioning(&partitioning, registry, &schema)?;
                 let locations = locations
                     .into_iter()
                     .map(|x| self.try_decode_task_read_location_list(x))
                     .collect::<Result<_>>()?;
-                let node = ShuffleReadExec::new(stage as usize, schema, partitioning);
+                let node = ShuffleReadExec::new(stage as usize, Arc::new(schema), partitioning);
                 let node = node.with_locations(locations);
                 Ok(Arc::new(node))
             }
@@ -217,8 +217,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 show_sizes,
                 sort_information,
             }) => {
-                let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
-                let schema = Arc::new((&schema).try_into()?);
+                let schema = self.try_decode_schema(&schema)?;
                 let partitions = partitions
                     .into_iter()
                     .map(|x| read_record_batches(&x))
@@ -228,16 +227,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let sort_information =
                     self.try_decode_lex_orderings(&sort_information, registry, &schema)?;
                 Ok(Arc::new(
-                    MemoryExec::try_new(&partitions, schema, projection)?
+                    MemoryExec::try_new(&partitions, Arc::new(schema), projection)?
                         .with_show_sizes(show_sizes)
                         .try_with_sort_information(sort_information)?,
                 ))
             }
             NodeKind::Values(gen::ValuesExecNode { data, schema }) => {
-                let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
-                let schema = Arc::new((&schema).try_into()?);
+                let schema = self.try_decode_schema(&schema)?;
                 let data = read_record_batches(&data)?;
-                Ok(Arc::new(ValuesExec::try_new_from_batches(schema, data)?))
+                Ok(Arc::new(ValuesExec::try_new_from_batches(
+                    Arc::new(schema),
+                    data,
+                )?))
             }
             NodeKind::NdJson(gen::NdJsonExecNode {
                 base_config,
@@ -264,11 +265,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ArrowExec::new(base_config)))
             }
             NodeKind::WorkTable(gen::WorkTableExecNode { name, schema }) => {
-                let schema = self.try_decode_message::<gen_datafusion_common::Schema>(&schema)?;
-                Ok(Arc::new(WorkTableExec::new(
-                    name,
-                    Arc::new((&schema).try_into()?),
-                )))
+                let schema = self.try_decode_schema(&schema)?;
+                Ok(Arc::new(WorkTableExec::new(name, Arc::new(schema))))
             }
             NodeKind::RecursiveQuery(gen::RecursiveQueryExecNode {
                 name,
@@ -315,17 +313,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     })
                     .collect::<Result<_>>()?;
                 let filter = if let Some(join_filter) = filter {
-                    let schema = self
-                        .try_decode_message::<gen_datafusion_common::Schema>(&join_filter.schema)?;
-                    let schema: Schema = (&schema).try_into()?;
-
+                    let schema = self.try_decode_schema(&join_filter.schema)?;
                     let expression = parse_physical_expr(
                         &self.try_decode_message(&join_filter.expression)?,
                         registry,
                         &schema,
                         self,
                     )?;
-
                     let column_indices = join_filter
                         .column_indices
                         .into_iter()
@@ -341,7 +335,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             })
                         })
                         .collect::<Result<Vec<_>>>()?;
-
                     Some(JoinFilter::new(expression, column_indices, schema))
                 } else {
                     None
@@ -373,9 +366,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
         let node_kind = if let Some(range) = node.as_any().downcast_ref::<RangeExec>() {
-            let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
-                range.schema().as_ref().try_into()?,
-            )?;
+            let schema = self.try_encode_schema(range.schema().as_ref())?;
             NodeKind::Range(gen::RangeExecNode {
                 start: range.range().start,
                 end: range.range().end,
@@ -384,9 +375,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
             })
         } else if let Some(show_string) = node.as_any().downcast_ref::<ShowStringExec>() {
-            let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
-                show_string.schema().as_ref().try_into()?,
-            )?;
+            let schema = self.try_encode_schema(show_string.schema().as_ref())?;
             NodeKind::ShowString(gen::ShowStringExecNode {
                 input: self.try_encode_plan(show_string.input().clone())?,
                 names: show_string.names().to_vec(),
@@ -396,9 +385,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
             })
         } else if let Some(schema_pivot) = node.as_any().downcast_ref::<SchemaPivotExec>() {
-            let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
-                schema_pivot.schema().as_ref().try_into()?,
-            )?;
+            let schema = self.try_encode_schema(schema_pivot.schema().as_ref())?;
             NodeKind::SchemaPivot(gen::SchemaPivotExecNode {
                 input: self.try_encode_plan(schema_pivot.input().clone())?,
                 names: schema_pivot.names().to_vec(),
@@ -406,9 +393,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(map_partitions) = node.as_any().downcast_ref::<MapPartitionsExec>() {
             let udf = self.try_encode_map_iter_udf(map_partitions.udf().as_ref())?;
-            let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
-                map_partitions.schema().as_ref().try_into()?,
-            )?;
+            let schema = self.try_encode_schema(map_partitions.schema().as_ref())?;
             NodeKind::MapPartitions(gen::MapPartitionsExecNode {
                 input: self.try_encode_plan(map_partitions.input().clone())?,
                 input_names: map_partitions.input_names().to_vec(),
@@ -416,9 +401,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
             })
         } else if let Some(shuffle_read) = node.as_any().downcast_ref::<ShuffleReadExec>() {
-            let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
-                shuffle_read.schema().as_ref().try_into()?,
-            )?;
+            let schema = self.try_encode_schema(shuffle_read.schema().as_ref())?;
             let partitioning = self.try_encode_partitioning(shuffle_read.partitioning())?;
             let locations = shuffle_read
                 .locations()
@@ -460,8 +443,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .map(|x| gen::PhysicalProjection {
                     columns: x.iter().map(|c| *c as u64).collect(),
                 });
-            let schema = self
-                .try_encode_message::<gen_datafusion_common::Schema>(schema.as_ref().try_into()?)?;
+            let schema = self.try_encode_schema(schema.as_ref())?;
             let sort_information = self.try_encode_lex_orderings(memory.sort_information())?;
             NodeKind::Memory(gen::MemoryExecNode {
                 partitions,
@@ -472,9 +454,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(values) = node.as_any().downcast_ref::<ValuesExec>() {
             let data = write_record_batches(&values.data(), &values.schema())?;
-            let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
-                values.schema().as_ref().try_into()?,
-            )?;
+            let schema = self.try_encode_schema(values.schema().as_ref())?;
             NodeKind::Values(gen::ValuesExecNode { data, schema })
         } else if let Some(nd_json) = node.as_any().downcast_ref::<NdJsonExec>() {
             let base_config =
@@ -491,9 +471,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::Arrow(gen::ArrowExecNode { base_config })
         } else if let Some(work_table) = node.as_any().downcast_ref::<WorkTableExec>() {
             let name = work_table.name().to_string();
-            let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
-                work_table.schema().as_ref().try_into()?,
-            )?;
+            let schema = self.try_encode_schema(work_table.schema().as_ref())?;
             NodeKind::WorkTable(gen::WorkTableExecNode { name, schema })
         } else if let Some(recursive_query) = node.as_any().downcast_ref::<RecursiveQueryExec>() {
             let name = recursive_query.name().to_string();
@@ -536,9 +514,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             gen::ColumnIndex { index, side }
                         })
                         .collect();
-                    let schema = self.try_encode_message::<gen_datafusion_common::Schema>(
-                        join_filter.schema().try_into()?,
-                    )?;
+                    let schema = self.try_encode_schema(join_filter.schema())?;
                     Ok(gen::JoinFilter {
                         expression,
                         column_indices,
@@ -586,7 +562,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
-        // TODO: Implement custom registry so we don't have this ugly mess of if-else
+        // TODO: Implement custom registry to avoid codec for built-in functions
         let udf = ExtendedScalarUdf::decode(buf)
             .map_err(|e| plan_datafusion_err!("failed to decode udf: {e}"))?;
         let ExtendedScalarUdf { udf_kind } = udf;
@@ -594,49 +570,83 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             Some(x) => x,
             None => return plan_err!("ExtendedScalarUdf: no UDF found for {name}"),
         };
-        let auxiliary_field = match udf_kind {
-            UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf { auxiliary_field }) => {
-                let auxiliary_field = match auxiliary_field {
-                    Some(auxiliary_field) => auxiliary_field,
-                    None => return plan_err!("no auxiliary field found for {name}"),
-                };
-                match auxiliary_field.auxiliary_field {
-                    Some(auxiliary_field) => Some(auxiliary_field),
-                    None => return plan_err!("no auxiliary field found for {name}"),
-                }
-            }
-            UdfKind::Standard(gen::StandardUdf {}) => None,
+        match udf_kind {
+            UdfKind::Standard(gen::StandardUdf {}) => {}
             UdfKind::PySpark(gen::PySparkUdf {
                 function_name,
                 deterministic,
                 input_types,
                 eval_type,
                 output_type,
-                python_bytes,
+                function,
             }) => {
-                let input_types: Vec<DataType> = input_types
+                let input_types = input_types
                     .iter()
-                    .map(|x| {
-                        let arrow_type =
-                            self.try_decode_message::<gen_datafusion_common::ArrowType>(x)?;
-                        let data_type: DataType = (&arrow_type).try_into()?;
-                        Ok(data_type)
-                    })
-                    .collect::<Result<_>>()?;
+                    .map(|x| self.try_decode_data_type(x))
+                    .collect::<Result<Vec<_>>>()?;
                 let eval_type = PySparkUdfType::try_from(eval_type)
                     .map_err(|e| plan_datafusion_err!("failed to decode udf eval_type: {e}"))?;
-                let output_type =
-                    self.try_decode_message::<gen_datafusion_common::ArrowType>(&output_type)?;
-                let output_type: DataType = (&output_type).try_into()?;
+                let output_type = self.try_decode_data_type(&output_type)?;
                 let udf = PySparkUDF::new(
-                    function_name.to_owned(),
+                    function_name,
                     deterministic,
                     eval_type,
                     input_types,
                     output_type,
-                    python_bytes,
-                    false,
+                    function,
                 );
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::PySparkCoGroupMap(gen::PySparkCoGroupMapUdf {
+                function_name,
+                deterministic,
+                left_type,
+                right_type,
+                output_type,
+                function,
+                legacy,
+            }) => {
+                let left_type = self.try_decode_data_type(&left_type)?;
+                let right_type = self.try_decode_data_type(&right_type)?;
+                let output_type = self.try_decode_data_type(&output_type)?;
+                let udf = PySparkCoGroupMapUDF::try_new(
+                    function_name,
+                    deterministic,
+                    left_type,
+                    right_type,
+                    output_type,
+                    function,
+                    legacy,
+                )?;
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::MapToArray(gen::MapToArrayUdf { nullable }) => {
+                let udf = MapToArray::new(nullable);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::DropStructField(gen::DropStructFieldUdf { field_names }) => {
+                let udf = DropStructField::new(field_names);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::Explode(gen::ExplodeUdf { name }) => {
+                let kind = explode_name_to_kind(&name)?;
+                let udf = Explode::new(kind);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { timezone }) => {
+                let udf = SparkUnixTimestamp::new(Arc::from(timezone));
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::StructFunction(gen::StructFunctionUdf { field_names }) => {
+                let udf = StructFunction::new(field_names);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::UpdateStructField(gen::UpdateStructFieldUdf { field_names }) => {
+                let udf = UpdateStructField::new(field_names);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkWeekOfYear(gen::SparkWeekOfYearUdf { timezone }) => {
+                let udf = SparkWeekOfYear::new(Arc::from(timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
         };
@@ -645,55 +655,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(ArrayItemWithPosition::new())))
             }
             "array_empty_to_null" => Ok(Arc::new(ScalarUDF::from(ArrayEmptyToNull::new()))),
-            "map_to_array" => {
-                let nullable = match auxiliary_field {
-                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(single)) => {
-                        self.try_decode_message::<bool>(&single.auxiliary_field)?
-                    }
-                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(_)) => {
-                        return plan_err!(
-                            "Expected single auxiliary field, but found repeated for {name}"
-                        )
-                    }
-                    None => return plan_err!("no auxiliary field found for {name}"),
-                };
-                Ok(Arc::new(ScalarUDF::from(MapToArray::new(nullable))))
-            }
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
-            "drop_struct_field" => {
-                let field_names = match auxiliary_field {
-                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(_)) => {
-                        return plan_err!(
-                            "Expected repeated auxiliary field, but found single for {name}"
-                        )
-                    }
-                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(
-                        repeated,
-                    )) => repeated
-                        .auxiliary_field
-                        .iter()
-                        .map(|x| self.try_decode_message::<String>(x))
-                        .collect::<Result<_>>()?,
-                    None => return plan_err!("no auxiliary field found for {name}"),
-                };
-                Ok(Arc::new(ScalarUDF::from(DropStructField::new(field_names))))
-            }
-            "explode" | "explode_outer" | "posexplode" | "posexplode_outer" => {
-                let kind = match auxiliary_field {
-                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(single)) => {
-                        self.try_decode_message::<String>(&single.auxiliary_field)?
-                    }
-                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(_)) => {
-                        return plan_err!(
-                            "Expected single auxiliary field, but found repeated for {name}"
-                        )
-                    }
-                    None => return plan_err!("no auxiliary field found for {name}"),
-                };
-                let kind = explode_name_to_kind(&kind)?;
-                Ok(Arc::new(ScalarUDF::from(Explode::new(kind))))
-            }
             "greatest" => Ok(Arc::new(ScalarUDF::from(Greatest::new()))),
             "least" => Ok(Arc::new(ScalarUDF::from(Least::new()))),
             "levenshtein" => Ok(Arc::new(ScalarUDF::from(Levenshtein::new()))),
@@ -712,71 +675,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_murmur3_hash" | "hash" => Ok(Arc::new(ScalarUDF::from(SparkMurmur3Hash::new()))),
             "spark_reverse" | "reverse" => Ok(Arc::new(ScalarUDF::from(SparkReverse::new()))),
             "spark_unix_timestamp" | "unix_timestamp" | "unix_timestamp_now" => {
-                match auxiliary_field {
-                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(single)) => {
-                        let timezone =
-                            self.try_decode_message::<String>(&single.auxiliary_field)?;
-                        let timezone: Arc<str> = timezone.into();
-                        Ok(Arc::new(ScalarUDF::from(SparkUnixTimestamp::new(timezone))))
-                    }
-                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(_)) => {
-                        plan_err!("Expected single auxiliary field, but found repeated for {name}")
-                    }
-                    None => Ok(Arc::new(ScalarUDF::from(UnixTimestampNow::new()))),
-                }
+                Ok(Arc::new(ScalarUDF::from(UnixTimestampNow::new())))
             }
             "spark_xxhash64" | "xxhash64" => Ok(Arc::new(ScalarUDF::from(SparkXxhash64::new()))),
-            "struct" => {
-                let field_names = match auxiliary_field {
-                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(_)) => {
-                        return plan_err!(
-                            "Expected repeated auxiliary field, but found single for {name}"
-                        )
-                    }
-                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(
-                        repeated,
-                    )) => repeated
-                        .auxiliary_field
-                        .iter()
-                        .map(|x| self.try_decode_message::<String>(x))
-                        .collect::<Result<_>>()?,
-                    None => return plan_err!("no auxiliary field found for {name}"),
-                };
-                Ok(Arc::new(ScalarUDF::from(StructFunction::new(field_names))))
-            }
-            "update_struct_field" => {
-                let field_names = match auxiliary_field {
-                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(_)) => {
-                        return plan_err!(
-                            "Expected repeated auxiliary field, but found single for {name}"
-                        )
-                    }
-                    Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(
-                        repeated,
-                    )) => repeated
-                        .auxiliary_field
-                        .iter()
-                        .map(|x| self.try_decode_message::<String>(x))
-                        .collect::<Result<_>>()?,
-                    None => return plan_err!("no auxiliary field found for {name}"),
-                };
-                Ok(Arc::new(ScalarUDF::from(UpdateStructField::new(
-                    field_names,
-                ))))
-            }
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
             "json_length" | "json_len" => Ok(datafusion_functions_json::udfs::json_length_udf()),
             "json_as_text" => Ok(datafusion_functions_json::udfs::json_as_text_udf()),
-            "spark_weekofyear" | "weekofyear" => match auxiliary_field {
-                Some(gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(single)) => {
-                    let timezone = self.try_decode_message::<String>(&single.auxiliary_field)?;
-                    let timezone: Arc<str> = timezone.into();
-                    Ok(Arc::new(ScalarUDF::from(SparkWeekOfYear::new(timezone))))
-                }
-                other => {
-                    plan_err!("Expected single auxiliary field, but found {other:?} for {name}")
-                }
-            },
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_unbase64" | "unbase64" => Ok(Arc::new(ScalarUDF::from(SparkUnbase64::new()))),
             "spark_aes_encrypt" | "aes_encrypt" => {
@@ -791,201 +695,94 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_aes_decrypt" | "try_aes_decrypt" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryAESDecrypt::new())))
             }
-            _ => plan_err!("Could not find Scalar Function: {name}"),
+            _ => plan_err!("could not find scalar function: {name}"),
         }
     }
 
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
-        // TODO: Implement custom registry so we don't have this ugly mess of if-else
-        let udf_kind = if let Some(_func) = node
-            .inner()
-            .as_any()
-            .downcast_ref::<ArrayItemWithPosition>()
+        // TODO: Implement custom registry to avoid codec for built-in functions
+        let udf_kind = if node.inner().as_any().is::<ArrayItemWithPosition>()
+            || node.inner().as_any().is::<ArrayEmptyToNull>()
+            || node.inner().as_any().is::<ArrayMin>()
+            || node.inner().as_any().is::<ArrayMax>()
+            || node.inner().as_any().is::<Greatest>()
+            || node.inner().as_any().is::<Least>()
+            || node.inner().as_any().is::<Levenshtein>()
+            || node.inner().as_any().is::<MapFunction>()
+            || node.inner().as_any().is::<MultiExpr>()
+            || node.inner().as_any().is::<RaiseError>()
+            || node.inner().as_any().is::<Randn>()
+            || node.inner().as_any().is::<Random>()
+            || node.inner().as_any().is::<Size>()
+            || node.inner().as_any().is::<SparkArray>()
+            || node.inner().as_any().is::<SparkConcat>()
+            || node.inner().as_any().is::<SparkHex>()
+            || node.inner().as_any().is::<SparkUnHex>()
+            || node.inner().as_any().is::<SparkMurmur3Hash>()
+            || node.inner().as_any().is::<SparkReverse>()
+            || node.inner().as_any().is::<SparkXxhash64>()
+            || node.inner().as_any().is::<UnixTimestampNow>()
+            || node.inner().as_any().is::<OverlayFunc>()
+            || node.inner().as_any().is::<SparkBase64>()
+            || node.inner().as_any().is::<SparkUnbase64>()
+            || node.inner().as_any().is::<SparkAESEncrypt>()
+            || node.inner().as_any().is::<SparkTryAESEncrypt>()
+            || node.inner().as_any().is::<SparkAESDecrypt>()
+            || node.inner().as_any().is::<SparkTryAESDecrypt>()
+            || node.name() == "json_length"
+            || node.name() == "json_len"
+            || node.name() == "json_as_text"
         {
             UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<ArrayEmptyToNull>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(func) = node.inner().as_any().downcast_ref::<MapToArray>() {
-            let nullable = self.try_encode_message::<bool>(func.nullable())?;
-            UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
-                auxiliary_field: Some(gen::AuxiliaryField {
-                    auxiliary_field: Some(
-                        gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(
-                            gen::AuxiliaryFieldSingle {
-                                auxiliary_field: nullable,
-                            },
-                        ),
-                    ),
-                }),
-            })
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<ArrayMin>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<ArrayMax>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(func) = node.inner().as_any().downcast_ref::<DropStructField>() {
-            let field_names = func
-                .field_names()
-                .iter()
-                .map(|x| self.try_encode_message::<String>(x.to_string()))
-                .collect::<Result<_>>()?;
-            UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
-                auxiliary_field: Some(gen::AuxiliaryField {
-                    auxiliary_field: Some(
-                        gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(
-                            gen::AuxiliaryFieldRepeated {
-                                auxiliary_field: field_names,
-                            },
-                        ),
-                    ),
-                }),
-            })
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<Explode>() {
-            let name = self.try_encode_message::<String>(node.name().to_string())?;
-            UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
-                auxiliary_field: Some(gen::AuxiliaryField {
-                    auxiliary_field: Some(
-                        gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(
-                            gen::AuxiliaryFieldSingle {
-                                auxiliary_field: name,
-                            },
-                        ),
-                    ),
-                }),
-            })
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<Greatest>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<Least>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<Levenshtein>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MapFunction>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MultiExpr>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<RaiseError>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<Randn>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<Random>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<Size>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkArray>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkConcat>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkHex>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkUnHex>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkMurmur3Hash>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkReverse>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkUnixTimestamp>() {
-            let timezone = self.try_encode_message::<String>(func.timezone().to_string())?;
-            UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
-                auxiliary_field: Some(gen::AuxiliaryField {
-                    auxiliary_field: Some(
-                        gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(
-                            gen::AuxiliaryFieldSingle {
-                                auxiliary_field: timezone,
-                            },
-                        ),
-                    ),
-                }),
-            })
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkXxhash64>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(func) = node.inner().as_any().downcast_ref::<StructFunction>() {
-            let field_names = func
-                .field_names()
-                .iter()
-                .map(|x| self.try_encode_message::<String>(x.to_string()))
-                .collect::<Result<_>>()?;
-            UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
-                auxiliary_field: Some(gen::AuxiliaryField {
-                    auxiliary_field: Some(
-                        gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(
-                            gen::AuxiliaryFieldRepeated {
-                                auxiliary_field: field_names,
-                            },
-                        ),
-                    ),
-                }),
-            })
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<UnixTimestampNow>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(func) = node.inner().as_any().downcast_ref::<UpdateStructField>() {
-            let field_names = func
-                .field_names()
-                .iter()
-                .map(|x| self.try_encode_message::<String>(x.to_string()))
-                .collect::<Result<_>>()?;
-            UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
-                auxiliary_field: Some(gen::AuxiliaryField {
-                    auxiliary_field: Some(
-                        gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldRepeated(
-                            gen::AuxiliaryFieldRepeated {
-                                auxiliary_field: field_names,
-                            },
-                        ),
-                    ),
-                }),
-            })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<PySparkUDF>() {
             let input_types = func
                 .input_types()
                 .iter()
-                .map(|x| {
-                    let input_type =
-                        self.try_encode_message::<gen_datafusion_common::ArrowType>(x.try_into()?)?;
-                    Ok(input_type)
-                })
-                .collect::<Result<_>>()?;
-            let output_type = self.try_encode_message::<gen_datafusion_common::ArrowType>(
-                func.output_type().try_into()?,
-            )?;
+                .map(|x| self.try_encode_data_type(x))
+                .collect::<Result<Vec<_>>>()?;
+            let output_type = self.try_encode_data_type(func.output_type())?;
             UdfKind::PySpark(gen::PySparkUdf {
                 function_name: func.function_name().to_string(),
                 deterministic: func.deterministic(),
                 eval_type: (*func.eval_type()).into(),
                 input_types,
                 output_type,
-                python_bytes: func.python_bytes().to_vec(),
+                function: func.function().to_vec(),
             })
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<OverlayFunc>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if node.name() == "json_length"
-            || node.name() == "json_len"
-            || node.name() == "json_as_text"
-        {
-            UdfKind::Standard(gen::StandardUdf {})
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<PySparkCoGroupMapUDF>() {
+            let left_type = self.try_encode_data_type(func.left_type())?;
+            let right_type = self.try_encode_data_type(func.right_type())?;
+            let output_type = self.try_encode_data_type(func.output_type())?;
+            UdfKind::PySparkCoGroupMap(gen::PySparkCoGroupMapUdf {
+                function_name: func.function_name().to_string(),
+                deterministic: func.deterministic(),
+                left_type,
+                right_type,
+                output_type,
+                function: func.function().to_vec(),
+                legacy: func.legacy(),
+            })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<MapToArray>() {
+            let nullable = func.nullable();
+            UdfKind::MapToArray(gen::MapToArrayUdf { nullable })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<DropStructField>() {
+            let field_names = func.field_names().to_vec();
+            UdfKind::DropStructField(gen::DropStructFieldUdf { field_names })
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<Explode>() {
+            let name = node.name().to_string();
+            UdfKind::Explode(gen::ExplodeUdf { name })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkUnixTimestamp>() {
+            let timezone = func.timezone().to_string();
+            UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { timezone })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<StructFunction>() {
+            let field_names = func.field_names().to_vec();
+            UdfKind::StructFunction(gen::StructFunctionUdf { field_names })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<UpdateStructField>() {
+            let field_names = func.field_names().to_vec();
+            UdfKind::UpdateStructField(gen::UpdateStructFieldUdf { field_names })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkWeekOfYear>() {
-            let timezone = self.try_encode_message::<String>(func.timezone().to_string())?;
-            UdfKind::WithOneAuxiliaryField(gen::WithOneAuxiliaryFieldUdf {
-                auxiliary_field: Some(gen::AuxiliaryField {
-                    auxiliary_field: Some(
-                        gen::auxiliary_field::AuxiliaryField::AuxiliaryFieldSingle(
-                            gen::AuxiliaryFieldSingle {
-                                auxiliary_field: timezone,
-                            },
-                        ),
-                    ),
-                }),
-            })
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkBase64>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkUnbase64>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkAESEncrypt>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkTryAESEncrypt>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkAESDecrypt>() {
-            UdfKind::Standard(gen::StandardUdf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkTryAESDecrypt>() {
-            UdfKind::Standard(gen::StandardUdf {})
+            let timezone = func.timezone().to_string();
+            UdfKind::SparkWeekOfYear(gen::SparkWeekOfYearUdf { timezone })
         } else {
             return Ok(());
         };
@@ -1002,31 +799,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let ExtendedAggregateUdf { udaf_kind } = udaf;
         match udaf_kind {
             Some(UdafKind::PySparkAgg(gen::PySparkUdaf {
+                format,
                 function_name,
                 deterministic,
+                input_names,
                 input_types,
                 output_type,
-                python_bytes,
+                function,
             })) => {
-                let input_types: Vec<DataType> = input_types
+                let input_types = input_types
                     .iter()
-                    .map(|x| {
-                        let arrow_type =
-                            self.try_decode_message::<gen_datafusion_common::ArrowType>(x)?;
-                        let data_type: DataType = (&arrow_type).try_into()?;
-                        Ok(data_type)
-                    })
-                    .collect::<Result<_>>()?;
-                let output_type =
-                    self.try_decode_message::<gen_datafusion_common::ArrowType>(&output_type)?;
-                let output_type: DataType = (&output_type).try_into()?;
+                    .map(|x| self.try_decode_data_type(x))
+                    .collect::<Result<Vec<_>>>()?;
+                let output_type = self.try_decode_data_type(&output_type)?;
                 let udaf = PySparkAggregateUDF::new(
-                    function_name.to_owned(),
+                    self.try_decode_pyspark_agg_format(format)?,
+                    function_name,
                     deterministic,
+                    input_names,
                     input_types,
                     output_type,
-                    python_bytes,
-                    false,
+                    function,
                 );
                 Ok(Arc::new(AggregateUDF::from(udaf)))
             }
@@ -1043,39 +836,30 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
-        let udaf_kind = if let Some(func) =
-            node.inner().as_any().downcast_ref::<PySparkAggregateUDF>()
+        let udaf_kind = if node.inner().as_any().is::<KurtosisFunction>()
+            || node.inner().as_any().is::<MaxByFunction>()
+            || node.inner().as_any().is::<MinByFunction>()
+            || node.inner().as_any().is::<ModeFunction>()
+            || node.inner().as_any().is::<SkewnessFunc>()
         {
+            UdafKind::Standard(gen::StandardUdaf {})
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<PySparkAggregateUDF>() {
             let input_types = func
                 .input_types()
                 .iter()
-                .map(|x| {
-                    let input_type =
-                        self.try_encode_message::<gen_datafusion_common::ArrowType>(x.try_into()?)?;
-                    Ok(input_type)
-                })
-                .collect::<Result<_>>()?;
-            let output_type = self.try_encode_message::<gen_datafusion_common::ArrowType>(
-                func.output_type().try_into()?,
-            )?;
+                .map(|x| self.try_encode_data_type(x))
+                .collect::<Result<Vec<_>>>()?;
+            let output_type = self.try_encode_data_type(func.output_type())?;
             let deterministic = matches!(func.signature().volatility, Volatility::Immutable);
             UdafKind::PySparkAgg(gen::PySparkUdaf {
+                format: self.try_encode_pyspark_agg_format(func.format())?,
                 function_name: func.function_name().to_string(),
                 deterministic,
+                input_names: func.input_names().to_vec(),
                 input_types,
                 output_type,
-                python_bytes: func.python_bytes().to_vec(),
+                function: func.function().to_vec(),
             })
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<KurtosisFunction>() {
-            UdafKind::Standard(gen::StandardUdaf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MaxByFunction>() {
-            UdafKind::Standard(gen::StandardUdaf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<MinByFunction>() {
-            UdafKind::Standard(gen::StandardUdaf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<ModeFunction>() {
-            UdafKind::Standard(gen::StandardUdaf {})
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SkewnessFunc>() {
-            UdafKind::Standard(gen::StandardUdaf {})
         } else {
             return Ok(());
         };
@@ -1105,13 +889,12 @@ impl RemoteExecutionCodec {
                 function,
                 output_schema,
             }) => {
-                let output_schema =
-                    self.try_decode_message::<gen_datafusion_common::Schema>(&output_schema)?;
+                let output_schema = self.try_decode_schema(&output_schema)?;
                 Arc::new(PySparkMapIterUDF::new(
                     self.try_decode_pyspark_map_iter_format(format)?,
                     function_name,
                     function,
-                    Arc::new((&output_schema).try_into()?),
+                    Arc::new(output_schema),
                 ))
             }
         };
@@ -1121,9 +904,7 @@ impl RemoteExecutionCodec {
     fn try_encode_map_iter_udf(&self, udf: &dyn MapIterUDF) -> Result<ExtendedMapIterUdf> {
         let map_iter_udf_kind =
             if let Some(func) = udf.dyn_object_as_any().downcast_ref::<PySparkMapIterUDF>() {
-                let output_schema = self.try_encode_message::<gen_datafusion_common::Schema>(
-                    func.output_schema().as_ref().try_into()?,
-                )?;
+                let output_schema = self.try_encode_schema(func.output_schema().as_ref())?;
                 MapIterUdfKind::PySpark(gen::PySparkMapIterUdf {
                     format: self.try_encode_pyspark_map_iter_format(func.format())?,
                     function_name: func.function_name().to_string(),
@@ -1207,6 +988,28 @@ impl RemoteExecutionCodec {
             ShowStringStyle::Html => gen::ShowStringStyle::Html,
         };
         Ok(style as i32)
+    }
+
+    fn try_decode_pyspark_agg_format(&self, format: i32) -> Result<PySparkAggFormat> {
+        let format = gen::PySparkAggFormat::try_from(format)
+            .map_err(|e| plan_datafusion_err!("failed to decode pyspark agg format: {e}"))?;
+        let format = match format {
+            gen::PySparkAggFormat::NoOp => PySparkAggFormat::NoOp,
+            gen::PySparkAggFormat::GroupAgg => PySparkAggFormat::GroupAgg,
+            gen::PySparkAggFormat::GroupMap => PySparkAggFormat::GroupMap,
+            gen::PySparkAggFormat::GroupMapLegacy => PySparkAggFormat::GroupMapLegacy,
+        };
+        Ok(format)
+    }
+
+    fn try_encode_pyspark_agg_format(&self, format: PySparkAggFormat) -> Result<i32> {
+        let format = match format {
+            PySparkAggFormat::NoOp => gen::PySparkAggFormat::NoOp,
+            PySparkAggFormat::GroupAgg => gen::PySparkAggFormat::GroupAgg,
+            PySparkAggFormat::GroupMap => gen::PySparkAggFormat::GroupMap,
+            PySparkAggFormat::GroupMapLegacy => gen::PySparkAggFormat::GroupMapLegacy,
+        };
+        Ok(format as i32)
     }
 
     fn try_decode_pyspark_map_iter_format(&self, format: i32) -> Result<PySparkMapIterFormat> {
@@ -1438,6 +1241,24 @@ impl RemoteExecutionCodec {
             .map(|location| self.try_encode_task_write_location(location))
             .collect::<Result<_>>()?;
         Ok(gen::TaskWriteLocationList { locations })
+    }
+
+    fn try_decode_data_type(&self, buf: &[u8]) -> Result<DataType> {
+        let arrow_type = self.try_decode_message::<gen_datafusion_common::ArrowType>(buf)?;
+        Ok((&arrow_type).try_into()?)
+    }
+
+    fn try_encode_data_type(&self, data_type: &DataType) -> Result<Vec<u8>> {
+        self.try_encode_message::<gen_datafusion_common::ArrowType>(data_type.try_into()?)
+    }
+
+    fn try_decode_schema(&self, buf: &[u8]) -> Result<Schema> {
+        let schema = self.try_decode_message::<gen_datafusion_common::Schema>(buf)?;
+        Ok((&schema).try_into()?)
+    }
+
+    fn try_encode_schema(&self, schema: &Schema) -> Result<Vec<u8>> {
+        self.try_encode_message::<gen_datafusion_common::Schema>(schema.try_into()?)
     }
 
     fn try_decode_message<M>(&self, buf: &[u8]) -> Result<M>

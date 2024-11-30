@@ -29,18 +29,18 @@ message ExtendedPhysicalPlanNode {
   }
 }
 
-message ExtendedAggregateUdf {
-  oneof UdafKind {
-    StandardUdaf standard = 1;
-    PySparkUdaf py_spark_agg = 2;
-  }
-}
-
 message ExtendedScalarUdf {
   oneof UdfKind {
     StandardUdf standard = 1;
-    WithOneAuxiliaryFieldUdf with_one_auxiliary_field = 2;
-    PySparkUdf py_spark = 3;
+    PySparkUdf py_spark = 2;
+    PySparkCoGroupMapUdf py_spark_co_group_map = 3;
+    MapToArrayUdf map_to_array = 4;
+    DropStructFieldUdf drop_struct_field = 5;
+    ExplodeUdf explode = 6;
+    SparkUnixTimestampUdf spark_unix_timestamp = 7;
+    StructFunctionUdf struct_function = 8;
+    UpdateStructFieldUdf update_struct_field = 9;
+    SparkWeekOfYearUdf spark_week_of_year = 10;
   }
 }
 
@@ -50,27 +50,14 @@ message ExtendedMapIterUdf {
   }
 }
 
-message StandardUdf {}
-message StandardUdaf {}
-
-message AuxiliaryFieldSingle {
-  bytes auxiliary_field = 1;
-}
-
-message AuxiliaryFieldRepeated {
-  repeated bytes auxiliary_field = 1;
-}
-
-message AuxiliaryField {
-  oneof auxiliary_field {
-    AuxiliaryFieldSingle auxiliary_field_single = 1;
-    AuxiliaryFieldRepeated auxiliary_field_repeated = 2;
+message ExtendedAggregateUdf {
+  oneof UdafKind {
+    StandardUdaf standard = 1;
+    PySparkUdaf py_spark_agg = 2;
   }
 }
 
-message WithOneAuxiliaryFieldUdf {
-  AuxiliaryField auxiliary_field = 1;
-}
+message StandardUdf {}
 
 message PySparkUdf {
   string function_name = 1;
@@ -78,15 +65,64 @@ message PySparkUdf {
   int32 eval_type = 3;
   repeated bytes input_types = 4;
   bytes output_type = 5;
-  bytes python_bytes = 6;
+  bytes function = 6;
 }
 
-message PySparkUdaf {
+message PySparkCoGroupMapUdf {
   string function_name = 1;
   bool deterministic = 2;
-  repeated bytes input_types = 3;
-  bytes output_type = 4;
-  bytes python_bytes = 5;
+  bytes left_type = 3;
+  bytes right_type = 4;
+  bytes output_type = 5;
+  bytes function = 6;
+  bool legacy = 7;
+}
+
+message MapToArrayUdf {
+  bool nullable = 1;
+}
+
+message DropStructFieldUdf {
+  repeated string field_names = 1;
+}
+
+message ExplodeUdf {
+  string name = 1;
+}
+
+message SparkUnixTimestampUdf {
+  string timezone = 1;
+}
+
+message StructFunctionUdf {
+  repeated string field_names = 1;
+}
+
+message UpdateStructFieldUdf {
+  repeated string field_names = 1;
+}
+
+message SparkWeekOfYearUdf {
+  string timezone = 1;
+}
+
+message StandardUdaf {}
+
+message PySparkUdaf {
+  PySparkAggFormat format = 1;
+  string function_name = 2;
+  bool deterministic = 3;
+  repeated string input_names = 4;
+  repeated bytes input_types = 5;
+  bytes output_type = 6;
+  bytes function = 7;
+}
+
+enum PySparkAggFormat {
+  PY_SPARK_AGG_FORMAT_NO_OP = 0;
+  PY_SPARK_AGG_FORMAT_GROUP_AGG = 1;
+  PY_SPARK_AGG_FORMAT_GROUP_MAP = 2;
+  PY_SPARK_AGG_FORMAT_GROUP_MAP_LEGACY = 3;
 }
 
 message PySparkMapIterUdf {

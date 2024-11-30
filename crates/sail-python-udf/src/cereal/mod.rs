@@ -1,14 +1,9 @@
-use pyo3::{Bound, PyAny, Python};
+use pyo3::Python;
 
 use crate::error::{PyUdfError, PyUdfResult};
 
 pub mod pyspark_udf;
 pub mod pyspark_udtf;
-
-pub trait PythonFunction: Sized {
-    fn load(v: &[u8]) -> PyUdfResult<Self>;
-    fn function<'py>(&self, py: Python<'py>) -> PyUdfResult<Bound<'py, PyAny>>;
-}
 
 pub(crate) fn check_python_udf_version(version: &str) -> PyUdfResult<()> {
     let pyo3_version: String = Python::with_gil(|py| py.version().to_string());

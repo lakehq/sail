@@ -8,6 +8,22 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
+    fn arrow_binary_type(&self) -> adt::DataType {
+        if self.config.arrow_use_large_var_types {
+            adt::DataType::LargeBinary
+        } else {
+            adt::DataType::Binary
+        }
+    }
+
+    fn arrow_string_type(&self) -> adt::DataType {
+        if self.config.arrow_use_large_var_types {
+            adt::DataType::LargeUtf8
+        } else {
+            adt::DataType::Utf8
+        }
+    }
+
     /// References:
     ///   org.apache.spark.sql.util.ArrowUtils#toArrowType
     ///   org.apache.spark.sql.connect.common.DataTypeProtoConverter
@@ -23,8 +39,8 @@ impl PlanResolver<'_> {
             DataType::Long => Ok(adt::DataType::Int64),
             DataType::Float => Ok(adt::DataType::Float32),
             DataType::Double => Ok(adt::DataType::Float64),
-            DataType::Binary => Ok(adt::DataType::Binary),
-            DataType::String => Ok(adt::DataType::Utf8),
+            DataType::Binary => Ok(self.arrow_binary_type()),
+            DataType::String => Ok(self.arrow_string_type()),
             DataType::Array {
                 element_type,
                 contains_null,
@@ -44,8 +60,8 @@ impl PlanResolver<'_> {
             DataType::Decimal256 { scale, precision } => {
                 Ok(adt::DataType::Decimal256(precision, scale))
             }
-            DataType::Char { .. } => Ok(adt::DataType::Utf8),
-            DataType::VarChar { .. } => Ok(adt::DataType::Utf8),
+            DataType::Char { .. } => Ok(self.arrow_string_type()),
+            DataType::VarChar { .. } => Ok(self.arrow_string_type()),
             DataType::Date => Ok(adt::DataType::Date32),
             DataType::Timestamp(time_unit, timezone) => Ok(adt::DataType::Timestamp(
                 Self::resolve_time_unit(time_unit)?,

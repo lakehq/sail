@@ -576,9 +576,9 @@ pub struct GroupMap {
     pub sorting_expressions: Vec<Expr>,
     pub initial_input: Option<Box<QueryPlan>>,
     pub initial_grouping_expressions: Vec<Expr>,
-    pub is_map_groups_with_state: Option<bool>, // TODO: this should probably be an enum
-    pub output_mode: Option<String>,            // TODO: this should probably be an enum
-    pub timeout_conf: Option<String>,           // TODO: this should probably be a struct
+    pub is_map_groups_with_state: Option<bool>,
+    pub output_mode: Option<String>,
+    pub timeout_conf: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -609,8 +609,8 @@ pub struct ApplyInPandasWithState {
     pub function: CommonInlineUserDefinedFunction,
     pub output_schema: Schema,
     pub state_schema: Schema,
-    pub output_mode: String,  // TODO: this should probably be an enum
-    pub timeout_conf: String, // TODO: this should probably be a struct
+    pub output_mode: String,
+    pub timeout_conf: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
