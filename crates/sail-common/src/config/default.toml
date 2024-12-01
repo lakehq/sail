@@ -16,9 +16,9 @@ worker_max_count = 0
 worker_max_idle_time_secs = 300
 worker_launch_timeout_secs = 300
 worker_task_slots = 8
+worker_stream_buffer = 16
 task_launch_timeout_secs = 600
 job_output_buffer = 16
-memory_stream_buffer = 16
 
 [execution]
 batch_size = 8192

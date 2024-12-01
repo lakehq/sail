@@ -9,7 +9,7 @@ pub struct WorkerLaunchOptions {
     pub enable_tls: bool,
     pub driver_external_host: String,
     pub driver_external_port: u16,
-    pub memory_stream_buffer: usize,
+    pub worker_stream_buffer: usize,
 }
 
 #[tonic::async_trait]

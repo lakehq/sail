@@ -31,7 +31,9 @@ use crate::driver::DriverEvent;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskId, WorkerId};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
-use crate::stream::{MergedRecordBatchStream, TaskReadLocation, TaskWriteLocation};
+use crate::stream::{
+    MergedRecordBatchStream, TaskReadLocation, TaskStreamPersistence, TaskWriteLocation,
+};
 use crate::worker_manager::WorkerLaunchOptions;
 
 impl DriverActor {
@@ -344,7 +346,7 @@ impl DriverActor {
             } else {
                 port
             },
-            memory_stream_buffer: self.options().memory_stream_buffer,
+            worker_stream_buffer: self.options().worker_stream_buffer,
         };
         let worker_manager = Arc::clone(&self.worker_manager);
         ctx.spawn(async move {
@@ -666,9 +668,10 @@ impl DriverActor {
                         let attempt = task.attempt;
                         let locations = (0..shuffle.shuffle_partitioning().partition_count())
                             .map(|p| {
-                                TaskWriteLocation::Memory {
+                                TaskWriteLocation::Local {
                                     channel: format!("job-{job_id}/task-{task_id}/attempt-{attempt}/partition-{p}")
                                         .into(),
+                                    persistence: TaskStreamPersistence::Ephemeral,
                                 }
                             })
                             .collect();

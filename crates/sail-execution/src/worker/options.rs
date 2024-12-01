@@ -13,7 +13,7 @@ pub struct WorkerOptions {
     pub worker_listen_port: u16,
     pub worker_external_host: String,
     pub worker_external_port: u16,
-    pub memory_stream_buffer: usize,
+    pub worker_stream_buffer: usize,
 }
 
 impl TryFrom<&AppConfig> for WorkerOptions {
@@ -33,7 +33,7 @@ impl TryFrom<&AppConfig> for WorkerOptions {
             worker_listen_port: config.cluster.worker_listen_port,
             worker_external_host: config.cluster.worker_external_host.clone(),
             worker_external_port: config.cluster.worker_external_port,
-            memory_stream_buffer: config.cluster.memory_stream_buffer,
+            worker_stream_buffer: config.cluster.worker_stream_buffer,
         })
     }
 }

@@ -207,7 +207,7 @@ async fn shuffle_write(
         })?;
         for p in 0..partitions.len() {
             if let Some(batch) = partitions[p].take() {
-                partition_writers[p].write(&batch).await?;
+                partition_writers[p].write(batch).await?;
             }
         }
     }

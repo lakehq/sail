@@ -86,7 +86,7 @@ use crate::plan::gen::{
     ExtendedAggregateUdf, ExtendedMapIterUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf,
 };
 use crate::plan::{gen, ShuffleReadExec, ShuffleWriteExec};
-use crate::stream::{TaskReadLocation, TaskWriteLocation};
+use crate::stream::{TaskReadLocation, TaskStreamPersistence, TaskWriteLocation};
 
 pub struct RemoteExecutionCodec {
     context: SessionContext,
@@ -1030,6 +1030,32 @@ impl RemoteExecutionCodec {
         Ok(format as i32)
     }
 
+    fn try_decode_task_stream_persistence(
+        &self,
+        persistence: i32,
+    ) -> Result<TaskStreamPersistence> {
+        let persistence = gen::TaskStreamPersistence::try_from(persistence)
+            .map_err(|e| plan_datafusion_err!("failed to decode task stream persistence: {e}"))?;
+        let persistence = match persistence {
+            gen::TaskStreamPersistence::Ephemeral => TaskStreamPersistence::Ephemeral,
+            gen::TaskStreamPersistence::Memory => TaskStreamPersistence::Memory,
+            gen::TaskStreamPersistence::Disk => TaskStreamPersistence::Disk,
+        };
+        Ok(persistence)
+    }
+
+    fn try_encode_task_stream_persistence(
+        &self,
+        persistence: &TaskStreamPersistence,
+    ) -> Result<i32> {
+        let persistence = match persistence {
+            TaskStreamPersistence::Ephemeral => gen::TaskStreamPersistence::Ephemeral,
+            TaskStreamPersistence::Memory => gen::TaskStreamPersistence::Memory,
+            TaskStreamPersistence::Disk => gen::TaskStreamPersistence::Disk,
+        };
+        Ok(persistence as i32)
+    }
+
     fn try_decode_file_compression_type(&self, variant: i32) -> Result<FileCompressionType> {
         let variant = gen::CompressionTypeVariant::try_from(variant)
             .map_err(|e| plan_datafusion_err!("failed to decode compression type variant: {e}"))?;
@@ -1175,15 +1201,12 @@ impl RemoteExecutionCodec {
     ) -> Result<TaskWriteLocation> {
         let gen::TaskWriteLocation { location } = location;
         let location = match location {
-            Some(gen::task_write_location::Location::Memory(gen::TaskWriteLocationMemory {
+            Some(gen::task_write_location::Location::Local(gen::TaskWriteLocationLocal {
                 channel,
-            })) => TaskWriteLocation::Memory {
+                persistence,
+            })) => TaskWriteLocation::Local {
                 channel: channel.into(),
-            },
-            Some(gen::task_write_location::Location::Disk(gen::TaskWriteLocationDisk {
-                channel,
-            })) => TaskWriteLocation::Disk {
-                channel: channel.into(),
+                persistence: self.try_decode_task_stream_persistence(persistence)?,
             },
             Some(gen::task_write_location::Location::Remote(gen::TaskWriteLocationRemote {
                 uri,
@@ -1198,17 +1221,14 @@ impl RemoteExecutionCodec {
         location: &TaskWriteLocation,
     ) -> Result<gen::TaskWriteLocation> {
         let location = match location {
-            TaskWriteLocation::Memory { channel } => gen::TaskWriteLocation {
-                location: Some(gen::task_write_location::Location::Memory(
-                    gen::TaskWriteLocationMemory {
+            TaskWriteLocation::Local {
+                channel,
+                persistence,
+            } => gen::TaskWriteLocation {
+                location: Some(gen::task_write_location::Location::Local(
+                    gen::TaskWriteLocationLocal {
                         channel: channel.clone().into(),
-                    },
-                )),
-            },
-            TaskWriteLocation::Disk { channel } => gen::TaskWriteLocation {
-                location: Some(gen::task_write_location::Location::Disk(
-                    gen::TaskWriteLocationDisk {
-                        channel: channel.clone().into(),
+                        persistence: self.try_encode_task_stream_persistence(persistence)?,
                     },
                 )),
             },

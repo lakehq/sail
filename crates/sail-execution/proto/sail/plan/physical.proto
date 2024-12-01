@@ -294,22 +294,24 @@ message TaskWriteLocationList {
 
 message TaskWriteLocation {
   oneof Location {
-    TaskWriteLocationMemory memory = 1;
-    TaskWriteLocationDisk disk = 2;
-    TaskWriteLocationRemote remote = 3;
+    TaskWriteLocationLocal local = 1;
+    TaskWriteLocationRemote remote = 2;
   }
 }
 
-message TaskWriteLocationMemory {
+message TaskWriteLocationLocal {
   string channel = 1;
-}
-
-message TaskWriteLocationDisk {
-  string channel = 1;
+  TaskStreamPersistence persistence = 2;
 }
 
 message TaskWriteLocationRemote {
   string uri = 1;
+}
+
+enum TaskStreamPersistence {
+  TASK_STREAM_PERSISTENCE_EPHEMERAL = 0;
+  TASK_STREAM_PERSISTENCE_MEMORY = 1;
+  TASK_STREAM_PERSISTENCE_DISK = 2;
 }
 
 enum CompressionTypeVariant {

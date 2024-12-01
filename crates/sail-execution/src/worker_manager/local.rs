@@ -50,7 +50,7 @@ impl WorkerManager for LocalWorkerManager {
             worker_listen_port: 0,
             worker_external_host: "127.0.0.1".to_string(),
             worker_external_port: 0,
-            memory_stream_buffer: options.memory_stream_buffer,
+            worker_stream_buffer: options.worker_stream_buffer,
         };
         let mut state = self.state.lock().await;
         let handle = state.system.spawn(options);

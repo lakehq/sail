@@ -11,17 +11,40 @@ use crate::stream::ChannelName;
 
 #[derive(Debug, Clone)]
 pub enum TaskWriteLocation {
-    Memory { channel: ChannelName },
-    Disk { channel: ChannelName },
-    Remote { uri: String },
+    Local {
+        channel: ChannelName,
+        persistence: TaskStreamPersistence,
+    },
+    Remote {
+        uri: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum TaskStreamPersistence {
+    Ephemeral,
+    Memory,
+    Disk,
 }
 
 impl Display for TaskWriteLocation {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            TaskWriteLocation::Memory { channel } => write!(f, "Memory({})", channel),
-            TaskWriteLocation::Disk { channel } => write!(f, "Disk({})", channel),
+            TaskWriteLocation::Local {
+                channel,
+                persistence,
+            } => write!(f, "Local({}, {})", channel, persistence),
             TaskWriteLocation::Remote { uri } => write!(f, "Remote({})", uri),
+        }
+    }
+}
+
+impl Display for TaskStreamPersistence {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Ephemeral => write!(f, "Ephemeral"),
+            Self::Memory => write!(f, "Memory"),
+            Self::Disk => write!(f, "Disk"),
         }
     }
 }
@@ -37,14 +60,14 @@ pub trait TaskStreamWriter: Debug + Send + Sync {
 
 #[tonic::async_trait]
 pub trait RecordBatchStreamWriter: Send {
-    async fn write(&mut self, batch: &RecordBatch) -> Result<()>;
+    async fn write(&mut self, batch: RecordBatch) -> Result<()>;
     fn close(self: Box<Self>) -> Result<()>;
 }
 
 #[tonic::async_trait]
 impl<W: Write + Send> RecordBatchStreamWriter for StreamWriter<W> {
-    async fn write(&mut self, batch: &RecordBatch) -> Result<()> {
-        Ok(self.write(batch)?)
+    async fn write(&mut self, batch: RecordBatch) -> Result<()> {
+        Ok(self.write(&batch)?)
     }
 
     fn close(mut self: Box<Self>) -> Result<()> {
@@ -54,8 +77,8 @@ impl<W: Write + Send> RecordBatchStreamWriter for StreamWriter<W> {
 
 #[tonic::async_trait]
 impl RecordBatchStreamWriter for mpsc::Sender<RecordBatch> {
-    async fn write(&mut self, batch: &RecordBatch) -> Result<()> {
-        self.send(batch.clone())
+    async fn write(&mut self, batch: RecordBatch) -> Result<()> {
+        self.send(batch)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))
     }

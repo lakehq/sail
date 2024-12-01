@@ -75,9 +75,9 @@ pub struct ClusterConfig {
     pub worker_max_idle_time_secs: u64,
     pub worker_launch_timeout_secs: u64,
     pub worker_task_slots: usize,
+    pub worker_stream_buffer: usize,
     pub task_launch_timeout_secs: u64,
     pub job_output_buffer: usize,
-    pub memory_stream_buffer: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
