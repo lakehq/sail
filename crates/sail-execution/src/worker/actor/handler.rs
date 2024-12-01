@@ -20,7 +20,7 @@ use crate::id::{TaskAttempt, TaskId, WorkerId};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::{ChannelName, RecordBatchStreamWriter, TaskStreamPersistence};
 use crate::worker::actor::core::WorkerActor;
-use crate::worker::actor::local_stream::{EphemeralStream, LocalStream};
+use crate::worker::actor::local_stream::{EphemeralStream, LocalStream, MemoryStream};
 use crate::worker::actor::stream_accessor::WorkerStreamAccessor;
 use crate::worker::actor::stream_monitor::TaskStreamMonitor;
 use crate::worker::WorkerEvent;
@@ -85,7 +85,7 @@ impl WorkerActor {
         let monitor = if let Some(channel) = channel {
             let mut output =
                 EphemeralStream::new(self.options().worker_stream_buffer, stream.schema());
-            let writer = match output.publish() {
+            let writer = match output.publish(ctx) {
                 Ok(x) => x,
                 Err(e) => {
                     let event = WorkerEvent::ReportTaskStatus {
@@ -147,15 +147,24 @@ impl WorkerActor {
 
     pub(super) fn handle_create_local_stream(
         &mut self,
-        _ctx: &mut ActorContext<Self>,
+        ctx: &mut ActorContext<Self>,
         channel: ChannelName,
-        _persistence: TaskStreamPersistence,
+        persistence: TaskStreamPersistence,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<Box<dyn RecordBatchStreamWriter>>>,
     ) -> ActorAction {
-        let mut stream = EphemeralStream::new(self.options().worker_stream_buffer, schema);
-        let _ = result.send(stream.publish());
-        self.local_streams.insert(channel, Box::new(stream));
+        let mut stream: Box<dyn LocalStream> = match persistence {
+            TaskStreamPersistence::Ephemeral => Box::new(EphemeralStream::new(
+                self.options().worker_stream_buffer,
+                schema,
+            )),
+            TaskStreamPersistence::Memory => Box::new(MemoryStream::new(schema)),
+            TaskStreamPersistence::Disk => {
+                return ActorAction::fail("not implemented: create disk stream")
+            }
+        };
+        let _ = result.send(stream.publish(ctx));
+        self.local_streams.insert(channel, stream);
         ActorAction::Continue
     }
 
@@ -174,7 +183,7 @@ impl WorkerActor {
 
     pub(super) fn handle_fetch_this_worker_stream(
         &mut self,
-        _ctx: &mut ActorContext<Self>,
+        ctx: &mut ActorContext<Self>,
         channel: ChannelName,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     ) -> ActorAction {
@@ -182,7 +191,7 @@ impl WorkerActor {
             .local_streams
             .get_mut(&channel)
             .map(|x| {
-                x.subscribe().map_err(|e| {
+                x.subscribe(ctx).map_err(|e| {
                     ExecutionError::InternalError(format!(
                         "failed to read task stream {channel}: {e}"
                     ))
