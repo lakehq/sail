@@ -152,7 +152,7 @@ impl PlanResolver<'_> {
                 Ok(DataType::CalendarInterval)
             }
             adt::DataType::Interval(adt::IntervalUnit::DayTime) => {
-                Err(PlanError::unsupported("interval unit: day-time"))
+                Ok(DataType::Interval(spec::IntervalUnit::DayTime))
             }
             adt::DataType::Binary
             | adt::DataType::FixedSizeBinary(_)
