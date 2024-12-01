@@ -243,6 +243,23 @@ impl WorkerActor {
         ActorAction::Continue
     }
 
+    pub(super) fn handle_remove_local_stream(
+        &mut self,
+        _ctx: &mut ActorContext<Self>,
+        channel_prefix: String,
+    ) -> ActorAction {
+        let mut keys = Vec::new();
+        for key in self.local_streams.keys() {
+            if key.has_prefix(&channel_prefix) {
+                keys.push(key.clone());
+            }
+        }
+        for key in keys {
+            self.local_streams.remove(&key);
+        }
+        ActorAction::Continue
+    }
+
     fn session_context(&self) -> Arc<SessionContext> {
         Arc::new(SessionContext::default())
     }

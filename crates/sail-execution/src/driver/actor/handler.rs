@@ -178,6 +178,7 @@ impl DriverActor {
     ) -> ActorAction {
         self.job_outputs.remove(&job_id);
         for worker_id in self.state.detach_job_from_workers(job_id) {
+            self.remove_worker_streams(ctx, worker_id, job_id);
             self.schedule_idle_worker_probe(ctx, worker_id);
         }
         ActorAction::Continue
@@ -792,6 +793,7 @@ impl DriverActor {
             output.fail(reason);
         }
         for worker_id in self.state.detach_job_from_workers(job_id) {
+            self.remove_worker_streams(ctx, worker_id, job_id);
             self.schedule_idle_worker_probe(ctx, worker_id);
         }
         let tasks = self
@@ -827,6 +829,27 @@ impl DriverActor {
                 if let Err(e) = client.stop_task(task_id, attempt).await {
                     warn!("failed to stop task {task_id}: {e}");
                 }
+            }
+        });
+    }
+
+    fn remove_worker_streams(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+        job_id: JobId,
+    ) {
+        let client = match self.worker_client(worker_id) {
+            Ok(client) => client.clone(),
+            Err(e) => {
+                warn!("failed to get worker client {worker_id}: {e}");
+                return;
+            }
+        };
+        ctx.spawn(async move {
+            let prefix = format!("job-{job_id}/");
+            if let Err(e) = client.remove_stream(prefix).await {
+                error!("failed to remove streams in worker {worker_id}: {e}");
             }
         });
     }

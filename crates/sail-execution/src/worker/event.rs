@@ -59,5 +59,8 @@ pub enum WorkerEvent {
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     },
+    RemoveLocalStream {
+        channel_prefix: String,
+    },
     Shutdown,
 }

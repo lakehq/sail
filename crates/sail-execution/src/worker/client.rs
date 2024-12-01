@@ -14,8 +14,8 @@ use crate::rpc::{ClientHandle, ClientOptions};
 use crate::stream::ChannelName;
 use crate::worker::gen::worker_service_client::WorkerServiceClient;
 use crate::worker::gen::{
-    RunTaskRequest, RunTaskResponse, StopTaskRequest, StopTaskResponse, StopWorkerRequest,
-    StopWorkerResponse, TaskStreamTicket,
+    RemoveStreamRequest, RemoveStreamResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
+    StopTaskResponse, StopWorkerRequest, StopWorkerResponse, TaskStreamTicket,
 };
 
 #[derive(Debug, Clone)]
@@ -86,6 +86,13 @@ impl WorkerClient {
         let stream = FlightRecordBatchStream::new_from_flight_data(stream)
             .map_err(|e| exec_datafusion_err!("{e}"));
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+    }
+
+    pub async fn remove_stream(&self, channel_prefix: String) -> ExecutionResult<()> {
+        let request = RemoveStreamRequest { channel_prefix };
+        let response = self.client.get().await?.remove_stream(request).await?;
+        let RemoveStreamResponse {} = response.into_inner();
+        Ok(())
     }
 
     pub async fn stop_worker(&self) -> ExecutionResult<()> {

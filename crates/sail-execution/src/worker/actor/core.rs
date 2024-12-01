@@ -111,6 +111,9 @@ impl Actor for WorkerActor {
                 schema,
                 result,
             } => self.handle_fetch_remote_stream(ctx, uri, schema, result),
+            WorkerEvent::RemoveLocalStream { channel_prefix } => {
+                self.handle_remove_local_stream(ctx, channel_prefix)
+            }
             WorkerEvent::Shutdown => ActorAction::Stop,
         }
     }
