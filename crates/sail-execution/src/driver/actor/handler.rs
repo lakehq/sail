@@ -32,7 +32,7 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskId, WorkerId};
 use crate::plan::{ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::{
-    MergedRecordBatchStream, TaskReadLocation, TaskStreamPersistence, TaskWriteLocation,
+    MergedRecordBatchStream, TaskReadLocation, TaskStreamStorage, TaskWriteLocation,
 };
 use crate::worker_manager::WorkerLaunchOptions;
 
@@ -659,9 +659,9 @@ impl DriverActor {
                 let shuffle = shuffle.clone().with_locations(locations);
                 Ok(Transformed::yes(Arc::new(shuffle)))
             } else if let Some(shuffle) = node.as_any().downcast_ref::<ShuffleWriteExec>() {
-                let persistence = match shuffle.consumption() {
-                    ShuffleConsumption::Single => TaskStreamPersistence::Ephemeral,
-                    ShuffleConsumption::Multiple => TaskStreamPersistence::Memory,
+                let storage = match shuffle.consumption() {
+                    ShuffleConsumption::Single => TaskStreamStorage::Ephemeral,
+                    ShuffleConsumption::Multiple => TaskStreamStorage::Memory,
                 };
                 let locations = (0..shuffle.locations().len())
                     .map(|partition| {
@@ -676,7 +676,7 @@ impl DriverActor {
                                 TaskWriteLocation::Local {
                                     channel: format!("job-{job_id}/task-{task_id}/attempt-{attempt}/partition-{p}")
                                         .into(),
-                                    persistence,
+                                    storage,
                                 }
                             })
                             .collect();

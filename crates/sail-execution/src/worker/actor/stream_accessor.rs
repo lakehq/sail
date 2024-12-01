@@ -79,12 +79,9 @@ impl TaskStreamWriter for WorkerStreamAccessor {
     ) -> Result<Box<dyn RecordBatchStreamWriter>> {
         let (tx, rx) = oneshot::channel();
         let event = match location {
-            TaskWriteLocation::Local {
-                channel,
-                persistence,
-            } => WorkerEvent::CreateLocalStream {
+            TaskWriteLocation::Local { channel, storage } => WorkerEvent::CreateLocalStream {
                 channel: channel.clone(),
-                persistence: *persistence,
+                storage: *storage,
                 schema,
                 result: tx,
             },

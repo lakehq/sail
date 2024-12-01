@@ -13,7 +13,7 @@ use crate::stream::ChannelName;
 pub enum TaskWriteLocation {
     Local {
         channel: ChannelName,
-        persistence: TaskStreamPersistence,
+        storage: TaskStreamStorage,
     },
     Remote {
         uri: String,
@@ -21,7 +21,7 @@ pub enum TaskWriteLocation {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum TaskStreamPersistence {
+pub enum TaskStreamStorage {
     Ephemeral,
     Memory,
     Disk,
@@ -30,16 +30,15 @@ pub enum TaskStreamPersistence {
 impl Display for TaskWriteLocation {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            TaskWriteLocation::Local {
-                channel,
-                persistence,
-            } => write!(f, "Local({}, {})", channel, persistence),
+            TaskWriteLocation::Local { channel, storage } => {
+                write!(f, "Local({}, {})", channel, storage)
+            }
             TaskWriteLocation::Remote { uri } => write!(f, "Remote({})", uri),
         }
     }
 }
 
-impl Display for TaskStreamPersistence {
+impl Display for TaskStreamStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::Ephemeral => write!(f, "Ephemeral"),

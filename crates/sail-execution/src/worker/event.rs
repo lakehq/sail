@@ -5,7 +5,7 @@ use tokio::sync::oneshot;
 use crate::driver::state::TaskStatus;
 use crate::error::ExecutionResult;
 use crate::id::{TaskId, WorkerId};
-use crate::stream::{ChannelName, RecordBatchStreamWriter, TaskStreamPersistence};
+use crate::stream::{ChannelName, RecordBatchStreamWriter, TaskStreamStorage};
 
 pub enum WorkerEvent {
     ServerReady {
@@ -33,7 +33,7 @@ pub enum WorkerEvent {
     },
     CreateLocalStream {
         channel: ChannelName,
-        persistence: TaskStreamPersistence,
+        storage: TaskStreamStorage,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<Box<dyn RecordBatchStreamWriter>>>,
     },

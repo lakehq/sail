@@ -84,10 +84,10 @@ impl Actor for WorkerActor {
             } => self.handle_report_task_status(ctx, task_id, attempt, status, message),
             WorkerEvent::CreateLocalStream {
                 channel,
-                persistence,
+                storage,
                 schema,
                 result,
-            } => self.handle_create_local_stream(ctx, channel, persistence, schema, result),
+            } => self.handle_create_local_stream(ctx, channel, storage, schema, result),
             WorkerEvent::CreateRemoteStream {
                 uri,
                 schema,

@@ -86,7 +86,7 @@ use crate::plan::gen::{
     ExtendedAggregateUdf, ExtendedMapIterUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf,
 };
 use crate::plan::{gen, ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
-use crate::stream::{TaskReadLocation, TaskStreamPersistence, TaskWriteLocation};
+use crate::stream::{TaskReadLocation, TaskStreamStorage, TaskWriteLocation};
 
 pub struct RemoteExecutionCodec {
     context: SessionContext,
@@ -1053,30 +1053,24 @@ impl RemoteExecutionCodec {
         Ok(consumption as i32)
     }
 
-    fn try_decode_task_stream_persistence(
-        &self,
-        persistence: i32,
-    ) -> Result<TaskStreamPersistence> {
-        let persistence = gen::TaskStreamPersistence::try_from(persistence)
-            .map_err(|e| plan_datafusion_err!("failed to decode task stream persistence: {e}"))?;
-        let persistence = match persistence {
-            gen::TaskStreamPersistence::Ephemeral => TaskStreamPersistence::Ephemeral,
-            gen::TaskStreamPersistence::Memory => TaskStreamPersistence::Memory,
-            gen::TaskStreamPersistence::Disk => TaskStreamPersistence::Disk,
+    fn try_decode_task_stream_storage(&self, storage: i32) -> Result<TaskStreamStorage> {
+        let storage = gen::TaskStreamStorage::try_from(storage)
+            .map_err(|e| plan_datafusion_err!("failed to decode task stream storage: {e}"))?;
+        let storage = match storage {
+            gen::TaskStreamStorage::Ephemeral => TaskStreamStorage::Ephemeral,
+            gen::TaskStreamStorage::Memory => TaskStreamStorage::Memory,
+            gen::TaskStreamStorage::Disk => TaskStreamStorage::Disk,
         };
-        Ok(persistence)
+        Ok(storage)
     }
 
-    fn try_encode_task_stream_persistence(
-        &self,
-        persistence: TaskStreamPersistence,
-    ) -> Result<i32> {
-        let persistence = match persistence {
-            TaskStreamPersistence::Ephemeral => gen::TaskStreamPersistence::Ephemeral,
-            TaskStreamPersistence::Memory => gen::TaskStreamPersistence::Memory,
-            TaskStreamPersistence::Disk => gen::TaskStreamPersistence::Disk,
+    fn try_encode_task_stream_storage(&self, storage: TaskStreamStorage) -> Result<i32> {
+        let storage = match storage {
+            TaskStreamStorage::Ephemeral => gen::TaskStreamStorage::Ephemeral,
+            TaskStreamStorage::Memory => gen::TaskStreamStorage::Memory,
+            TaskStreamStorage::Disk => gen::TaskStreamStorage::Disk,
         };
-        Ok(persistence as i32)
+        Ok(storage as i32)
     }
 
     fn try_decode_file_compression_type(&self, variant: i32) -> Result<FileCompressionType> {
@@ -1226,10 +1220,10 @@ impl RemoteExecutionCodec {
         let location = match location {
             Some(gen::task_write_location::Location::Local(gen::TaskWriteLocationLocal {
                 channel,
-                persistence,
+                storage,
             })) => TaskWriteLocation::Local {
                 channel: channel.into(),
-                persistence: self.try_decode_task_stream_persistence(persistence)?,
+                storage: self.try_decode_task_stream_storage(storage)?,
             },
             Some(gen::task_write_location::Location::Remote(gen::TaskWriteLocationRemote {
                 uri,
@@ -1244,14 +1238,11 @@ impl RemoteExecutionCodec {
         location: &TaskWriteLocation,
     ) -> Result<gen::TaskWriteLocation> {
         let location = match location {
-            TaskWriteLocation::Local {
-                channel,
-                persistence,
-            } => gen::TaskWriteLocation {
+            TaskWriteLocation::Local { channel, storage } => gen::TaskWriteLocation {
                 location: Some(gen::task_write_location::Location::Local(
                     gen::TaskWriteLocationLocal {
                         channel: channel.clone().into(),
-                        persistence: self.try_encode_task_stream_persistence(*persistence)?,
+                        storage: self.try_encode_task_stream_storage(*storage)?,
                     },
                 )),
             },
