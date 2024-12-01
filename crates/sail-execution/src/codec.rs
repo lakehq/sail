@@ -85,7 +85,7 @@ use crate::plan::gen::extended_scalar_udf::UdfKind;
 use crate::plan::gen::{
     ExtendedAggregateUdf, ExtendedMapIterUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf,
 };
-use crate::plan::{gen, ShuffleReadExec, ShuffleWriteExec};
+use crate::plan::{gen, ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::{TaskReadLocation, TaskStreamPersistence, TaskWriteLocation};
 
 pub struct RemoteExecutionCodec {
@@ -197,16 +197,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 stage,
                 plan,
                 partitioning,
+                consumption,
                 locations,
             }) => {
                 let plan = self.try_decode_plan(&plan, registry)?;
                 let partitioning =
                     self.try_decode_partitioning(&partitioning, registry, &plan.schema())?;
+                let consumption = self.try_decode_shuffle_consumption(consumption)?;
                 let locations = locations
                     .into_iter()
                     .map(|x| self.try_decode_task_write_location_list(x))
                     .collect::<Result<_>>()?;
-                let node = ShuffleWriteExec::new(stage as usize, plan, partitioning);
+                let node = ShuffleWriteExec::new(stage as usize, plan, partitioning, consumption);
                 let node = node.with_locations(locations);
                 Ok(Arc::new(node))
             }
@@ -415,8 +417,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 locations,
             })
         } else if let Some(shuffle_write) = node.as_any().downcast_ref::<ShuffleWriteExec>() {
+            let plan = self.try_encode_plan(shuffle_write.plan().clone())?;
             let partitioning =
                 self.try_encode_partitioning(shuffle_write.shuffle_partitioning())?;
+            let consumption = self.try_encode_shuffle_consumption(shuffle_write.consumption())?;
             let locations = shuffle_write
                 .locations()
                 .iter()
@@ -424,8 +428,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .collect::<Result<_>>()?;
             NodeKind::ShuffleWrite(gen::ShuffleWriteExecNode {
                 stage: shuffle_write.stage() as u64,
-                plan: self.try_encode_plan(shuffle_write.plan().clone())?,
+                plan,
                 partitioning,
+                consumption,
                 locations,
             })
         } else if let Some(memory) = node.as_any().downcast_ref::<MemoryExec>() {
@@ -1030,6 +1035,24 @@ impl RemoteExecutionCodec {
         Ok(format as i32)
     }
 
+    fn try_decode_shuffle_consumption(&self, consumption: i32) -> Result<ShuffleConsumption> {
+        let consumption = gen::ShuffleConsumption::try_from(consumption)
+            .map_err(|e| plan_datafusion_err!("failed to decode shuffle consumption: {e}"))?;
+        let consumption = match consumption {
+            gen::ShuffleConsumption::Single => ShuffleConsumption::Single,
+            gen::ShuffleConsumption::Multiple => ShuffleConsumption::Multiple,
+        };
+        Ok(consumption)
+    }
+
+    fn try_encode_shuffle_consumption(&self, consumption: ShuffleConsumption) -> Result<i32> {
+        let consumption = match consumption {
+            ShuffleConsumption::Single => gen::ShuffleConsumption::Single,
+            ShuffleConsumption::Multiple => gen::ShuffleConsumption::Multiple,
+        };
+        Ok(consumption as i32)
+    }
+
     fn try_decode_task_stream_persistence(
         &self,
         persistence: i32,
@@ -1046,7 +1069,7 @@ impl RemoteExecutionCodec {
 
     fn try_encode_task_stream_persistence(
         &self,
-        persistence: &TaskStreamPersistence,
+        persistence: TaskStreamPersistence,
     ) -> Result<i32> {
         let persistence = match persistence {
             TaskStreamPersistence::Ephemeral => gen::TaskStreamPersistence::Ephemeral,
@@ -1228,7 +1251,7 @@ impl RemoteExecutionCodec {
                 location: Some(gen::task_write_location::Location::Local(
                     gen::TaskWriteLocationLocal {
                         channel: channel.clone().into(),
-                        persistence: self.try_encode_task_stream_persistence(persistence)?,
+                        persistence: self.try_encode_task_stream_persistence(*persistence)?,
                     },
                 )),
             },

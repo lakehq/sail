@@ -9,7 +9,7 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
+use crate::plan::{ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
 
 pub struct JobGraph {
     stages: Vec<Arc<dyn ExecutionPlan>>,
@@ -58,7 +58,12 @@ fn build_job_graph(
             }
             partitioning => {
                 let child = get_one_child_plan(&plan)?;
-                create_shuffle(&child, graph, partitioning.clone())?
+                create_shuffle(
+                    &child,
+                    graph,
+                    partitioning.clone(),
+                    ShuffleConsumption::Single,
+                )?
             }
         }
     } else if plan
@@ -68,7 +73,12 @@ fn build_job_graph(
     {
         let child = get_one_child_plan(&plan)?;
         let partitioning = child.properties().output_partitioning();
-        let child = create_shuffle(&child, graph, partitioning.clone())?;
+        let child = create_shuffle(
+            &child,
+            graph,
+            partitioning.clone(),
+            ShuffleConsumption::Multiple,
+        )?;
         with_new_children_if_necessary(plan, vec![child])?
     } else {
         plan
@@ -91,6 +101,7 @@ fn create_shuffle(
     plan: &Arc<dyn ExecutionPlan>,
     graph: &mut JobGraph,
     partitioning: Partitioning,
+    consumption: ShuffleConsumption,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     let stage = graph.stages.len();
 
@@ -98,6 +109,7 @@ fn create_shuffle(
         stage,
         plan.clone(),
         partitioning.clone(),
+        consumption,
     ));
     graph.stages.push(writer);
 

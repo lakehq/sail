@@ -285,7 +285,8 @@ message ShuffleWriteExecNode {
   uint64 stage = 1;
   bytes plan = 2;
   bytes partitioning = 3;
-  repeated TaskWriteLocationList locations = 4;
+  ShuffleConsumption consumption = 4;
+  repeated TaskWriteLocationList locations = 5;
 }
 
 message TaskWriteLocationList {
@@ -306,6 +307,11 @@ message TaskWriteLocationLocal {
 
 message TaskWriteLocationRemote {
   string uri = 1;
+}
+
+enum ShuffleConsumption {
+  SHUFFLE_CONSUMPTION_SINGLE = 0;
+  SHUFFLE_CONSUMPTION_MULTIPLE = 1;
 }
 
 enum TaskStreamPersistence {

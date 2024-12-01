@@ -84,7 +84,7 @@ impl TaskStreamWriter for WorkerStreamAccessor {
                 persistence,
             } => WorkerEvent::CreateLocalStream {
                 channel: channel.clone(),
-                persistence: persistence.clone(),
+                persistence: *persistence,
                 schema,
                 result: tx,
             },

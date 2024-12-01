@@ -20,7 +20,7 @@ pub enum TaskWriteLocation {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum TaskStreamPersistence {
     Ephemeral,
     Memory,
