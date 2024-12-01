@@ -34,7 +34,7 @@ impl DriverClient {
             host,
             port: port as u32,
         });
-        let response = self.inner.lock().await?.register_worker(request).await?;
+        let response = self.inner.get().await?.register_worker(request).await?;
         let RegisterWorkerResponse {} = response.into_inner();
         Ok(())
     }
@@ -54,7 +54,7 @@ impl DriverClient {
             message,
             sequence,
         });
-        let response = self.inner.lock().await?.report_task_status(request).await?;
+        let response = self.inner.get().await?.report_task_status(request).await?;
         let ReportTaskStatusResponse {} = response.into_inner();
         Ok(())
     }
