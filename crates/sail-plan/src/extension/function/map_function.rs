@@ -1,10 +1,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::StructArray;
-use arrow::buffer::OffsetBuffer;
-use arrow::compute::interleave;
+use datafusion::arrow::array::StructArray;
 use datafusion::arrow::array::{ArrayRef, MapArray};
+use datafusion::arrow::buffer::OffsetBuffer;
+use datafusion::arrow::compute::interleave;
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
