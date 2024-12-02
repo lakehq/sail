@@ -3,4 +3,4 @@ mod builder;
 mod retry;
 
 pub use builder::{ServerBuilder, ServerBuilderOptions};
-pub use retry::{RetryStrategy, Retryable};
+pub use retry::RetryStrategy;

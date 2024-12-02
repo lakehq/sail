@@ -35,7 +35,30 @@ impl Iterator for ExponentialBackoffDelay {
 }
 
 impl RetryStrategy {
-    pub fn iter(&self) -> Box<dyn Iterator<Item = Duration> + Send> {
+    pub async fn run<F, Fut, T, E>(&self, mut f: F) -> Result<T, E>
+    where
+        F: FnMut() -> Fut + Send,
+        Fut: Future<Output = Result<T, E>> + Send,
+        T: Send,
+        E: std::fmt::Display + Send,
+    {
+        let mut delay = self.delay();
+        loop {
+            match f().await {
+                x @ Ok(_) => return x,
+                Err(e) => {
+                    warn!("retryable operation failed: {e}");
+                    if let Some(delay) = delay.next() {
+                        tokio::time::sleep(delay).await;
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    }
+
+    fn delay(&self) -> Box<dyn Iterator<Item = Duration> + Send> {
         match self {
             Self::ExponentialBackoff {
                 max_count,
@@ -78,37 +101,6 @@ impl From<&config::RetryStrategy> for RetryStrategy {
                 max_delay: Duration::from_secs(*max_delay_secs),
                 factor: *factor,
             },
-        }
-    }
-}
-
-#[tonic::async_trait]
-pub trait Retryable<F, Fut, T, E> {
-    async fn retry(self, strategy: RetryStrategy) -> Result<T, E>;
-}
-
-#[tonic::async_trait]
-impl<F, Fut, T, E> Retryable<F, Fut, T, E> for F
-where
-    F: FnMut() -> Fut + Send,
-    Fut: Future<Output = Result<T, E>> + Send,
-    T: Send,
-    E: std::fmt::Display + Send,
-{
-    async fn retry(mut self, strategy: RetryStrategy) -> Result<T, E> {
-        let mut delay = strategy.iter();
-        loop {
-            match self().await {
-                x @ Ok(_) => return x,
-                Err(e) => {
-                    warn!("retryable operation failed: {e}");
-                    if let Some(delay) = delay.next() {
-                        tokio::time::sleep(delay).await;
-                    } else {
-                        return Err(e);
-                    }
-                }
-            }
         }
     }
 }

@@ -12,7 +12,6 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::{debug, error, info, warn};
 use prost::Message;
 use sail_server::actor::{ActorAction, ActorContext};
-use sail_server::Retryable;
 use tokio::sync::oneshot;
 
 use crate::driver::state::TaskStatus;
@@ -50,12 +49,14 @@ impl WorkerActor {
         let client = self.driver_client();
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
-            let f = || {
-                let client = client.clone();
-                let host = host.clone();
-                async move { client.register_worker(worker_id, host, port).await }
-            };
-            if let Err(e) = f.retry(retry_strategy).await {
+            if let Err(e) = retry_strategy
+                .run(|| {
+                    let client = client.clone();
+                    let host = host.clone();
+                    async move { client.register_worker(worker_id, host, port).await }
+                })
+                .await
+            {
                 error!("failed to register worker with retries: {e}");
                 let _ = handle.send(WorkerEvent::Shutdown).await;
             }
@@ -165,16 +166,18 @@ impl WorkerActor {
         let handle = ctx.handle().clone();
         let retry_strategy = self.options().rpc_retry_strategy.clone();
         ctx.spawn(async move {
-            let f = || {
-                let client = client.clone();
-                let message = message.clone();
-                async move {
-                    client
-                        .report_task_status(task_id, attempt, status, message, sequence)
-                        .await
-                }
-            };
-            if let Err(e) = f.retry(retry_strategy).await {
+            if let Err(e) = retry_strategy
+                .run(|| {
+                    let client = client.clone();
+                    let message = message.clone();
+                    async move {
+                        client
+                            .report_task_status(task_id, attempt, status, message, sequence)
+                            .await
+                    }
+                })
+                .await
+            {
                 error!("failed to report task status with retries: {e}");
                 let _ = handle.send(WorkerEvent::Shutdown).await;
             }
