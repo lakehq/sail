@@ -73,9 +73,11 @@ impl DriverActor {
                             tasks: Default::default(),
                             jobs: Default::default(),
                             updated_at: Instant::now(),
+                            heartbeat_at: Instant::now(),
                         },
                         None,
                     );
+                    self.schedule_lost_worker_probe(ctx, worker_id);
                     self.schedule_idle_worker_probe(ctx, worker_id);
                     self.schedule_tasks(ctx);
                     Ok(())
@@ -98,6 +100,16 @@ impl DriverActor {
         if result.send(out).is_err() {
             warn!("failed to send worker registration result");
         }
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_worker_heartbeat(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+    ) -> ActorAction {
+        self.state.record_worker_heartbeat(worker_id);
+        self.schedule_lost_worker_probe(ctx, worker_id);
         ActorAction::Continue
     }
 
@@ -146,6 +158,30 @@ impl DriverActor {
             if tasks.is_empty() && jobs.is_empty() && updated_at.elapsed() > timeout {
                 let reason = format!("worker has been idle for {} second(s)", timeout.as_secs());
                 self.stop_worker(ctx, worker_id, Some(reason));
+            }
+        }
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_probe_lost_worker(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+    ) -> ActorAction {
+        let Some(worker) = self.state.get_worker(worker_id) else {
+            warn!("worker {worker_id} not found");
+            return ActorAction::Continue;
+        };
+        if let WorkerState::Running { heartbeat_at, .. } = &worker.state {
+            let timeout = self.options().worker_heartbeat_timeout;
+            if heartbeat_at.elapsed() > timeout {
+                warn!("worker {worker_id} heartbeat timeout");
+                let message = format!(
+                    "worker heartbeat timeout after {} second(s)",
+                    timeout.as_secs()
+                );
+                self.fail_tasks_for_worker(ctx, worker_id, message.clone());
+                self.stop_worker(ctx, worker_id, Some(message));
             }
         }
         ActorAction::Continue
@@ -347,6 +383,7 @@ impl DriverActor {
             } else {
                 port
             },
+            worker_heartbeat_interval: self.options().worker_heartbeat_interval,
             worker_stream_buffer: self.options().worker_stream_buffer,
         };
         let worker_manager = Arc::clone(&self.worker_manager);
@@ -440,6 +477,13 @@ impl DriverActor {
         ctx.send_with_delay(
             DriverEvent::ProbeIdleWorker { worker_id },
             self.options().worker_max_idle_time,
+        );
+    }
+
+    fn schedule_lost_worker_probe(&mut self, ctx: &mut ActorContext<Self>, worker_id: WorkerId) {
+        ctx.send_with_delay(
+            DriverEvent::ProbeLostWorker { worker_id },
+            self.options().worker_heartbeat_timeout,
         );
     }
 
@@ -835,6 +879,25 @@ impl DriverActor {
                 }
             }
         });
+    }
+
+    fn fail_tasks_for_worker(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+        reason: String,
+    ) {
+        let tasks = self
+            .state
+            .find_tasks_for_worker(worker_id)
+            .into_iter()
+            .map(|(task_id, task)| (task_id, task.attempt))
+            .collect::<Vec<_>>();
+        for (task_id, attempt) in tasks {
+            let reason =
+                format!("task {task_id} attempt {attempt} failed for worker {worker_id}: {reason}");
+            self.update_task(ctx, task_id, attempt, TaskStatus::Failed, Some(reason));
+        }
     }
 
     fn remove_worker_streams(

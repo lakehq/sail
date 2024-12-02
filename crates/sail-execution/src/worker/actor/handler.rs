@@ -9,7 +9,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use prost::Message;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
@@ -51,6 +51,25 @@ impl WorkerActor {
             if let Err(e) = client.register_worker(worker_id, host, port).await {
                 error!("failed to register worker: {e}");
                 let _ = handle.send(WorkerEvent::Shutdown).await;
+            }
+            if let Err(e) = handle.send(WorkerEvent::StartHeartbeat).await {
+                error!("failed to start worker heartbeat: {e}");
+                let _ = handle.send(WorkerEvent::Shutdown).await;
+            }
+        });
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_start_heartbeat(&mut self, ctx: &mut ActorContext<Self>) -> ActorAction {
+        let worker_id = self.options().worker_id;
+        let client = self.driver_client.clone();
+        let interval = self.options().worker_heartbeat_interval;
+        ctx.spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                if let Err(e) = client.report_worker_heartbeat(worker_id).await {
+                    warn!("failed to report worker heartbeat: {e}");
+                }
             }
         });
         ActorAction::Continue

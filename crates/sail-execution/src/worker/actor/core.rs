@@ -66,6 +66,7 @@ impl Actor for WorkerActor {
             WorkerEvent::ServerReady { port, signal } => {
                 self.handle_server_ready(ctx, port, signal)
             }
+            WorkerEvent::StartHeartbeat => self.handle_start_heartbeat(ctx),
             WorkerEvent::RunTask {
                 task_id,
                 attempt,

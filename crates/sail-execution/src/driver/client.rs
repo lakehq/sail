@@ -39,6 +39,20 @@ impl DriverClient {
         Ok(())
     }
 
+    pub async fn report_worker_heartbeat(&self, worker_id: WorkerId) -> ExecutionResult<()> {
+        let request = tonic::Request::new(gen::ReportWorkerHeartbeatRequest {
+            worker_id: worker_id.into(),
+        });
+        let response = self
+            .inner
+            .get()
+            .await?
+            .report_worker_heartbeat(request)
+            .await?;
+        let gen::ReportWorkerHeartbeatResponse {} = response.into_inner();
+        Ok(())
+    }
+
     pub async fn report_task_status(
         &self,
         task_id: TaskId,

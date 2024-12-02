@@ -16,6 +16,8 @@ pub struct DriverOptions {
     pub worker_max_count: usize,
     pub worker_task_slots: usize,
     pub worker_max_idle_time: Duration,
+    pub worker_heartbeat_interval: Duration,
+    pub worker_heartbeat_timeout: Duration,
     pub worker_launch_timeout: Duration,
     pub worker_stream_buffer: usize,
     pub task_launch_timeout: Duration,
@@ -59,6 +61,12 @@ impl TryFrom<&AppConfig> for DriverOptions {
             worker_max_count: config.cluster.worker_max_count,
             worker_task_slots: config.cluster.worker_task_slots,
             worker_max_idle_time: Duration::from_secs(config.cluster.worker_max_idle_time_secs),
+            worker_heartbeat_interval: Duration::from_secs(
+                config.cluster.worker_heartbeat_interval_secs,
+            ),
+            worker_heartbeat_timeout: Duration::from_secs(
+                config.cluster.worker_heartbeat_timeout_secs,
+            ),
             worker_launch_timeout: Duration::from_secs(config.cluster.worker_launch_timeout_secs),
             worker_stream_buffer: config.cluster.worker_stream_buffer,
             task_launch_timeout: Duration::from_secs(config.cluster.task_launch_timeout_secs),

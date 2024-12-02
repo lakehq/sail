@@ -76,11 +76,17 @@ impl Actor for DriverActor {
                 port,
                 result,
             } => self.handle_register_worker(ctx, worker_id, host, port, result),
+            DriverEvent::WorkerHeartbeat { worker_id } => {
+                self.handle_worker_heartbeat(ctx, worker_id)
+            }
             DriverEvent::ProbePendingWorker { worker_id } => {
                 self.handle_probe_pending_worker(ctx, worker_id)
             }
             DriverEvent::ProbeIdleWorker { worker_id } => {
                 self.handle_probe_idle_worker(ctx, worker_id)
+            }
+            DriverEvent::ProbeLostWorker { worker_id } => {
+                self.handle_probe_lost_worker(ctx, worker_id)
             }
             DriverEvent::ExecuteJob { plan, result } => self.handle_execute_job(ctx, plan, result),
             DriverEvent::RemoveJobOutput { job_id } => self.handle_remove_job_output(ctx, job_id),

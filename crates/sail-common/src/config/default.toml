@@ -14,10 +14,12 @@ worker_external_port = 0
 worker_initial_count = 4
 worker_max_count = 0
 worker_max_idle_time_secs = 300
+worker_heartbeat_interval_secs = 30
+worker_heartbeat_timeout_secs = 120
 worker_launch_timeout_secs = 300
 worker_task_slots = 8
 worker_stream_buffer = 16
-task_launch_timeout_secs = 600
+task_launch_timeout_secs = 300
 job_output_buffer = 16
 
 [execution]

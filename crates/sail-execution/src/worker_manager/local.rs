@@ -50,6 +50,7 @@ impl WorkerManager for LocalWorkerManager {
             worker_listen_port: 0,
             worker_external_host: "127.0.0.1".to_string(),
             worker_external_port: 0,
+            worker_heartbeat_interval: options.worker_heartbeat_interval,
             worker_stream_buffer: options.worker_stream_buffer,
         };
         let mut state = self.state.lock().await;

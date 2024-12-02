@@ -73,6 +73,8 @@ pub struct ClusterConfig {
     pub worker_initial_count: usize,
     pub worker_max_count: usize,
     pub worker_max_idle_time_secs: u64,
+    pub worker_heartbeat_interval_secs: u64,
+    pub worker_heartbeat_timeout_secs: u64,
     pub worker_launch_timeout_secs: u64,
     pub worker_task_slots: usize,
     pub worker_stream_buffer: usize,

@@ -14,6 +14,7 @@ pub enum WorkerEvent {
         port: u16,
         signal: oneshot::Sender<()>,
     },
+    StartHeartbeat,
     RunTask {
         task_id: TaskId,
         attempt: usize,
