@@ -143,11 +143,7 @@ impl KubernetesWorkerManager {
             },
             EnvVar {
                 name: ClusterConfigEnv::ENABLE_TLS.to_string(),
-                value: Some(if enable_tls {
-                    "true".to_string()
-                } else {
-                    "false".to_string()
-                }),
+                value: Some(enable_tls.to_string()),
                 value_from: None,
             },
             EnvVar {

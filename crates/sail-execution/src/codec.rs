@@ -1055,7 +1055,7 @@ impl RemoteExecutionCodec {
 
     fn try_decode_local_stream_storage(&self, storage: i32) -> Result<LocalStreamStorage> {
         let storage = gen::LocalStreamStorage::try_from(storage)
-            .map_err(|e| plan_datafusion_err!("failed to decode task stream storage: {e}"))?;
+            .map_err(|e| plan_datafusion_err!("failed to decode local stream storage: {e}"))?;
         let storage = match storage {
             gen::LocalStreamStorage::Ephemeral => LocalStreamStorage::Ephemeral,
             gen::LocalStreamStorage::Memory => LocalStreamStorage::Memory,
