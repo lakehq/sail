@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use sail_common::config::AppConfig;
+use sail_server::RetryStrategy;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::WorkerId;
@@ -17,6 +18,7 @@ pub struct WorkerOptions {
     pub worker_external_port: u16,
     pub worker_heartbeat_interval: Duration,
     pub worker_stream_buffer: usize,
+    pub rpc_retry_strategy: RetryStrategy,
 }
 
 impl TryFrom<&AppConfig> for WorkerOptions {
@@ -40,6 +42,7 @@ impl TryFrom<&AppConfig> for WorkerOptions {
                 config.cluster.worker_heartbeat_interval_secs,
             ),
             worker_stream_buffer: config.cluster.worker_stream_buffer,
+            rpc_retry_strategy: (&config.cluster.rpc_retry_strategy).into(),
         })
     }
 }

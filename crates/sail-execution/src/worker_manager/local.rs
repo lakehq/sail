@@ -52,6 +52,7 @@ impl WorkerManager for LocalWorkerManager {
             worker_external_port: 0,
             worker_heartbeat_interval: options.worker_heartbeat_interval,
             worker_stream_buffer: options.worker_stream_buffer,
+            rpc_retry_strategy: options.rpc_retry_strategy,
         };
         let mut state = self.state.lock().await;
         let handle = state.system.spawn(options);

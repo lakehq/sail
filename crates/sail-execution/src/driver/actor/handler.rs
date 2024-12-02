@@ -385,6 +385,7 @@ impl DriverActor {
             },
             worker_heartbeat_interval: self.options().worker_heartbeat_interval,
             worker_stream_buffer: self.options().worker_stream_buffer,
+            rpc_retry_strategy: self.options().rpc_retry_strategy.clone(),
         };
         let worker_manager = Arc::clone(&self.worker_manager);
         ctx.spawn(async move {
@@ -811,7 +812,7 @@ impl DriverActor {
                 let channel = channel.ok_or_else(|| {
                     ExecutionError::InternalError(format!("task channel is not set: {task_id}"))
                 })?;
-                let client = self.worker_client(worker_id)?.clone();
+                let client = self.worker_client(worker_id)?;
                 Ok((channel, client))
             })
             .collect::<ExecutionResult<Vec<_>>>();
@@ -907,7 +908,7 @@ impl DriverActor {
         job_id: JobId,
     ) {
         let client = match self.worker_client(worker_id) {
-            Ok(client) => client.clone(),
+            Ok(x) => x,
             Err(e) => {
                 warn!("failed to get worker client {worker_id}: {e}");
                 return;
@@ -940,7 +941,7 @@ impl DriverActor {
             WorkerState::Running { .. } => {
                 info!("stopping worker {worker_id}");
                 let client = match self.worker_client(worker_id) {
-                    Ok(client) => client.clone(),
+                    Ok(x) => x,
                     Err(e) => {
                         warn!("failed to stop worker {worker_id}: {e}");
                         return;

@@ -12,6 +12,7 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::{debug, error, info, warn};
 use prost::Message;
 use sail_server::actor::{ActorAction, ActorContext};
+use sail_server::Retryable;
 use tokio::sync::oneshot;
 
 use crate::driver::state::TaskStatus;
@@ -45,11 +46,17 @@ impl WorkerActor {
         } else {
             port
         };
-        let client = self.driver_client.clone();
+        let retry_strategy = self.options().rpc_retry_strategy.clone();
+        let client = self.driver_client();
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
-            if let Err(e) = client.register_worker(worker_id, host, port).await {
-                error!("failed to register worker: {e}");
+            let f = || {
+                let client = client.clone();
+                let host = host.clone();
+                async move { client.register_worker(worker_id, host, port).await }
+            };
+            if let Err(e) = f.retry(retry_strategy).await {
+                error!("failed to register worker with retries: {e}");
                 let _ = handle.send(WorkerEvent::Shutdown).await;
             }
             if let Err(e) = handle.send(WorkerEvent::StartHeartbeat).await {
@@ -62,13 +69,15 @@ impl WorkerActor {
 
     pub(super) fn handle_start_heartbeat(&mut self, ctx: &mut ActorContext<Self>) -> ActorAction {
         let worker_id = self.options().worker_id;
-        let client = self.driver_client.clone();
+        let client = self.driver_client();
         let interval = self.options().worker_heartbeat_interval;
         ctx.spawn(async move {
             loop {
                 tokio::time::sleep(interval).await;
                 if let Err(e) = client.report_worker_heartbeat(worker_id).await {
                     warn!("failed to report worker heartbeat: {e}");
+                    // We do not retry heartbeat since we will report heartbeat again after
+                    // the configured interval.
                 }
             }
         });
@@ -152,13 +161,22 @@ impl WorkerActor {
             Some(x) => x,
             None => return ActorAction::fail("sequence number overflow"),
         };
-        let client = self.driver_client.clone();
+        let client = self.driver_client();
+        let handle = ctx.handle().clone();
+        let retry_strategy = self.options().rpc_retry_strategy.clone();
         ctx.spawn(async move {
-            if let Err(e) = client
-                .report_task_status(task_id, attempt, status, message, sequence)
-                .await
-            {
-                error!("failed to report task status: {e}");
+            let f = || {
+                let client = client.clone();
+                let message = message.clone();
+                async move {
+                    client
+                        .report_task_status(task_id, attempt, status, message, sequence)
+                        .await
+                }
+            };
+            if let Err(e) = f.retry(retry_strategy).await {
+                error!("failed to report task status with retries: {e}");
+                let _ = handle.send(WorkerEvent::Shutdown).await;
             }
         });
         ActorAction::Continue

@@ -51,10 +51,18 @@ impl AppConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "snake_case")]
 pub enum ExecutionMode {
     Local,
+    #[serde(alias = "local-cluster")]
     LocalCluster,
+    #[serde(
+        alias = "kubernetes-cluster",
+        alias = "k8s-cluster",
+        alias = "k8s_cluster",
+        alias = "kube-cluster",
+        alias = "kube_cluster"
+    )]
     KubernetesCluster,
 }
 
@@ -80,6 +88,22 @@ pub struct ClusterConfig {
     pub worker_stream_buffer: usize,
     pub task_launch_timeout_secs: u64,
     pub job_output_buffer: usize,
+    pub rpc_retry_strategy: RetryStrategy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetryStrategy {
+    Fixed {
+        max_count: usize,
+        delay_secs: u64,
+    },
+    ExponentialBackoff {
+        max_count: usize,
+        initial_delay_secs: u64,
+        max_delay_secs: u64,
+        factor: u32,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,11 +134,22 @@ pub struct KubernetesConfig {
 /// Environment variables for application cluster configuration.
 pub struct ClusterConfigEnv;
 
+macro_rules! define_cluster_config_env {
+    ($($name:ident),* $(,)?) => {
+        $(pub const $name: &'static str = concat!("SAIL_CLUSTER__", stringify!($name));)*
+    };
+}
+
 impl ClusterConfigEnv {
-    pub const ENABLE_TLS: &'static str = "SAIL_CLUSTER__ENABLE_TLS";
-    pub const WORKER_ID: &'static str = "SAIL_CLUSTER__WORKER_ID";
-    pub const WORKER_LISTEN_HOST: &'static str = "SAIL_CLUSTER__WORKER_LISTEN_HOST";
-    pub const WORKER_EXTERNAL_HOST: &'static str = "SAIL_CLUSTER__WORKER_EXTERNAL_HOST";
-    pub const DRIVER_EXTERNAL_HOST: &'static str = "SAIL_CLUSTER__DRIVER_EXTERNAL_HOST";
-    pub const DRIVER_EXTERNAL_PORT: &'static str = "SAIL_CLUSTER__DRIVER_EXTERNAL_PORT";
+    define_cluster_config_env! {
+        ENABLE_TLS,
+        DRIVER_EXTERNAL_HOST,
+        DRIVER_EXTERNAL_PORT,
+        WORKER_ID,
+        WORKER_LISTEN_HOST,
+        WORKER_EXTERNAL_HOST,
+        WORKER_HEARTBEAT_INTERVAL_SECS,
+        WORKER_STREAM_BUFFER,
+        RPC_RETRY_STRATEGY,
+    }
 }

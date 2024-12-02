@@ -1,19 +1,11 @@
 mod kubernetes;
 mod local;
+mod options;
 
-use std::time::Duration;
+pub(crate) use options::WorkerLaunchOptions;
 
 use crate::error::ExecutionResult;
 use crate::id::WorkerId;
-
-#[derive(Debug)]
-pub struct WorkerLaunchOptions {
-    pub enable_tls: bool,
-    pub driver_external_host: String,
-    pub driver_external_port: u16,
-    pub worker_heartbeat_interval: Duration,
-    pub worker_stream_buffer: usize,
-}
 
 #[tonic::async_trait]
 pub trait WorkerManager: Send + Sync + 'static {

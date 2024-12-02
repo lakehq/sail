@@ -9,6 +9,7 @@ use tokio::sync::oneshot;
 
 use crate::codec::RemoteExecutionCodec;
 use crate::driver::DriverClient;
+use crate::error::ExecutionResult;
 use crate::id::{TaskAttempt, WorkerId};
 use crate::rpc::{ClientOptions, ServerMonitor};
 use crate::stream::ChannelName;
@@ -20,8 +21,8 @@ use crate::worker::WorkerClient;
 pub struct WorkerActor {
     options: WorkerOptions,
     pub(super) server: ServerMonitor,
-    pub(super) driver_client: DriverClient,
-    pub(super) worker_clients: HashMap<WorkerId, WorkerClient>,
+    driver_client: DriverClient,
+    worker_clients: HashMap<WorkerId, WorkerClient>,
     pub(super) task_signals: HashMap<TaskAttempt, oneshot::Sender<()>>,
     pub(super) local_streams: HashMap<ChannelName, Box<dyn LocalStream>>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
@@ -128,5 +129,28 @@ impl Actor for WorkerActor {
 impl WorkerActor {
     pub(super) fn options(&self) -> &WorkerOptions {
         &self.options
+    }
+
+    pub(super) fn driver_client(&mut self) -> DriverClient {
+        self.driver_client.clone()
+    }
+
+    pub(super) fn worker_client(
+        &mut self,
+        id: WorkerId,
+        host: String,
+        port: u16,
+    ) -> ExecutionResult<WorkerClient> {
+        let enable_tls = self.options().enable_tls;
+        let options = ClientOptions {
+            enable_tls,
+            host,
+            port,
+        };
+        let client = self
+            .worker_clients
+            .entry(id)
+            .or_insert_with(|| WorkerClient::new(options));
+        Ok(client.clone())
     }
 }
