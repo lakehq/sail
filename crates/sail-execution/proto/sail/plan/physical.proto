@@ -302,7 +302,7 @@ message TaskWriteLocation {
 
 message TaskWriteLocationLocal {
   string channel = 1;
-  TaskStreamStorage storage = 2;
+  LocalStreamStorage storage = 2;
 }
 
 message TaskWriteLocationRemote {
@@ -314,10 +314,10 @@ enum ShuffleConsumption {
   SHUFFLE_CONSUMPTION_MULTIPLE = 1;
 }
 
-enum TaskStreamStorage {
-  TASK_STREAM_STORAGE_EPHEMERAL = 0;
-  TASK_STREAM_STORAGE_MEMORY = 1;
-  TASK_STREAM_STORAGE_DISK = 2;
+enum LocalStreamStorage {
+  LOCAL_STREAM_STORAGE_EPHEMERAL = 0;
+  LOCAL_STREAM_STORAGE_MEMORY = 1;
+  LOCAL_STREAM_STORAGE_DISK = 2;
 }
 
 enum CompressionTypeVariant {

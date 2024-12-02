@@ -18,7 +18,7 @@ use crate::driver::state::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskAttempt, TaskId, WorkerId};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
-use crate::stream::{ChannelName, RecordBatchStreamWriter, TaskStreamStorage};
+use crate::stream::{ChannelName, LocalStreamStorage, RecordBatchStreamWriter};
 use crate::worker::actor::core::WorkerActor;
 use crate::worker::actor::local_stream::{EphemeralStream, LocalStream, MemoryStream};
 use crate::worker::actor::stream_accessor::WorkerStreamAccessor;
@@ -149,17 +149,17 @@ impl WorkerActor {
         &mut self,
         ctx: &mut ActorContext<Self>,
         channel: ChannelName,
-        storage: TaskStreamStorage,
+        storage: LocalStreamStorage,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<Box<dyn RecordBatchStreamWriter>>>,
     ) -> ActorAction {
         let mut stream: Box<dyn LocalStream> = match storage {
-            TaskStreamStorage::Ephemeral => Box::new(EphemeralStream::new(
+            LocalStreamStorage::Ephemeral => Box::new(EphemeralStream::new(
                 self.options().worker_stream_buffer,
                 schema,
             )),
-            TaskStreamStorage::Memory => Box::new(MemoryStream::new(schema)),
-            TaskStreamStorage::Disk => {
+            LocalStreamStorage::Memory => Box::new(MemoryStream::new(schema)),
+            LocalStreamStorage::Disk => {
                 return ActorAction::fail("not implemented: create disk stream")
             }
         };
