@@ -36,3 +36,6 @@ image_pull_policy = "IfNotPresent"
 namespace = "default"
 driver_pod_name = ""
 worker_pod_name_prefix = "sail-worker-"
+
+[spark]
+session_timeout_secs = 300

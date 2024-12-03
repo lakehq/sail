@@ -3,7 +3,7 @@ use std::mem;
 
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
-use log::debug;
+use log::info;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
@@ -122,7 +122,7 @@ impl Actor for WorkerActor {
 
     async fn stop(self, _ctx: &mut ActorContext<Self>) {
         self.server.stop().await;
-        debug!("worker {} server has stopped", self.options.worker_id);
+        info!("worker {} server has stopped", self.options.worker_id);
     }
 }
 

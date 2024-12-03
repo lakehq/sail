@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
-use log::{debug, error};
+use log::{error, info};
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 
 use crate::codec::RemoteExecutionCodec;
@@ -83,11 +83,11 @@ impl Actor for DriverActor {
             DriverEvent::ProbePendingWorker { worker_id } => {
                 self.handle_probe_pending_worker(ctx, worker_id)
             }
-            DriverEvent::ProbeIdleWorker { worker_id } => {
-                self.handle_probe_idle_worker(ctx, worker_id)
+            DriverEvent::ProbeIdleWorker { worker_id, instant } => {
+                self.handle_probe_idle_worker(ctx, worker_id, instant)
             }
-            DriverEvent::ProbeLostWorker { worker_id } => {
-                self.handle_probe_lost_worker(ctx, worker_id)
+            DriverEvent::ProbeLostWorker { worker_id, instant } => {
+                self.handle_probe_lost_worker(ctx, worker_id, instant)
             }
             DriverEvent::ExecuteJob { plan, result } => self.handle_execute_job(ctx, plan, result),
             DriverEvent::RemoveJobOutput { job_id } => self.handle_remove_job_output(ctx, job_id),
@@ -98,8 +98,8 @@ impl Actor for DriverActor {
                 message,
                 sequence,
             } => self.handle_update_task(ctx, task_id, attempt, status, message, sequence),
-            DriverEvent::ProbePendingTask { task_id } => {
-                self.handle_probe_pending_task(ctx, task_id)
+            DriverEvent::ProbePendingTask { task_id, attempt } => {
+                self.handle_probe_pending_task(ctx, task_id, attempt)
             }
             DriverEvent::Shutdown => ActorAction::Stop,
         }
@@ -107,8 +107,9 @@ impl Actor for DriverActor {
 
     async fn stop(mut self, ctx: &mut ActorContext<Self>) {
         self.stop_all_workers(ctx);
+        info!("stopping driver server");
         self.server.stop().await;
-        debug!("driver server has stopped");
+        info!("driver server has stopped");
         // TODO: support timeout for worker manager stop
         if let Err(e) = self.worker_manager.stop().await {
             error!("encountered error while stopping workers: {e}");

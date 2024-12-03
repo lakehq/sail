@@ -64,7 +64,7 @@ impl DriverActor {
         info!("worker {worker_id} is available at {host}:{port}");
         let out = if let Some(worker) = self.state.get_worker(worker_id) {
             match worker.state {
-                WorkerState::Pending { .. } => {
+                WorkerState::Pending => {
                     self.state.update_worker(
                         worker_id,
                         WorkerState::Running {
@@ -122,18 +122,12 @@ impl DriverActor {
             warn!("worker {worker_id} not found");
             return ActorAction::Continue;
         };
-        let timeout = self.options().worker_launch_timeout;
-        if let WorkerState::Pending { pending_at } = &worker.state {
-            if pending_at.elapsed() > timeout {
-                warn!("worker {worker_id} registration timeout");
-                let message = format!(
-                    "worker registration timeout after {} second(s)",
-                    timeout.as_secs()
-                );
-                self.state
-                    .update_worker(worker_id, WorkerState::Failed, Some(message));
-                self.scale_up_workers(ctx);
-            }
+        if matches!(&worker.state, WorkerState::Pending) {
+            warn!("worker {worker_id} registration timeout");
+            let message = "worker registration timeout".to_string();
+            self.state
+                .update_worker(worker_id, WorkerState::Failed, Some(message));
+            self.scale_up_workers(ctx);
         }
         ActorAction::Continue
     }
@@ -142,6 +136,7 @@ impl DriverActor {
         &mut self,
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
+        instant: Instant,
     ) -> ActorAction {
         let Some(worker) = self.state.get_worker(worker_id) else {
             warn!("worker {worker_id} not found");
@@ -154,9 +149,8 @@ impl DriverActor {
             ..
         } = &worker.state
         {
-            let timeout = self.options().worker_max_idle_time;
-            if tasks.is_empty() && jobs.is_empty() && updated_at.elapsed() > timeout {
-                let reason = format!("worker has been idle for {} second(s)", timeout.as_secs());
+            if tasks.is_empty() && jobs.is_empty() && *updated_at <= instant {
+                let reason = "worker has been idle for too long".to_string();
                 self.stop_worker(ctx, worker_id, Some(reason));
             }
         }
@@ -167,19 +161,16 @@ impl DriverActor {
         &mut self,
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
+        instant: Instant,
     ) -> ActorAction {
         let Some(worker) = self.state.get_worker(worker_id) else {
             warn!("worker {worker_id} not found");
             return ActorAction::Continue;
         };
         if let WorkerState::Running { heartbeat_at, .. } = &worker.state {
-            let timeout = self.options().worker_heartbeat_timeout;
-            if heartbeat_at.elapsed() > timeout {
+            if *heartbeat_at <= instant {
                 warn!("worker {worker_id} heartbeat timeout");
-                let message = format!(
-                    "worker heartbeat timeout after {} second(s)",
-                    timeout.as_secs()
-                );
+                let message = "worker heartbeat timeout ".to_string();
                 self.fail_tasks_for_worker(ctx, worker_id, message.clone());
                 self.stop_worker(ctx, worker_id, Some(message));
             }
@@ -249,26 +240,21 @@ impl DriverActor {
         &mut self,
         ctx: &mut ActorContext<Self>,
         task_id: TaskId,
+        attempt: usize,
     ) -> ActorAction {
         let Some(task) = self.state.get_task(task_id) else {
             warn!("task {task_id} not found");
             return ActorAction::Continue;
         };
-        if let TaskState::Pending { pending_at } = &task.state {
-            let timeout = self.options().task_launch_timeout;
-            if pending_at.elapsed() > timeout {
-                let message = format!(
-                    "task scheduling timeout after {} second(s)",
-                    timeout.as_secs()
-                );
-                self.update_task(
-                    ctx,
-                    task_id,
-                    task.attempt,
-                    TaskStatus::Failed,
-                    Some(message),
-                );
-            }
+        if task.attempt == attempt && matches!(&task.state, TaskState::Pending) {
+            let message = "task scheduling timeout ".to_string();
+            self.update_task(
+                ctx,
+                task_id,
+                task.attempt,
+                TaskStatus::Failed,
+                Some(message),
+            );
         }
         ActorAction::Continue
     }
@@ -356,9 +342,7 @@ impl DriverActor {
         };
         for &worker_id in worker_ids.iter() {
             let descriptor = WorkerDescriptor {
-                state: WorkerState::Pending {
-                    pending_at: Instant::now(),
-                },
+                state: WorkerState::Pending,
                 messages: vec![],
             };
             self.state.add_worker(worker_id, descriptor);
@@ -475,15 +459,37 @@ impl DriverActor {
     }
 
     fn schedule_idle_worker_probe(&mut self, ctx: &mut ActorContext<Self>, worker_id: WorkerId) {
+        let Some(worker) = self.state.get_worker(worker_id) else {
+            warn!("worker {worker_id} not found");
+            return;
+        };
+        let WorkerState::Running { updated_at, .. } = &worker.state else {
+            warn!("worker {worker_id} is not running");
+            return;
+        };
         ctx.send_with_delay(
-            DriverEvent::ProbeIdleWorker { worker_id },
+            DriverEvent::ProbeIdleWorker {
+                worker_id,
+                instant: *updated_at,
+            },
             self.options().worker_max_idle_time,
         );
     }
 
     fn schedule_lost_worker_probe(&mut self, ctx: &mut ActorContext<Self>, worker_id: WorkerId) {
+        let Some(worker) = self.state.get_worker(worker_id) else {
+            warn!("worker {worker_id} not found");
+            return;
+        };
+        let WorkerState::Running { heartbeat_at, .. } = &worker.state else {
+            warn!("worker {worker_id} is not running");
+            return;
+        };
         ctx.send_with_delay(
-            DriverEvent::ProbeLostWorker { worker_id },
+            DriverEvent::ProbeLostWorker {
+                worker_id,
+                instant: *heartbeat_at,
+            },
             self.options().worker_heartbeat_timeout,
         );
     }
@@ -551,16 +557,11 @@ impl DriverActor {
             )));
         };
         if matches!(task.state, TaskState::Created) {
-            self.state.update_task(
-                task_id,
-                task.attempt,
-                TaskState::Pending {
-                    pending_at: Instant::now(),
-                },
-                None,
-            );
+            let attempt = task.attempt;
+            self.state
+                .update_task(task_id, attempt, TaskState::Pending, None);
             ctx.send_with_delay(
-                DriverEvent::ProbePendingTask { task_id },
+                DriverEvent::ProbePendingTask { task_id, attempt },
                 self.options().task_launch_timeout,
             );
         };
@@ -591,7 +592,7 @@ impl DriverActor {
             )));
         };
         match task.state {
-            TaskState::Pending { .. } => {}
+            TaskState::Pending => {}
             _ => {
                 return Err(ExecutionError::InternalError(format!(
                     "task {task_id} cannot be scheduled in its current state"
@@ -933,7 +934,7 @@ impl DriverActor {
             return;
         };
         match worker.state {
-            WorkerState::Pending { .. } => {
+            WorkerState::Pending => {
                 warn!("trying to stop pending worker {worker_id}");
                 self.state
                     .update_worker(worker_id, WorkerState::Stopped, reason);

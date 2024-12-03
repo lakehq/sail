@@ -64,10 +64,6 @@ impl SparkError {
         SparkError::InvalidArgument(message.into())
     }
 
-    pub fn send(message: impl Into<String>) -> Self {
-        SparkError::SendError(message.into())
-    }
-
     pub fn internal(message: impl Into<String>) -> Self {
         SparkError::InternalError(message.into())
     }

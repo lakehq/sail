@@ -251,7 +251,7 @@ impl DriverState {
             .filter(|worker| {
                 matches!(
                     worker.state,
-                    WorkerState::Pending { .. } | WorkerState::Running { .. }
+                    WorkerState::Pending | WorkerState::Running { .. }
                 )
             })
             .count()
@@ -272,7 +272,7 @@ impl DriverState {
     pub fn count_pending_tasks(&self) -> usize {
         self.tasks
             .values()
-            .filter(|task| matches!(task.state, TaskState::Created | TaskState::Pending { .. }))
+            .filter(|task| matches!(task.state, TaskState::Created | TaskState::Pending))
             .count()
     }
 }
@@ -285,9 +285,7 @@ pub struct WorkerDescriptor {
 
 #[derive(Debug)]
 pub enum WorkerState {
-    Pending {
-        pending_at: Instant,
-    },
+    Pending,
     Running {
         host: String,
         port: u16,
@@ -346,10 +344,7 @@ pub enum TaskState {
     /// The task has been created, but may not be eligible for scheduling.
     Created,
     /// The task is eligible for scheduling, but is not assigned to any worker.
-    Pending {
-        /// The time when the current task attempt becomes pending.
-        pending_at: Instant,
-    },
+    Pending,
     /// The task is scheduled to a worker, but its status is unknown.
     Scheduled {
         /// The worker ID to schedule the current task attempt.
@@ -375,7 +370,7 @@ impl TaskState {
     pub fn run(&self) -> Option<TaskState> {
         match self {
             TaskState::Created => None,
-            TaskState::Pending { .. } => None,
+            TaskState::Pending => None,
             TaskState::Scheduled { worker_id } => Some(TaskState::Running {
                 worker_id: *worker_id,
             }),
@@ -389,7 +384,7 @@ impl TaskState {
     pub fn succeed(&self) -> Option<TaskState> {
         match self {
             TaskState::Created => None,
-            TaskState::Pending { .. } => None,
+            TaskState::Pending => None,
             TaskState::Scheduled { worker_id } | TaskState::Running { worker_id } => {
                 Some(TaskState::Succeeded {
                     worker_id: *worker_id,
