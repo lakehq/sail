@@ -14,6 +14,7 @@ pub struct AppConfig {
     pub execution: ExecutionConfig,
     pub kubernetes: KubernetesConfig,
     pub parquet: ParquetConfig,
+    pub spark: SparkConfig,
     /// Reserved for internal use.
     /// This field ensures that environment variables with prefix `SAIL_INTERNAL_`
     /// can only be used for internal configuration.
@@ -112,12 +113,6 @@ pub struct ExecutionConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ParquetConfig {
-    pub maximum_parallel_row_group_writers: usize,
-    pub maximum_buffered_record_batches_per_stream: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KubernetesConfig {
     pub image: String,
     pub image_pull_policy: String,
@@ -129,6 +124,17 @@ pub struct KubernetesConfig {
     /// The prefix of the name of worker pods.
     /// This should usually end with a hyphen (`-`).
     pub worker_pod_name_prefix: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParquetConfig {
+    pub maximum_parallel_row_group_writers: usize,
+    pub maximum_buffered_record_batches_per_stream: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SparkConfig {
+    pub session_timeout_secs: u64,
 }
 
 /// Environment variables for application cluster configuration.

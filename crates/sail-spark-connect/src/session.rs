@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use datafusion::prelude::SessionContext;
 use sail_execution::job::JobRunner;
 use sail_plan::config::PlanConfig;
+use tokio::time::Instant;
 
 use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
 use crate::error::{SparkError, SparkResult};
@@ -175,11 +176,24 @@ impl SparkExtension {
     pub(crate) fn job_runner(&self) -> &dyn JobRunner {
         self.job_runner.as_ref()
     }
+
+    pub(crate) fn track_activity(&self) -> SparkResult<Instant> {
+        let mut state = self.state.lock()?;
+        state.active_at = Instant::now();
+        Ok(state.active_at)
+    }
+
+    pub(crate) fn active_at(&self) -> SparkResult<Instant> {
+        let state = self.state.lock()?;
+        Ok(state.active_at)
+    }
 }
 
 struct SparkExtensionState {
     config: SparkRuntimeConfig,
     executors: HashMap<String, Arc<Executor>>,
+    /// The time when the Spark session is last seen as active.
+    active_at: Instant,
 }
 
 impl SparkExtensionState {
@@ -187,6 +201,7 @@ impl SparkExtensionState {
         Self {
             config: SparkRuntimeConfig::new(),
             executors: HashMap::new(),
+            active_at: Instant::now(),
         }
     }
 }
