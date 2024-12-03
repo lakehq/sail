@@ -12,7 +12,6 @@ use crate::driver::DriverEvent;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::WorkerId;
 use crate::rpc::ClientOptions;
-use crate::worker::WorkerClient;
 
 impl DriverActor {
     pub(super) async fn serve(
@@ -44,7 +43,7 @@ impl DriverActor {
             .map_err(|e| ExecutionError::InternalError(e.to_string()))
     }
 
-    pub(super) fn worker_client(&mut self, id: WorkerId) -> ExecutionResult<&WorkerClient> {
+    pub(super) fn worker_client_options(&mut self, id: WorkerId) -> ExecutionResult<ClientOptions> {
         let worker = self
             .state
             .get_worker(id)
@@ -58,14 +57,10 @@ impl DriverActor {
             }
         };
         let enable_tls = self.options().enable_tls;
-        let client = self.worker_clients.entry(id).or_insert_with(|| {
-            let options = ClientOptions {
-                enable_tls,
-                host,
-                port,
-            };
-            WorkerClient::new(options)
-        });
-        Ok(client)
+        Ok(ClientOptions {
+            enable_tls,
+            host,
+            port,
+        })
     }
 }

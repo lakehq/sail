@@ -14,8 +14,8 @@ use crate::rpc::{ClientHandle, ClientOptions};
 use crate::stream::ChannelName;
 use crate::worker::gen::worker_service_client::WorkerServiceClient;
 use crate::worker::gen::{
-    RunTaskRequest, RunTaskResponse, StopTaskRequest, StopTaskResponse, StopWorkerRequest,
-    StopWorkerResponse, TaskStreamTicket,
+    RemoveStreamRequest, RemoveStreamResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
+    StopTaskResponse, StopWorkerRequest, StopWorkerResponse, TaskStreamTicket,
 };
 
 #[derive(Debug, Clone)]
@@ -50,7 +50,7 @@ impl WorkerClient {
             partition: partition as u64,
             channel: channel.map(|x| x.into()),
         };
-        let response = self.client.lock().await?.run_task(request).await?;
+        let response = self.client.get().await?.run_task(request).await?;
         let RunTaskResponse {} = response.into_inner();
         Ok(())
     }
@@ -60,7 +60,7 @@ impl WorkerClient {
             task_id: task_id.into(),
             attempt: attempt as u64,
         };
-        let response = self.client.lock().await?.stop_task(request).await?;
+        let response = self.client.get().await?.stop_task(request).await?;
         let StopTaskResponse {} = response.into_inner();
         Ok(())
     }
@@ -81,16 +81,23 @@ impl WorkerClient {
         let request = arrow_flight::Ticket {
             ticket: ticket.into(),
         };
-        let response = self.flight_client.lock().await?.do_get(request).await?;
+        let response = self.flight_client.get().await?.do_get(request).await?;
         let stream = response.into_inner().map_err(|e| e.into());
         let stream = FlightRecordBatchStream::new_from_flight_data(stream)
             .map_err(|e| exec_datafusion_err!("{e}"));
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 
+    pub async fn remove_stream(&self, channel_prefix: String) -> ExecutionResult<()> {
+        let request = RemoveStreamRequest { channel_prefix };
+        let response = self.client.get().await?.remove_stream(request).await?;
+        let RemoveStreamResponse {} = response.into_inner();
+        Ok(())
+    }
+
     pub async fn stop_worker(&self) -> ExecutionResult<()> {
         let request = StopWorkerRequest {};
-        let response = self.client.lock().await?.stop_worker(request).await?;
+        let response = self.client.get().await?.stop_worker(request).await?;
         let StopWorkerResponse {} = response.into_inner();
         Ok(())
     }

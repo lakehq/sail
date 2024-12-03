@@ -1,12 +1,11 @@
-use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use datafusion::execution::SendableRecordBatchStream;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 use crate::driver::state::TaskStatus;
 use crate::error::ExecutionResult;
 use crate::id::{TaskId, WorkerId};
-use crate::stream::ChannelName;
+use crate::stream::{ChannelName, LocalStreamStorage, RecordBatchStreamWriter};
 
 pub enum WorkerEvent {
     ServerReady {
@@ -15,6 +14,7 @@ pub enum WorkerEvent {
         port: u16,
         signal: oneshot::Sender<()>,
     },
+    StartHeartbeat,
     RunTask {
         task_id: TaskId,
         attempt: usize,
@@ -32,22 +32,36 @@ pub enum WorkerEvent {
         status: TaskStatus,
         message: Option<String>,
     },
-    CreateMemoryTaskStream {
+    CreateLocalStream {
         channel: ChannelName,
+        storage: LocalStreamStorage,
         schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<mpsc::Sender<RecordBatch>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn RecordBatchStreamWriter>>>,
     },
-    FetchThisWorkerTaskStream {
+    CreateRemoteStream {
+        uri: String,
+        schema: SchemaRef,
+        result: oneshot::Sender<ExecutionResult<Box<dyn RecordBatchStreamWriter>>>,
+    },
+    FetchThisWorkerStream {
         channel: ChannelName,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     },
-    FetchOtherWorkerTaskStream {
+    FetchOtherWorkerStream {
         worker_id: WorkerId,
         host: String,
         port: u16,
         channel: ChannelName,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
+    },
+    FetchRemoteStream {
+        uri: String,
+        schema: SchemaRef,
+        result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
+    },
+    RemoveLocalStream {
+        channel_prefix: String,
     },
     Shutdown,
 }

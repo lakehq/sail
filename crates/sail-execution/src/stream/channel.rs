@@ -12,6 +12,10 @@ impl ChannelName {
     pub fn new(name: impl Into<String>) -> Self {
         Self(name.into())
     }
+
+    pub fn has_prefix(&self, prefix: &str) -> bool {
+        self.0.starts_with(prefix)
+    }
 }
 
 impl From<String> for ChannelName {

@@ -11,6 +11,7 @@ use crate::codec::RemoteExecutionCodec;
 use crate::driver::actor::output::JobOutput;
 use crate::driver::state::DriverState;
 use crate::driver::{DriverEvent, DriverOptions, WorkerManagerOptions};
+use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskId, WorkerId};
 use crate::rpc::ServerMonitor;
 use crate::worker::WorkerClient;
@@ -21,7 +22,7 @@ pub struct DriverActor {
     pub(super) state: DriverState,
     pub(super) server: ServerMonitor,
     pub(super) worker_manager: Arc<dyn WorkerManager>,
-    pub(super) worker_clients: HashMap<WorkerId, WorkerClient>,
+    worker_clients: HashMap<WorkerId, WorkerClient>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
     /// The queue of tasks that need to be scheduled.
     /// A task is enqueued after all its dependencies in the previous job stage.
@@ -76,11 +77,17 @@ impl Actor for DriverActor {
                 port,
                 result,
             } => self.handle_register_worker(ctx, worker_id, host, port, result),
+            DriverEvent::WorkerHeartbeat { worker_id } => {
+                self.handle_worker_heartbeat(ctx, worker_id)
+            }
             DriverEvent::ProbePendingWorker { worker_id } => {
                 self.handle_probe_pending_worker(ctx, worker_id)
             }
             DriverEvent::ProbeIdleWorker { worker_id } => {
                 self.handle_probe_idle_worker(ctx, worker_id)
+            }
+            DriverEvent::ProbeLostWorker { worker_id } => {
+                self.handle_probe_lost_worker(ctx, worker_id)
             }
             DriverEvent::ExecuteJob { plan, result } => self.handle_execute_job(ctx, plan, result),
             DriverEvent::RemoveJobOutput { job_id } => self.handle_remove_job_output(ctx, job_id),
@@ -112,5 +119,14 @@ impl Actor for DriverActor {
 impl DriverActor {
     pub(super) fn options(&self) -> &DriverOptions {
         &self.options
+    }
+
+    pub(super) fn worker_client(&mut self, id: WorkerId) -> ExecutionResult<WorkerClient> {
+        let options = self.worker_client_options(id)?;
+        let client = self
+            .worker_clients
+            .entry(id)
+            .or_insert_with(|| WorkerClient::new(options));
+        Ok(client.clone())
     }
 }

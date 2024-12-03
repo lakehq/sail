@@ -75,6 +75,16 @@ impl DriverState {
         worker.state = state;
     }
 
+    pub fn record_worker_heartbeat(&mut self, worker_id: WorkerId) {
+        let Some(worker) = self.workers.get_mut(&worker_id) else {
+            warn!("worker {worker_id} not found");
+            return;
+        };
+        if let WorkerState::Running { heartbeat_at, .. } = &mut worker.state {
+            *heartbeat_at = Instant::now();
+        }
+    }
+
     pub fn add_job(&mut self, job_id: JobId, descriptor: JobDescriptor) {
         self.jobs.insert(job_id, descriptor);
     }
@@ -179,6 +189,20 @@ impl DriverState {
         out
     }
 
+    pub fn find_tasks_for_worker(&self, worker_id: WorkerId) -> Vec<(TaskId, &TaskDescriptor)> {
+        let Some(worker) = self.workers.get(&worker_id) else {
+            warn!("worker {worker_id} not found");
+            return vec![];
+        };
+        match &worker.state {
+            WorkerState::Running { tasks, .. } => tasks
+                .iter()
+                .filter_map(|task_id| self.tasks.get(task_id).map(|task| (*task_id, task)))
+                .collect(),
+            _ => vec![],
+        }
+    }
+
     pub fn update_task(
         &mut self,
         task_id: TaskId,
@@ -276,6 +300,7 @@ pub enum WorkerState {
         /// The worker needs to be running for shuffle stream or job output stream consumption.
         jobs: HashSet<JobId>,
         updated_at: Instant,
+        heartbeat_at: Instant,
     },
     Stopped,
     Failed,

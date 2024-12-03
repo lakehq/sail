@@ -85,8 +85,8 @@ use crate::plan::gen::extended_scalar_udf::UdfKind;
 use crate::plan::gen::{
     ExtendedAggregateUdf, ExtendedMapIterUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf,
 };
-use crate::plan::{gen, ShuffleReadExec, ShuffleWriteExec};
-use crate::stream::{TaskReadLocation, TaskWriteLocation};
+use crate::plan::{gen, ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
+use crate::stream::{LocalStreamStorage, TaskReadLocation, TaskWriteLocation};
 
 pub struct RemoteExecutionCodec {
     context: SessionContext,
@@ -197,16 +197,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 stage,
                 plan,
                 partitioning,
+                consumption,
                 locations,
             }) => {
                 let plan = self.try_decode_plan(&plan, registry)?;
                 let partitioning =
                     self.try_decode_partitioning(&partitioning, registry, &plan.schema())?;
+                let consumption = self.try_decode_shuffle_consumption(consumption)?;
                 let locations = locations
                     .into_iter()
                     .map(|x| self.try_decode_task_write_location_list(x))
                     .collect::<Result<_>>()?;
-                let node = ShuffleWriteExec::new(stage as usize, plan, partitioning);
+                let node = ShuffleWriteExec::new(stage as usize, plan, partitioning, consumption);
                 let node = node.with_locations(locations);
                 Ok(Arc::new(node))
             }
@@ -415,8 +417,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 locations,
             })
         } else if let Some(shuffle_write) = node.as_any().downcast_ref::<ShuffleWriteExec>() {
+            let plan = self.try_encode_plan(shuffle_write.plan().clone())?;
             let partitioning =
                 self.try_encode_partitioning(shuffle_write.shuffle_partitioning())?;
+            let consumption = self.try_encode_shuffle_consumption(shuffle_write.consumption())?;
             let locations = shuffle_write
                 .locations()
                 .iter()
@@ -424,8 +428,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .collect::<Result<_>>()?;
             NodeKind::ShuffleWrite(gen::ShuffleWriteExecNode {
                 stage: shuffle_write.stage() as u64,
-                plan: self.try_encode_plan(shuffle_write.plan().clone())?,
+                plan,
                 partitioning,
+                consumption,
                 locations,
             })
         } else if let Some(memory) = node.as_any().downcast_ref::<MemoryExec>() {
@@ -1030,6 +1035,44 @@ impl RemoteExecutionCodec {
         Ok(format as i32)
     }
 
+    fn try_decode_shuffle_consumption(&self, consumption: i32) -> Result<ShuffleConsumption> {
+        let consumption = gen::ShuffleConsumption::try_from(consumption)
+            .map_err(|e| plan_datafusion_err!("failed to decode shuffle consumption: {e}"))?;
+        let consumption = match consumption {
+            gen::ShuffleConsumption::Single => ShuffleConsumption::Single,
+            gen::ShuffleConsumption::Multiple => ShuffleConsumption::Multiple,
+        };
+        Ok(consumption)
+    }
+
+    fn try_encode_shuffle_consumption(&self, consumption: ShuffleConsumption) -> Result<i32> {
+        let consumption = match consumption {
+            ShuffleConsumption::Single => gen::ShuffleConsumption::Single,
+            ShuffleConsumption::Multiple => gen::ShuffleConsumption::Multiple,
+        };
+        Ok(consumption as i32)
+    }
+
+    fn try_decode_local_stream_storage(&self, storage: i32) -> Result<LocalStreamStorage> {
+        let storage = gen::LocalStreamStorage::try_from(storage)
+            .map_err(|e| plan_datafusion_err!("failed to decode local stream storage: {e}"))?;
+        let storage = match storage {
+            gen::LocalStreamStorage::Ephemeral => LocalStreamStorage::Ephemeral,
+            gen::LocalStreamStorage::Memory => LocalStreamStorage::Memory,
+            gen::LocalStreamStorage::Disk => LocalStreamStorage::Disk,
+        };
+        Ok(storage)
+    }
+
+    fn try_encode_local_stream_storage(&self, storage: LocalStreamStorage) -> Result<i32> {
+        let storage = match storage {
+            LocalStreamStorage::Ephemeral => gen::LocalStreamStorage::Ephemeral,
+            LocalStreamStorage::Memory => gen::LocalStreamStorage::Memory,
+            LocalStreamStorage::Disk => gen::LocalStreamStorage::Disk,
+        };
+        Ok(storage as i32)
+    }
+
     fn try_decode_file_compression_type(&self, variant: i32) -> Result<FileCompressionType> {
         let variant = gen::CompressionTypeVariant::try_from(variant)
             .map_err(|e| plan_datafusion_err!("failed to decode compression type variant: {e}"))?;
@@ -1175,15 +1218,12 @@ impl RemoteExecutionCodec {
     ) -> Result<TaskWriteLocation> {
         let gen::TaskWriteLocation { location } = location;
         let location = match location {
-            Some(gen::task_write_location::Location::Memory(gen::TaskWriteLocationMemory {
+            Some(gen::task_write_location::Location::Local(gen::TaskWriteLocationLocal {
                 channel,
-            })) => TaskWriteLocation::Memory {
+                storage,
+            })) => TaskWriteLocation::Local {
                 channel: channel.into(),
-            },
-            Some(gen::task_write_location::Location::Disk(gen::TaskWriteLocationDisk {
-                channel,
-            })) => TaskWriteLocation::Disk {
-                channel: channel.into(),
+                storage: self.try_decode_local_stream_storage(storage)?,
             },
             Some(gen::task_write_location::Location::Remote(gen::TaskWriteLocationRemote {
                 uri,
@@ -1198,17 +1238,11 @@ impl RemoteExecutionCodec {
         location: &TaskWriteLocation,
     ) -> Result<gen::TaskWriteLocation> {
         let location = match location {
-            TaskWriteLocation::Memory { channel } => gen::TaskWriteLocation {
-                location: Some(gen::task_write_location::Location::Memory(
-                    gen::TaskWriteLocationMemory {
+            TaskWriteLocation::Local { channel, storage } => gen::TaskWriteLocation {
+                location: Some(gen::task_write_location::Location::Local(
+                    gen::TaskWriteLocationLocal {
                         channel: channel.clone().into(),
-                    },
-                )),
-            },
-            TaskWriteLocation::Disk { channel } => gen::TaskWriteLocation {
-                location: Some(gen::task_write_location::Location::Disk(
-                    gen::TaskWriteLocationDisk {
-                        channel: channel.clone().into(),
+                        storage: self.try_encode_local_stream_storage(*storage)?,
                     },
                 )),
             },

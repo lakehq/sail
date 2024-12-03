@@ -11,6 +11,13 @@ message RegisterWorkerRequest {
 message RegisterWorkerResponse {
 }
 
+message ReportWorkerHeartbeatRequest {
+  uint64 worker_id = 1;
+}
+
+message ReportWorkerHeartbeatResponse {
+}
+
 message ReportTaskStatusRequest {
   uint64 task_id = 1;
   TaskStatus status = 2;
@@ -31,5 +38,6 @@ message ReportTaskStatusResponse {
 
 service DriverService {
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse) {}
+  rpc ReportWorkerHeartbeat(ReportWorkerHeartbeatRequest) returns (ReportWorkerHeartbeatResponse) {}
   rpc ReportTaskStatus(ReportTaskStatusRequest) returns (ReportTaskStatusResponse) {}
 }

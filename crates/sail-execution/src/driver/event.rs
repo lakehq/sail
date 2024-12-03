@@ -21,10 +21,16 @@ pub enum DriverEvent {
         port: u16,
         result: oneshot::Sender<ExecutionResult<()>>,
     },
+    WorkerHeartbeat {
+        worker_id: WorkerId,
+    },
     ProbePendingWorker {
         worker_id: WorkerId,
     },
     ProbeIdleWorker {
+        worker_id: WorkerId,
+    },
+    ProbeLostWorker {
         worker_id: WorkerId,
     },
     ExecuteJob {

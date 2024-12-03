@@ -11,6 +11,15 @@ pub(crate) mod gen {
     tonic::include_proto!("sail.plan");
 }
 
+/// The way in which a shuffle stream is consumed by downstream tasks.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ShuffleConsumption {
+    /// Each shuffle stream is consumed by a single downstream tasks.
+    Single,
+    /// Each shuffle stream is consumed by multiple downstream tasks.
+    Multiple,
+}
+
 fn write_list_of_lists<T: Display>(
     f: &mut std::fmt::Formatter,
     data: &[Vec<T>],

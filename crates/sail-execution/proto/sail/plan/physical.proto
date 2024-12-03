@@ -285,7 +285,8 @@ message ShuffleWriteExecNode {
   uint64 stage = 1;
   bytes plan = 2;
   bytes partitioning = 3;
-  repeated TaskWriteLocationList locations = 4;
+  ShuffleConsumption consumption = 4;
+  repeated TaskWriteLocationList locations = 5;
 }
 
 message TaskWriteLocationList {
@@ -294,22 +295,29 @@ message TaskWriteLocationList {
 
 message TaskWriteLocation {
   oneof Location {
-    TaskWriteLocationMemory memory = 1;
-    TaskWriteLocationDisk disk = 2;
-    TaskWriteLocationRemote remote = 3;
+    TaskWriteLocationLocal local = 1;
+    TaskWriteLocationRemote remote = 2;
   }
 }
 
-message TaskWriteLocationMemory {
+message TaskWriteLocationLocal {
   string channel = 1;
-}
-
-message TaskWriteLocationDisk {
-  string channel = 1;
+  LocalStreamStorage storage = 2;
 }
 
 message TaskWriteLocationRemote {
   string uri = 1;
+}
+
+enum ShuffleConsumption {
+  SHUFFLE_CONSUMPTION_SINGLE = 0;
+  SHUFFLE_CONSUMPTION_MULTIPLE = 1;
+}
+
+enum LocalStreamStorage {
+  LOCAL_STREAM_STORAGE_EPHEMERAL = 0;
+  LOCAL_STREAM_STORAGE_MEMORY = 1;
+  LOCAL_STREAM_STORAGE_DISK = 2;
 }
 
 enum CompressionTypeVariant {

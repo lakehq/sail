@@ -4718,6 +4718,7 @@ name = "sail-server"
 version = "0.2.0"
 dependencies = [
  "log",
+ "sail-common",
  "sail-telemetry",
  "tokio",
  "tonic",
