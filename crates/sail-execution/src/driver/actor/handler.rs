@@ -170,7 +170,7 @@ impl DriverActor {
         if let WorkerState::Running { heartbeat_at, .. } = &worker.state {
             if *heartbeat_at <= instant {
                 warn!("worker {worker_id} heartbeat timeout");
-                let message = "worker heartbeat timeout ".to_string();
+                let message = "worker heartbeat timeout".to_string();
                 self.fail_tasks_for_worker(ctx, worker_id, message.clone());
                 self.stop_worker(ctx, worker_id, Some(message));
             }
@@ -247,7 +247,7 @@ impl DriverActor {
             return ActorAction::Continue;
         };
         if task.attempt == attempt && matches!(&task.state, TaskState::Pending) {
-            let message = "task scheduling timeout ".to_string();
+            let message = "task scheduling timeout".to_string();
             self.update_task(
                 ctx,
                 task_id,
