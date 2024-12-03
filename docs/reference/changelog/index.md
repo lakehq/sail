@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.0
+
+_December 3, 2024_
+
+We are excited to announce the first Sail release with the distributed processing capability. Spark SQL and DataFrame queries can now run on Kubernetes, powered by the Sail distributed compute engine. We also introduced a new Sail CLI and a configuration mechanism that will serve as the entrypoint for all Sail features moving forward.
+
+We continued extending coverage for Spark SQL functions and the Spark DataFrame API. The changes are listed below.
+
+- Supported the following DataFrame and SQL functions ([#278](https://github.com/lakehq/sail/pull/278) and [#305](https://github.com/lakehq/sail/pull/305)).
+  - `DataFrame.crosstab`
+  - `DataFrame.replace`
+  - `DataFrame.to`
+  - `reverse`
+  - `aes_decrypt`
+  - `aes_encrypt`
+  - `try_aes_decrypt`
+  - `base64`
+  - `unbase64`
+  - `weekofyear`
+- Supported `mapInPandas()` and `mapInArrow()` for Spark DataFrame ([#310](https://github.com/lakehq/sail/pull/310)).
+- Supported `applyInPandas()` for grouped and co-grouped Spark DataFrame ([#313](https://github.com/lakehq/sail/pull/313)).
+
+### Breaking Changes
+
+This release comes with the new Sail CLI, and the way to launch the Spark Connect server and PySpark shell is different from the 0.1.x versions. Please refer to the [Getting Started](/guide/getting-started/) page for the updated instructions.
+
 ## 0.1.7
 
 _November 1, 2024_
