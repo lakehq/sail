@@ -41,7 +41,7 @@ chrono-tz = "0.10.0"
 futures = "0.3"
 comfy-table = "7.1"
 html-escape = "0.2"
-syn = "2.0.89"
+syn = "2.0.90"
 quote = "1.0.37"
 prettyplease = "0.2.24"
 phf = { version = "0.11.2", features = ["macros"] }

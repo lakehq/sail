@@ -75,6 +75,16 @@ impl DriverState {
         worker.state = state;
     }
 
+    pub fn record_worker_heartbeat(&mut self, worker_id: WorkerId) {
+        let Some(worker) = self.workers.get_mut(&worker_id) else {
+            warn!("worker {worker_id} not found");
+            return;
+        };
+        if let WorkerState::Running { heartbeat_at, .. } = &mut worker.state {
+            *heartbeat_at = Instant::now();
+        }
+    }
+
     pub fn add_job(&mut self, job_id: JobId, descriptor: JobDescriptor) {
         self.jobs.insert(job_id, descriptor);
     }
@@ -179,6 +189,20 @@ impl DriverState {
         out
     }
 
+    pub fn find_tasks_for_worker(&self, worker_id: WorkerId) -> Vec<(TaskId, &TaskDescriptor)> {
+        let Some(worker) = self.workers.get(&worker_id) else {
+            warn!("worker {worker_id} not found");
+            return vec![];
+        };
+        match &worker.state {
+            WorkerState::Running { tasks, .. } => tasks
+                .iter()
+                .filter_map(|task_id| self.tasks.get(task_id).map(|task| (*task_id, task)))
+                .collect(),
+            _ => vec![],
+        }
+    }
+
     pub fn update_task(
         &mut self,
         task_id: TaskId,
@@ -227,7 +251,7 @@ impl DriverState {
             .filter(|worker| {
                 matches!(
                     worker.state,
-                    WorkerState::Pending { .. } | WorkerState::Running { .. }
+                    WorkerState::Pending | WorkerState::Running { .. }
                 )
             })
             .count()
@@ -248,7 +272,7 @@ impl DriverState {
     pub fn count_pending_tasks(&self) -> usize {
         self.tasks
             .values()
-            .filter(|task| matches!(task.state, TaskState::Created | TaskState::Pending { .. }))
+            .filter(|task| matches!(task.state, TaskState::Created | TaskState::Pending))
             .count()
     }
 }
@@ -261,9 +285,7 @@ pub struct WorkerDescriptor {
 
 #[derive(Debug)]
 pub enum WorkerState {
-    Pending {
-        pending_at: Instant,
-    },
+    Pending,
     Running {
         host: String,
         port: u16,
@@ -276,6 +298,7 @@ pub enum WorkerState {
         /// The worker needs to be running for shuffle stream or job output stream consumption.
         jobs: HashSet<JobId>,
         updated_at: Instant,
+        heartbeat_at: Instant,
     },
     Stopped,
     Failed,
@@ -321,10 +344,7 @@ pub enum TaskState {
     /// The task has been created, but may not be eligible for scheduling.
     Created,
     /// The task is eligible for scheduling, but is not assigned to any worker.
-    Pending {
-        /// The time when the current task attempt becomes pending.
-        pending_at: Instant,
-    },
+    Pending,
     /// The task is scheduled to a worker, but its status is unknown.
     Scheduled {
         /// The worker ID to schedule the current task attempt.
@@ -350,7 +370,7 @@ impl TaskState {
     pub fn run(&self) -> Option<TaskState> {
         match self {
             TaskState::Created => None,
-            TaskState::Pending { .. } => None,
+            TaskState::Pending => None,
             TaskState::Scheduled { worker_id } => Some(TaskState::Running {
                 worker_id: *worker_id,
             }),
@@ -364,7 +384,7 @@ impl TaskState {
     pub fn succeed(&self) -> Option<TaskState> {
         match self {
             TaskState::Created => None,
-            TaskState::Pending { .. } => None,
+            TaskState::Pending => None,
             TaskState::Scheduled { worker_id } | TaskState::Running { worker_id } => {
                 Some(TaskState::Succeeded {
                     worker_id: *worker_id,

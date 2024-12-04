@@ -25,6 +25,13 @@ message StopTaskRequest {
 message StopTaskResponse {
 }
 
+message RemoveStreamRequest {
+  string channel_prefix = 1;
+}
+
+message RemoveStreamResponse {
+}
+
 message StopWorkerRequest {
 }
 
@@ -34,5 +41,6 @@ message StopWorkerResponse {
 service WorkerService {
   rpc RunTask(RunTaskRequest) returns (RunTaskResponse) {}
   rpc StopTask(StopTaskRequest) returns (StopTaskResponse) {}
+  rpc RemoveStream(RemoveStreamRequest) returns (RemoveStreamResponse) {}
   rpc StopWorker(StopWorkerRequest) returns (StopWorkerResponse) {}
 }

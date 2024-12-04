@@ -6,8 +6,8 @@ use crate::error::ExecutionError;
 use crate::worker::actor::WorkerActor;
 use crate::worker::gen::worker_service_server::WorkerService;
 use crate::worker::gen::{
-    RunTaskRequest, RunTaskResponse, StopTaskRequest, StopTaskResponse, StopWorkerRequest,
-    StopWorkerResponse,
+    RemoveStreamRequest, RemoveStreamResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
+    StopTaskResponse, StopWorkerRequest, StopWorkerResponse,
 };
 use crate::worker::WorkerEvent;
 
@@ -68,6 +68,23 @@ impl WorkerService for WorkerServer {
             .await
             .map_err(ExecutionError::from)?;
         let response = StopTaskResponse {};
+        debug!("{:?}", response);
+        Ok(Response::new(response))
+    }
+
+    async fn remove_stream(
+        &self,
+        request: Request<RemoveStreamRequest>,
+    ) -> Result<Response<RemoveStreamResponse>, Status> {
+        let request = request.into_inner();
+        debug!("{:?}", request);
+        let RemoveStreamRequest { channel_prefix } = request;
+        let event = WorkerEvent::RemoveLocalStream { channel_prefix };
+        self.handle
+            .send(event)
+            .await
+            .map_err(ExecutionError::from)?;
+        let response = RemoveStreamResponse {};
         debug!("{:?}", response);
         Ok(Response::new(response))
     }

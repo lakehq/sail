@@ -69,7 +69,8 @@ impl SparkConnectService for SparkConnectServer {
         };
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_key)?;
+            .get_or_create_session_context(session_key)
+            .await?;
         let Plan { op_type: op } = request.plan.required("plan")?;
         let op = op.required("plan op")?;
         let stream = match op {
@@ -139,7 +140,8 @@ impl SparkConnectService for SparkConnectServer {
         };
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_key)?;
+            .get_or_create_session_context(session_key)
+            .await?;
         let analyze = request.analyze.required("analyze")?;
         let result = match analyze {
             Analyze::Schema(schema) => {
@@ -215,7 +217,8 @@ impl SparkConnectService for SparkConnectServer {
         };
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_key)?;
+            .get_or_create_session_context(session_key)
+            .await?;
         let sc::config_request::Operation { op_type: op } =
             request.operation.required("operation")?;
         let op = op.required("operation type")?;
@@ -266,7 +269,8 @@ impl SparkConnectService for SparkConnectServer {
         };
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_key)?;
+            .get_or_create_session_context(session_key)
+            .await?;
         let payload = first.payload;
         let session_id = first.session_id;
         let stream = async_stream::try_stream! {
@@ -302,7 +306,8 @@ impl SparkConnectService for SparkConnectServer {
         };
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_key)?;
+            .get_or_create_session_context(session_key)
+            .await?;
         let statuses = service::handle_artifact_statuses(&ctx, request.names).await?;
         let response = ArtifactStatusesResponse { statuses };
         debug!("{:?}", response);
@@ -321,7 +326,8 @@ impl SparkConnectService for SparkConnectServer {
         };
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_key)?;
+            .get_or_create_session_context(session_key)
+            .await?;
         let ids = match InterruptType::try_from(request.interrupt_type) {
             Ok(InterruptType::All) => Ok(service::handle_interrupt_all(&ctx).await?),
             Ok(InterruptType::Tag) => {
@@ -364,7 +370,8 @@ impl SparkConnectService for SparkConnectServer {
         };
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_key)?;
+            .get_or_create_session_context(session_key)
+            .await?;
         let stream =
             service::handle_reattach_execute(&ctx, request.operation_id, request.last_response_id)
                 .await?;
@@ -383,7 +390,8 @@ impl SparkConnectService for SparkConnectServer {
         };
         let ctx = self
             .session_manager
-            .get_or_create_session_context(session_key)?;
+            .get_or_create_session_context(session_key)
+            .await?;
         let response_id = match request.release.required("release")? {
             Release::ReleaseAll(ReleaseAll {}) => None,
             Release::ReleaseUntil(ReleaseUntil { response_id }) => Some(response_id),

@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use arrow::array::RecordBatch;
     use arrow::error::ArrowError;
@@ -9,6 +9,7 @@ mod tests {
     use sail_common::config::AppConfig;
     use sail_common::tests::test_gold_set;
     use sail_plan::resolve_and_execute_plan;
+    use sail_server::actor::ActorSystem;
     use serde::{Deserialize, Serialize};
 
     use crate::error::{SparkError, SparkResult};
@@ -54,13 +55,18 @@ mod tests {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        let config = AppConfig::load()?;
-        let session_manager = SessionManager::new(Arc::new(config));
+        let config = Arc::new(AppConfig::load()?);
+        let system = Arc::new(Mutex::new(ActorSystem::new()));
         let session_key = SessionKey {
             user_id: None,
             session_id: "test".to_string(),
         };
-        let context = session_manager.get_or_create_session_context(session_key)?;
+        let context = rt.block_on(async {
+            // We create the session inside an async context, even though the
+            // `create_session_context` function itself is sync. This is because the actor system
+            // may need to spawn actors when the session runs in cluster mode.
+            SessionManager::create_session_context(config, system, session_key)
+        })?;
         Ok(test_gold_set(
             "tests/gold_data/function/*.json",
             |example: FunctionExample| -> SparkResult<String> {

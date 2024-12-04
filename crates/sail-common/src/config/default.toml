@@ -14,11 +14,14 @@ worker_external_port = 0
 worker_initial_count = 4
 worker_max_count = 0
 worker_max_idle_time_secs = 300
+worker_heartbeat_interval_secs = 30
+worker_heartbeat_timeout_secs = 120
 worker_launch_timeout_secs = 300
 worker_task_slots = 8
-task_launch_timeout_secs = 600
+worker_stream_buffer = 16
+task_launch_timeout_secs = 300
 job_output_buffer = 16
-memory_stream_buffer = 16
+rpc_retry_strategy = { "fixed" = { "max_count" = 3, "delay_secs" = 5 } }
 
 [execution]
 batch_size = 8192
@@ -33,3 +36,6 @@ image_pull_policy = "IfNotPresent"
 namespace = "default"
 driver_pod_name = ""
 worker_pod_name_prefix = "sail-worker-"
+
+[spark]
+session_timeout_secs = 300

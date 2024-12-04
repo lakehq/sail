@@ -1,5 +1,5 @@
 use arrow::datatypes::SchemaRef;
-use datafusion::common::{not_impl_err, DataFusionError, Result};
+use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::SendableRecordBatchStream;
 use sail_server::actor::ActorHandle;
 use tokio::sync::oneshot;
@@ -12,19 +12,19 @@ use crate::stream::{
 use crate::worker::{WorkerActor, WorkerEvent};
 
 #[derive(Debug)]
-pub(super) struct WorkerTaskStreamReader {
+pub(super) struct WorkerStreamAccessor {
     worker_id: WorkerId,
     handle: ActorHandle<WorkerActor>,
 }
 
-impl WorkerTaskStreamReader {
+impl WorkerStreamAccessor {
     pub fn new(worker_id: WorkerId, handle: ActorHandle<WorkerActor>) -> Self {
         Self { worker_id, handle }
     }
 }
 
 #[tonic::async_trait]
-impl TaskStreamReader for WorkerTaskStreamReader {
+impl TaskStreamReader for WorkerStreamAccessor {
     async fn open(
         &self,
         location: &TaskReadLocation,
@@ -39,12 +39,12 @@ impl TaskStreamReader for WorkerTaskStreamReader {
                 channel,
             } => {
                 if *worker_id == self.worker_id {
-                    WorkerEvent::FetchThisWorkerTaskStream {
+                    WorkerEvent::FetchThisWorkerStream {
                         channel: channel.clone(),
                         result: tx,
                     }
                 } else {
-                    WorkerEvent::FetchOtherWorkerTaskStream {
+                    WorkerEvent::FetchOtherWorkerStream {
                         worker_id: *worker_id,
                         host: host.clone(),
                         port: *port,
@@ -54,7 +54,11 @@ impl TaskStreamReader for WorkerTaskStreamReader {
                     }
                 }
             }
-            TaskReadLocation::Remote { .. } => return not_impl_err!("remote task read"),
+            TaskReadLocation::Remote { uri } => WorkerEvent::FetchRemoteStream {
+                uri: uri.clone(),
+                schema,
+                result: tx,
+            },
         };
         self.handle
             .send(event)
@@ -66,21 +70,8 @@ impl TaskStreamReader for WorkerTaskStreamReader {
     }
 }
 
-#[derive(Debug)]
-pub(super) struct WorkerTaskStreamWriter {
-    #[allow(dead_code)]
-    worker_id: WorkerId,
-    handle: ActorHandle<WorkerActor>,
-}
-
-impl WorkerTaskStreamWriter {
-    pub fn new(worker_id: WorkerId, handle: ActorHandle<WorkerActor>) -> Self {
-        Self { worker_id, handle }
-    }
-}
-
 #[tonic::async_trait]
-impl TaskStreamWriter for WorkerTaskStreamWriter {
+impl TaskStreamWriter for WorkerStreamAccessor {
     async fn open(
         &self,
         location: &TaskWriteLocation,
@@ -88,26 +79,24 @@ impl TaskStreamWriter for WorkerTaskStreamWriter {
     ) -> Result<Box<dyn RecordBatchStreamWriter>> {
         let (tx, rx) = oneshot::channel();
         let event = match location {
-            TaskWriteLocation::Memory { channel } => WorkerEvent::CreateMemoryTaskStream {
+            TaskWriteLocation::Local { channel, storage } => WorkerEvent::CreateLocalStream {
                 channel: channel.clone(),
+                storage: *storage,
                 schema,
                 result: tx,
             },
-            TaskWriteLocation::Disk { .. } => {
-                return not_impl_err!("disk task write");
-            }
-            TaskWriteLocation::Remote { .. } => {
-                return not_impl_err!("remote task write");
-            }
+            TaskWriteLocation::Remote { uri } => WorkerEvent::CreateRemoteStream {
+                uri: uri.clone(),
+                schema,
+                result: tx,
+            },
         };
         self.handle
             .send(event)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let sender = rx
-            .await
+        rx.await
             .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        Ok(Box::new(sender))
+            .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 }

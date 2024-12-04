@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::ExecutionPlan;
 use tokio::sync::oneshot;
+use tokio::time::Instant;
 
 use crate::driver::state::TaskStatus;
 use crate::error::ExecutionResult;
@@ -21,11 +22,19 @@ pub enum DriverEvent {
         port: u16,
         result: oneshot::Sender<ExecutionResult<()>>,
     },
+    WorkerHeartbeat {
+        worker_id: WorkerId,
+    },
     ProbePendingWorker {
         worker_id: WorkerId,
     },
     ProbeIdleWorker {
         worker_id: WorkerId,
+        instant: Instant,
+    },
+    ProbeLostWorker {
+        worker_id: WorkerId,
+        instant: Instant,
     },
     ExecuteJob {
         plan: Arc<dyn ExecutionPlan>,
@@ -45,6 +54,7 @@ pub enum DriverEvent {
     },
     ProbePendingTask {
         task_id: TaskId,
+        attempt: usize,
     },
     Shutdown,
 }

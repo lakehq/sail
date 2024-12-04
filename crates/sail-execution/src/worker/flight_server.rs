@@ -88,7 +88,7 @@ impl FlightService for WorkerFlightServer {
         debug!("{:?}", ticket);
         let TaskStreamTicket { channel } = ticket;
         let (tx, rx) = oneshot::channel();
-        let event = crate::worker::WorkerEvent::FetchThisWorkerTaskStream {
+        let event = crate::worker::WorkerEvent::FetchThisWorkerStream {
             channel: channel.into(),
             result: tx,
         };

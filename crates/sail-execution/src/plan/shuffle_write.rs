@@ -17,7 +17,7 @@ use datafusion::physical_plan::{
 use futures::future::try_join_all;
 use futures::StreamExt;
 
-use crate::plan::write_list_of_lists;
+use crate::plan::{write_list_of_lists, ShuffleConsumption};
 use crate::stream::{TaskStreamWriter, TaskWriteLocation};
 
 #[derive(Debug, Clone)]
@@ -29,6 +29,7 @@ pub struct ShuffleWriteExec {
     /// The partition count for the shuffle output can be different from the
     /// partition count of the input plan.
     shuffle_partitioning: Partitioning,
+    consumption: ShuffleConsumption,
     /// For each input partition, a list of locations to write to.
     locations: Vec<Vec<TaskWriteLocation>>,
     properties: PlanProperties,
@@ -36,7 +37,12 @@ pub struct ShuffleWriteExec {
 }
 
 impl ShuffleWriteExec {
-    pub fn new(stage: usize, plan: Arc<dyn ExecutionPlan>, partitioning: Partitioning) -> Self {
+    pub fn new(
+        stage: usize,
+        plan: Arc<dyn ExecutionPlan>,
+        partitioning: Partitioning,
+        consumption: ShuffleConsumption,
+    ) -> Self {
         let partitioning = match partitioning {
             Partitioning::Hash(expr, n) if expr.is_empty() => Partitioning::UnknownPartitioning(n),
             Partitioning::Hash(expr, n) => {
@@ -67,6 +73,7 @@ impl ShuffleWriteExec {
             stage,
             plan,
             shuffle_partitioning: partitioning,
+            consumption,
             locations,
             properties,
             writer: None,
@@ -87,6 +94,10 @@ impl ShuffleWriteExec {
 
     pub fn locations(&self) -> &[Vec<TaskWriteLocation>] {
         &self.locations
+    }
+
+    pub fn consumption(&self) -> ShuffleConsumption {
+        self.consumption
     }
 
     pub fn with_locations(self, locations: Vec<Vec<TaskWriteLocation>>) -> Self {
@@ -207,7 +218,7 @@ async fn shuffle_write(
         })?;
         for p in 0..partitions.len() {
             if let Some(batch) = partitions[p].take() {
-                partition_writers[p].write(&batch).await?;
+                partition_writers[p].write(batch).await?;
             }
         }
     }
