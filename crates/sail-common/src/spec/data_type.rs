@@ -8,6 +8,7 @@ use crate::error::CommonError;
 /// Native Sail data types that convert to Arrow types.
 /// Currently based on Spark's type system, transitioning to
 /// match [`arrow_schema::DataType`] variants directly.
+/// [Credit]: Comments within the enum are copied from [`arrow_schema::DataType`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum DataType {
