@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use std::sync::Arc;
 
 use num_enum::TryFromPrimitive;
@@ -185,20 +186,100 @@ pub enum DataType {
     /// inline (for small strings) or an inlined prefix, an index of another buffer,
     /// and an offset pointing to a slice in that buffer (for non-small strings).
     BinaryView,
+    /// A variable-length string in Unicode with UTF-8 encoding.
+    ///
+    /// A single Utf8 array can store up to [`i32::MAX`] bytes
+    /// of string data in total.
+    Utf8,
+    /// A variable-length string in Unicode with UFT-8 encoding and 64-bit offsets.
+    ///
+    /// A single LargeUtf8 array can store up to [`i64::MAX`] bytes
+    /// of string data in total.
+    LargeUtf8,
+    /// A variable-length string in Unicode with UTF-8 encoding
+    ///
+    /// Logically the same as [`Self::Utf8`], but the internal representation uses a view
+    /// struct that contains the string length and either the string's entire data
+    /// inline (for small strings) or an inlined prefix, an index of another buffer,
+    /// and an offset pointing to a slice in that buffer (for non-small strings).
+    Utf8View,
+    /// A list of some logical data type with variable length.
+    ///
+    /// A single List array can store up to [`i32::MAX`] elements in total.
+    List(FieldRef),
+    /// A list of some logical data type with fixed length.
+    FixedSizeList(FieldRef, i32),
+    /// A list of some logical data type with variable length and 64-bit offsets.
+    ///
+    /// A single LargeList array can store up to [`i64::MAX`] elements in total.
+    LargeList(FieldRef),
+    /// A nested datatype that contains a number of sub-fields.
+    Struct(Fields),
+    /// A nested datatype that can represent slots of differing types. Components:
+    ///
+    /// 1. [`UnionFields`]
+    /// 2. The type of union (Sparse or Dense)
+    Union(UnionFields, UnionMode),
+    /// A dictionary encoded array (`key_type`, `value_type`), where
+    /// each array element is an index of `key_type` into an
+    /// associated dictionary of `value_type`.
+    ///
+    /// Dictionary arrays are used to store columns of `value_type`
+    /// that contain many repeated values using less memory, but with
+    /// a higher CPU overhead for some operations.
+    ///
+    /// This type mostly used to represent low cardinality string
+    /// arrays or a limited set of primitive types as integers.
+    Dictionary(Box<DataType>, Box<DataType>),
+    /// Exact 128-bit width decimal value with precision and scale
+    ///
+    /// * precision is the total number of digits
+    /// * scale is the number of digits past the decimal
+    ///
+    /// For example the number 123.45 has precision 5 and scale 2.
+    ///
+    /// In certain situations, scale could be negative number. For
+    /// negative scale, it is the number of padding 0 to the right
+    /// of the digits.
+    ///
+    /// For example the number 12300 could be treated as a decimal
+    /// has precision 3 and scale -2.
+    Decimal128(u8, i8),
+    /// Exact 256-bit width decimal value with precision and scale
+    ///
+    /// * precision is the total number of digits
+    /// * scale is the number of digits past the decimal
+    ///
+    /// For example the number 123.45 has precision 5 and scale 2.
+    ///
+    /// In certain situations, scale could be negative number. For
+    /// negative scale, it is the number of padding 0 to the right
+    /// of the digits.
+    ///
+    /// For example the number 12300 could be treated as a decimal
+    /// has precision 3 and scale -2.
+    Decimal256(u8, i8),
+    /// A Map is a logical nested type that is represented as
+    ///
+    /// `List<entries: Struct<key: K, value: V>>`
+    ///
+    /// The keys and values are each respectively contiguous.
+    /// The key and value types are not constrained, but keys should be
+    /// hashable and unique.
+    /// Whether the keys are sorted can be set in the `bool` after the `Field`.
+    ///
+    /// In a field with Map type, the field has a child Struct field, which then
+    /// has two children: key type and the second the value type. The names of the
+    /// child fields may be respectively "entries", "key", and "value", but this is
+    /// not enforced.
+    Map(FieldRef, bool),
+
     Byte,
     Short,
     Integer,
     Long,
     Float,
     Double,
-    Decimal128 {
-        precision: u8,
-        scale: i8,
-    },
-    Decimal256 {
-        precision: u8,
-        scale: i8,
-    },
     String,
     Char {
         length: u32,
@@ -221,14 +302,11 @@ pub enum DataType {
         element_type: Box<DataType>,
         contains_null: bool,
     },
-    Struct {
-        fields: Fields,
-    },
-    Map {
-        key_type: Box<DataType>,
-        value_type: Box<DataType>,
-        value_contains_null: bool,
-    },
+    // Map {
+    //     key_type: Box<DataType>,
+    //     value_type: Box<DataType>,
+    //     value_contains_null: bool,
+    // },
     UserDefined {
         jvm_class: Option<String>,
         python_class: Option<String>,
@@ -240,8 +318,8 @@ pub enum DataType {
 impl DataType {
     pub fn into_schema(self, default_field_name: &str, nullable: bool) -> Schema {
         let fields = match self {
-            DataType::Struct { fields } => fields,
-            x => Fields::new(vec![Field {
+            DataType::Struct(fields) => fields,
+            x => Fields::from(vec![Field {
                 name: default_field_name.to_string(),
                 data_type: x,
                 nullable,
@@ -261,28 +339,133 @@ pub struct Field {
     pub metadata: Vec<(String, String)>,
 }
 
+/// [Credit]: The implementations for [`Field`], [`FieldRef`], [`Fields`], and [`UnionFields`] are
+/// copied from [`arrow_schema::Field`], [`arrow_schema::FieldRef`], [`arrow_schema::Fields`], and [`arrow_schema::UnionFields`].
+
+/// A reference counted [`Field`]
+pub type FieldRef = Arc<Field>;
+
+/// A cheaply cloneable, owned slice of [`FieldRef`]
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct Fields(pub Vec<Field>);
+pub struct Fields(Arc<[FieldRef]>);
 
 impl Fields {
-    pub fn new(fields: Vec<Field>) -> Self {
-        Fields(fields)
-    }
-
     pub fn empty() -> Self {
-        Fields(Vec::new())
+        Self(Arc::new([]))
     }
 }
 
-impl From<Fields> for Vec<Field> {
-    fn from(fields: Fields) -> Vec<Field> {
-        fields.0
+impl Default for Fields {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl FromIterator<Field> for Fields {
+    fn from_iter<T: IntoIterator<Item = Field>>(iter: T) -> Self {
+        iter.into_iter().map(Arc::new).collect()
+    }
+}
+
+impl FromIterator<FieldRef> for Fields {
+    fn from_iter<T: IntoIterator<Item = FieldRef>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
     }
 }
 
 impl From<Vec<Field>> for Fields {
-    fn from(fields: Vec<Field>) -> Fields {
-        Fields(fields)
+    fn from(fields: Vec<Field>) -> Self {
+        fields.into_iter().collect()
+    }
+}
+
+impl From<Vec<FieldRef>> for Fields {
+    fn from(fields: Vec<FieldRef>) -> Self {
+        Self(fields.into())
+    }
+}
+
+impl From<&[FieldRef]> for Fields {
+    fn from(fields: &[FieldRef]) -> Self {
+        Self(fields.into())
+    }
+}
+
+impl<const N: usize> From<[FieldRef; N]> for Fields {
+    fn from(fields: [FieldRef; N]) -> Self {
+        Self(Arc::new(fields))
+    }
+}
+
+impl Deref for Fields {
+    type Target = [FieldRef];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+impl<'a> IntoIterator for &'a Fields {
+    type Item = &'a FieldRef;
+    type IntoIter = std::slice::Iter<'a, FieldRef>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+/// A cheaply cloneable, owned collection of [`FieldRef`] and their corresponding type ids
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct UnionFields(Arc<[(i8, FieldRef)]>);
+
+impl UnionFields {
+    /// Create a new [`UnionFields`] with no fields
+    pub fn empty() -> Self {
+        Self(Arc::from([]))
+    }
+}
+
+impl Deref for UnionFields {
+    type Target = [(i8, FieldRef)];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+impl FromIterator<(i8, FieldRef)> for UnionFields {
+    fn from_iter<T: IntoIterator<Item = (i8, FieldRef)>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+/// Sparse or Dense union layouts
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    TryFromPrimitive,
+)]
+#[serde(rename_all = "camelCase")]
+#[num_enum(error_type(name = CommonError, constructor = UnionMode::invalid))]
+#[repr(i32)]
+pub enum UnionMode {
+    /// Sparse union layout
+    Sparse = 0,
+    /// Dense union layout
+    Dense = 1,
+}
+
+impl UnionMode {
+    fn invalid(value: i32) -> CommonError {
+        CommonError::invalid(format!("interval union mode: {value}"))
     }
 }
 
