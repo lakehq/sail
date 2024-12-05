@@ -83,34 +83,6 @@ impl NamedExpr {
         self.metadata = metadata;
         self
     }
-
-    pub fn into_alias_expr(self) -> PlanResult<expr::Expr> {
-        match &self.expr {
-            // TODO: This seems hacky. Is there a better way to handle this?
-            // There is no need to add alias to an alias expression.
-            expr::Expr::Alias(_)
-            // We do not add alias for literal when it is used as function arguments,
-            // since some function (e.g. `struct()`) may need to determine struct field names
-            // for literals.
-            | expr::Expr::Literal(_)
-            // We should not add alias to expressions that will be rewritten in logical plans.
-            // Otherwise, some logical plan optimizers may not work correctly.
-            | expr::Expr::Wildcard { .. }
-            | expr::Expr::GroupingSet(_)
-            | expr::Expr::Placeholder(_)
-            | expr::Expr::Unnest(_) => return Ok(self.expr),
-            _ => (),
-        };
-        let relation = match &self.expr {
-            expr::Expr::Column(Column { relation, .. }) => relation.clone(),
-            _ => None,
-        };
-        let name = self
-            .name
-            .one()
-            .map_err(|_| PlanError::invalid("named expression must have a single name"))?;
-        Ok(self.expr.alias_qualified(relation, name))
-    }
 }
 
 impl PlanResolver<'_> {
@@ -604,26 +576,6 @@ impl PlanResolver<'_> {
         Ok((names, exprs))
     }
 
-    pub(super) async fn resolve_alias_expressions_and_names(
-        &self,
-        expressions: Vec<spec::Expr>,
-        schema: &DFSchemaRef,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<(Vec<String>, Vec<expr::Expr>)> {
-        let mut names: Vec<String> = Vec::with_capacity(expressions.len());
-        let mut exprs: Vec<expr::Expr> = Vec::with_capacity(expressions.len());
-        for expression in expressions {
-            let named_expr = self
-                .resolve_named_expression(expression, schema, state)
-                .await?;
-            let name = named_expr.name.clone().one()?;
-            let expr = named_expr.into_alias_expr()?;
-            names.push(name);
-            exprs.push(expr);
-        }
-        Ok((names, exprs))
-    }
-
     fn resolve_expression_literal(&self, literal: spec::Literal) -> PlanResult<NamedExpr> {
         let name = self.config.plan_formatter.literal_to_string(&literal)?;
         let literal = self.resolve_literal(literal)?;
@@ -727,7 +679,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let (argument_names, arguments) = self
-            .resolve_alias_expressions_and_names(arguments, schema, state)
+            .resolve_expressions_and_names(arguments, schema, state)
             .await?;
 
         // FIXME: is_user_defined_function is always false
@@ -896,7 +848,7 @@ impl PlanResolver<'_> {
                         return Err(PlanError::unsupported("distinct window function"));
                     }
                     let (argument_names, arguments) = self
-                        .resolve_alias_expressions_and_names(arguments, schema, state)
+                        .resolve_expressions_and_names(arguments, schema, state)
                         .await?;
                     let function = get_built_in_window_function(function_name.as_str())?;
                     (
@@ -915,7 +867,7 @@ impl PlanResolver<'_> {
                         function,
                     } = function;
                     let (argument_names, arguments) = self
-                        .resolve_alias_expressions_and_names(arguments, schema, state)
+                        .resolve_expressions_and_names(arguments, schema, state)
                         .await?;
                     let input_types: Vec<DataType> = arguments
                         .iter()
@@ -1200,7 +1152,7 @@ impl PlanResolver<'_> {
 
         let function_name: &str = function_name.as_str();
         let (argument_names, arguments) = self
-            .resolve_alias_expressions_and_names(arguments, schema, state)
+            .resolve_expressions_and_names(arguments, schema, state)
             .await?;
         let input_types: Vec<DataType> = arguments
             .iter()
