@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::CommonError;
 
 /// Native Sail data types that convert to Arrow types.
-/// Currently based on Spark's type system, transitioning to
-/// match [`arrow_schema::DataType`] variants directly.
+/// These types directly match to [arrow_schema::DataType] variants when there is a corresponding type.
+/// Additionally, custom data types are supported for cases not covered by Arrow (e.g. [`UserDefined`]).
 /// [Credit]: Comments within the enum are copied from [`arrow_schema::DataType`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -103,7 +103,7 @@ pub enum DataType {
     /// non-empty value requires to think about the desired semantics.
     /// One possibility is to assume that the original timestamp values are
     /// relative to the epoch of the timezone being set; timestamp values should
-    /// then adjusted to the Unix epoch (for example, changing the timezone from
+    /// then adjust to the Unix epoch (for example, changing the timezone from
     /// empty to "Europe/Paris" would require converting the timestamp values
     /// from "Europe/Paris" to "UTC", which seems counter-intuitive but is
     /// nevertheless correct).
@@ -164,7 +164,7 @@ pub enum DataType {
     Duration(TimeUnit),
     /// A "calendar" interval which models types that don't necessarily
     /// have a precise duration without the context of a base timestamp (e.g.
-    /// days can differ in length during day light savings time transitions).
+    /// days can differ in length during daylight savings time transitions).
     Interval(IntervalUnit),
     /// Opaque binary data of variable length.
     ///
@@ -259,7 +259,7 @@ pub enum DataType {
     /// For example the number 12300 could be treated as a decimal
     /// has precision 3 and scale -2.
     Decimal256(u8, i8),
-    /// A Map is a logical nested type that is represented as
+    /// A Map is a logical-nested type that is represented as
     ///
     /// `List<entries: Struct<key: K, value: V>>`
     ///
@@ -274,34 +274,34 @@ pub enum DataType {
     /// not enforced.
     Map(FieldRef, bool),
 
-    Byte,
-    Short,
-    Integer,
-    Long,
-    Float,
-    Double,
-    String,
-    Char {
-        length: u32,
-    },
-    VarChar {
-        length: u32,
-    },
-    Date,
-    TimestampNtz,
-    CalendarInterval,
-    YearMonthInterval {
-        start_field: Option<YearMonthIntervalField>,
-        end_field: Option<YearMonthIntervalField>,
-    },
-    DayTimeInterval {
-        start_field: Option<DayTimeIntervalField>,
-        end_field: Option<DayTimeIntervalField>,
-    },
-    Array {
-        element_type: Box<DataType>,
-        contains_null: bool,
-    },
+    // Byte,
+    // Short,
+    // Integer,
+    // Long,
+    // Float,
+    // Double,
+    // String,
+    // Char {
+    //     length: u32,
+    // },
+    // VarChar {
+    //     length: u32,
+    // },
+    // Date,
+    // TimestampNtz,
+    // CalendarInterval,
+    // YearMonthInterval {
+    //     start_field: Option<YearMonthIntervalField>,
+    //     end_field: Option<YearMonthIntervalField>,
+    // },
+    // DayTimeInterval {
+    //     start_field: Option<DayTimeIntervalField>,
+    //     end_field: Option<DayTimeIntervalField>,
+    // },
+    // Array {
+    //     element_type: Box<DataType>,
+    //     contains_null: bool,
+    // },
     // Map {
     //     key_type: Box<DataType>,
     //     value_type: Box<DataType>,
@@ -494,8 +494,8 @@ pub enum IntervalUnit {
     DayTime = 1,
     /// A triple of the number of elapsed months, days, and nanoseconds.
     /// The values are stored contiguously in 16 byte blocks. Months and
-    /// days are encoded as 32 bit integers and nanoseconds is encoded as a
-    /// 64 bit integer. All integers are signed. Each field is independent
+    /// days are encoded as 32-bit integers and nanoseconds is encoded as a
+    /// 64-bit integer. All integers are signed. Each field is independent
     /// (e.g. there is no constraint that nanoseconds have the same sign
     /// as days or that the quantity of nanoseconds represents less
     /// than a day's worth of time).
