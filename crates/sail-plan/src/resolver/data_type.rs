@@ -146,33 +146,35 @@ impl PlanResolver<'_> {
             adt::DataType::Utf8 => Ok(DataType::Utf8),
             adt::DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
             adt::DataType::Utf8View => Ok(DataType::Utf8View),
-            adt::DataType::List(field) => Ok(DataType::List(Arc::new(self.resolve_field(field)?))),
+            adt::DataType::List(field) => {
+                Ok(DataType::List(Arc::new(Self::unresolve_field(field)?)))
+            }
             adt::DataType::FixedSizeList(field, i32) => Ok(DataType::FixedSizeList(
-                Arc::new(self.resolve_field(field)?),
+                Arc::new(Self::unresolve_field(field)?),
                 *i32,
             )),
             adt::DataType::LargeList(field) => {
-                Ok(DataType::LargeList(Arc::new(self.resolve_field(field)?)))
+                Ok(DataType::LargeList(Arc::new(Self::unresolve_field(field)?)))
             }
-            adt::DataType::Struct(fields) => Ok(DataType::Struct(self.resolve_fields(fields)?)),
+            adt::DataType::Struct(fields) => Ok(DataType::Struct(Self::unresolve_fields(fields)?)),
             adt::DataType::Union(union_fields, union_mode) => {
                 let union_fields = union_fields
                     .iter()
-                    .map(|(i, field)| Ok((*i, Arc::new(self.resolve_field(field)?))))
+                    .map(|(i, field)| Ok((i, Arc::new(Self::unresolve_field(field)?))))
                     .collect::<PlanResult<_>>()?;
                 Ok(DataType::Union(
                     union_fields,
-                    Self::resolve_union_mode(union_mode),
+                    Self::unresolve_union_mode(union_mode),
                 ))
             }
             adt::DataType::Dictionary(key_type, value_type) => Ok(DataType::Dictionary(
-                Box::new(self.resolve_data_type(key_type)?),
-                Box::new(self.resolve_data_type(value_type)?),
+                Box::new(Self::unresolve_data_type(key_type)?),
+                Box::new(Self::unresolve_data_type(value_type)?),
             )),
             adt::DataType::Decimal128(u8, i8) => Ok(DataType::Decimal128(*u8, *i8)),
             adt::DataType::Decimal256(u8, i8) => Ok(DataType::Decimal256(*u8, *i8)),
             adt::DataType::Map(field, keys_are_sorted) => Ok(DataType::Map(
-                Arc::new(self.resolve_field(field)?),
+                Arc::new(Self::unresolve_field(field)?),
                 *keys_are_sorted,
             )),
             adt::DataType::ListView(_) => {
