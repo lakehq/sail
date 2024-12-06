@@ -6,13 +6,27 @@ import pyarrow as pa
 from pyspark.sql.pandas.types import DataType, from_arrow_type
 from pyspark.sql.types import ArrayType, MapType, StructType
 
+try:
+    _PYARROW_LIST_ARRAY_TYPES = (
+        pa.ListArray,
+        pa.LargeListArray,
+        pa.FixedSizeListArray,
+        pa.ListViewArray,
+        pa.LargeListViewArray,
+    )
+except AttributeError:
+    _PYARROW_LIST_ARRAY_TYPES = (pa.ListArray, pa.LargeListArray, pa.FixedSizeListArray)
+
+try:
+    _PYARROW_LIST_TYPES = (pa.ListType, pa.LargeListType, pa.FixedSizeListType, pa.ListViewType, pa.LargeListViewType)
+except AttributeError:
+    _PYARROW_LIST_TYPES = (pa.ListType, pa.LargeListType, pa.FixedSizeListType)
+
 
 def arrow_array_to_pyspark(array: pa.Array) -> list[Any]:
     def _convert(data: pa.Array, dt: DataType) -> list[Any]:
         if isinstance(dt, ArrayType):
-            if not isinstance(
-                data, (pa.ListArray, pa.LargeListArray, pa.FixedSizeListArray, pa.ListViewArray, pa.LargeListViewArray)
-            ):
+            if not isinstance(data, _PYARROW_LIST_ARRAY_TYPES):
                 msg = f"invalid data type for array: {type(data)}"
                 raise TypeError(msg)
             values = _convert(data.flatten(), dt.elementType)
@@ -56,7 +70,7 @@ def arrow_array_to_pyspark(array: pa.Array) -> list[Any]:
 
 def pyspark_to_arrow_array(obj: list[Any], data_type: pa.DataType) -> pa.Array:
     def _convert(data: list[Any], dt: pa.DataType) -> pa.Array:
-        if isinstance(dt, (pa.ListType, pa.LargeListType, pa.FixedSizeListType, pa.ListViewType, pa.LargeListViewType)):
+        if isinstance(dt, _PYARROW_LIST_TYPES):
             (values, offsets) = [], [0]
             end = 0
             for x in data:
