@@ -5,13 +5,14 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::common::Result;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use pyo3::prelude::{PyAnyMethods, PyTypeMethods};
-use pyo3::types::{PyIterator, PyList, PyTuple};
-use pyo3::{Bound, PyAny, PyObject, Python};
+use pyo3::prelude::PyAnyMethods;
+use pyo3::types::{PyList, PyTuple};
+use pyo3::{PyObject, Python};
 use sail_common::spec;
 
 use crate::cereal::pyspark_udf::PySparkUdfObject;
 use crate::error::PyUdfResult;
+use crate::helper::UdfHelper;
 use crate::utils::builtins::PyBuiltins;
 use crate::utils::pyarrow::{PyArrow, PyArrowArray, PyArrowArrayOptions, PyArrowToPandasOptions};
 
@@ -168,76 +169,32 @@ fn call_udf(
     py: Python,
     udf: PyObject,
     args: Vec<ArrayRef>,
-    eval_type: spec::PySparkUdfType,
-    deterministic: bool,
+    _eval_type: spec::PySparkUdfType,
+    _deterministic: bool,
     output_type: &DataType,
 ) -> PyUdfResult<ArrayData> {
     let udf = udf.into_bound(py);
     let py_list = PyBuiltins::list(py)?;
-    let py_str = PyBuiltins::str(py)?;
-    let pyarrow_array = PyArrow::array(
-        py,
-        PyArrowArrayOptions {
-            r#type: Some(output_type.to_pyarrow(py)?),
-            from_pandas: Some(false),
-        },
-    )?;
-    let pyarrow_array_to_pylist = PyArrowArray::to_pylist(py)?;
-
-    let py_args_columns_list = args
+    let py_args = args
         .iter()
-        .map(|arg| {
-            let arg = arg.into_data().to_pyarrow(py)?;
-            let arg = pyarrow_array_to_pylist.call1((arg,))?;
-            Ok(arg)
-        })
+        .map(|arg| Ok(UdfHelper::arrow_array_to_pyspark(py, arg)?))
         .collect::<PyUdfResult<Vec<_>>>()?;
-    let py_args_tuple = PyTuple::new_bound(py, &py_args_columns_list);
-    // TODO: Do zip in Rust for performance.
-    let py_args_zip = py.eval_bound("zip", None, None)?.call1(&py_args_tuple)?;
-    let py_args = PyIterator::from_bound_object(&py_args_zip)?;
-
-    let mut already_str: bool = false;
-    let results = py_args
-        .map(|py_arg| -> PyUdfResult<Bound<PyAny>> {
-            let py_arg = py_arg?;
-            let result = udf.call1((py.None(), (py_arg,)))?;
-            let result = py_list.call1((result,))?.get_item(0)?;
-
-            if matches!(eval_type, spec::PySparkUdfType::Batched)
-                && deterministic
-                && *output_type == DataType::Utf8
-            {
-                if already_str {
-                    return Ok(result);
-                }
-                let result_type = result.get_type();
-                let result_data_type_name = result_type.name()?;
-                if result_data_type_name != "str" {
-                    let result = py_str.call1((result,))?;
-                    return Ok(result);
-                } else {
-                    already_str = true;
-                }
-            }
-            Ok(result)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let results = pyarrow_array.call1((results,))?;
-    Ok(ArrayData::from_pyarrow_bound(&results)?)
+    let py_args = PyTuple::new_bound(py, py_args);
+    let py_args = PyBuiltins::zip(py)?.call1(py_args)?;
+    let results = udf.call1((py.None(), py_args))?;
+    let results = py_list.call1((results,))?;
+    Ok(UdfHelper::pyspark_to_arrow_array(&results, output_type)?)
 }
 
 fn call_udf_no_args(
     py: Python,
     udf: PyObject,
-    eval_type: spec::PySparkUdfType,
-    deterministic: bool,
+    _eval_type: spec::PySparkUdfType,
+    _deterministic: bool,
     output_type: &DataType,
 ) -> PyUdfResult<ArrayData> {
     let udf = udf.into_bound(py);
     let py_list = PyBuiltins::list(py)?;
-    let py_str = PyBuiltins::str(py)?;
     let pyarrow_array = PyArrow::array(
         py,
         PyArrowArrayOptions {
@@ -248,19 +205,6 @@ fn call_udf_no_args(
 
     let result = udf.call1((py.None(), (PyList::empty_bound(py),)))?;
     let result = py_list.call1((result,))?.get_item(0)?;
-    let result_type = result.get_type();
-    let result_data_type_name = result_type.name()?;
-
-    let result = if matches!(eval_type, spec::PySparkUdfType::Batched)
-        && deterministic
-        && *output_type == DataType::Utf8
-        && result_data_type_name != "str"
-    {
-        py_str.call1((result,))?
-    } else {
-        result
-    };
-
     let result = pyarrow_array.call1(([result],))?;
     Ok(ArrayData::from_pyarrow_bound(&result)?)
 }

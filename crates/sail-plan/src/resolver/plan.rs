@@ -645,7 +645,7 @@ impl PlanResolver<'_> {
         let function_name = function_name.table();
         let schema = Arc::new(DFSchema::empty());
         let (_, arguments) = self
-            .resolve_alias_expressions_and_names(arguments, &schema, state)
+            .resolve_expressions_and_names(arguments, &schema, state)
             .await?;
         let table_function = self.ctx.table_function(function_name)?;
         let table_provider = table_function.create_table_provider(&arguments)?;

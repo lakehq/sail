@@ -1357,7 +1357,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: MedianAccumulator not supported for median(col) with Interval(YearMonth)"
+        "failure": "error in DataFusion: This feature is not implemented: MedianAccumulator not supported for median(tab.#1) with Interval(YearMonth)"
       }
     },
     {
@@ -1503,7 +1503,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: resolve_grouping_function\ncaused by\nError during planning: Argument people.#3 AS name to grouping function is not in grouping columns people.#3"
+        "success": "ok"
       }
     },
     {

@@ -397,7 +397,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: two values expected: [Alias(Alias { expr: ScalarFunction(ScalarFunction { func: ScalarUDF { inner: SparkArray { signature: Signature { type_signature: OneOf([UserDefined, Any(0)]), volatility: Immutable }, aliases: [\"spark_make_array\"] } }, args: [Literal(Utf8(\"hello\")), Literal(NULL), Literal(Utf8(\"world\"))] }), relation: None, name: \"array(hello, NULL, world)\" }), Literal(Utf8(\" \")), Literal(Utf8(\",\"))]"
+        "failure": "error in DataFusion: Error during planning: two values expected: [ScalarFunction(ScalarFunction { func: ScalarUDF { inner: SparkArray { signature: Signature { type_signature: OneOf([UserDefined, Any(0)]), volatility: Immutable }, aliases: [\"spark_make_array\"] } }, args: [Literal(Utf8(\"hello\")), Literal(NULL), Literal(Utf8(\"world\"))] }), Literal(Utf8(\" \")), Literal(Utf8(\",\"))]"
       }
     },
     {

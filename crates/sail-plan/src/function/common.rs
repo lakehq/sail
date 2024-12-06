@@ -12,11 +12,23 @@ use crate::utils::ItemTaker;
 pub struct FunctionContext<'a> {
     plan_config: Arc<PlanConfig>,
     ctx: &'a SessionContext,
+    /// The names of function arguments.
+    /// Most functions do not need this information, so it is
+    /// passed as `&[String]` rather than `Vec<String>` to avoid unnecessary clone.
+    argument_names: &'a [String],
 }
 
 impl<'a> FunctionContext<'a> {
-    pub fn new(plan_config: Arc<PlanConfig>, ctx: &'a SessionContext) -> Self {
-        Self { plan_config, ctx }
+    pub fn new(
+        plan_config: Arc<PlanConfig>,
+        ctx: &'a SessionContext,
+        argument_names: &'a [String],
+    ) -> Self {
+        Self {
+            plan_config,
+            ctx,
+            argument_names,
+        }
     }
 
     pub fn plan_config(&self) -> &Arc<PlanConfig> {
@@ -25,6 +37,10 @@ impl<'a> FunctionContext<'a> {
 
     pub fn session_context(&self) -> &SessionContext {
         self.ctx
+    }
+
+    pub fn argument_names(&self) -> &[String] {
+        self.argument_names
     }
 }
 
@@ -118,19 +134,6 @@ impl FunctionBuilder {
         Arc::new(move |args, _config| {
             Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
                 func: f(),
-                args,
-            }))
-        })
-    }
-
-    pub fn dynamic_udf<F, U>(f: F) -> Function
-    where
-        F: Fn(Vec<expr::Expr>) -> PlanResult<U> + Send + Sync + 'static,
-        U: ScalarUDFImpl + Send + Sync + 'static,
-    {
-        Arc::new(move |args, _config| {
-            Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func: Arc::new(ScalarUDF::from(f(args.clone())?)),
                 args,
             }))
         })
