@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 fn to_struct_array(args: &[ArrayRef], field_names: &[String]) -> Result<ArrayRef> {
     if args.is_empty() {
@@ -45,22 +45,6 @@ impl StructFunction {
 
     pub fn field_names(&self) -> &[String] {
         &self.field_names
-    }
-
-    pub fn try_new_from_expressions(expr: Vec<Expr>) -> Result<Self> {
-        let field_names: Vec<String> = expr
-            .into_iter()
-            .enumerate()
-            .map(|(i, x)| -> Result<_> {
-                match x {
-                    Expr::Column(column) => Ok(column.name),
-                    Expr::Alias(alias) => Ok(alias.name),
-                    Expr::Wildcard { .. } => exec_err!("wildcard is not yet supported in struct"),
-                    _ => Ok(format!("col{}", i + 1)),
-                }
-            })
-            .collect::<Result<_>>()?;
-        Ok(Self::new(field_names))
     }
 }
 
