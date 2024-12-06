@@ -103,7 +103,7 @@ pub enum DataType {
     /// non-empty value requires to think about the desired semantics.
     /// One possibility is to assume that the original timestamp values are
     /// relative to the epoch of the timezone being set; timestamp values should
-    /// then adjust to the Unix epoch (for example, changing the timezone from
+    /// then adjusted to the Unix epoch (for example, changing the timezone from
     /// empty to "Europe/Paris" would require converting the timestamp values
     /// from "Europe/Paris" to "UTC", which seems counter-intuitive but is
     /// nevertheless correct).
@@ -114,7 +114,7 @@ pub enum DataType {
     /// DataType::Timestamp(TimeUnit::Second, Some("literal".into()));
     /// DataType::Timestamp(TimeUnit::Second, Some("string".to_string().into()));
     /// ```
-    Timestamp(Option<TimeUnit>, Option<Arc<str>>),
+    Timestamp(TimeUnit, Option<Arc<str>>),
     /// A signed 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in days.
     Date32,
@@ -164,7 +164,7 @@ pub enum DataType {
     Duration(TimeUnit),
     /// A "calendar" interval which models types that don't necessarily
     /// have a precise duration without the context of a base timestamp (e.g.
-    /// days can differ in length during daylight savings time transitions).
+    /// days can differ in length during day light savings time transitions).
     Interval(IntervalUnit),
     /// Opaque binary data of variable length.
     ///
@@ -259,7 +259,7 @@ pub enum DataType {
     /// For example the number 12300 could be treated as a decimal
     /// has precision 3 and scale -2.
     Decimal256(u8, i8),
-    /// A Map is a logical-nested type that is represented as
+    /// A Map is a logical nested type that is represented as
     ///
     /// `List<entries: Struct<key: K, value: V>>`
     ///
