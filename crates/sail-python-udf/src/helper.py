@@ -7,6 +7,11 @@ from pyspark.sql.pandas.types import DataType, from_arrow_type
 from pyspark.sql.types import ArrayType, MapType, StructType
 
 try:
+    _PYARROW_LIST_TYPES = (pa.ListType, pa.LargeListType, pa.FixedSizeListType, pa.ListViewType, pa.LargeListViewType)
+except AttributeError:
+    _PYARROW_LIST_TYPES = (pa.ListType, pa.LargeListType, pa.FixedSizeListType)
+
+try:
     _PYARROW_LIST_ARRAY_TYPES = (
         pa.ListArray,
         pa.LargeListArray,
@@ -18,9 +23,9 @@ except AttributeError:
     _PYARROW_LIST_ARRAY_TYPES = (pa.ListArray, pa.LargeListArray, pa.FixedSizeListArray)
 
 try:
-    _PYARROW_LIST_TYPES = (pa.ListType, pa.LargeListType, pa.FixedSizeListType, pa.ListViewType, pa.LargeListViewType)
+    _PYARROW_STRING_TYPE_INSTANCES = (pa.string(), pa.large_string(), pa.string_view())
 except AttributeError:
-    _PYARROW_LIST_TYPES = (pa.ListType, pa.LargeListType, pa.FixedSizeListType)
+    _PYARROW_STRING_TYPE_INSTANCES = (pa.string(), pa.large_string())
 
 
 def arrow_array_to_pyspark(array: pa.Array) -> list[Any]:
@@ -115,7 +120,7 @@ def pyspark_to_arrow_array(obj: list[Any], data_type: pa.DataType) -> pa.Array:
             return pa.StructArray.from_arrays(
                 [_convert(col, f.type) for col, f in zip(columns, dt.fields)], fields=dt.fields, mask=mask
             )
-        elif dt.equals(pa.string()) or dt.equals(pa.large_string()) or dt.equals(pa.string_view()):
+        elif any(dt.equals(x) for x in _PYARROW_STRING_TYPE_INSTANCES):
             return pa.array([None if x is None else str(x) for x in data], type=dt)
         else:
             converter = from_arrow_type(dt).toInternal
