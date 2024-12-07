@@ -25,16 +25,15 @@ pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_SCALE: i8 = 18;
 /// Parse a Spark data type string of various forms.
 /// Reference: org.apache.spark.sql.connect.planner.SparkConnectPlanner#parseDatatypeString
 pub(crate) fn parse_spark_data_type(schema: &str) -> SparkResult<spec::DataType> {
-    if let Ok(dt) = parse_data_type(schema) {
-        Ok(dt)
-    } else if let Ok(dt) = parse_data_type(format!("struct<{schema}>").as_str()) {
-        // The SQL parser supports both `struct<name: type, ...>` and `struct<name type, ...>` syntax.
-        // Therefore, by wrapping the input with `struct<...>`, we do not need separate logic
-        // to parse table schema input (`name type, ...`).
-        Ok(dt)
-    } else {
-        parse_spark_json_data_type(schema)?.try_into()
-    }
+if let Ok(dt) = parse_data_type(schema) {
+    Ok(dt)
+} else if let Ok(dt) = parse_data_type(format!("struct<{schema}>").as_str()) {
+    // The SQL parser supports both `struct<name: type, ...>` and `struct<name type, ...>` syntax.
+    // Therefore, by wrapping the input with `struct<...>`, we do not need separate logic
+    // to parse table schema input (`name type, ...`).
+    Ok(dt)
+} else {
+    parse_spark_json_data_type(schema)?.try_into()
 }
 
 impl TryFrom<sdt::StructField> for spec::Field {
@@ -75,12 +74,12 @@ impl TryFrom<DataType> for spec::DataType {
             Kind::Null(_) => Ok(spec::DataType::Null),
             Kind::Binary(_) => Ok(spec::DataType::Binary),
             Kind::Boolean(_) => Ok(spec::DataType::Boolean),
-            Kind::Byte(_) => Ok(spec::DataType::Byte),
-            Kind::Short(_) => Ok(spec::DataType::Short),
-            Kind::Integer(_) => Ok(spec::DataType::Integer),
-            Kind::Long(_) => Ok(spec::DataType::Long),
-            Kind::Float(_) => Ok(spec::DataType::Float),
-            Kind::Double(_) => Ok(spec::DataType::Double),
+            Kind::Byte(_) => Ok(spec::DataType::Int8),
+            Kind::Short(_) => Ok(spec::DataType::Int16),
+            Kind::Integer(_) => Ok(spec::DataType::Int32),
+            Kind::Long(_) => Ok(spec::DataType::Int64),
+            Kind::Float(_) => Ok(spec::DataType::Float32),
+            Kind::Double(_) => Ok(spec::DataType::Float64),
             Kind::Decimal(sdt::Decimal {
                 scale,
                 precision,
@@ -97,12 +96,12 @@ impl TryFrom<DataType> for spec::DataType {
                     .map_err(|_| SparkError::invalid("decimal precision"))?
                     .unwrap_or(SPARK_DECIMAL_USER_DEFAULT_PRECISION);
                 if precision > ARROW_DECIMAL128_MAX_PRECISION {
-                    Ok(spec::DataType::Decimal256 { precision, scale })
+                    Ok(spec::DataType::Decimal256(precision, scale))
                 } else {
-                    Ok(spec::DataType::Decimal128 { precision, scale })
+                    Ok(spec::DataType::Decimal128(precision, scale))
                 }
             }
-            Kind::String(_) => Ok(spec::DataType::String),
+            Kind::String(_) => Ok(spec::DataType::ConfiguredUtf8(None)),
             Kind::Char(sdt::Char {
                 length,
                 type_variation_reference: _,
@@ -110,7 +109,7 @@ impl TryFrom<DataType> for spec::DataType {
                 let length = length
                     .try_into()
                     .map_err(|_| SparkError::invalid("char length"))?;
-                Ok(spec::DataType::Char { length })
+                Ok(spec::DataType::ConfiguredUtf8(Some(length)))
             }
             Kind::VarChar(sdt::VarChar {
                 length,
@@ -119,15 +118,18 @@ impl TryFrom<DataType> for spec::DataType {
                 let length = length
                     .try_into()
                     .map_err(|_| SparkError::invalid("varchar length"))?;
-                Ok(spec::DataType::VarChar { length })
+                Ok(spec::DataType::ConfiguredUtf8(Some(length)))
             }
-            Kind::Date(_) => Ok(spec::DataType::Date),
+            Kind::Date(_) => Ok(spec::DataType::Date32),
             Kind::Timestamp(_) => Ok(spec::DataType::Timestamp(
-                Some(spec::TimeUnit::Microsecond),
+                spec::TimeUnit::Microsecond,
                 Some(Arc::<str>::from("ltz")),
             )),
-            Kind::TimestampNtz(_) => Ok(spec::DataType::TimestampNtz),
-            Kind::CalendarInterval(_) => Ok(spec::DataType::CalendarInterval),
+            Kind::TimestampNtz(_) => Ok(spec::DataType::Timestamp(
+                spec::TimeUnit::Microsecond,
+                None,
+            )),
+            Kind::CalendarInterval(_) => Ok(spec::DataType::Interval(spec::IntervalUnit::MonthDayNano)),
             Kind::YearMonthInterval(sdt::YearMonthInterval {
                 start_field,
                 end_field,
@@ -135,14 +137,20 @@ impl TryFrom<DataType> for spec::DataType {
             }) => {
                 let start_field = start_field
                     .map(spec::YearMonthIntervalField::try_from)
+                    .transpose()?
+                    .map(spec::IntervalFieldType::try_from)
                     .transpose()?;
                 let end_field = end_field
                     .map(spec::YearMonthIntervalField::try_from)
+                    .transpose()?
+                    .map(spec::IntervalFieldType::try_from)
                     .transpose()?;
-                Ok(spec::DataType::YearMonthInterval {
+                // TODO: [CHECK HERE] Don't merge in till you come back to this: val DEFAULT = YearMonthIntervalType(YEAR, MONTH)
+                Ok(spec::DataType::Interval(
+                    spec::IntervalUnit::YearMonth,
                     start_field,
                     end_field,
-                })
+                ))
             }
             Kind::DayTimeInterval(sdt::DayTimeInterval {
                 start_field,
@@ -151,14 +159,20 @@ impl TryFrom<DataType> for spec::DataType {
             }) => {
                 let start_field = start_field
                     .map(spec::DayTimeIntervalField::try_from)
+                    .transpose()?
+                    .map(spec::IntervalFieldType::try_from)
                     .transpose()?;
                 let end_field = end_field
                     .map(spec::DayTimeIntervalField::try_from)
+                    .transpose()?
+                    .map(spec::IntervalFieldType::try_from)
                     .transpose()?;
-                Ok(spec::DataType::DayTimeInterval {
+                // TODO: [CHECK HERE] Don't merge in till you come back to this: val DEFAULT = DayTimeIntervalType(DAY, SECOND)
+                Ok(spec::DataType::Interval(
+                    spec::IntervalUnit::DayTime,
                     start_field,
                     end_field,
-                })
+                ))
             }
             Kind::Array(array) => {
                 let sdt::Array {
@@ -356,26 +370,26 @@ impl TryFrom<spec::DataType> for DataType {
 
 #[cfg(test)]
 mod tests {
-    use sail_common::tests::test_gold_set;
+use sail_common::tests::test_gold_set;
 
-    use super::{parse_spark_data_type, DEFAULT_FIELD_NAME};
-    use crate::error::{SparkError, SparkResult};
+use super::{parse_spark_data_type, DEFAULT_FIELD_NAME};
+use crate::error::{SparkError, SparkResult};
 
-    #[test]
-    fn test_parse_spark_data_type_gold_set() -> SparkResult<()> {
-        test_gold_set(
-            "tests/gold_data/data_type.json",
-            |s: String| parse_spark_data_type(&s),
-            |e: String| SparkError::internal(e),
-        )
-    }
+#[test]
+fn test_parse_spark_data_type_gold_set() -> SparkResult<()> {
+    test_gold_set(
+        "tests/gold_data/data_type.json",
+        |s: String| parse_spark_data_type(&s),
+        |e: String| SparkError::internal(e),
+    )
+}
 
-    #[test]
-    fn test_parse_spark_table_schema_gold_set() -> SparkResult<()> {
-        test_gold_set(
-            "tests/gold_data/table_schema.json",
-            |s: String| Ok(parse_spark_data_type(&s)?.into_schema(DEFAULT_FIELD_NAME, true)),
-            |e: String| SparkError::internal(e),
-        )
-    }
+#[test]
+fn test_parse_spark_table_schema_gold_set() -> SparkResult<()> {
+    test_gold_set(
+        "tests/gold_data/table_schema.json",
+        |s: String| Ok(parse_spark_data_type(&s)?.into_schema(DEFAULT_FIELD_NAME, true)),
+        |e: String| SparkError::internal(e),
+    )
+}
 }

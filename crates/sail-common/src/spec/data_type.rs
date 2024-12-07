@@ -4,10 +4,11 @@ use std::sync::Arc;
 use num_enum::TryFromPrimitive;
 use serde::{Deserialize, Serialize};
 
-use crate::error::CommonError;
+use crate::error::{CommonError, CommonResult};
 
 /// Native Sail data types that convert to Arrow types.
-/// These types directly match to [arrow_schema::DataType] variants when there is a corresponding type.
+/// These types usually directly match to [arrow_schema::DataType] variants when there is a corresponding type.
+/// Exceptions to this are: [`Interval`].
 /// Additionally, custom data types are supported for cases not covered by Arrow (e.g. [`UserDefined`]).
 /// [Credit]: Comments within the enum are copied from [`arrow_schema::DataType`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -164,8 +165,15 @@ pub enum DataType {
     Duration(TimeUnit),
     /// A "calendar" interval which models types that don't necessarily
     /// have a precise duration without the context of a base timestamp (e.g.
-    /// days can differ in length during day light savings time transitions).
-    Interval(IntervalUnit),
+    /// days can differ in length during daylight savings time transitions).
+    ///
+    /// This differs from the Arrow specification.
+    /// Sail's specification allows for an optional start_field and end_field.
+    Interval(
+        IntervalUnit,
+        Option<IntervalFieldType>,
+        Option<IntervalFieldType>,
+    ),
     /// Opaque binary data of variable length.
     ///
     /// A single Binary array can store up to [`i32::MAX`] bytes
@@ -313,6 +321,18 @@ pub enum DataType {
         serialized_python_class: Option<String>,
         sql_type: Box<DataType>,
     },
+    // TODO: [CHECK HERE] Don't merge in till you revisit this to include optional "String type" information from Spark.
+    /// Resolves to either [`Self::Utf8`] or [`Self::LargeUtf8`], based on `config.arrow_use_large_var_types`.
+    /// Optional length parameter is currently unused but retained for potential future use.
+    ///
+    /// The [`sail-spark-connect`] crate uses `TryFrom` for mapping Spark types to Sail types,
+    /// whereas [`PlanResolver`] resolves `DataType` without `TryFrom`. This makes
+    /// [`PlanResolver::resolve_data_type`] more suitable here, as it has access to `config`
+    /// and can determine the type accordingly.
+    ///
+    /// TODO: Refactor data type resolution in [`sail-spark-connect`] to avoid using `TryFrom`.
+    ///     This would make it possible to remove this variant in the future.
+    ConfiguredUtf8(Option<u32>),
 }
 
 impl DataType {
@@ -564,6 +584,37 @@ impl YearMonthIntervalField {
     }
 }
 
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    TryFromPrimitive,
+)]
+#[serde(rename_all = "camelCase")]
+#[num_enum(error_type(name = CommonError, constructor = IntervalFieldType::invalid))]
+#[repr(i32)]
+pub enum IntervalFieldType {
+    Year = 0,
+    Month = 1,
+    Day = 2,
+    Hour = 3,
+    Minute = 4,
+    Second = 5,
+}
+
+impl IntervalFieldType {
+    fn invalid(value: i32) -> CommonError {
+        CommonError::invalid(format!("interval field type: {value}"))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Schema {
     pub fields: Fields,
@@ -584,4 +635,28 @@ pub enum TimeUnit {
     Millisecond,
     Microsecond,
     Nanosecond,
+}
+
+impl TryFrom<DayTimeIntervalField> for IntervalFieldType {
+    type Error = CommonError;
+
+    fn try_from(field_type: DayTimeIntervalField) -> CommonResult<IntervalFieldType> {
+        match field_type {
+            DayTimeIntervalField::Day => Ok(IntervalFieldType::Day),
+            DayTimeIntervalField::Hour => Ok(IntervalFieldType::Hour),
+            DayTimeIntervalField::Minute => Ok(IntervalFieldType::Minute),
+            DayTimeIntervalField::Second => Ok(IntervalFieldType::Second),
+        }
+    }
+}
+
+impl TryFrom<YearMonthIntervalField> for IntervalFieldType {
+    type Error = CommonError;
+
+    fn try_from(field_type: YearMonthIntervalField) -> CommonResult<IntervalFieldType> {
+        match field_type {
+            YearMonthIntervalField::Year => Ok(IntervalFieldType::Year),
+            YearMonthIntervalField::Month => Ok(IntervalFieldType::Month),
+        }
+    }
 }

@@ -98,6 +98,7 @@ impl PlanResolver<'_> {
                 Arc::new(self.resolve_field(field)?),
                 *keys_are_sorted,
             )),
+            DataType::ConfiguredUtf8(_length) => Ok(self.arrow_string_type()),
             DataType::UserDefined { .. } => Err(PlanError::unsupported(
                 "user defined data type should only exist in a field",
             )),
@@ -178,9 +179,11 @@ impl PlanResolver<'_> {
                 *keys_are_sorted,
             )),
             adt::DataType::ListView(_) => {
+                // Not yet fully supported by Arrow
                 Err(PlanError::unsupported("unresolve_data_type ListView"))
             }
             adt::DataType::LargeListView(_) => {
+                // Not yet fully supported by Arrow
                 Err(PlanError::unsupported("unresolve_data_type LargeListView"))
             }
             adt::DataType::RunEndEncoded(_, _) => {

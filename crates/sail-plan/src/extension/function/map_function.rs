@@ -1,8 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::StructArray;
-use datafusion::arrow::array::{ArrayRef, MapArray};
+use datafusion::arrow::array::{ArrayRef, MapArray, StructArray};
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute::interleave;
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
