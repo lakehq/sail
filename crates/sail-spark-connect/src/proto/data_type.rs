@@ -25,15 +25,16 @@ pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_SCALE: i8 = 18;
 /// Parse a Spark data type string of various forms.
 /// Reference: org.apache.spark.sql.connect.planner.SparkConnectPlanner#parseDatatypeString
 pub(crate) fn parse_spark_data_type(schema: &str) -> SparkResult<spec::DataType> {
-if let Ok(dt) = parse_data_type(schema) {
-    Ok(dt)
-} else if let Ok(dt) = parse_data_type(format!("struct<{schema}>").as_str()) {
-    // The SQL parser supports both `struct<name: type, ...>` and `struct<name type, ...>` syntax.
-    // Therefore, by wrapping the input with `struct<...>`, we do not need separate logic
-    // to parse table schema input (`name type, ...`).
-    Ok(dt)
-} else {
-    parse_spark_json_data_type(schema)?.try_into()
+    if let Ok(dt) = parse_data_type(schema) {
+        Ok(dt)
+    } else if let Ok(dt) = parse_data_type(format!("struct<{schema}>").as_str()) {
+        // The SQL parser supports both `struct<name: type, ...>` and `struct<name type, ...>` syntax.
+        // Therefore, by wrapping the input with `struct<...>`, we do not need separate logic
+        // to parse table schema input (`name type, ...`).
+        Ok(dt)
+    } else {
+        parse_spark_json_data_type(schema)?.try_into()
+    }
 }
 
 impl TryFrom<sdt::StructField> for spec::Field {
@@ -125,11 +126,12 @@ impl TryFrom<DataType> for spec::DataType {
                 spec::TimeUnit::Microsecond,
                 Some(Arc::<str>::from("ltz")),
             )),
-            Kind::TimestampNtz(_) => Ok(spec::DataType::Timestamp(
-                spec::TimeUnit::Microsecond,
-                None,
-            )),
-            Kind::CalendarInterval(_) => Ok(spec::DataType::Interval(spec::IntervalUnit::MonthDayNano)),
+            Kind::TimestampNtz(_) => {
+                Ok(spec::DataType::Timestamp(spec::TimeUnit::Microsecond, None))
+            }
+            Kind::CalendarInterval(_) => {
+                Ok(spec::DataType::Interval(spec::IntervalUnit::MonthDayNano))
+            }
             Kind::YearMonthInterval(sdt::YearMonthInterval {
                 start_field,
                 end_field,
@@ -370,26 +372,26 @@ impl TryFrom<spec::DataType> for DataType {
 
 #[cfg(test)]
 mod tests {
-use sail_common::tests::test_gold_set;
+    use sail_common::tests::test_gold_set;
 
-use super::{parse_spark_data_type, DEFAULT_FIELD_NAME};
-use crate::error::{SparkError, SparkResult};
+    use super::{parse_spark_data_type, DEFAULT_FIELD_NAME};
+    use crate::error::{SparkError, SparkResult};
 
-#[test]
-fn test_parse_spark_data_type_gold_set() -> SparkResult<()> {
-    test_gold_set(
-        "tests/gold_data/data_type.json",
-        |s: String| parse_spark_data_type(&s),
-        |e: String| SparkError::internal(e),
-    )
-}
+    #[test]
+    fn test_parse_spark_data_type_gold_set() -> SparkResult<()> {
+        test_gold_set(
+            "tests/gold_data/data_type.json",
+            |s: String| parse_spark_data_type(&s),
+            |e: String| SparkError::internal(e),
+        )
+    }
 
-#[test]
-fn test_parse_spark_table_schema_gold_set() -> SparkResult<()> {
-    test_gold_set(
-        "tests/gold_data/table_schema.json",
-        |s: String| Ok(parse_spark_data_type(&s)?.into_schema(DEFAULT_FIELD_NAME, true)),
-        |e: String| SparkError::internal(e),
-    )
-}
+    #[test]
+    fn test_parse_spark_table_schema_gold_set() -> SparkResult<()> {
+        test_gold_set(
+            "tests/gold_data/table_schema.json",
+            |s: String| Ok(parse_spark_data_type(&s)?.into_schema(DEFAULT_FIELD_NAME, true)),
+            |e: String| SparkError::internal(e),
+        )
+    }
 }
