@@ -330,8 +330,8 @@ pub enum DataType {
     /// [`PlanResolver::resolve_data_type`] more suitable here, as it has access to `config`
     /// and can determine the type accordingly.
     ///
-    /// TODO: Refactor data type resolution in [`sail-spark-connect`] to avoid using `TryFrom`.
-    ///     This would make it possible to remove this variant in the future.
+    /// TODO: Refactor data type resolution in [`sail-spark-connect`] to avoid using `TryFrom`,
+    ///       which would allow for removal of this variant.
     ConfiguredUtf8(Option<u32>),
 }
 
