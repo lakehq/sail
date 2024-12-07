@@ -168,11 +168,11 @@ pub enum DataType {
     /// days can differ in length during daylight savings time transitions).
     ///
     /// This differs from the Arrow specification.
-    /// Sail's specification allows for an optional start_field and end_field.
+    /// Sail's specification allows for an optional `start_field` and `end_field`.
     Interval(
         IntervalUnit,
-        Option<IntervalFieldType>,
-        Option<IntervalFieldType>,
+        Option<IntervalFieldType>, // `start_field`
+        Option<IntervalFieldType>, // `end_field`
     ),
     /// Opaque binary data of variable length.
     ///
@@ -267,7 +267,7 @@ pub enum DataType {
     /// For example the number 12300 could be treated as a decimal
     /// has precision 3 and scale -2.
     Decimal256(u8, i8),
-    /// A Map is a logical nested type that is represented as
+    /// A Map is a logical-nested type that is represented as
     ///
     /// `List<entries: Struct<key: K, value: V>>`
     ///
