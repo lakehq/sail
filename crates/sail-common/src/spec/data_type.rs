@@ -167,6 +167,7 @@ pub enum DataType {
     /// have a precise duration without the context of a base timestamp (e.g.
     /// days can differ in length during daylight savings time transitions).
     ///
+    /// TODO: [CHECK HERE] Don't merge in till you revisit this to see if it's necessary to include `start_field` and `end_field`.
     /// This differs from the Arrow specification.
     /// Sail's specification allows for an optional `start_field` and `end_field`.
     Interval(
