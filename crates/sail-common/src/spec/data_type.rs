@@ -167,7 +167,6 @@ pub enum DataType {
     /// have a precise duration without the context of a base timestamp (e.g.
     /// days can differ in length during daylight savings time transitions).
     ///
-    /// TODO: [CHECK HERE] Don't merge in till you revisit this to see if it's necessary to include `start_field` and `end_field`.
     /// This differs from the Arrow specification.
     /// Sail's specification allows for an optional `start_field` and `end_field`.
     Interval(
@@ -282,49 +281,18 @@ pub enum DataType {
     /// child fields may be respectively "entries", "key", and "value", but this is
     /// not enforced.
     Map(FieldRef, bool),
-
-    // Byte,
-    // Short,
-    // Integer,
-    // Long,
-    // Float,
-    // Double,
-    // String,
-    // Char {
-    //     length: u32,
-    // },
-    // VarChar {
-    //     length: u32,
-    // },
-    // Date,
-    // TimestampNtz,
-    // CalendarInterval,
-    // YearMonthInterval {
-    //     start_field: Option<YearMonthIntervalField>,
-    //     end_field: Option<YearMonthIntervalField>,
-    // },
-    // DayTimeInterval {
-    //     start_field: Option<DayTimeIntervalField>,
-    //     end_field: Option<DayTimeIntervalField>,
-    // },
-    // Array {
-    //     element_type: Box<DataType>,
-    //     contains_null: bool,
-    // },
-    // Map {
-    //     key_type: Box<DataType>,
-    //     value_type: Box<DataType>,
-    //     value_contains_null: bool,
-    // },
+    ///
+    /// Everything below this line is not part of the Arrow specification.
+    ///
     UserDefined {
         jvm_class: Option<String>,
         python_class: Option<String>,
         serialized_python_class: Option<String>,
         sql_type: Box<DataType>,
     },
-    // TODO: [CHECK HERE] Don't merge in till you revisit this to include optional "String type" information from Spark.
     /// Resolves to either [`Self::Utf8`] or [`Self::LargeUtf8`], based on `config.arrow_use_large_var_types`.
     /// Optional length parameter is currently unused but retained for potential future use.
+    /// Optional `ConfiguredUtf8Type` specifies if the type is a `varchar` or `char`.
     ///
     /// The [`sail-spark-connect`] crate uses `TryFrom` for mapping Spark types to Sail types,
     /// whereas [`PlanResolver`] resolves `DataType` without `TryFrom`. This makes
@@ -333,7 +301,9 @@ pub enum DataType {
     ///
     /// TODO: Refactor data type resolution in [`sail-spark-connect`] to avoid using `TryFrom`,
     ///       which would allow for removal of this variant.
-    ConfiguredUtf8(Option<u32>),
+    ConfiguredUtf8(Option<u32>, Option<ConfiguredUtf8Type>),
+    // TODO: Same TODO as `ConfiguredUtf8`.
+    ConfiguredBinary,
 }
 
 impl DataType {
@@ -659,5 +629,40 @@ impl TryFrom<YearMonthIntervalField> for IntervalFieldType {
             YearMonthIntervalField::Year => Ok(IntervalFieldType::Year),
             YearMonthIntervalField::Month => Ok(IntervalFieldType::Month),
         }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    TryFromPrimitive,
+)]
+#[serde(rename_all = "camelCase")]
+#[num_enum(error_type(name = CommonError, constructor = ConfiguredUtf8Type::invalid))]
+#[repr(i32)]
+/// TODO: Currently the behavior of each variant is not implemented.
+/// Reference: https://spark.apache.org/docs/3.5.3/sql-ref-datatypes.html#supported-data-types
+pub enum ConfiguredUtf8Type {
+    /// String which has a length limitation.
+    /// Data writing will fail if the input string exceeds the length limitation.
+    /// Note: this type can only be used in table schema, not functions/operator
+    VarChar = 0,
+    /// A variant of Varchar(length) which is fixed length.
+    /// Reading column of type Char(n) always returns string values of length n.
+    /// Char type column comparison will pad the short one to the longer length.
+    Char = 1,
+}
+
+impl ConfiguredUtf8Type {
+    fn invalid(value: i32) -> CommonError {
+        CommonError::invalid(format!("configured utf8 type: {value}"))
     }
 }
