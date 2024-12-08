@@ -222,9 +222,7 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
                     })
                 })
                 .collect::<SqlResult<Vec<_>>>()?;
-            Ok(spec::DataType::Struct {
-                fields: spec::Fields::new(fields),
-            })
+            Ok(spec::DataType::Struct(spec::Fields::from(fields)))
         }
         ast::DataType::Map(key, value) => {
             let key = from_ast_data_type(key)?;
