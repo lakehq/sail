@@ -63,6 +63,8 @@ impl TryFrom<sdt::StructField> for spec::Field {
     }
 }
 
+// FIXME: [CHECK HERE] Don't merge in till you fix type mapping
+//  https://github.com/apache/spark/blob/bb17665955ad536d8c81605da9a59fb94b6e0162/sql/api/src/main/scala/org/apache/spark/sql/util/ArrowUtils.scala#L34
 impl TryFrom<DataType> for spec::DataType {
     type Error = SparkError;
 
@@ -301,6 +303,8 @@ impl TryFrom<spec::Field> for sdt::StructField {
     }
 }
 
+// FIXME: [CHECK HERE] Don't merge in till you fix type mapping
+//  https://github.com/apache/spark/blob/bb17665955ad536d8c81605da9a59fb94b6e0162/sql/api/src/main/scala/org/apache/spark/sql/util/ArrowUtils.scala#L34
 impl TryFrom<spec::DataType> for DataType {
     type Error = SparkError;
 
