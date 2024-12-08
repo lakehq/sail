@@ -306,7 +306,7 @@ impl TryFrom<spec::DataType> for DataType {
                 type_variation_reference: 0,
             })),
             // FIXME: This mapping might not always be correct due to converting to Arrow data types and back.
-            //  For example, this may be a `Kind::Char` or `Kind::VarChar` in Spark.
+            //  For example, this originally may have been a `Kind::Char` or `Kind::VarChar` in Spark.
             //  We retain the original type information in `ConfiguredUtf8`, which is currently lost when converting to Arrow.
             spec::DataType::Utf8 | spec::DataType::LargeUtf8 | spec::DataType::Utf8View => {
                 Ok(Kind::String(sdt::String::default()))

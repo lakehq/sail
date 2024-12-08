@@ -99,7 +99,7 @@ impl PlanResolver<'_> {
                 *keys_are_sorted,
             )),
             DataType::ConfiguredUtf8(_length, _utf8_type) => {
-                // TODO: Currently `length` and `utf8_type` is lost in translation.
+                // FIXME: Currently `length` and `utf8_type` is lost in translation.
                 //  This impacts accuracy if `spec::ConfiguredUtf8Type` is `VarChar` or `Char`.
                 Ok(self.arrow_string_type())
             }
@@ -114,8 +114,6 @@ impl PlanResolver<'_> {
         use spec::DataType;
 
         match data_type {
-            // TODO: DataType::ConfiguredUtf8 is lost in translation.
-            //  This impacts accuracy if `spec::ConfiguredUtf8Type` is `VarChar` or `Char`.
             adt::DataType::Null => Ok(DataType::Null),
             adt::DataType::Boolean => Ok(DataType::Boolean),
             adt::DataType::Int8 => Ok(DataType::Int8),
