@@ -63,8 +63,7 @@ impl TryFrom<sdt::StructField> for spec::Field {
     }
 }
 
-// FIXME: [CHECK HERE] Don't merge in till you fix type mapping
-//  https://github.com/apache/spark/blob/bb17665955ad536d8c81605da9a59fb94b6e0162/sql/api/src/main/scala/org/apache/spark/sql/util/ArrowUtils.scala#L34
+/// Reference: https://github.com/apache/spark/blob/bb17665955ad536d8c81605da9a59fb94b6e0162/sql/api/src/main/scala/org/apache/spark/sql/util/ArrowUtils.scala
 impl TryFrom<DataType> for spec::DataType {
     type Error = SparkError;
 
@@ -144,60 +143,28 @@ impl TryFrom<DataType> for spec::DataType {
             Kind::TimestampNtz(_) => {
                 Ok(spec::DataType::Timestamp(spec::TimeUnit::Microsecond, None))
             }
-            Kind::CalendarInterval(_) => Ok(spec::DataType::Interval(
-                spec::IntervalUnit::MonthDayNano,
-                None,
-                None,
-            )),
-            Kind::YearMonthInterval(sdt::YearMonthInterval {
-                start_field,
-                end_field,
-                type_variation_reference: _,
-            }) => {
-                let start_field = start_field
-                    .map(spec::YearMonthIntervalField::try_from)
-                    .transpose()?
-                    .map(spec::IntervalFieldType::try_from)
-                    .transpose()?;
-                let end_field = end_field
-                    .map(spec::YearMonthIntervalField::try_from)
-                    .transpose()?
-                    .map(spec::IntervalFieldType::try_from)
-                    .transpose()?;
-                let start_field = Some(start_field.unwrap_or(spec::IntervalFieldType::Year));
-                let end_field = Some(end_field.unwrap_or(spec::IntervalFieldType::Month));
-                Ok(spec::DataType::Interval(
-                    spec::IntervalUnit::YearMonth,
-                    start_field,
-                    end_field,
-                ))
+            Kind::CalendarInterval(_) => {
+                Ok(spec::DataType::Interval(spec::IntervalUnit::MonthDayNano))
             }
+            Kind::YearMonthInterval(sdt::YearMonthInterval {
+                // FIXME: Currently `start_field` and `end_field` are lost in translation.
+                //  This does not impact computation accuracy.
+                //  This may affect the display string in the `data_type_to_simple_string` function.
+                start_field: _,
+                end_field: _,
+                type_variation_reference: _,
+            }) => Ok(spec::DataType::Interval(spec::IntervalUnit::YearMonth)),
             Kind::DayTimeInterval(sdt::DayTimeInterval {
-                start_field,
-                end_field,
+                // FIXME: Currently `start_field` and `end_field` are lost in translation.
+                //  This does not impact computation accuracy.
+                //  This may affect the display string in the `data_type_to_simple_string` function.
+                start_field: _,
+                end_field: _,
                 type_variation_reference: _,
             }) => {
-                let start_field = start_field
-                    .map(spec::DayTimeIntervalField::try_from)
-                    .transpose()?
-                    .map(spec::IntervalFieldType::try_from)
-                    .transpose()?;
-                let end_field = end_field
-                    .map(spec::DayTimeIntervalField::try_from)
-                    .transpose()?
-                    .map(spec::IntervalFieldType::try_from)
-                    .transpose()?;
-                let start_field = Some(start_field.unwrap_or(spec::IntervalFieldType::Day));
-                let end_field = Some(end_field.unwrap_or(spec::IntervalFieldType::Second));
-                Ok(spec::DataType::Interval(
-                    /// TODO: [CHECK HERE] Don't merge in till you revisit this!!!
-                    ///  Arrow `IntervalUnit::DayTime` only has millisecond precision.
-                    ///  Spark's `Literal::DayTimeInterval` has microsecond precision.
-                    ///  We use `IntervalUnit::MonthDayNano`, so we need to convert the precision in `Literal::DayTimeInterval` to nanoseconds.
-                    spec::IntervalUnit::MonthDayNano,
-                    start_field,
-                    end_field,
-                ))
+                // Spark's DayTimeInterval has microsecond precision.
+                // Arrow's IntervalUnit::DayTime has millisecond precision.
+                Ok(spec::DataType::Duration(spec::TimeUnit::Microsecond))
             }
             Kind::Array(array) => {
                 let sdt::Array {
@@ -303,8 +270,7 @@ impl TryFrom<spec::Field> for sdt::StructField {
     }
 }
 
-// FIXME: [CHECK HERE] Don't merge in till you fix type mapping
-//  https://github.com/apache/spark/blob/bb17665955ad536d8c81605da9a59fb94b6e0162/sql/api/src/main/scala/org/apache/spark/sql/util/ArrowUtils.scala#L34
+/// Reference: https://github.com/apache/spark/blob/bb17665955ad536d8c81605da9a59fb94b6e0162/sql/api/src/main/scala/org/apache/spark/sql/util/ArrowUtils.scala
 impl TryFrom<spec::DataType> for DataType {
     type Error = SparkError;
 
@@ -319,14 +285,15 @@ impl TryFrom<spec::DataType> for DataType {
             | spec::DataType::BinaryView
             | spec::DataType::ConfiguredBinary => Ok(Kind::Binary(sdt::Binary::default())),
             spec::DataType::Boolean => Ok(Kind::Boolean(sdt::Boolean::default())),
-            spec::DataType::UInt8 | spec::DataType::Int8 => Ok(Kind::Byte(sdt::Byte::default())),
-            spec::DataType::UInt16 | spec::DataType::Int16 => {
-                Ok(Kind::Short(sdt::Short::default()))
-            }
-            spec::DataType::UInt32 | spec::DataType::Int32 => {
+            spec::DataType::Int8 => Ok(Kind::Byte(sdt::Byte::default())),
+            spec::DataType::UInt8 | spec::DataType::Int16 => Ok(Kind::Short(sdt::Short::default())),
+            spec::DataType::UInt16 | spec::DataType::Int32 => {
                 Ok(Kind::Integer(sdt::Integer::default()))
             }
-            spec::DataType::UInt64 | spec::DataType::Int64 => Ok(Kind::Long(sdt::Long::default())),
+            // FIXME: `spec::DataType::UInt64` to `Kind::Long` will overflow.
+            spec::DataType::UInt32 | spec::DataType::UInt64 | spec::DataType::Int64 => {
+                Ok(Kind::Long(sdt::Long::default()))
+            }
             spec::DataType::Float16 => Err(SparkError::unsupported(
                 "TryFrom spec::DataType::Float16 to Spark Kind",
             )),
@@ -338,7 +305,7 @@ impl TryFrom<spec::DataType> for DataType {
                 precision: Some(precision as i32),
                 type_variation_reference: 0,
             })),
-            // TODO: This mapping might not always be correct due to converting to Arrow data types and back.
+            // FIXME: This mapping might not always be correct due to converting to Arrow data types and back.
             //  For example, this may be a `Kind::Char` or `Kind::VarChar` in Spark.
             //  We retain the original type information in `ConfiguredUtf8`, which is currently lost when converting to Arrow.
             spec::DataType::Utf8 | spec::DataType::LargeUtf8 | spec::DataType::Utf8View => {
@@ -369,68 +336,51 @@ impl TryFrom<spec::DataType> for DataType {
             spec::DataType::Time64(_) => Err(SparkError::unsupported(
                 "TryFrom spec::DataType::Time64 to Spark Kind",
             )),
-            spec::DataType::Timestamp(_, None) => {
+            spec::DataType::Timestamp(spec::TimeUnit::Microsecond, None) => {
                 Ok(Kind::TimestampNtz(sdt::TimestampNtz::default()))
             }
-            spec::DataType::Timestamp(_time_unit, Some(_timezone)) => {
+            spec::DataType::Timestamp(spec::TimeUnit::Microsecond, Some(_timezone)) => {
                 Ok(Kind::Timestamp(sdt::Timestamp::default()))
             }
-            /// FIXME: START HERE
-            ///  [CHECK HERE] Don't merge in till you revisit this!!!
-            ///  Interval logic won't work here due to losing start_field and end_field information.
-            spec::DataType::Interval(spec::IntervalUnit::MonthDayNano, None, None) => {
+            spec::DataType::Timestamp(spec::TimeUnit::Second, _)
+            | spec::DataType::Timestamp(spec::TimeUnit::Millisecond, _)
+            | spec::DataType::Timestamp(spec::TimeUnit::Nanosecond, _) => {
+                // This error theoretically should never be reached.
+                Err(SparkError::unsupported(
+                    "TryFrom spec::DataType::Timestamp(Second | Millisecond | Nanosecond) to Spark Kind",
+                ))
+            }
+            spec::DataType::Interval(spec::IntervalUnit::MonthDayNano) => {
                 Ok(Kind::CalendarInterval(sdt::CalendarInterval::default()))
             }
-            spec::DataType::Interval(spec::IntervalUnit::YearMonth, start_field, end_field) => {
+            spec::DataType::Interval(spec::IntervalUnit::YearMonth) => {
                 Ok(Kind::YearMonthInterval(sdt::YearMonthInterval {
-                    start_field: start_field.map(|f| f as i32),
-                    end_field: end_field.map(|f| f as i32),
+                    start_field: None,
+                    end_field: None,
                     type_variation_reference: 0,
                 }))
             }
-            spec::DataType::Interval(spec::IntervalUnit::DayTime, start_field, end_field) => {
-                /// TODO: [CHECK HERE] Don't merge in till you revisit this!!!
-                ///  Arrow `IntervalUnit::DayTime` only has millisecond precision.
-                ///  Spark's `Literal::DayTimeInterval` has microsecond precision.
-                ///  We use `IntervalUnit::MonthDayNano`, so we need to convert the precision in `Literal::DayTimeInterval` to nanoseconds.
-                Ok(Kind::DayTimeInterval(sdt::DayTimeInterval {
-                    start_field: start_field.map(|f| f as i32),
-                    end_field: end_field.map(|f| f as i32),
-                    type_variation_reference: 0,
-                }))
-            }
-            spec::DataType::Interval(
-                spec::IntervalUnit::MonthDayNano,
-                Some(start_field),
-                Some(end_field),
-            ) if start_field as i32 > 1 && end_field as i32 > 1 => {
-                /// TODO: [CHECK HERE] Don't merge in till you revisit this!!!
-                ///  Arrow `IntervalUnit::DayTime` only has millisecond precision.
-                ///  Spark's `Literal::DayTimeInterval` has microsecond precision.
-                ///  We use `IntervalUnit::MonthDayNano`, so we need to convert the precision in `Literal::DayTimeInterval` to nanoseconds.
-                Ok(Kind::DayTimeInterval(sdt::DayTimeInterval {
-                    start_field: Some(start_field as i32),
-                    end_field: Some(end_field as i32),
-                    type_variation_reference: 0,
-                }))
-            }
-            spec::DataType::Interval(
-                spec::IntervalUnit::MonthDayNano,
-                Some(start_field),
-                Some(end_field),
-            ) if start_field as i32 <= 1 || end_field as i32 <= 1 => {
+            spec::DataType::Interval(spec::IntervalUnit::DayTime) => {
                 // This error theoretically should never be reached.
                 Err(SparkError::unsupported(
-                    "TryFrom spec::DataType::Interval start_field and/or end_field to Spark Kind",
+                    "TryFrom spec::DataType::Interval(DayTime) to Spark Kind",
                 ))
             }
-            spec::DataType::Interval(spec::IntervalUnit::MonthDayNano, _, _) => {
+            spec::DataType::Duration(spec::TimeUnit::Microsecond) => {
+                Ok(Kind::DayTimeInterval(sdt::DayTimeInterval {
+                    start_field: None,
+                    end_field: None,
+                    type_variation_reference: 0,
+                }))
+            }
+            spec::DataType::Duration(spec::TimeUnit::Second)
+            | spec::DataType::Duration(spec::TimeUnit::Millisecond)
+            | spec::DataType::Duration(spec::TimeUnit::Nanosecond) => {
                 // This error theoretically should never be reached.
                 Err(SparkError::unsupported(
-                    "TryFrom spec::DataType::Interval to Spark Kind",
+                    "TryFrom spec::DataType::Duration(Second | Millisecond | Nanosecond) to Spark Kind",
                 ))
             }
-            /// FIXME: END HERE
             spec::DataType::List(field)
             | spec::DataType::FixedSizeList(field, _)
             | spec::DataType::LargeList(field) => {
@@ -497,19 +447,6 @@ impl TryFrom<spec::DataType> for DataType {
                 serialized_python_class,
                 sql_type: Some(Box::new((*sql_type).try_into()?)),
             }))),
-            spec::DataType::Duration(spec::TimeUnit::Microsecond) => {
-                Ok(Kind::DayTimeInterval(sdt::DayTimeInterval {
-                    start_field: Some(0), // Day
-                    end_field: Some(3),   // Second
-                    type_variation_reference: 0,
-                }))
-            }
-            spec::DataType::Duration(_) => {
-                // This error theoretically should never be reached.
-                Err(SparkError::unsupported(
-                    "TryFrom spec::DataType::Duration to Spark Kind",
-                ))
-            }
             spec::DataType::Union(_, _) => Err(SparkError::unsupported(
                 "TryFrom spec::DataType::Union to Spark Kind",
             )),

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use num_enum::TryFromPrimitive;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{CommonError, CommonResult};
+use crate::error::CommonError;
 
 /// Native Sail data types that convert to Arrow types.
 /// These types usually directly match to [arrow_schema::DataType] variants when there is a corresponding type.
@@ -104,7 +104,7 @@ pub enum DataType {
     /// non-empty value requires to think about the desired semantics.
     /// One possibility is to assume that the original timestamp values are
     /// relative to the epoch of the timezone being set; timestamp values should
-    /// then adjusted to the Unix epoch (for example, changing the timezone from
+    /// then adjust to the Unix epoch (for example, changing the timezone from
     /// empty to "Europe/Paris" would require converting the timestamp values
     /// from "Europe/Paris" to "UTC", which seems counter-intuitive but is
     /// nevertheless correct).
@@ -166,14 +166,7 @@ pub enum DataType {
     /// A "calendar" interval which models types that don't necessarily
     /// have a precise duration without the context of a base timestamp (e.g.
     /// days can differ in length during daylight savings time transitions).
-    ///
-    /// This differs from the Arrow specification.
-    /// Sail's specification allows for an optional `start_field` and `end_field`.
-    Interval(
-        IntervalUnit,
-        Option<IntervalFieldType>, // `start_field`
-        Option<IntervalFieldType>, // `end_field`
-    ),
+    Interval(IntervalUnit),
     /// Opaque binary data of variable length.
     ///
     /// A single Binary array can store up to [`i32::MAX`] bytes
@@ -555,37 +548,6 @@ impl YearMonthIntervalField {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    TryFromPrimitive,
-)]
-#[serde(rename_all = "camelCase")]
-#[num_enum(error_type(name = CommonError, constructor = IntervalFieldType::invalid))]
-#[repr(i32)]
-pub enum IntervalFieldType {
-    Year = 0,
-    Month = 1,
-    Day = 2,
-    Hour = 3,
-    Minute = 4,
-    Second = 5,
-}
-
-impl IntervalFieldType {
-    fn invalid(value: i32) -> CommonError {
-        CommonError::invalid(format!("interval field type: {value}"))
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Schema {
     pub fields: Fields,
@@ -606,30 +568,6 @@ pub enum TimeUnit {
     Millisecond,
     Microsecond,
     Nanosecond,
-}
-
-impl TryFrom<DayTimeIntervalField> for IntervalFieldType {
-    type Error = CommonError;
-
-    fn try_from(field_type: DayTimeIntervalField) -> CommonResult<IntervalFieldType> {
-        match field_type {
-            DayTimeIntervalField::Day => Ok(IntervalFieldType::Day),
-            DayTimeIntervalField::Hour => Ok(IntervalFieldType::Hour),
-            DayTimeIntervalField::Minute => Ok(IntervalFieldType::Minute),
-            DayTimeIntervalField::Second => Ok(IntervalFieldType::Second),
-        }
-    }
-}
-
-impl TryFrom<YearMonthIntervalField> for IntervalFieldType {
-    type Error = CommonError;
-
-    fn try_from(field_type: YearMonthIntervalField) -> CommonResult<IntervalFieldType> {
-        match field_type {
-            YearMonthIntervalField::Year => Ok(IntervalFieldType::Year),
-            YearMonthIntervalField::Month => Ok(IntervalFieldType::Month),
-        }
-    }
 }
 
 #[derive(
