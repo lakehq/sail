@@ -36,13 +36,14 @@ use datafusion_expr::{
 };
 use sail_common::spec;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
-use sail_python_udf::cereal::pyspark_udf::build_pyspark_udf_payload;
-use sail_python_udf::udf::get_udf_name;
+use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
+use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
-use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterFormat, PySparkMapIterUDF};
-use sail_python_udf::udf::pyspark_udaf::{PySparkAggFormat, PySparkAggregateUDF};
+use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
+use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
 use sail_python_udf::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
+use sail_python_udf::udf::{get_udf_name, ColumnMatch};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::multi_expr::MultiExpr;
@@ -1600,17 +1601,18 @@ impl PlanResolver<'_> {
             }
         };
         let output_names = state.register_fields(&output_schema);
-        let payload: Vec<u8> = build_pyspark_udf_payload(
-            &python_version,
-            &command,
-            eval_type,
+        let payload = PySparkUdfPayload {
+            python_version: &python_version,
+            command: &command,
+            eval_type: eval_type.into(),
             // MapPartitions UDF has the iterator as the only argument
-            &[0],
-            &self.config.spark_udf_config,
-        )?;
-        let format = match eval_type {
-            spec::PySparkUdfType::MapPandasIter => PySparkMapIterFormat::Pandas,
-            spec::PySparkUdfType::MapArrowIter => PySparkMapIterFormat::Arrow,
+            arg_offsets: &[0],
+            config: &self.config.spark_udf_config,
+        }
+        .write()?;
+        let kind = match eval_type {
+            spec::PySparkUdfType::MapPandasIter => PySparkMapIterKind::Pandas,
+            spec::PySparkUdfType::MapArrowIter => PySparkMapIterKind::Arrow,
             _ => {
                 return Err(PlanError::invalid(
                     "only MapPandasIter UDF is supported in MapPartitions",
@@ -1618,7 +1620,7 @@ impl PlanResolver<'_> {
             }
         };
         let func = PySparkMapIterUDF::new(
-            format,
+            kind,
             get_udf_name(&function_name, &payload),
             payload,
             output_schema,
@@ -1749,30 +1751,31 @@ impl PlanResolver<'_> {
         let args = args.into_iter().map(|x| x.expr).collect::<Vec<_>>();
         let grouping = grouping.into_iter().map(|x| x.expr).collect::<Vec<_>>();
         let input_types = Self::resolve_expression_types(&args, schema)?;
-        let payload: Vec<u8> = build_pyspark_udf_payload(
-            &python_version,
-            &command,
-            eval_type,
-            &offsets,
-            &self.config.spark_udf_config,
-        )?;
+        let payload = PySparkUdfPayload {
+            python_version: &python_version,
+            command: &command,
+            eval_type: eval_type.into(),
+            arg_offsets: &offsets,
+            config: &self.config.spark_udf_config,
+        }
+        .write()?;
         let legacy = !self
             .config
             .spark_udf_config
             .pandas_grouped_map_assign_columns_by_name;
-        let format = if legacy {
-            PySparkAggFormat::GroupMapLegacy
+        let column_match = if legacy {
+            ColumnMatch::ByPosition
         } else {
-            PySparkAggFormat::GroupMap
+            ColumnMatch::ByName
         };
-        let udaf = PySparkAggregateUDF::new(
-            format,
+        let udaf = PySparkGroupMapUDF::new(
             get_udf_name(&function_name, &payload),
+            payload,
             deterministic,
             input_names,
             input_types,
             udf_output_type,
-            payload,
+            column_match,
         );
         let agg = Expr::AggregateFunction(expr::AggregateFunction {
             func: Arc::new(AggregateUDF::from(udaf)),
@@ -1884,25 +1887,31 @@ impl PlanResolver<'_> {
                 "only CoGroupedMapPandas UDF is supported in co-group map",
             ));
         }
-        let payload: Vec<u8> = build_pyspark_udf_payload(
-            &python_version,
-            &command,
-            eval_type,
-            &offsets,
-            &self.config.spark_udf_config,
-        )?;
+        let payload = PySparkUdfPayload {
+            python_version: &python_version,
+            command: &command,
+            eval_type: eval_type.into(),
+            arg_offsets: &offsets,
+            config: &self.config.spark_udf_config,
+        }
+        .write()?;
         let legacy = !self
             .config
             .spark_udf_config
             .pandas_grouped_map_assign_columns_by_name;
+        let column_match = if legacy {
+            ColumnMatch::ByPosition
+        } else {
+            ColumnMatch::ByName
+        };
         let udf = PySparkCoGroupMapUDF::try_new(
             get_udf_name(&function_name, &payload),
+            payload,
             deterministic,
             left.mapper_input_type,
             right.mapper_input_type,
             mapper_output_type,
-            payload,
-            legacy,
+            column_match,
         )?;
         let mapping = Expr::ScalarFunction(ScalarFunction {
             func: Arc::new(ScalarUDF::from(udf)),
@@ -1974,15 +1983,7 @@ impl PlanResolver<'_> {
             DataType::Struct(input_fields.into()),
             false,
         )));
-        let udaf = PySparkAggregateUDF::new(
-            PySparkAggFormat::NoOp,
-            get_udf_name("cogroup", &[]),
-            true,
-            input_names,
-            input_types,
-            agg_output_type.clone(),
-            vec![],
-        );
+        let udaf = PySparkBatchCollectorUDF::new(input_types, agg_output_type.clone());
         let agg = Expr::AggregateFunction(expr::AggregateFunction {
             func: Arc::new(AggregateUDF::from(udaf)),
             args,

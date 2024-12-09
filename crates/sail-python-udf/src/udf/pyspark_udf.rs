@@ -1,43 +1,45 @@
 use std::any::Any;
+use std::fmt::Debug;
 
-use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef};
+use datafusion::arrow::array::{make_array, ArrayData, ArrayRef};
 use datafusion::arrow::datatypes::DataType;
-use datafusion::arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::common::Result;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use pyo3::prelude::PyAnyMethods;
-use pyo3::types::{PyList, PyTuple};
 use pyo3::{PyObject, Python};
-use sail_common::spec;
 
-use crate::cereal::pyspark_udf::PySparkUdfObject;
+use crate::cereal::pyspark_udf::PySparkUdfPayload;
+use crate::conversion::{TryFromPy, TryToPy};
 use crate::error::PyUdfResult;
-use crate::helper::UdfHelper;
-use crate::utils::builtins::PyBuiltins;
-use crate::utils::pyarrow::{PyArrow, PyArrowArray, PyArrowArrayOptions, PyArrowToPandasOptions};
+use crate::lazy::LazyPyObject;
+use crate::utils::spark::PySpark;
+
+#[derive(Debug, Clone, Copy)]
+pub enum PySparkUdfKind {
+    Batch,
+    ArrowBatch,
+    Pandas,
+}
 
 #[derive(Debug)]
 pub struct PySparkUDF {
     signature: Signature,
+    kind: PySparkUdfKind,
     function_name: String,
-    // TODO: We should not keep spec information in the UDF.
-    //   We should define different UDFs for different eval types
-    //   and let the plan resolver create the correct UDF instance.
+    function: Vec<u8>,
     deterministic: bool,
-    eval_type: spec::PySparkUdfType,
     input_types: Vec<DataType>,
     output_type: DataType,
-    python_function: PySparkUdfObject,
+    udf: LazyPyObject,
 }
 
 impl PySparkUDF {
     pub fn new(
+        kind: PySparkUdfKind,
         function_name: String,
+        function: Vec<u8>,
         deterministic: bool,
-        eval_type: spec::PySparkUdfType,
         input_types: Vec<DataType>,
         output_type: DataType,
-        function: Vec<u8>,
     ) -> Self {
         Self {
             signature: Signature::exact(
@@ -48,25 +50,30 @@ impl PySparkUDF {
                     false => Volatility::Volatile,
                 },
             ),
+            kind,
             function_name,
+            function,
             deterministic,
             input_types,
             output_type,
-            eval_type,
-            python_function: PySparkUdfObject::new(function),
+            udf: LazyPyObject::new(),
         }
+    }
+
+    pub fn kind(&self) -> PySparkUdfKind {
+        self.kind
     }
 
     pub fn function_name(&self) -> &str {
         &self.function_name
     }
 
-    pub fn deterministic(&self) -> bool {
-        self.deterministic
+    pub fn function(&self) -> &[u8] {
+        &self.function
     }
 
-    pub fn eval_type(&self) -> &spec::PySparkUdfType {
-        &self.eval_type
+    pub fn deterministic(&self) -> bool {
+        self.deterministic
     }
 
     pub fn input_types(&self) -> &[DataType] {
@@ -77,136 +84,24 @@ impl PySparkUDF {
         &self.output_type
     }
 
-    pub fn function(&self) -> &[u8] {
-        self.python_function.data()
+    fn udf(&self, py: Python) -> PyUdfResult<PyObject> {
+        let udf = self.udf.get_or_try_init(py, || {
+            let udf = PySparkUdfPayload::load(py, &self.function)?;
+            let wrapper = match self.kind {
+                PySparkUdfKind::Batch => {
+                    PySpark::batch_udf(py, udf, &self.input_types, &self.output_type)?
+                }
+                PySparkUdfKind::ArrowBatch => {
+                    PySpark::arrow_batch_udf(py, udf, &self.input_types, &self.output_type)?
+                }
+                PySparkUdfKind::Pandas => {
+                    PySpark::pandas_udf(py, udf, &self.input_types, &self.output_type)?
+                }
+            };
+            Ok(wrapper.unbind())
+        })?;
+        Ok(udf.clone_ref(py))
     }
-}
-
-// TODO: `call_arrow_udf` and `call_pandas_udf` are identical.
-fn call_arrow_udf(
-    py: Python,
-    udf: PyObject,
-    args: Vec<ArrayRef>,
-    output_type: &DataType,
-) -> PyUdfResult<ArrayData> {
-    let udf = udf.into_bound(py);
-    let pyarrow_array = PyArrow::array(
-        py,
-        PyArrowArrayOptions {
-            r#type: Some(output_type.to_pyarrow(py)?),
-            from_pandas: Some(true),
-        },
-    )?;
-    let pyarrow_array_to_pandas = PyArrowArray::to_pandas(
-        py,
-        PyArrowToPandasOptions {
-            use_pandas_nullable_types: true,
-        },
-    )?;
-
-    let py_args = args
-        .iter()
-        .map(|arg| {
-            let arg = arg.into_data().to_pyarrow(py)?;
-            let arg = pyarrow_array_to_pandas.call1((arg,))?;
-            Ok(arg)
-        })
-        .collect::<PyUdfResult<Vec<_>>>()?;
-    let py_args = PyTuple::new_bound(py, &py_args);
-
-    let result = udf.call1((py.None(), (py_args,)))?;
-    let result = PyBuiltins::list(py)?.call1((result,))?.get_item(0)?;
-
-    let data = result.get_item(0)?;
-    let _data_type = result.get_item(1)?;
-    let data = pyarrow_array.call1((data,))?;
-
-    Ok(ArrayData::from_pyarrow_bound(&data)?)
-}
-
-fn call_pandas_udf(
-    py: Python,
-    udf: PyObject,
-    args: Vec<ArrayRef>,
-    output_type: &DataType,
-) -> PyUdfResult<ArrayData> {
-    let udf = udf.into_bound(py);
-    let pyarrow_array = PyArrow::array(
-        py,
-        PyArrowArrayOptions {
-            r#type: Some(output_type.to_pyarrow(py)?),
-            from_pandas: Some(true),
-        },
-    )?;
-    let pyarrow_array_to_pandas = PyArrowArray::to_pandas(
-        py,
-        PyArrowToPandasOptions {
-            use_pandas_nullable_types: true,
-        },
-    )?;
-
-    let py_args = args
-        .iter()
-        .map(|arg| {
-            let arg = arg.into_data().to_pyarrow(py)?;
-            let arg = pyarrow_array_to_pandas.call1((arg,))?;
-            Ok(arg)
-        })
-        .collect::<PyUdfResult<Vec<_>>>()?;
-    let py_args = PyTuple::new_bound(py, &py_args);
-
-    let result = udf.call1((py.None(), (py_args,)))?;
-    let result = PyBuiltins::list(py)?.call1((result,))?.get_item(0)?;
-
-    let data = result.get_item(0)?;
-    let _data_type = result.get_item(1)?;
-    let data = pyarrow_array.call1((data,))?;
-
-    Ok(ArrayData::from_pyarrow_bound(&data)?)
-}
-
-fn call_udf(
-    py: Python,
-    udf: PyObject,
-    args: Vec<ArrayRef>,
-    _eval_type: spec::PySparkUdfType,
-    _deterministic: bool,
-    output_type: &DataType,
-) -> PyUdfResult<ArrayData> {
-    let udf = udf.into_bound(py);
-    let py_list = PyBuiltins::list(py)?;
-    let py_args = args
-        .iter()
-        .map(|arg| Ok(UdfHelper::arrow_array_to_pyspark(py, arg)?))
-        .collect::<PyUdfResult<Vec<_>>>()?;
-    let py_args = PyTuple::new_bound(py, py_args);
-    let py_args = PyBuiltins::zip(py)?.call1(py_args)?;
-    let results = udf.call1((py.None(), py_args))?;
-    let results = py_list.call1((results,))?;
-    Ok(UdfHelper::pyspark_to_arrow_array(&results, output_type)?)
-}
-
-fn call_udf_no_args(
-    py: Python,
-    udf: PyObject,
-    _eval_type: spec::PySparkUdfType,
-    _deterministic: bool,
-    output_type: &DataType,
-) -> PyUdfResult<ArrayData> {
-    let udf = udf.into_bound(py);
-    let py_list = PyBuiltins::list(py)?;
-    let pyarrow_array = PyArrow::array(
-        py,
-        PyArrowArrayOptions {
-            r#type: Some(output_type.to_pyarrow(py)?),
-            from_pandas: Some(false),
-        },
-    )?;
-
-    let result = udf.call1((py.None(), (PyList::empty_bound(py),)))?;
-    let result = py_list.call1((result,))?.get_item(0)?;
-    let result = pyarrow_array.call1(([result],))?;
-    Ok(ArrayData::from_pyarrow_bound(&result)?)
 }
 
 impl ScalarUDFImpl for PySparkUDF {
@@ -226,39 +121,14 @@ impl ScalarUDFImpl for PySparkUDF {
         Ok(self.output_type.clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(args)?;
-        let array_data = Python::with_gil(|py| {
-            let udf = self.python_function.get(py)?;
-            if self.eval_type.is_arrow_udf() {
-                call_arrow_udf(py, udf, args, &self.output_type)
-            } else if self.eval_type.is_pandas_udf() {
-                call_pandas_udf(py, udf, args, &self.output_type)
-            } else {
-                call_udf(
-                    py,
-                    udf,
-                    args,
-                    self.eval_type,
-                    self.deterministic,
-                    &self.output_type,
-                )
-            }
+        let output = Python::with_gil(|py| -> PyUdfResult<_> {
+            let output = self
+                .udf(py)?
+                .call1(py, (args.try_to_py(py)?, number_rows))?;
+            Ok(ArrayData::try_from_py(py, &output)?)
         })?;
-        Ok(ColumnarValue::Array(make_array(array_data)))
-    }
-
-    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
-        let array_data = Python::with_gil(|py| {
-            let udf = self.python_function.get(py)?;
-            call_udf_no_args(
-                py,
-                udf,
-                self.eval_type,
-                self.deterministic,
-                &self.output_type,
-            )
-        })?;
-        Ok(ColumnarValue::Array(make_array(array_data)))
+        Ok(ColumnarValue::Array(make_array(output)))
     }
 }

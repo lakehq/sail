@@ -12,25 +12,6 @@ impl PyArrow {
     fn module(py: Python) -> PyResult<Bound<PyModule>> {
         PyModule::import_bound(py, intern!(py, "pyarrow"))
     }
-
-    /// Creates a partial function for `pyarrow.array()`.
-    pub fn array(py: Python, options: PyArrowArrayOptions) -> PyResult<Bound<PyAny>> {
-        let func = Self::module(py)?.getattr(intern!(py, "array"))?;
-        let kwargs = PyDict::new_bound(py);
-        if let Some(r#type) = options.r#type {
-            kwargs.set_item(intern!(py, "type"), r#type)?;
-        }
-        if let Some(from_pandas) = options.from_pandas {
-            kwargs.set_item(intern!(py, "from_pandas"), from_pandas)?;
-        }
-        PyFunctools::partial(py)?.call((func,), Some(&kwargs))
-    }
-}
-
-#[derive(Default)]
-pub struct PyArrowArrayOptions {
-    pub r#type: Option<PyObject>,
-    pub from_pandas: Option<bool>,
 }
 
 /// Methods for working with the `pyarrow.Array` class.
@@ -79,13 +60,6 @@ impl PyArrowRecordBatch {
         if let Some(schema) = schema {
             kwargs.set_item(intern!(py, "schema"), schema)?;
         }
-        PyFunctools::partial(py)?.call((func,), Some(&kwargs))
-    }
-
-    /// Creates a partial function for `pyarrow.RecordBatch.to_pandas()`.
-    pub fn to_pandas(py: Python, options: PyArrowToPandasOptions) -> PyResult<Bound<PyAny>> {
-        let func = Self::class(py)?.getattr(intern!(py, "to_pandas"))?;
-        let kwargs = get_pyarrow_to_pandas_kwargs(py, options)?;
         PyFunctools::partial(py)?.call((func,), Some(&kwargs))
     }
 }

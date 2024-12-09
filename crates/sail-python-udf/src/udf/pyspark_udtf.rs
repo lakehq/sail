@@ -22,7 +22,7 @@ use sail_common::spec::TableFunctionDefinition;
 use sail_common::utils::cast_record_batch;
 
 use crate::cereal::check_python_udf_version;
-use crate::cereal::pyspark_udtf::{build_pyspark_udtf_payload, PySparkUdtfObject};
+use crate::cereal::pyspark_udtf::PySparkUdtfPayload;
 use crate::config::SparkUdfConfig;
 use crate::error::PyUdfResult;
 use crate::utils::builtins::PyBuiltins;
@@ -144,14 +144,16 @@ impl TableFunctionImpl for PySparkUDTF {
             };
 
         check_python_udf_version(python_version)?;
-        let udtf_payload: Vec<u8> = build_pyspark_udtf_payload(
+        let udtf_payload = PySparkUdtfPayload {
+            python_version,
             command,
-            *eval_type,
-            exprs.len(),
-            &self.return_type,
-            &self.spark_udf_config,
-        )?;
-        let udtf = Python::with_gil(|py| PySparkUdtfObject::load(py, &udtf_payload))?;
+            eval_type: (*eval_type).into(),
+            num_args: exprs.len(),
+            return_type: &self.return_type,
+            config: &self.spark_udf_config,
+        }
+        .write()?;
+        let udtf = Python::with_gil(|py| PySparkUdtfPayload::load(py, &udtf_payload))?;
 
         if exprs.is_empty() {
             let batches: RecordBatch = if eval_type.is_arrow_udf() {

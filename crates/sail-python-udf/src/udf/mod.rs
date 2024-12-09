@@ -1,7 +1,9 @@
 use md5::{Digest, Md5};
 use num_bigint::BigUint;
 
+pub mod pyspark_batch_collector;
 pub mod pyspark_cogroup_map_udf;
+pub mod pyspark_group_map_udf;
 pub mod pyspark_map_iter_udf;
 pub mod pyspark_udaf;
 pub mod pyspark_udf;
@@ -20,7 +22,17 @@ pub fn get_udf_name(name: &str, payload: &[u8]) -> String {
     format!("{name}@{hash}")
 }
 
-pub(crate) enum ColumnMatch {
+#[derive(Debug, Copy, Clone)]
+pub enum ColumnMatch {
     ByName,
     ByPosition,
+}
+
+impl ColumnMatch {
+    pub fn is_by_name(&self) -> bool {
+        match self {
+            ColumnMatch::ByName => true,
+            ColumnMatch::ByPosition => false,
+        }
+    }
 }
