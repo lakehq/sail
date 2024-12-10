@@ -111,6 +111,7 @@ impl PlanResolver<'_> {
     }
 
     pub fn unresolve_data_type(data_type: &adt::DataType) -> PlanResult<spec::DataType> {
+        // TODO: unresolve_data_type is no longer needed, remove it
         use spec::DataType;
 
         match data_type {
