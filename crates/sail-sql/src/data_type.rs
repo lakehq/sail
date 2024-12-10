@@ -66,13 +66,17 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
     match sql_type {
         ast::DataType::Null | ast::DataType::Void => Ok(spec::DataType::Null),
         ast::DataType::Boolean | ast::DataType::Bool => Ok(spec::DataType::Boolean),
-        ast::DataType::TinyInt(_) => Ok(spec::DataType::Byte),
-        ast::DataType::SmallInt(_) => Ok(spec::DataType::Short),
-        ast::DataType::Int(_) | ast::DataType::Integer(_) => Ok(spec::DataType::Integer),
-        ast::DataType::BigInt(_) | ast::DataType::Long(_) => Ok(spec::DataType::Long),
+        ast::DataType::TinyInt(_) => Ok(spec::DataType::Int8),
+        ast::DataType::SmallInt(_) | ast::DataType::Int16 => Ok(spec::DataType::Int16),
+        ast::DataType::Int(_) | ast::DataType::Integer(_) | ast::DataType::Int32 => {
+            Ok(spec::DataType::Int32)
+        }
+        ast::DataType::BigInt(_) | ast::DataType::Long(_) | ast::DataType::Int64 => {
+            Ok(spec::DataType::Int64)
+        }
         ast::DataType::Binary(_) | ast::DataType::Bytea => Ok(spec::DataType::Binary),
-        ast::DataType::Float(_) | ast::DataType::Real => Ok(spec::DataType::Float),
-        ast::DataType::Double | ast::DataType::DoublePrecision => Ok(spec::DataType::Double),
+        ast::DataType::Float(_) | ast::DataType::Real => Ok(spec::DataType::Float32),
+        ast::DataType::Double | ast::DataType::DoublePrecision => Ok(spec::DataType::Float64),
         ast::DataType::Decimal(info) | ast::DataType::Dec(info) | ast::DataType::Numeric(info) => {
             use ast::ExactNumberInfo;
 
@@ -93,41 +97,40 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
                 }
             };
             if precision > ARROW_DECIMAL128_MAX_PRECISION {
-                Ok(spec::DataType::Decimal256 { precision, scale })
+                Ok(spec::DataType::Decimal256(precision, scale))
             } else {
-                Ok(spec::DataType::Decimal128 { precision, scale })
+                Ok(spec::DataType::Decimal128(precision, scale))
             }
         }
-        ast::DataType::Char(n) | ast::DataType::Character(n) => Ok(spec::DataType::Char {
-            length: from_ast_char_length(n)?,
-        }),
+        ast::DataType::Char(n) | ast::DataType::Character(n) => Ok(spec::DataType::ConfiguredUtf8(
+            Some(from_ast_char_length(n)?),
+            Some(spec::ConfiguredUtf8Type::Char),
+        )),
         ast::DataType::Varchar(n)
         | ast::DataType::CharVarying(n)
-        | ast::DataType::CharacterVarying(n) => Ok(spec::DataType::VarChar {
-            length: from_ast_char_length(n)?,
-        }),
-        ast::DataType::String(_) | ast::DataType::Text => Ok(spec::DataType::String),
+        | ast::DataType::CharacterVarying(n) => Ok(spec::DataType::ConfiguredUtf8(
+            Some(from_ast_char_length(n)?),
+            Some(spec::ConfiguredUtf8Type::VarChar),
+        )),
+        ast::DataType::String(_) => Ok(spec::DataType::Utf8),
+        ast::DataType::Text => Ok(spec::DataType::LargeUtf8),
         ast::DataType::Timestamp(None, tz_info) => {
             use ast::TimezoneInfo;
 
             match tz_info {
-                // FIXME: `timestamp` can either be `timestamp_ltz` (default) or `timestamp_ntz`,
-                //  We need to consider the `spark.sql.timestampType` configuration.
-                TimezoneInfo::WithoutTimeZone => Ok(spec::DataType::TimestampNtz),
-                TimezoneInfo::None => Ok(spec::DataType::Timestamp(
-                    Some(spec::TimeUnit::Microsecond),
-                    None,
-                )),
+                TimezoneInfo::None | TimezoneInfo::WithoutTimeZone => {
+                    Ok(spec::DataType::Timestamp(spec::TimeUnit::Microsecond, None))
+                }
                 TimezoneInfo::WithLocalTimeZone => Ok(spec::DataType::Timestamp(
-                    Some(spec::TimeUnit::Microsecond),
+                    spec::TimeUnit::Microsecond,
                     Some(Arc::<str>::from("ltz")),
                 )),
                 TimezoneInfo::WithTimeZone | TimezoneInfo::Tz => {
-                    Err(SqlError::unsupported("timestamp with time zone"))
+                    Err(SqlError::todo("timestamp with time zone"))
                 }
             }
         }
-        ast::DataType::Date => Ok(spec::DataType::Date),
+        ast::DataType::Date | ast::DataType::Date32 => Ok(spec::DataType::Date32),
         ast::DataType::Interval(unit) => match unit {
             ast::IntervalUnit {
                 leading_field: None,
@@ -236,9 +239,6 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
         ast::DataType::Int2(_)
         | ast::DataType::Int4(_)
         | ast::DataType::Int8(_)
-        | ast::DataType::Int16
-        | ast::DataType::Int32
-        | ast::DataType::Int64
         | ast::DataType::Int128
         | ast::DataType::Int256
         | ast::DataType::MediumInt(_)
@@ -282,7 +282,6 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
         | ast::DataType::UInt128
         | ast::DataType::UInt256
         | ast::DataType::Float32
-        | ast::DataType::Date32
         | ast::DataType::Datetime64(_, _)
         | ast::DataType::FixedString(_)
         | ast::DataType::Tuple(_)
