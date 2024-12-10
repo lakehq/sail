@@ -4,9 +4,9 @@ use std::cmp::Ordering;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::string::concat::ConcatFunc;
 use datafusion_common::utils::list_ndims;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{plan_err, ExprSchema, Result};
 use datafusion_expr::type_coercion::binary::get_wider_type;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, Expr, ExprSchemable, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions_nested::concat::ArrayConcat;
 
 #[derive(Debug)]
@@ -83,6 +83,14 @@ impl ScalarUDFImpl for SparkConcat {
                 })
                 .unwrap_or(&DataType::Utf8)
                 .clone())
+        }
+    }
+
+    fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
+        if args.is_empty() {
+            true
+        } else {
+            args.iter().any(|arg| arg.nullable(schema).unwrap_or(true))
         }
     }
 
