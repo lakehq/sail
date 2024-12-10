@@ -9,17 +9,17 @@ version = "0.2.0"
 edition = "2021"
 
 [workspace.dependencies]
-thiserror = { version = "2.0.3" }
-tokio = { version = "1.41.0", features = ["full"] }
-tokio-stream = "0.1.16"
+thiserror = { version = "2.0.6" }
+tokio = { version = "1.42.0", features = ["full"] }
+tokio-stream = "0.1.17"
 tonic = { version = "0.12.3", features = ["tls", "tls-roots", "gzip", "zstd"] }
 tonic-build = "0.12.3"
 tonic-reflection = "0.12.3"
 tonic-health = "0.12.3"
 tonic-types = "0.12.3"
 prost-build = "0.13.3"
-prost = "0.13.3"
-prost-types = "0.13.3"
+prost = "0.13.4"
+prost-types = "0.13.4"
 pbjson = "0.7.0"
 pbjson-types = "0.7.0"
 pbjson-build = "0.7.0"
@@ -55,10 +55,10 @@ rand = "0.8.5"
 rand_chacha = "0.3.1"
 rand_distr = "0.4.3"
 url = "2.5.4"
-lexical-core = { version = "1.0.2", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
+lexical-core = { version = "1.0.5", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 aws-config = "1.5.9"
 aws-credential-types = "1.2.1"
-clap = { version = "4.5.20", features = ["derive"] }
+clap = { version = "4.5.23", features = ["derive"] }
 num_enum = "0.7.3"
 log = "0.4.22"
 env_logger = "0.11.5"
@@ -71,7 +71,7 @@ hdfs-native-object-store = "0.12.1"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 kube = "0.96.0"
 k8s-openapi = { version = "0.23.0", features = ["latest"] }
-twox-hash = "2.0.1"
+twox-hash = "2.1.0"
 aes = "0.8.4"
 aes-gcm = "0.10.3"
 cbc = { version = "0.1.2", features = ["std"] }
