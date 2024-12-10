@@ -52,7 +52,7 @@ impl<'a> CatalogManager<'a> {
             .fields()
             .iter()
             .map(|column| -> PlanResult<_> {
-                let data_type = PlanResolver::unresolve_data_type(column.data_type().clone())?;
+                let data_type = PlanResolver::unresolve_data_type(column.data_type())?;
                 let data_type = self
                     .config
                     .plan_formatter

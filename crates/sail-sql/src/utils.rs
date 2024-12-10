@@ -65,7 +65,7 @@ pub fn build_schema_from_columns(columns: Vec<ast::ColumnDef>) -> SqlResult<spec
         fields.push(field);
     }
 
-    let fields = spec::Fields::new(fields);
+    let fields = spec::Fields::from(fields);
     Ok(spec::Schema { fields })
 }
 
