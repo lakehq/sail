@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 from typing import Any, Callable, Iterator, Union
 
 import pandas as pd
@@ -139,20 +140,23 @@ class MapConverter(Converter):
 class StructConverter(Converter):
     def __init__(self, data_type: pa.StructType):
         super().__init__(data_type)
-        self._fields = data_type.fields
-        self._field_converters = [_get_converter(f.type) for f in data_type.fields]
+        try:
+            self._fields = data_type.fields
+        except AttributeError:
+            self._fields = [data_type.field(i) for i in range(data_type.num_fields)]
+        self._field_converters = [_get_converter(f.type) for f in self._fields]
         self._spark_data_type = from_arrow_type(data_type)
 
     def to_pyspark(self, array: pa.Array) -> list[Any]:
         if not isinstance(array, pa.StructArray):
             msg = f"invalid data type for struct: {type(array)}"
             raise TypeError(msg)
-        columns = [f(col) for (col, f) in zip(array.flatten(), self._field_converters)]
+        columns = [c.to_pyspark(col) for col, c in zip(array.flatten(), self._field_converters)]
         return [self._spark_data_type.fromInternal(x) for x in zip(*columns)]
 
     def from_pyspark(self, data: list[Any]) -> pa.Array:
         n = len(self._fields)
-        columns = [[]] * n
+        columns = [[] for _ in range(n)]
         mask = []
         for x in data:
             if x is None:
@@ -164,7 +168,9 @@ class StructConverter(Converter):
                 for i, v in enumerate(x):
                     columns[i].append(v)
         return pa.StructArray.from_arrays(
-            [f(col) for col, f in zip(columns, self._field_converters)], fields=self._fields, mask=mask
+            [c.from_pyspark(col) for col, c in zip(columns, self._field_converters)],
+            fields=self._fields,
+            mask=pa.array(mask, type=pa.bool_()),
         )
 
 
@@ -237,9 +243,12 @@ class PySparkBatchUdf:
     def init(*args):
         return PySparkBatchUdf(*args)
 
-    def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
-        inputs = [c.to_pyspark(a) for (a, c) in zip(args, self._input_converters)]
-        output = list(self._udf(None, zip(*inputs)))
+    def __call__(self, args: list[pa.Array], num_rows: int) -> pa.Array:
+        if len(args) > 0:
+            inputs = [c.to_pyspark(a) for a, c in zip(args, self._input_converters)]
+            output = list(self._udf(None, zip(*inputs)))
+        else:
+            output = list(self._udf(None, itertools.repeat((), num_rows)))
         return self._output_converter.from_pyspark(output)
 
 
@@ -254,12 +263,16 @@ class PySparkArrowBatchUdf:
         return PySparkArrowBatchUdf(*args)
 
     def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
-        inputs = tuple(x.to_pandas(types_mapper=ARROW_TO_PANDAS_NULLABLE_TYPES.get, split_blocks=True) for x in args)
-        [(output, _output_type)] = list(self._udf(None, inputs))
+        inputs = tuple(self._to_pandas(x) for x in args)
+        [(output, _output_type)] = list(self._udf(None, (inputs,)))
         return pa.array(output, type=self._output_type, from_pandas=True)
 
+    @staticmethod
+    def _to_pandas(array: pa.Array) -> pd.Series:
+        return array.to_pandas(types_mapper=ARROW_TO_PANDAS_NULLABLE_TYPES.get, split_blocks=True)
 
-class PySparkPandasUdf:
+
+class PySparkScalarPandasUdf:
     def __init__(self, udf: Callable[..., Any], input_types: list[pa.DataType], output_type: pa.DataType):
         self._udf = udf
         self._input_types = input_types
@@ -267,12 +280,36 @@ class PySparkPandasUdf:
 
     @staticmethod
     def init(*args):
-        return PySparkPandasUdf(*args)
+        return PySparkScalarPandasUdf(*args)
 
     def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
-        inputs = tuple(x.to_pandas(types_mapper=ARROW_TO_PANDAS_NULLABLE_TYPES.get, split_blocks=True) for x in args)
-        [(output, _output_type)] = list(self._udf(None, inputs))
+        inputs = tuple(self._to_pandas(x) for x in args)
+        [(output, _output_type)] = list(self._udf(None, (inputs,)))
         return pa.array(output, type=self._output_type, from_pandas=True)
+
+    @staticmethod
+    def _to_pandas(array: pa.Array) -> pd.Series:
+        return array.to_pandas(types_mapper=ARROW_TO_PANDAS_NULLABLE_TYPES.get, split_blocks=True)
+
+
+class PySparkScalarPandasIterUdf:
+    def __init__(self, udf: Callable[..., Any], input_types: list[pa.DataType], output_type: pa.DataType):
+        self._udf = udf
+        self._input_types = input_types
+        self._output_type = output_type
+
+    @staticmethod
+    def init(*args):
+        return PySparkScalarPandasIterUdf(*args)
+
+    def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
+        inputs = tuple(self._to_pandas(x) for x in args)
+        [(output, _output_type)] = list(self._udf(None, [inputs]))
+        return pa.array(output, type=self._output_type, from_pandas=True)
+
+    @staticmethod
+    def _to_pandas(array: pa.Array) -> pd.Series:
+        return array.to_pandas(types_mapper=ARROW_TO_PANDAS_NULLABLE_TYPES.get, split_blocks=True)
 
 
 class PySparkGroupAggUdf:
@@ -289,21 +326,26 @@ class PySparkGroupAggUdf:
         return PySparkGroupAggUdf(*args)
 
     def __call__(self, args: list[pa.Array]) -> pa.Array:
-        inputs = [x.to_pandas(types_mapper=ARROW_TO_PANDAS_NULLABLE_TYPES.get, split_blocks=True) for x in args]
+        inputs = tuple(self._to_pandas(x) for x in args)
         for x, name in zip(inputs, self._input_names):
             x.name = name
-        [(output, _output_type)] = list(self._udf(None, inputs))
+        [(output, _output_type)] = list(self._udf(None, (inputs,)))
         return pa.array(output, type=self._output_type, from_pandas=True)
+
+    @staticmethod
+    def _to_pandas(array: pa.Array) -> pd.Series:
+        return array.to_pandas(types_mapper=ARROW_TO_PANDAS_NULLABLE_TYPES.get, split_blocks=True)
 
 
 def _pandas_to_record_batch(df: pd.DataFrame, schema: pa.Schema, column_match_by_name: bool) -> pa.RecordBatch:  # noqa: FBT001
-    if not column_match_by_name or all(not isinstance(x, str) for x in df.columns):
-        df = df[df.columns[: len(schema.names)]]
-        # An exception will be raised if the number of columns does not match the number of fields in the schema.
-        df.columns = schema.names
     if len(df) > 0:
+        if not column_match_by_name or all(not isinstance(x, str) for x in df.columns):
+            df = df[df.columns[: len(schema.names)]]
+            # An exception will be raised if the number of columns does not match the number of fields in the schema.
+            df.columns = schema.names
         return pa.RecordBatch.from_pandas(df, schema=schema)
-    return pa.RecordBatch.from_pylist([], schema=schema)
+    else:  # noqa: RET505
+        return pa.RecordBatch.from_pylist([], schema=schema)
 
 
 class PySparkGroupMapUdf:
@@ -324,11 +366,15 @@ class PySparkGroupMapUdf:
         return PySparkGroupMapUdf(*args)
 
     def __call__(self, args: list[pa.Array]) -> pa.RecordBatch:
-        inputs = [x.to_pandas(types_mapper=ARROW_TO_PANDAS_NULLABLE_TYPES.get, split_blocks=True) for x in args]
+        inputs = tuple(self._to_pandas(x) for x in args)
         for x, name in zip(inputs, self._input_names):
             x.name = name
-        [[(output, _output_type)]] = list(self._udf(None, inputs))
+        [[(output, _output_type)]] = list(self._udf(None, (inputs,)))
         return _pandas_to_record_batch(output, self._output_schema, self._column_match_by_name)
+
+    @staticmethod
+    def _to_pandas(array: pa.Array) -> pd.DataFrame:
+        return array.to_pandas(types_mapper=ARROW_TO_PANDAS_NULLABLE_TYPES.get, split_blocks=True)
 
 
 class PySparkCoGroupMapUdf:
@@ -347,8 +393,8 @@ class PySparkCoGroupMapUdf:
         return PySparkCoGroupMapUdf(*args)
 
     def __call__(self, left: pa.RecordBatch, right: pa.RecordBatch) -> pa.RecordBatch:
-        args = [self._to_pandas(left), self._to_pandas(right)]
-        [[(output, _output_type)]] = list(self._udf(None, args))
+        args = (self._to_pandas(left), self._to_pandas(right))
+        [[(output, _output_type)]] = list(self._udf(None, (args,)))
         return _pandas_to_record_batch(output, self._output_schema, self._column_match_by_name)
 
     @staticmethod
@@ -371,7 +417,9 @@ class PySparkMapPandasIterUdf:
         return PySparkMapPandasIterUdf(*args)
 
     def __call__(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
-        return map(self._convert_output, self._udf(map(self._convert_input, args)))
+        input_ = map(self._convert_input, args)
+        output = self._udf(None, ((x,) for x in input_))
+        return map(self._convert_output, (x for x, _ in output))
 
     @staticmethod
     def _convert_input(batch: pa.RecordBatch) -> pd.DataFrame:
@@ -384,7 +432,7 @@ class PySparkMapPandasIterUdf:
 class PySparkMapArrowIterUdf:
     def __init__(
         self,
-        udf: Callable[[Iterator[pa.RecordBatch]], Iterator[pa.RecordBatch]],
+        udf: Callable[..., Iterator[pa.RecordBatch]],
     ):
         self._udf = udf
 
@@ -393,4 +441,5 @@ class PySparkMapArrowIterUdf:
         return PySparkMapArrowIterUdf(*args)
 
     def __call__(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
-        return self._udf(args)
+        output = self._udf(None, ((x,) for x in args))
+        return (x for x, _ in output)

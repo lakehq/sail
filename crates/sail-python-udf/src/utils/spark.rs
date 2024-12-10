@@ -58,14 +58,28 @@ impl PySpark {
             )
     }
 
-    pub fn pandas_udf<'py>(
+    pub fn scalar_pandas_udf<'py>(
         py: Python<'py>,
         udf: PyObject,
         input_types: &[DataType],
         output_type: &DataType,
     ) -> PyResult<Bound<'py, PyAny>> {
         Self::module(py)?
-            .getattr(intern!(py, "PySparkPandasUdf"))?
+            .getattr(intern!(py, "PySparkScalarPandasUdf"))?
+            .call_method1(
+                intern!(py, "init"),
+                (udf, input_types.try_to_py(py)?, output_type.try_to_py(py)?),
+            )
+    }
+
+    pub fn scalar_pandas_iter_udf<'py>(
+        py: Python<'py>,
+        udf: PyObject,
+        input_types: &[DataType],
+        output_type: &DataType,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        Self::module(py)?
+            .getattr(intern!(py, "PySparkScalarPandasIterUdf"))?
             .call_method1(
                 intern!(py, "init"),
                 (udf, input_types.try_to_py(py)?, output_type.try_to_py(py)?),

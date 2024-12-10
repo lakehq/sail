@@ -21,7 +21,6 @@ use pyo3::{Bound, PyAny, PyObject, Python};
 use sail_common::spec::TableFunctionDefinition;
 use sail_common::utils::cast_record_batch;
 
-use crate::cereal::check_python_udf_version;
 use crate::cereal::pyspark_udtf::PySparkUdtfPayload;
 use crate::config::SparkUdfConfig;
 use crate::error::PyUdfResult;
@@ -143,11 +142,10 @@ impl TableFunctionImpl for PySparkUDTF {
                 } => (return_type, eval_type, command, python_version),
             };
 
-        check_python_udf_version(python_version)?;
         let udtf_payload = PySparkUdtfPayload {
             python_version,
             command,
-            eval_type: (*eval_type).into(),
+            eval_type: *eval_type,
             num_args: exprs.len(),
             return_type: &self.return_type,
             config: &self.spark_udf_config,

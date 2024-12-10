@@ -2,15 +2,16 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyModule;
 use pyo3::{intern, PyObject, Python, ToPyObject};
+use sail_common::spec;
 
-use crate::cereal::check_python_udf_version;
+use crate::cereal::{check_python_udf_version, should_write_config};
 use crate::config::SparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
 
 pub struct PySparkUdfPayload<'a> {
     pub python_version: &'a str,
     pub command: &'a [u8],
-    pub eval_type: i32,
+    pub eval_type: spec::PySparkUdfType,
     pub arg_offsets: &'a [usize],
     pub config: &'a SparkUdfConfig,
 }
@@ -40,15 +41,17 @@ impl PySparkUdfPayload<'_> {
         check_python_udf_version(self.python_version)?;
         let mut data: Vec<u8> = Vec::new();
 
-        data.extend(&self.eval_type.to_be_bytes());
+        data.extend(&i32::from(self.eval_type).to_be_bytes());
 
-        let config = self.config.to_key_value_pairs();
-        data.extend((config.len() as i32).to_be_bytes()); // number of configuration options
-        for (key, value) in config {
-            data.extend(&(key.len() as i32).to_be_bytes()); // length of the key
-            data.extend(key.as_bytes());
-            data.extend(&(value.len() as i32).to_be_bytes()); // length of the value
-            data.extend(value.as_bytes());
+        if should_write_config(self.eval_type) {
+            let config = self.config.to_key_value_pairs();
+            data.extend((config.len() as i32).to_be_bytes()); // number of configuration options
+            for (key, value) in config {
+                data.extend(&(key.len() as i32).to_be_bytes()); // length of the key
+                data.extend(key.as_bytes());
+                data.extend(&(value.len() as i32).to_be_bytes()); // length of the value
+                data.extend(value.as_bytes());
+            }
         }
 
         data.extend(&1i32.to_be_bytes()); // number of UDFs

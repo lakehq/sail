@@ -1604,7 +1604,7 @@ impl PlanResolver<'_> {
         let payload = PySparkUdfPayload {
             python_version: &python_version,
             command: &command,
-            eval_type: eval_type.into(),
+            eval_type,
             // MapPartitions UDF has the iterator as the only argument
             arg_offsets: &[0],
             config: &self.config.spark_udf_config,
@@ -1754,7 +1754,7 @@ impl PlanResolver<'_> {
         let payload = PySparkUdfPayload {
             python_version: &python_version,
             command: &command,
-            eval_type: eval_type.into(),
+            eval_type,
             arg_offsets: &offsets,
             config: &self.config.spark_udf_config,
         }
@@ -1890,7 +1890,7 @@ impl PlanResolver<'_> {
         let payload = PySparkUdfPayload {
             python_version: &python_version,
             command: &command,
-            eval_type: eval_type.into(),
+            eval_type,
             arg_offsets: &offsets,
             config: &self.config.spark_udf_config,
         }

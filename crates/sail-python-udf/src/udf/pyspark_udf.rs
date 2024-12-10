@@ -17,7 +17,8 @@ use crate::utils::spark::PySpark;
 pub enum PySparkUdfKind {
     Batch,
     ArrowBatch,
-    Pandas,
+    ScalarPandas,
+    ScalarPandasIter,
 }
 
 #[derive(Debug)]
@@ -94,8 +95,11 @@ impl PySparkUDF {
                 PySparkUdfKind::ArrowBatch => {
                     PySpark::arrow_batch_udf(py, udf, &self.input_types, &self.output_type)?
                 }
-                PySparkUdfKind::Pandas => {
-                    PySpark::pandas_udf(py, udf, &self.input_types, &self.output_type)?
+                PySparkUdfKind::ScalarPandas => {
+                    PySpark::scalar_pandas_udf(py, udf, &self.input_types, &self.output_type)?
+                }
+                PySparkUdfKind::ScalarPandasIter => {
+                    PySpark::scalar_pandas_iter_udf(py, udf, &self.input_types, &self.output_type)?
                 }
             };
             Ok(wrapper.unbind())

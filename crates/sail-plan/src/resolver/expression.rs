@@ -706,7 +706,7 @@ impl PlanResolver<'_> {
                 let payload = PySparkUdfPayload {
                     python_version,
                     command,
-                    eval_type: (*eval_type).into(),
+                    eval_type: *eval_type,
                     arg_offsets: &((0..arguments.len()).collect::<Vec<_>>()),
                     config: &self.config.spark_udf_config,
                 }
@@ -721,7 +721,7 @@ impl PlanResolver<'_> {
                 let kind = match eval_type {
                     PySparkUdfType::Batched => PySparkUdfKind::Batch,
                     PySparkUdfType::ArrowBatched => PySparkUdfKind::ArrowBatch,
-                    PySparkUdfType::ScalarPandas => PySparkUdfKind::Pandas,
+                    PySparkUdfType::ScalarPandas => PySparkUdfKind::ScalarPandas,
                     _ => {
                         return Err(PlanError::unsupported(format!(
                             "unsupported PySpark UDF type: {:?}",
@@ -904,7 +904,7 @@ impl PlanResolver<'_> {
                     let payload = PySparkUdfPayload {
                         python_version: &python_version,
                         command: &command,
-                        eval_type: eval_type.into(),
+                        eval_type,
                         arg_offsets: &((0..arguments.len()).collect::<Vec<_>>()),
                         config: &self.config.spark_udf_config,
                     }
@@ -1184,7 +1184,7 @@ impl PlanResolver<'_> {
         let payload = PySparkUdfPayload {
             python_version: &python_version,
             command: &command,
-            eval_type: eval_type.into(),
+            eval_type,
             arg_offsets: &((0..arguments.len()).collect::<Vec<_>>()),
             config: &self.config.spark_udf_config,
         }
@@ -1194,7 +1194,6 @@ impl PlanResolver<'_> {
             PySparkUdfType::None
             | PySparkUdfType::GroupedMapPandas
             | PySparkUdfType::WindowAggPandas
-            | PySparkUdfType::ScalarPandasIter
             | PySparkUdfType::MapPandasIter
             | PySparkUdfType::CogroupedMapPandas
             | PySparkUdfType::MapArrowIter
@@ -1236,7 +1235,21 @@ impl PlanResolver<'_> {
             }
             PySparkUdfType::ScalarPandas => {
                 let udf = PySparkUDF::new(
-                    PySparkUdfKind::Pandas,
+                    PySparkUdfKind::ScalarPandas,
+                    get_udf_name(function_name, &payload),
+                    payload,
+                    deterministic,
+                    input_types,
+                    output_type,
+                );
+                expr::Expr::ScalarFunction(expr::ScalarFunction {
+                    func: Arc::new(ScalarUDF::from(udf)),
+                    args: arguments,
+                })
+            }
+            PySparkUdfType::ScalarPandasIter => {
+                let udf = PySparkUDF::new(
+                    PySparkUdfKind::ScalarPandasIter,
                     get_udf_name(function_name, &payload),
                     payload,
                     deterministic,

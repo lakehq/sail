@@ -1097,7 +1097,8 @@ impl RemoteExecutionCodec {
         let kind = match kind {
             gen::PySparkUdfKind::Batch => PySparkUdfKind::Batch,
             gen::PySparkUdfKind::ArrowBatch => PySparkUdfKind::ArrowBatch,
-            gen::PySparkUdfKind::Pandas => PySparkUdfKind::Pandas,
+            gen::PySparkUdfKind::ScalarPandas => PySparkUdfKind::ScalarPandas,
+            gen::PySparkUdfKind::ScalarPandasIter => PySparkUdfKind::ScalarPandasIter,
         };
         Ok(kind)
     }
@@ -1106,7 +1107,8 @@ impl RemoteExecutionCodec {
         let kind = match kind {
             PySparkUdfKind::Batch => gen::PySparkUdfKind::Batch,
             PySparkUdfKind::ArrowBatch => gen::PySparkUdfKind::ArrowBatch,
-            PySparkUdfKind::Pandas => gen::PySparkUdfKind::Pandas,
+            PySparkUdfKind::ScalarPandas => gen::PySparkUdfKind::ScalarPandas,
+            PySparkUdfKind::ScalarPandasIter => gen::PySparkUdfKind::ScalarPandasIter,
         };
         Ok(kind as i32)
     }
