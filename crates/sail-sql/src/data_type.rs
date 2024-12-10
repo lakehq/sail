@@ -67,13 +67,9 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
         ast::DataType::Null | ast::DataType::Void => Ok(spec::DataType::Null),
         ast::DataType::Boolean | ast::DataType::Bool => Ok(spec::DataType::Boolean),
         ast::DataType::TinyInt(_) => Ok(spec::DataType::Int8),
-        ast::DataType::SmallInt(_) | ast::DataType::Int16 => Ok(spec::DataType::Int16),
-        ast::DataType::Int(_) | ast::DataType::Integer(_) | ast::DataType::Int32 => {
-            Ok(spec::DataType::Int32)
-        }
-        ast::DataType::BigInt(_) | ast::DataType::Long(_) | ast::DataType::Int64 => {
-            Ok(spec::DataType::Int64)
-        }
+        ast::DataType::SmallInt(_) => Ok(spec::DataType::Int16),
+        ast::DataType::Int(_) | ast::DataType::Integer(_) => Ok(spec::DataType::Int32),
+        ast::DataType::BigInt(_) | ast::DataType::Long(_) => Ok(spec::DataType::Int64),
         ast::DataType::Binary(_) | ast::DataType::Bytea => Ok(spec::DataType::Binary),
         ast::DataType::Float(_) | ast::DataType::Real => Ok(spec::DataType::Float32),
         ast::DataType::Double | ast::DataType::DoublePrecision => Ok(spec::DataType::Float64),
@@ -239,6 +235,9 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
         ast::DataType::Int2(_)
         | ast::DataType::Int4(_)
         | ast::DataType::Int8(_)
+        | ast::DataType::Int16
+        | ast::DataType::Int32
+        | ast::DataType::Int64
         | ast::DataType::Int128
         | ast::DataType::Int256
         | ast::DataType::MediumInt(_)
