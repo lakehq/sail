@@ -58,20 +58,19 @@ impl PlanFormatter for DefaultPlanFormatter {
             DataType::Null => Ok("void".to_string()),
             DataType::Binary => Ok("binary".to_string()),
             DataType::Boolean => Ok("boolean".to_string()),
-            DataType::Byte => Ok("tinyint".to_string()),
-            DataType::Short => Ok("smallint".to_string()),
-            DataType::Integer => Ok("int".to_string()),
-            DataType::Long => Ok("bigint".to_string()),
-            DataType::Float => Ok("float".to_string()),
-            DataType::Double => Ok("double".to_string()),
-            DataType::Decimal128 { precision, scale }
-            | DataType::Decimal256 { precision, scale } => {
+            DataType::Int8 => Ok("tinyint".to_string()),
+            DataType::Int16 => Ok("smallint".to_string()),
+            DataType::Int32 => Ok("int".to_string()),
+            DataType::Int64 => Ok("bigint".to_string()),
+            DataType::Float32 => Ok("float".to_string()),
+            DataType::Float64 => Ok("double".to_string()),
+            DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
                 Ok(format!("decimal({},{})", precision, scale))
             }
-            DataType::String => Ok("string".to_string()),
+            DataType::Utf8 | DataType::LargeUtf8 => Ok("string".to_string()),
             DataType::Char { length } => Ok(format!("char({})", length)),
             DataType::VarChar { length } => Ok(format!("varchar({})", length)),
-            DataType::Date => Ok("date".to_string()),
+            DataType::Date32 => Ok("date".to_string()),
             DataType::Timestamp(_time_unit, _timezone) => Ok("timestamp".to_string()),
             DataType::TimestampNtz => Ok("timestamp_ntz".to_string()),
             DataType::CalendarInterval => Ok("interval".to_string()),
@@ -145,9 +144,8 @@ impl PlanFormatter for DefaultPlanFormatter {
                 "array<{}>",
                 self.data_type_to_simple_string(element_type.as_ref())?
             )),
-            DataType::Struct { fields } => {
+            DataType::Struct(fields) => {
                 let fields = fields
-                    .0
                     .iter()
                     .map(|field| {
                         Ok(format!(
@@ -291,7 +289,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 elements,
             } => {
                 let fields = match struct_type {
-                    spec::DataType::Struct { fields } => fields,
+                    spec::DataType::Struct(fields) => fields,
                     _ => return Err(PlanError::invalid("struct type")),
                 };
                 let fields = fields
@@ -465,6 +463,7 @@ fn format_decimal<T: Display>(value: &T, scale: i8, f: &mut Formatter<'_>) -> st
 mod tests {
     use arrow::datatypes::i256;
     use sail_common::spec::Literal;
+    use std::sync::Arc;
 
     use super::*;
 
@@ -626,14 +625,14 @@ mod tests {
         assert_eq!(
             to_string(Literal::Array {
                 elements: vec![Literal::Integer(1), Literal::Integer(-2)],
-                element_type: spec::DataType::Integer,
+                element_type: spec::DataType::Int32,
             })?,
             "array(1, -2)",
         );
         assert_eq!(
             to_string(Literal::Map {
-                key_type: spec::DataType::String,
-                value_type: spec::DataType::Double,
+                key_type: spec::DataType::Utf8,
+                value_type: spec::DataType::Float64,
                 keys: vec![
                     Literal::String("a".to_string()),
                     Literal::String("b".to_string()),
@@ -644,47 +643,44 @@ mod tests {
         );
         assert_eq!(
             to_string(Literal::Struct {
-                struct_type: spec::DataType::Struct {
-                    fields: vec![
-                        spec::Field {
-                            name: "foo".to_string(),
-                            data_type: spec::DataType::Array {
-                                element_type: Box::new(spec::DataType::Long),
-                                contains_null: true,
-                            },
-                            nullable: false,
-                            metadata: vec![],
-                        },
-                        spec::Field {
-                            name: "bar".to_string(),
-                            data_type: spec::DataType::Struct {
-                                fields: spec::Fields(vec![spec::Field {
-                                    name: "baz".to_string(),
-                                    data_type: spec::DataType::String,
-                                    nullable: false,
-                                    metadata: vec![],
-                                }]),
-                            },
+                struct_type: spec::DataType::Struct(spec::Fields::from(vec![
+                    spec::Field {
+                        name: "foo".to_string(),
+                        data_type: spec::DataType::List(Arc::new(spec::Field {
+                            name: "item".to_string(),
+                            data_type: spec::DataType::Int64,
                             nullable: true,
                             metadata: vec![],
-                        },
-                    ]
-                    .into()
-                },
+                        })),
+                        nullable: false,
+                        metadata: vec![],
+                    },
+                    spec::Field {
+                        name: "bar".to_string(),
+                        data_type: spec::DataType::Struct(spec::Fields::from(vec![spec::Field {
+                            name: "baz".to_string(),
+                            data_type: spec::DataType::Utf8,
+                            nullable: false,
+                            metadata: vec![],
+                        }]),),
+                        nullable: true,
+                        metadata: vec![],
+                    },
+                ])),
                 elements: vec![
                     Literal::Array {
                         elements: vec![Literal::Long(1), Literal::Null],
-                        element_type: spec::DataType::Long,
+                        element_type: spec::DataType::Int64,
                     },
                     Literal::Struct {
-                        struct_type: spec::DataType::Struct {
-                            fields: spec::Fields(vec![spec::Field {
+                        struct_type: spec::DataType::Struct(spec::Fields::from(vec![
+                            spec::Field {
                                 name: "baz".to_string(),
-                                data_type: spec::DataType::String,
+                                data_type: spec::DataType::Utf8,
                                 nullable: false,
                                 metadata: vec![],
-                            }]),
-                        },
+                            }
+                        ]),),
                         elements: vec![Literal::String("hello".to_string())],
                     },
                 ],
