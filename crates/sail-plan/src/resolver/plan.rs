@@ -1735,15 +1735,11 @@ impl PlanResolver<'_> {
             &offsets,
             &self.config.spark_udf_config,
         )?;
-        let legacy = !self
-            .config
-            .spark_udf_config
-            .pandas_grouped_map_assign_columns_by_name;
-        let column_match = if legacy {
-            ColumnMatch::ByPosition
-        } else {
-            ColumnMatch::ByName
-        };
+        let column_match = ColumnMatch::by_name(
+            self.config
+                .spark_udf_config
+                .pandas_grouped_map_assign_columns_by_name,
+        );
         let udaf = PySparkGroupMapUDF::new(
             get_udf_name(&function_name, &payload),
             payload,
@@ -1859,15 +1855,11 @@ impl PlanResolver<'_> {
             &offsets,
             &self.config.spark_udf_config,
         )?;
-        let legacy = !self
-            .config
-            .spark_udf_config
-            .pandas_grouped_map_assign_columns_by_name;
-        let column_match = if legacy {
-            ColumnMatch::ByPosition
-        } else {
-            ColumnMatch::ByName
-        };
+        let column_match = ColumnMatch::by_name(
+            self.config
+                .spark_udf_config
+                .pandas_grouped_map_assign_columns_by_name,
+        );
         let udf = PySparkCoGroupMapUDF::try_new(
             get_udf_name(&function_name, &payload),
             payload,

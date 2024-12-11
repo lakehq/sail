@@ -29,6 +29,14 @@ pub enum ColumnMatch {
 }
 
 impl ColumnMatch {
+    pub fn by_name(value: bool) -> Self {
+        if value {
+            ColumnMatch::ByName
+        } else {
+            ColumnMatch::ByPosition
+        }
+    }
+
     pub fn is_by_name(&self) -> bool {
         match self {
             ColumnMatch::ByName => true,
