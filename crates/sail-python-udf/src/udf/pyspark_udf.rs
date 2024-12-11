@@ -88,7 +88,7 @@ impl PySparkUDF {
     fn udf(&self, py: Python) -> PyUdfResult<PyObject> {
         let udf = self.udf.get_or_try_init(py, || {
             let udf = PySparkUdfPayload::load(py, &self.function)?;
-            let wrapper = match self.kind {
+            let udf = match self.kind {
                 PySparkUdfKind::Batch => {
                     PySpark::batch_udf(py, udf, &self.input_types, &self.output_type)?
                 }
@@ -102,7 +102,7 @@ impl PySparkUDF {
                     PySpark::scalar_pandas_iter_udf(py, udf, &self.input_types, &self.output_type)?
                 }
             };
-            Ok(wrapper.unbind())
+            Ok(udf.unbind())
         })?;
         Ok(udf.clone_ref(py))
     }

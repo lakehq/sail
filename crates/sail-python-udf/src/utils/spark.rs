@@ -153,4 +153,24 @@ impl PySpark {
             (udf,),
         )
     }
+
+    pub fn table_udf<'py>(
+        py: Python<'py>,
+        udf: PyObject,
+        schema: &SchemaRef,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        py_init_object(
+            Self::module(py)?,
+            intern!(py, "PySparkTableUdf"),
+            (udf, schema.try_to_py(py)?),
+        )
+    }
+
+    pub fn arrow_table_udf(py: Python, udf: PyObject) -> PyResult<Bound<PyAny>> {
+        py_init_object(
+            Self::module(py)?,
+            intern!(py, "PySparkArrowTableUdf"),
+            (udf,),
+        )
+    }
 }

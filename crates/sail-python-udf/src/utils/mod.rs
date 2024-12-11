@@ -2,10 +2,6 @@ use pyo3::prelude::{PyAnyMethods, PyModule};
 use pyo3::types::{PyString, PyTuple};
 use pyo3::{intern, Bound, IntoPy, Py, PyAny, PyResult};
 
-pub(crate) mod builtins;
-pub(crate) mod pyarrow;
-pub(crate) mod std;
-
 pub(crate) mod spark;
 
 fn py_init_object<C, A>(module: Bound<PyModule>, class: C, args: A) -> PyResult<Bound<PyAny>>
