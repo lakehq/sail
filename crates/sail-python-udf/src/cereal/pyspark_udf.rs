@@ -8,15 +8,9 @@ use crate::cereal::{check_python_udf_version, should_write_config};
 use crate::config::SparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
 
-pub struct PySparkUdfPayload<'a> {
-    pub python_version: &'a str,
-    pub command: &'a [u8],
-    pub eval_type: spec::PySparkUdfType,
-    pub arg_offsets: &'a [usize],
-    pub config: &'a SparkUdfConfig,
-}
+pub struct PySparkUdfPayload;
 
-impl PySparkUdfPayload<'_> {
+impl PySparkUdfPayload {
     pub fn load(py: Python, data: &[u8]) -> PyUdfResult<PyObject> {
         let (eval_type, v) = data
             .split_at_checked(size_of::<i32>())
@@ -37,14 +31,20 @@ impl PySparkUdfPayload<'_> {
         Ok(tuple.get_item(0)?.to_object(py))
     }
 
-    pub fn write(&self) -> PyUdfResult<Vec<u8>> {
-        check_python_udf_version(self.python_version)?;
+    pub fn build(
+        python_version: &str,
+        command: &[u8],
+        eval_type: spec::PySparkUdfType,
+        arg_offsets: &[usize],
+        config: &SparkUdfConfig,
+    ) -> PyUdfResult<Vec<u8>> {
+        check_python_udf_version(python_version)?;
         let mut data: Vec<u8> = Vec::new();
 
-        data.extend(&i32::from(self.eval_type).to_be_bytes());
+        data.extend(&i32::from(eval_type).to_be_bytes());
 
-        if should_write_config(self.eval_type) {
-            let config = self.config.to_key_value_pairs();
+        if should_write_config(eval_type) {
+            let config = config.to_key_value_pairs();
             data.extend((config.len() as i32).to_be_bytes()); // number of configuration options
             for (key, value) in config {
                 data.extend(&(key.len() as i32).to_be_bytes()); // length of the key
@@ -56,13 +56,12 @@ impl PySparkUdfPayload<'_> {
 
         data.extend(&1i32.to_be_bytes()); // number of UDFs
 
-        let num_arg_offsets: i32 = self
-            .arg_offsets
+        let num_arg_offsets: i32 = arg_offsets
             .len()
             .try_into()
             .map_err(|e| PyUdfError::invalid(format!("num args: {e}")))?;
         data.extend(&num_arg_offsets.to_be_bytes()); // number of argument offsets
-        for offset in self.arg_offsets {
+        for offset in arg_offsets {
             let offset: i32 = (*offset)
                 .try_into()
                 .map_err(|e| PyUdfError::invalid(format!("arg offset: {e}")))?;
@@ -70,8 +69,8 @@ impl PySparkUdfPayload<'_> {
         }
 
         data.extend(&1i32.to_be_bytes()); // number of functions
-        data.extend(&(self.command.len() as i32).to_be_bytes()); // length of the function
-        data.extend_from_slice(self.command);
+        data.extend(&(command.len() as i32).to_be_bytes()); // length of the function
+        data.extend_from_slice(command);
 
         Ok(data)
     }

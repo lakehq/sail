@@ -8,6 +8,7 @@ mod data_source;
 mod data_type;
 mod ddl;
 mod expression;
+mod function;
 mod literal;
 pub mod plan;
 mod schema;

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, ArrayRef};
+use datafusion::arrow::datatypes as adt;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::pyarrow::*;
 use datafusion::arrow::record_batch::RecordBatch;
@@ -18,12 +19,12 @@ use datafusion_expr::{Expr, TableType};
 use pyo3::prelude::{PyAnyMethods, PyListMethods};
 use pyo3::types::{PyDict, PyIterator, PyList, PyTuple};
 use pyo3::{Bound, PyAny, PyObject, Python};
-use sail_common::spec::TableFunctionDefinition;
+use sail_common::spec;
 use sail_common::utils::cast_record_batch;
 
 use crate::cereal::pyspark_udtf::PySparkUdtfPayload;
 use crate::config::SparkUdfConfig;
-use crate::error::PyUdfResult;
+use crate::error::{PyUdfError, PyUdfResult};
 use crate::utils::builtins::PyBuiltins;
 use crate::utils::pyarrow::{PyArrowArray, PyArrowRecordBatch, PyArrowToPandasOptions};
 
@@ -79,9 +80,11 @@ impl TableProvider for PySparkUserDefinedTable {
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct PySparkUDTF {
+    python_version: String,
+    eval_type: spec::PySparkUdfType,
+    command: Vec<u8>,
     return_type: DataType,
     return_schema: SchemaRef,
-    table_function_definition: TableFunctionDefinition,
     spark_udf_config: SparkUdfConfig,
     #[allow(dead_code)]
     deterministic: bool,
@@ -89,8 +92,10 @@ pub struct PySparkUDTF {
 
 #[derive(PartialEq, PartialOrd)]
 struct PySparkUDTFOrd<'a> {
+    python_version: &'a str,
+    eval_type: spec::PySparkUdfType,
+    command: &'a [u8],
     return_type: &'a DataType,
-    table_function_definition: &'a TableFunctionDefinition,
     spark_udf_config: &'a SparkUdfConfig,
     deterministic: &'a bool,
 }
@@ -98,8 +103,10 @@ struct PySparkUDTFOrd<'a> {
 impl<'a> From<&'a PySparkUDTF> for PySparkUDTFOrd<'a> {
     fn from(udtf: &'a PySparkUDTF) -> Self {
         Self {
+            python_version: &udtf.python_version,
+            eval_type: udtf.eval_type,
+            command: &udtf.command,
             return_type: &udtf.return_type,
-            table_function_definition: &udtf.table_function_definition,
             spark_udf_config: &udtf.spark_udf_config,
             deterministic: &udtf.deterministic,
         }
@@ -113,48 +120,51 @@ impl PartialOrd for PySparkUDTF {
 }
 
 impl PySparkUDTF {
-    pub fn new(
+    pub fn try_new(
+        python_version: String,
+        eval_type: spec::PySparkUdfType,
+        command: Vec<u8>,
         return_type: DataType,
-        return_schema: SchemaRef,
-        table_function_definition: TableFunctionDefinition,
         spark_udf_config: SparkUdfConfig,
         deterministic: bool,
-    ) -> Self {
-        Self {
+    ) -> PyUdfResult<Self> {
+        let return_schema: SchemaRef = match return_type {
+            DataType::Struct(ref fields) => {
+                Arc::new(adt::Schema::new(fields.clone()))
+            },
+            _ => {
+                return Err(PyUdfError::invalid(format!(
+                    "Invalid Python user-defined table function return type. Expect a struct type, but got {}",
+                    return_type
+                )))
+            }
+        };
+        Ok(Self {
+            python_version,
+            eval_type,
+            command,
             return_type,
             return_schema,
-            table_function_definition,
             spark_udf_config,
             deterministic,
-        }
+        })
     }
 }
 
 impl TableFunctionImpl for PySparkUDTF {
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
-        let (_return_type, eval_type, command, python_version) =
-            match &self.table_function_definition {
-                TableFunctionDefinition::PythonUdtf {
-                    return_type,
-                    eval_type,
-                    command,
-                    python_version,
-                } => (return_type, eval_type, command, python_version),
-            };
-
-        let udtf_payload = PySparkUdtfPayload {
-            python_version,
-            command,
-            eval_type: *eval_type,
-            num_args: exprs.len(),
-            return_type: &self.return_type,
-            config: &self.spark_udf_config,
-        }
-        .write()?;
-        let udtf = Python::with_gil(|py| PySparkUdtfPayload::load(py, &udtf_payload))?;
+        let payload = PySparkUdtfPayload::build(
+            &self.python_version,
+            &self.command,
+            self.eval_type,
+            exprs.len(),
+            &self.return_type,
+            &self.spark_udf_config,
+        )?;
+        let udtf = Python::with_gil(|py| PySparkUdtfPayload::load(py, &payload))?;
 
         if exprs.is_empty() {
-            let batches: RecordBatch = if eval_type.is_arrow_udf() {
+            let batches: RecordBatch = if self.eval_type.is_arrow_udf() {
                 Python::with_gil(|py| apply_pyspark_arrow_function(py, &[], udtf))?
             } else {
                 Python::with_gil(|py| {
@@ -207,7 +217,7 @@ impl TableFunctionImpl for PySparkUDTF {
             }
         }
 
-        let batches: RecordBatch = if eval_type.is_arrow_udf() {
+        let batches: RecordBatch = if self.eval_type.is_arrow_udf() {
             Python::with_gil(|py| apply_pyspark_arrow_function(py, &input_arrays, udtf))?
         } else {
             Python::with_gil(|py| {

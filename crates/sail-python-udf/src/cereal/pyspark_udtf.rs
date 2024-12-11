@@ -10,16 +10,9 @@ use crate::cereal::{check_python_udf_version, should_write_config};
 use crate::config::SparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
 
-pub struct PySparkUdtfPayload<'a> {
-    pub python_version: &'a str,
-    pub command: &'a [u8],
-    pub eval_type: spec::PySparkUdfType,
-    pub num_args: usize,
-    pub return_type: &'a DataType,
-    pub config: &'a SparkUdfConfig,
-}
+pub struct PySparkUdtfPayload;
 
-impl PySparkUdtfPayload<'_> {
+impl PySparkUdtfPayload {
     pub fn load(py: Python, v: &[u8]) -> PyUdfResult<PyObject> {
         let (eval_type, v) = v
             .split_at_checked(size_of::<i32>())
@@ -40,14 +33,21 @@ impl PySparkUdtfPayload<'_> {
         Ok(tuple.get_item(0)?.to_object(py))
     }
 
-    pub fn write(&self) -> PyUdfResult<Vec<u8>> {
-        check_python_udf_version(self.python_version)?;
+    pub fn build(
+        python_version: &str,
+        command: &[u8],
+        eval_type: spec::PySparkUdfType,
+        num_args: usize,
+        return_type: &DataType,
+        config: &SparkUdfConfig,
+    ) -> PyUdfResult<Vec<u8>> {
+        check_python_udf_version(python_version)?;
         let mut data: Vec<u8> = Vec::new();
 
-        data.extend(&i32::from(self.eval_type).to_be_bytes()); // Add eval_type for extraction in visit_bytes
+        data.extend(&i32::from(eval_type).to_be_bytes()); // Add eval_type for extraction in visit_bytes
 
-        if should_write_config(self.eval_type) {
-            let config = self.config.to_key_value_pairs();
+        if should_write_config(eval_type) {
+            let config = config.to_key_value_pairs();
             data.extend((config.len() as i32).to_be_bytes()); // number of configuration options
             for (key, value) in config {
                 data.extend(&(key.len() as i32).to_be_bytes()); // length of the key
@@ -57,8 +57,7 @@ impl PySparkUdtfPayload<'_> {
             }
         }
 
-        let num_args: i32 = self
-            .num_args
+        let num_args: i32 = num_args
             .try_into()
             .map_err(|e| PyUdfError::invalid(format!("num_args: {e}")))?;
         data.extend(&num_args.to_be_bytes()); // number of arguments
@@ -66,15 +65,11 @@ impl PySparkUdtfPayload<'_> {
             data.extend(&index.to_be_bytes()); // argument offset
         }
 
-        data.extend(&(self.command.len() as i32).to_be_bytes()); // length of the function
-        data.extend_from_slice(self.command);
+        data.extend(&(command.len() as i32).to_be_bytes()); // length of the function
+        data.extend_from_slice(command);
 
         let type_string = Python::with_gil(|py| -> PyResult<String> {
-            let return_type = self
-                .return_type
-                .to_pyarrow(py)?
-                .clone_ref(py)
-                .into_bound(py);
+            let return_type = return_type.to_pyarrow(py)?.clone_ref(py).into_bound(py);
             PyModule::import_bound(py, intern!(py, "pyspark.sql.pandas.types"))?
                 .getattr(intern!(py, "from_arrow_type"))?
                 .call1((return_type,))?

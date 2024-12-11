@@ -1,10 +1,11 @@
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
-use pyo3::prelude::{PyAnyMethods, PyModule};
+use pyo3::prelude::PyModule;
 use pyo3::sync::GILOnceCell;
 use pyo3::{intern, Bound, Py, PyAny, PyObject, PyResult, Python};
 
 use crate::conversion::TryToPy;
 use crate::udf::ColumnMatch;
+use crate::utils::py_init_object;
 
 const MODULE_NAME: &str = "utils.spark";
 const MODULE_FILE_NAME: &str = "spark.py";
@@ -36,12 +37,11 @@ impl PySpark {
         input_types: &[DataType],
         output_type: &DataType,
     ) -> PyResult<Bound<'py, PyAny>> {
-        Self::module(py)?
-            .getattr(intern!(py, "PySparkBatchUdf"))?
-            .call_method1(
-                intern!(py, "init"),
-                (udf, input_types.try_to_py(py)?, output_type.try_to_py(py)?),
-            )
+        py_init_object(
+            Self::module(py)?,
+            intern!(py, "PySparkBatchUdf"),
+            (udf, input_types.try_to_py(py)?, output_type.try_to_py(py)?),
+        )
     }
 
     pub fn arrow_batch_udf<'py>(
@@ -50,12 +50,11 @@ impl PySpark {
         input_types: &[DataType],
         output_type: &DataType,
     ) -> PyResult<Bound<'py, PyAny>> {
-        Self::module(py)?
-            .getattr(intern!(py, "PySparkArrowBatchUdf"))?
-            .call_method1(
-                intern!(py, "init"),
-                (udf, input_types.try_to_py(py)?, output_type.try_to_py(py)?),
-            )
+        py_init_object(
+            Self::module(py)?,
+            intern!(py, "PySparkArrowBatchUdf"),
+            (udf, input_types.try_to_py(py)?, output_type.try_to_py(py)?),
+        )
     }
 
     pub fn scalar_pandas_udf<'py>(
@@ -64,12 +63,11 @@ impl PySpark {
         input_types: &[DataType],
         output_type: &DataType,
     ) -> PyResult<Bound<'py, PyAny>> {
-        Self::module(py)?
-            .getattr(intern!(py, "PySparkScalarPandasUdf"))?
-            .call_method1(
-                intern!(py, "init"),
-                (udf, input_types.try_to_py(py)?, output_type.try_to_py(py)?),
-            )
+        py_init_object(
+            Self::module(py)?,
+            intern!(py, "PySparkScalarPandasUdf"),
+            (udf, input_types.try_to_py(py)?, output_type.try_to_py(py)?),
+        )
     }
 
     pub fn scalar_pandas_iter_udf<'py>(
@@ -78,12 +76,11 @@ impl PySpark {
         input_types: &[DataType],
         output_type: &DataType,
     ) -> PyResult<Bound<'py, PyAny>> {
-        Self::module(py)?
-            .getattr(intern!(py, "PySparkScalarPandasIterUdf"))?
-            .call_method1(
-                intern!(py, "init"),
-                (udf, input_types.try_to_py(py)?, output_type.try_to_py(py)?),
-            )
+        py_init_object(
+            Self::module(py)?,
+            intern!(py, "PySparkScalarPandasIterUdf"),
+            (udf, input_types.try_to_py(py)?, output_type.try_to_py(py)?),
+        )
     }
 
     pub fn group_agg_udf<'py>(
@@ -93,17 +90,16 @@ impl PySpark {
         input_types: &[DataType],
         output_type: &DataType,
     ) -> PyResult<Bound<'py, PyAny>> {
-        Self::module(py)?
-            .getattr(intern!(py, "PySparkGroupAggUdf"))?
-            .call_method1(
-                intern!(py, "init"),
-                (
-                    udf,
-                    input_names,
-                    input_types.try_to_py(py)?,
-                    output_type.try_to_py(py)?,
-                ),
-            )
+        py_init_object(
+            Self::module(py)?,
+            intern!(py, "PySparkGroupAggUdf"),
+            (
+                udf,
+                input_names,
+                input_types.try_to_py(py)?,
+                output_type.try_to_py(py)?,
+            ),
+        )
     }
 
     pub fn group_map_udf(
@@ -113,17 +109,16 @@ impl PySpark {
         output_schema: SchemaRef,
         column_match: ColumnMatch,
     ) -> PyResult<Bound<PyAny>> {
-        Self::module(py)?
-            .getattr(intern!(py, "PySparkGroupMapUdf"))?
-            .call_method1(
-                intern!(py, "init"),
-                (
-                    udf,
-                    input_names,
-                    output_schema.try_to_py(py)?,
-                    column_match.is_by_name(),
-                ),
-            )
+        py_init_object(
+            Self::module(py)?,
+            intern!(py, "PySparkGroupMapUdf"),
+            (
+                udf,
+                input_names,
+                output_schema.try_to_py(py)?,
+                column_match.is_by_name(),
+            ),
+        )
     }
 
     pub fn cogroup_map_udf(
@@ -132,12 +127,11 @@ impl PySpark {
         output_schema: SchemaRef,
         column_match: ColumnMatch,
     ) -> PyResult<Bound<PyAny>> {
-        Self::module(py)?
-            .getattr(intern!(py, "PySparkCoGroupMapUdf"))?
-            .call_method1(
-                intern!(py, "init"),
-                (udf, output_schema.try_to_py(py)?, column_match.is_by_name()),
-            )
+        py_init_object(
+            Self::module(py)?,
+            intern!(py, "PySparkCoGroupMapUdf"),
+            (udf, output_schema.try_to_py(py)?, column_match.is_by_name()),
+        )
     }
 
     pub fn map_pandas_iter_udf(
@@ -145,14 +139,18 @@ impl PySpark {
         udf: PyObject,
         output_schema: SchemaRef,
     ) -> PyResult<Bound<PyAny>> {
-        Self::module(py)?
-            .getattr(intern!(py, "PySparkMapPandasIterUdf"))?
-            .call_method1(intern!(py, "init"), (udf, output_schema.try_to_py(py)?))
+        py_init_object(
+            Self::module(py)?,
+            intern!(py, "PySparkMapPandasIterUdf"),
+            (udf, output_schema.try_to_py(py)?),
+        )
     }
 
     pub fn map_arrow_iter_udf(py: Python, udf: PyObject) -> PyResult<Bound<PyAny>> {
-        Self::module(py)?
-            .getattr(intern!(py, "PySparkMapArrowIterUdf"))?
-            .call_method1(intern!(py, "init"), (udf,))
+        py_init_object(
+            Self::module(py)?,
+            intern!(py, "PySparkMapArrowIterUdf"),
+            (udf,),
+        )
     }
 }

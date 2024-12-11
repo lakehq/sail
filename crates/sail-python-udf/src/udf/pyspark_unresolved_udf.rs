@@ -3,21 +3,25 @@ use std::any::Any;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use sail_common::spec::FunctionDefinition;
+use sail_common::spec;
 
 #[derive(Debug, Clone)]
-pub struct UnresolvedPySparkUDF {
+pub struct PySparkUnresolvedUDF {
     signature: Signature,
-    function_name: String,
-    python_function_definition: FunctionDefinition,
+    name: String,
+    python_version: String,
+    eval_type: spec::PySparkUdfType,
+    command: Vec<u8>,
     output_type: DataType,
     deterministic: bool,
 }
 
-impl UnresolvedPySparkUDF {
+impl PySparkUnresolvedUDF {
     pub fn new(
-        function_name: String,
-        python_function_definition: FunctionDefinition,
+        name: String,
+        python_version: String,
+        eval_type: spec::PySparkUdfType,
+        command: Vec<u8>,
         output_type: DataType,
         deterministic: bool,
     ) -> Self {
@@ -29,29 +33,43 @@ impl UnresolvedPySparkUDF {
                     false => Volatility::Volatile,
                 },
             ),
-            function_name,
-            python_function_definition,
+            name,
+            python_version,
+            eval_type,
+            command,
             output_type,
             deterministic,
         }
     }
 
-    pub fn python_function_definition(&self) -> Result<&FunctionDefinition> {
-        Ok(&self.python_function_definition)
+    pub fn python_version(&self) -> &str {
+        &self.python_version
     }
 
-    pub fn deterministic(&self) -> Result<bool> {
-        Ok(self.deterministic)
+    pub fn eval_type(&self) -> spec::PySparkUdfType {
+        self.eval_type
+    }
+
+    pub fn command(&self) -> &[u8] {
+        &self.command
+    }
+
+    pub fn output_type(&self) -> &DataType {
+        &self.output_type
+    }
+
+    pub fn deterministic(&self) -> bool {
+        self.deterministic
     }
 }
 
-impl ScalarUDFImpl for UnresolvedPySparkUDF {
+impl ScalarUDFImpl for PySparkUnresolvedUDF {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
-        &self.function_name
+        &self.name
     }
 
     fn signature(&self) -> &Signature {

@@ -8,7 +8,7 @@ pub mod pyspark_map_iter_udf;
 pub mod pyspark_udaf;
 pub mod pyspark_udf;
 pub mod pyspark_udtf;
-pub mod unresolved_pyspark_udf;
+pub mod pyspark_unresolved_udf;
 
 /// Generates a unique function name by combining the base name with a hash of the Python function payload.
 /// Without this, lambda functions with the name `<lambda>` will be treated as the same function
