@@ -63,16 +63,16 @@ message StandardUdf {}
 
 message PySparkUdf {
   PySparkUdfKind kind = 1;
-  string function_name = 2;
-  bytes function = 3;
+  string name = 2;
+  bytes payload = 3;
   bool deterministic = 4;
   repeated bytes input_types = 5;
   bytes output_type = 6;
 }
 
 message PySparkCoGroupMapUdf {
-  string function_name = 1;
-  bytes function = 2;
+  string name = 1;
+  bytes payload = 2;
   bool deterministic = 3;
   bytes left_type = 4;
   bytes right_type = 5;
@@ -111,8 +111,8 @@ message SparkWeekOfYearUdf {
 message StandardUdaf {}
 
 message PySparkGroupAggUdaf {
-  string function_name = 1;
-  bytes function = 2;
+  string name = 1;
+  bytes payload = 2;
   bool deterministic = 3;
   repeated string input_names = 4;
   repeated bytes input_types = 5;
@@ -120,8 +120,8 @@ message PySparkGroupAggUdaf {
 }
 
 message PySparkGroupMapUdaf {
-  string function_name = 1;
-  bytes function = 2;
+  string name = 1;
+  bytes payload = 2;
   bool deterministic = 3;
   repeated string input_names = 4;
   repeated bytes input_types = 5;
@@ -136,8 +136,8 @@ message PySparkBatchCollectorUdaf {
 
 message PySparkMapIterUdf {
   PySparkMapIterKind kind = 1;
-  string function_name = 2;
-  bytes function = 3;
+  string name = 2;
+  bytes payload = 3;
   bytes output_schema = 4;
 }
 

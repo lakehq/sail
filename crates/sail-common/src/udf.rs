@@ -11,6 +11,9 @@ use crate::object::DynObject;
 
 /// Trait for implementing UDF to map input stream to output stream.
 pub trait MapIterUDF: DynObject + Debug + Send + Sync {
+    /// The name of the UDF.
+    fn name(&self) -> &str;
+
     /// The schema of the output stream.
     fn output_schema(&self) -> SchemaRef;
 

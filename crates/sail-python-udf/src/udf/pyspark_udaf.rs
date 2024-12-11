@@ -19,8 +19,9 @@ use crate::utils::spark::PySpark;
 #[derive(Debug)]
 pub struct PySparkGroupAggregateUDF {
     signature: Signature,
-    function_name: String,
-    function: Vec<u8>,
+    name: String,
+    payload: Vec<u8>,
+    deterministic: bool,
     input_names: Vec<String>,
     input_types: Vec<DataType>,
     output_type: DataType,
@@ -29,8 +30,8 @@ pub struct PySparkGroupAggregateUDF {
 
 impl PySparkGroupAggregateUDF {
     pub fn new(
-        function_name: String,
-        function: Vec<u8>,
+        name: String,
+        payload: Vec<u8>,
         deterministic: bool,
         input_names: Vec<String>,
         input_types: Vec<DataType>,
@@ -45,8 +46,9 @@ impl PySparkGroupAggregateUDF {
         );
         Self {
             signature,
-            function_name,
-            function,
+            name,
+            payload,
+            deterministic,
             input_names,
             input_types,
             output_type,
@@ -54,12 +56,12 @@ impl PySparkGroupAggregateUDF {
         }
     }
 
-    pub fn function_name(&self) -> &str {
-        &self.function_name
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
     }
 
-    pub fn function(&self) -> &[u8] {
-        &self.function
+    pub fn deterministic(&self) -> bool {
+        self.deterministic
     }
 
     pub fn input_names(&self) -> &[String] {
@@ -78,7 +80,7 @@ impl PySparkGroupAggregateUDF {
         let udf = self.udf.get_or_try_init(py, || {
             Ok(PySpark::group_agg_udf(
                 py,
-                PySparkUdfPayload::load(py, &self.function)?,
+                PySparkUdfPayload::load(py, &self.payload)?,
                 self.input_names.clone(),
                 &self.input_types,
                 &self.output_type,
@@ -95,7 +97,7 @@ impl AggregateUDFImpl for PySparkGroupAggregateUDF {
     }
 
     fn name(&self) -> &str {
-        &self.function_name
+        &self.name
     }
 
     fn signature(&self) -> &Signature {

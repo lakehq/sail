@@ -25,8 +25,8 @@ pub enum PySparkUdfKind {
 pub struct PySparkUDF {
     signature: Signature,
     kind: PySparkUdfKind,
-    function_name: String,
-    function: Vec<u8>,
+    name: String,
+    payload: Vec<u8>,
     deterministic: bool,
     input_types: Vec<DataType>,
     output_type: DataType,
@@ -36,8 +36,8 @@ pub struct PySparkUDF {
 impl PySparkUDF {
     pub fn new(
         kind: PySparkUdfKind,
-        function_name: String,
-        function: Vec<u8>,
+        name: String,
+        payload: Vec<u8>,
         deterministic: bool,
         input_types: Vec<DataType>,
         output_type: DataType,
@@ -52,8 +52,8 @@ impl PySparkUDF {
                 },
             ),
             kind,
-            function_name,
-            function,
+            name,
+            payload,
             deterministic,
             input_types,
             output_type,
@@ -65,12 +65,8 @@ impl PySparkUDF {
         self.kind
     }
 
-    pub fn function_name(&self) -> &str {
-        &self.function_name
-    }
-
-    pub fn function(&self) -> &[u8] {
-        &self.function
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
     }
 
     pub fn deterministic(&self) -> bool {
@@ -87,7 +83,7 @@ impl PySparkUDF {
 
     fn udf(&self, py: Python) -> PyUdfResult<PyObject> {
         let udf = self.udf.get_or_try_init(py, || {
-            let udf = PySparkUdfPayload::load(py, &self.function)?;
+            let udf = PySparkUdfPayload::load(py, &self.payload)?;
             let udf = match self.kind {
                 PySparkUdfKind::Batch => {
                     PySpark::batch_udf(py, udf, &self.input_types, &self.output_type)?
@@ -114,7 +110,7 @@ impl ScalarUDFImpl for PySparkUDF {
     }
 
     fn name(&self) -> &str {
-        &self.function_name
+        &self.name
     }
 
     fn signature(&self) -> &Signature {

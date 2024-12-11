@@ -22,8 +22,8 @@ use crate::utils::spark::PySpark;
 #[derive(Debug)]
 pub struct PySparkCoGroupMapUDF {
     signature: Signature,
-    function_name: String,
-    function: Vec<u8>,
+    name: String,
+    payload: Vec<u8>,
     deterministic: bool,
     left_type: DataType,
     left_inner_schema: SchemaRef,
@@ -37,8 +37,8 @@ pub struct PySparkCoGroupMapUDF {
 
 impl PySparkCoGroupMapUDF {
     pub fn try_new(
-        function_name: String,
-        function: Vec<u8>,
+        name: String,
+        payload: Vec<u8>,
         deterministic: bool,
         left_type: DataType,
         right_type: DataType,
@@ -58,8 +58,8 @@ impl PySparkCoGroupMapUDF {
                     false => Volatility::Volatile,
                 },
             ),
-            function_name,
-            function,
+            name,
+            payload,
             deterministic,
             left_type,
             left_inner_schema,
@@ -72,12 +72,8 @@ impl PySparkCoGroupMapUDF {
         })
     }
 
-    pub fn function_name(&self) -> &str {
-        &self.function_name
-    }
-
-    pub fn function(&self) -> &[u8] {
-        &self.function
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
     }
 
     pub fn deterministic(&self) -> bool {
@@ -102,7 +98,7 @@ impl PySparkCoGroupMapUDF {
 
     fn udf(&self, py: Python) -> PyUdfResult<PyObject> {
         let udf = self.udf.get_or_try_init(py, || {
-            let udf = PySparkUdfPayload::load(py, &self.function)?;
+            let udf = PySparkUdfPayload::load(py, &self.payload)?;
             Ok(PySpark::cogroup_map_udf(
                 py,
                 udf,
@@ -158,7 +154,7 @@ impl ScalarUDFImpl for PySparkCoGroupMapUDF {
     }
 
     fn name(&self) -> &str {
-        &self.function_name
+        &self.name
     }
 
     fn signature(&self) -> &Signature {

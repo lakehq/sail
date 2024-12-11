@@ -20,22 +20,22 @@ pub enum PySparkMapIterKind {
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PySparkMapIterUDF {
     kind: PySparkMapIterKind,
-    function_name: String,
-    function: Vec<u8>,
+    name: String,
+    payload: Vec<u8>,
     output_schema: SchemaRef,
 }
 
 impl PySparkMapIterUDF {
     pub fn new(
         kind: PySparkMapIterKind,
-        function_name: String,
-        function: Vec<u8>,
+        name: String,
+        payload: Vec<u8>,
         output_schema: SchemaRef,
     ) -> Self {
         Self {
             kind,
-            function_name,
-            function,
+            name,
+            payload,
             output_schema,
         }
     }
@@ -44,28 +44,24 @@ impl PySparkMapIterUDF {
         self.kind
     }
 
-    pub fn function_name(&self) -> &str {
-        &self.function_name
-    }
-
-    pub fn function(&self) -> &[u8] {
-        &self.function
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
     }
 }
 
 #[derive(PartialEq, PartialOrd)]
 struct PySparkMapIterUDFOrd<'a> {
     kind: PySparkMapIterKind,
-    function_name: &'a String,
-    function: &'a Vec<u8>,
+    name: &'a String,
+    payload: &'a Vec<u8>,
 }
 
 impl<'a> From<&'a PySparkMapIterUDF> for PySparkMapIterUDFOrd<'a> {
     fn from(udf: &'a PySparkMapIterUDF) -> Self {
         Self {
             kind: udf.kind,
-            function_name: &udf.function_name,
-            function: &udf.function,
+            name: &udf.name,
+            payload: &udf.payload,
         }
     }
 }
@@ -77,13 +73,17 @@ impl PartialOrd for PySparkMapIterUDF {
 }
 
 impl MapIterUDF for PySparkMapIterUDF {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
     fn output_schema(&self) -> SchemaRef {
         self.output_schema.clone()
     }
 
     fn invoke(&self, input: SendableRecordBatchStream) -> Result<SendableRecordBatchStream> {
         let function = Python::with_gil(|py| -> PyUdfResult<_> {
-            let udf = PySparkUdfPayload::load(py, &self.function)?;
+            let udf = PySparkUdfPayload::load(py, &self.payload)?;
             let udf = match self.kind {
                 PySparkMapIterKind::Pandas => {
                     PySpark::map_pandas_iter_udf(py, udf, self.output_schema.clone())?
