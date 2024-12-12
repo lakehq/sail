@@ -331,7 +331,7 @@ pub struct Field {
 
 /// [Credit]: The implementations for [`Field`], [`FieldRef`], [`Fields`], and [`UnionFields`] are
 /// copied from [`arrow_schema::Field`], [`arrow_schema::FieldRef`], [`arrow_schema::Fields`], and [`arrow_schema::UnionFields`].
-
+///
 /// A reference counted [`Field`]
 pub type FieldRef = Arc<Field>;
 
