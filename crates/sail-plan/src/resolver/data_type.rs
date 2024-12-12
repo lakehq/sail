@@ -218,7 +218,7 @@ impl PlanResolver<'_> {
             metadata,
         } = field;
         let mut metadata: HashMap<_, _> = metadata
-            .into_iter()
+            .iter()
             .map(|(k, v)| (format!("metadata.{}", k), v.to_string()))
             .collect();
         let data_type = match data_type {

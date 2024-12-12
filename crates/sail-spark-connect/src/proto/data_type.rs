@@ -37,10 +37,10 @@ pub(crate) fn parse_spark_data_type(schema: &str) -> SparkResult<spec::DataType>
     }
 }
 
-impl TryFrom<sdt::StructField> for spec::Field {
+impl TryFrom<sdt::StructField> for spec::FieldRef {
     type Error = SparkError;
 
-    fn try_from(field: sdt::StructField) -> SparkResult<spec::Field> {
+    fn try_from(field: sdt::StructField) -> SparkResult<spec::FieldRef> {
         let sdt::StructField {
             name,
             data_type,
@@ -53,13 +53,13 @@ impl TryFrom<sdt::StructField> for spec::Field {
             .map(|m| -> SparkResult<_> { Ok(serde_json::from_str(m.as_str())?) })
             .transpose()?
             .unwrap_or_default();
-        Ok(spec::Field {
+        Ok(Arc::new(spec::Field {
             name,
             data_type,
             nullable,
             // TODO: preserve metadata order in serde
             metadata: metadata.into_iter().collect(),
-        })
+        }))
     }
 }
 
@@ -202,9 +202,9 @@ impl TryFrom<DataType> for spec::DataType {
                 fields,
                 type_variation_reference: _,
             }) => {
-                let fields = fields
+                let fields: Vec<spec::FieldRef> = fields
                     .into_iter()
-                    .map(spec::Field::try_from)
+                    .map(spec::FieldRef::try_from)
                     .collect::<SparkResult<_>>()?;
                 Ok(spec::DataType::Struct(spec::Fields::from(fields)))
             }
@@ -328,7 +328,7 @@ impl TryFrom<spec::DataType> for DataType {
             spec::DataType::Utf8 | spec::DataType::LargeUtf8 | spec::DataType::Utf8View => {
                 Ok(Kind::String(sdt::String::default()))
             }
-            spec::DataType::ConfiguredUtf8(length, utf8_type) => match utf8_type {
+            spec::DataType::ConfiguredUtf8(Some(length), utf8_type) => match utf8_type {
                 Some(spec::ConfiguredUtf8Type::Char) => Ok(Kind::Char(sdt::Char {
                     length: length
                         .try_into()
@@ -343,6 +343,9 @@ impl TryFrom<spec::DataType> for DataType {
                 })),
                 None => Ok(Kind::String(sdt::String::default())),
             },
+            spec::DataType::ConfiguredUtf8(None, _utf8_type) => Err(SparkError::invalid(
+                "TryFrom spec::DataType::ConfiguredUtf8(None, _) to Spark Kind",
+            )),
             spec::DataType::Date32 => Ok(Kind::Date(sdt::Date::default())),
             spec::DataType::Date64 => Err(SparkError::unsupported(
                 "TryFrom spec::DataType::Date64 to Spark Kind",
@@ -414,16 +417,13 @@ impl TryFrom<spec::DataType> for DataType {
                     type_variation_reference: 0,
                 })))
             }
-            spec::DataType::Struct(fields) => {
-                let fields: Vec<spec::Field> = fields.into();
-                Ok(Kind::Struct(sdt::Struct {
-                    fields: fields
-                        .into_iter()
-                        .map(|f| f.try_into())
-                        .collect::<SparkResult<Vec<sdt::StructField>>>()?,
-                    type_variation_reference: 0,
-                }))
-            }
+            spec::DataType::Struct(fields) => Ok(Kind::Struct(sdt::Struct {
+                fields: fields
+                    .into_iter()
+                    .map(|f| f.as_ref().clone().try_into())
+                    .collect::<SparkResult<Vec<sdt::StructField>>>()?,
+                type_variation_reference: 0,
+            })),
             spec::DataType::Map(field, _keys_are_sorted) => {
                 let spec::Field {
                     name: _,
