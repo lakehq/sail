@@ -1412,7 +1412,7 @@
     {
       "input": "select * from my_tvf(2, table (v1), arg1 => table (select 1))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: 1 at Line: 1, Column: 59"
+        "failure": "invalid argument: unsupported function argument type"
       }
     },
     {
@@ -1436,14 +1436,14 @@
     {
       "input": "select * from my_tvf(arg1 => table (v1), arg2 => table (select 1))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: 1 at Line: 1, Column: 64"
+        "failure": "invalid argument: unsupported function argument type"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table v1)",
       "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_FUNCTION_IDENTIFIER_ARGUMENT_MISSING_PARENTHESES] Invalid SQL syntax: Syntax error: call to table-valued function is invalid because parentheses are missing around the provided TABLE argument `v1`; please surround this with parentheses and try again.(line 1, pos 29)\n\n== SQL ==\nselect * from my_tvf(arg1 => table v1)\n-----------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: v1 at Line: 1, Column: 36"
+        "failure": "invalid argument: sql parser error: Expected: (, found: v1 at Line: 1, Column: 36"
       }
     },
     {
@@ -1455,7 +1455,93 @@
     {
       "input": "select * from my_tvf(table (v1), table (select 1))",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: 1 at Line: 1, Column: 48"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "udtf": {
+                    "name": [
+                      "my_tvf"
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedFunction": {
+                          "functionName": "table",
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "v1"
+                                ],
+                                "planId": null
+                              }
+                            }
+                          ],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false
+                        }
+                      },
+                      {
+                        "unresolvedFunction": {
+                          "functionName": "table",
+                          "arguments": [
+                            {
+                              "scalarSubquery": {
+                                "subquery": {
+                                  "project": {
+                                    "input": {
+                                      "empty": {
+                                        "produceOneRow": true
+                                      },
+                                      "planId": null,
+                                      "sourceInfo": null
+                                    },
+                                    "expressions": [
+                                      {
+                                        "literal": {
+                                          "integer": 1
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  "planId": null,
+                                  "sourceInfo": null
+                                }
+                              }
+                            }
+                          ],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false
+                        }
+                      }
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

@@ -90,6 +90,34 @@ impl SparkDialect {
             within_group: vec![],
         }))
     }
+
+    fn parse_table_function(&self, parser: &mut Parser) -> Result<ast::Expr, ParserError> {
+        parser.expect_keyword(Keyword::TABLE)?;
+        parser.expect_token(&Token::LParen)?;
+        let expr = if parser
+            .parse_one_of_keywords(&[Keyword::SELECT, Keyword::WITH])
+            .is_some()
+        {
+            parser.prev_token();
+            ast::Expr::Subquery(parser.parse_boxed_query()?)
+        } else {
+            parser.parse_expr()?
+        };
+        parser.expect_token(&Token::RParen)?;
+        Ok(ast::Expr::Function(ast::Function {
+            name: ast::ObjectName(vec![ast::Ident::new("table")]),
+            parameters: ast::FunctionArguments::None,
+            args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                duplicate_treatment: None,
+                args: vec![ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(expr))],
+                clauses: vec![],
+            }),
+            filter: None,
+            null_treatment: None,
+            over: None,
+            within_group: vec![],
+        }))
+    }
 }
 
 impl Dialect for SparkDialect {
@@ -136,6 +164,9 @@ impl Dialect for SparkDialect {
             }
             Token::Word(w) if w.keyword == Keyword::STRUCT => {
                 Some(self.parse_struct_function(parser))
+            }
+            Token::Word(w) if w.keyword == Keyword::TABLE => {
+                Some(self.parse_table_function(parser))
             }
             _ => None,
         }

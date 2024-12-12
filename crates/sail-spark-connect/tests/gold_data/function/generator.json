@@ -72,7 +72,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Table function 'posexplode' not found"
+        "failure": "not supported: unknown table function: posexplode"
       }
     },
     {
@@ -101,7 +101,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Table function 'posexplode_outer' not found"
+        "failure": "not supported: unknown table function: posexplode_outer"
       }
     },
     {
