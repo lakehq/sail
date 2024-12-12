@@ -17,11 +17,10 @@ use log::debug;
 use num_traits::Float;
 use sail_common::spec;
 use sail_common::spec::PySparkUdfType;
-use sail_python_udf::cereal::pyspark_udf::build_pyspark_udf_payload;
+use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::udf::get_udf_name;
-use sail_python_udf::udf::pyspark_udaf::{PySparkAggFormat, PySparkAggregateUDF};
-use sail_python_udf::udf::pyspark_udf::PySparkUDF;
-use sail_python_udf::udf::unresolved_pyspark_udf::UnresolvedPySparkUDF;
+use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
+use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::drop_struct_field::DropStructField;
@@ -30,6 +29,7 @@ use crate::function::common::{AggFunctionContext, FunctionContext};
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, get_built_in_window_function,
 };
+use crate::resolver::function::PythonUdf;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
@@ -82,34 +82,6 @@ impl NamedExpr {
     pub fn with_metadata(mut self, metadata: Vec<(String, String)>) -> Self {
         self.metadata = metadata;
         self
-    }
-
-    pub fn into_alias_expr(self) -> PlanResult<expr::Expr> {
-        match &self.expr {
-            // TODO: This seems hacky. Is there a better way to handle this?
-            // There is no need to add alias to an alias expression.
-            expr::Expr::Alias(_)
-            // We do not add alias for literal when it is used as function arguments,
-            // since some function (e.g. `struct()`) may need to determine struct field names
-            // for literals.
-            | expr::Expr::Literal(_)
-            // We should not add alias to expressions that will be rewritten in logical plans.
-            // Otherwise, some logical plan optimizers may not work correctly.
-            | expr::Expr::Wildcard { .. }
-            | expr::Expr::GroupingSet(_)
-            | expr::Expr::Placeholder(_)
-            | expr::Expr::Unnest(_) => return Ok(self.expr),
-            _ => (),
-        };
-        let relation = match &self.expr {
-            expr::Expr::Column(Column { relation, .. }) => relation.clone(),
-            _ => None,
-        };
-        let name = self
-            .name
-            .one()
-            .map_err(|_| PlanError::invalid("named expression must have a single name"))?;
-        Ok(self.expr.alias_qualified(relation, name))
     }
 }
 
@@ -604,26 +576,6 @@ impl PlanResolver<'_> {
         Ok((names, exprs))
     }
 
-    pub(super) async fn resolve_alias_expressions_and_names(
-        &self,
-        expressions: Vec<spec::Expr>,
-        schema: &DFSchemaRef,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<(Vec<String>, Vec<expr::Expr>)> {
-        let mut names: Vec<String> = Vec::with_capacity(expressions.len());
-        let mut exprs: Vec<expr::Expr> = Vec::with_capacity(expressions.len());
-        for expression in expressions {
-            let named_expr = self
-                .resolve_named_expression(expression, schema, state)
-                .await?;
-            let name = named_expr.name.clone().one()?;
-            let expr = named_expr.into_alias_expr()?;
-            names.push(name);
-            exprs.push(expr);
-        }
-        Ok((names, exprs))
-    }
-
     fn resolve_expression_literal(&self, literal: spec::Literal) -> PlanResult<NamedExpr> {
         let name = self.config.plan_formatter.literal_to_string(&literal)?;
         let literal = self.resolve_literal(literal)?;
@@ -727,63 +679,36 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let (argument_names, arguments) = self
-            .resolve_alias_expressions_and_names(arguments, schema, state)
+            .resolve_expressions_and_names(arguments, schema, state)
             .await?;
 
-        // FIXME: is_user_defined_function is always false
-        //  So, we need to check udf's before built-in functions.
+        // FIXME: `is_user_defined_function` is always false,
+        //   so we need to check UDFs before built-in functions.
         let func = if let Ok(udf) = self.ctx.udf(function_name.as_str()) {
-            // TODO: UnresolvedPythonUDF will likely need to be accounted for as well
-            //  once we integrate LakeSail Python UDF.
-            let udf = if let Some(f) = udf.inner().as_any().downcast_ref::<UnresolvedPySparkUDF>() {
-                let deterministic = f.deterministic()?;
-                let function_definition = f.python_function_definition()?;
-                let (output_type, eval_type, command, python_version) = match &function_definition {
-                    spec::FunctionDefinition::PythonUdf {
-                        output_type,
-                        eval_type,
-                        command,
-                        python_version,
-                    } => (output_type, eval_type, command, python_version),
-                    _ => {
-                        return Err(PlanError::invalid("UDF function type must be Python UDF"));
-                    }
+            if let Some(f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
+                let function = PythonUdf {
+                    python_version: f.python_version().to_string(),
+                    eval_type: f.eval_type(),
+                    command: f.command().to_vec(),
+                    output_type: f.output_type().clone(),
                 };
-                let output_type: DataType = self.resolve_data_type(output_type.clone())?;
-
-                let payload: Vec<u8> = build_pyspark_udf_payload(
-                    python_version,
-                    command,
-                    *eval_type,
-                    &((0..arguments.len()).collect::<Vec<_>>()),
-                    &self.config.spark_udf_config,
-                )?;
-
-                let input_types: Vec<DataType> = arguments
-                    .iter()
-                    .map(|arg| arg.get_type(schema))
-                    .collect::<Result<Vec<DataType>, DataFusionError>>(
-                )?;
-
-                let python_udf: PySparkUDF = PySparkUDF::new(
-                    get_udf_name(&function_name, &payload),
-                    deterministic,
-                    *eval_type,
-                    input_types,
-                    output_type,
-                    payload,
-                );
-
-                Arc::new(ScalarUDF::from(python_udf))
+                self.resolve_python_udf_expr(
+                    function,
+                    &function_name,
+                    arguments,
+                    &argument_names,
+                    schema,
+                    f.deterministic(),
+                )?
             } else {
-                udf
-            };
-            expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func: udf,
-                args: arguments,
-            })
+                expr::Expr::ScalarFunction(expr::ScalarFunction {
+                    func: udf,
+                    args: arguments,
+                })
+            }
         } else if let Ok(func) = get_built_in_function(function_name.as_str()) {
-            let function_context = FunctionContext::new(self.config.clone(), self.ctx);
+            let function_context =
+                FunctionContext::new(self.config.clone(), self.ctx, &argument_names);
             func(arguments.clone(), &function_context)?
         } else if let Ok(func) = get_built_in_aggregate_function(function_name.as_str()) {
             let agg_function_context = AggFunctionContext::new(is_distinct);
@@ -793,10 +718,9 @@ impl PlanResolver<'_> {
                 "unknown function: {function_name}",
             )));
         };
-        // TODO: udaf and udwf
 
         let name = self.config.plan_formatter.function_to_string(
-            function_name.as_str(),
+            &function_name,
             argument_names.iter().map(|x| x.as_str()).collect(),
             is_distinct,
         )?;
@@ -896,7 +820,7 @@ impl PlanResolver<'_> {
                         return Err(PlanError::unsupported("distinct window function"));
                     }
                     let (argument_names, arguments) = self
-                        .resolve_alias_expressions_and_names(arguments, schema, state)
+                        .resolve_expressions_and_names(arguments, schema, state)
                         .await?;
                     let function = get_built_in_window_function(function_name.as_str())?;
                     (
@@ -915,49 +839,29 @@ impl PlanResolver<'_> {
                         function,
                     } = function;
                     let (argument_names, arguments) = self
-                        .resolve_alias_expressions_and_names(arguments, schema, state)
+                        .resolve_expressions_and_names(arguments, schema, state)
                         .await?;
                     let input_types: Vec<DataType> = arguments
                         .iter()
                         .map(|arg| arg.get_type(schema))
                         .collect::<Result<Vec<DataType>, DataFusionError>>()?;
-
-                    let (output_type, eval_type, command, python_version) = match function {
-                        spec::FunctionDefinition::PythonUdf {
-                            output_type,
-                            eval_type,
-                            command,
-                            python_version,
-                        } => (output_type, eval_type, command, python_version),
-                        _ => {
-                            return Err(PlanError::invalid(
-                                "user-defined window function type must be Python UDF",
-                            ));
-                        }
-                    };
-                    let output_type = self.resolve_data_type(output_type)?;
-
-                    let payload: Vec<u8> = build_pyspark_udf_payload(
-                        &python_version,
-                        &command,
-                        eval_type,
+                    let function = self.resolve_python_udf(function)?;
+                    let payload = PySparkUdfPayload::build(
+                        &function.python_version,
+                        &function.command,
+                        function.eval_type,
                         &((0..arguments.len()).collect::<Vec<_>>()),
                         &self.config.spark_udf_config,
-                    )
-                    .map_err(|e| {
-                        PlanError::invalid(format!("Python UDF deserialization error: {:?}", e))
-                    })?;
-
-                    let function = match eval_type {
+                    )?;
+                    let function = match function.eval_type {
                         PySparkUdfType::GroupedAggPandas => {
-                            let udaf = PySparkAggregateUDF::new(
-                                PySparkAggFormat::GroupAgg,
+                            let udaf = PySparkGroupAggregateUDF::new(
                                 get_udf_name(&function_name, &payload),
+                                payload,
                                 deterministic,
                                 argument_names.clone(),
                                 input_types,
-                                output_type,
-                                payload,
+                                function.output_type,
                             );
                             let udaf = AggregateUDF::from(udaf);
                             expr::WindowFunctionDefinition::AggregateUDF(Arc::new(udaf))
@@ -1188,9 +1092,6 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        // TODO: Function arg for if pyspark_udf or not.
-        use sail_python_udf::udf::pyspark_udf::PySparkUDF;
-
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic,
@@ -1198,85 +1099,20 @@ impl PlanResolver<'_> {
             function,
         } = function;
 
-        let function_name: &str = function_name.as_str();
         let (argument_names, arguments) = self
-            .resolve_alias_expressions_and_names(arguments, schema, state)
+            .resolve_expressions_and_names(arguments, schema, state)
             .await?;
-        let input_types: Vec<DataType> = arguments
-            .iter()
-            .map(|arg| arg.get_type(schema))
-            .collect::<Result<Vec<DataType>, DataFusionError>>()?;
-
-        let (output_type, eval_type, command, python_version) = match function {
-            spec::FunctionDefinition::PythonUdf {
-                output_type,
-                eval_type,
-                command,
-                python_version,
-            } => (output_type, eval_type, command, python_version),
-            _ => {
-                return Err(PlanError::invalid("UDF function type must be Python UDF"));
-            }
-        };
-        let output_type = self.resolve_data_type(output_type)?;
-
-        let payload: Vec<u8> = build_pyspark_udf_payload(
-            &python_version,
-            &command,
-            eval_type,
-            &((0..arguments.len()).collect::<Vec<_>>()),
-            &self.config.spark_udf_config,
+        let function = self.resolve_python_udf(function)?;
+        let func = self.resolve_python_udf_expr(
+            function,
+            &function_name,
+            arguments,
+            &argument_names,
+            schema,
+            deterministic,
         )?;
-
-        let func = match eval_type {
-            PySparkUdfType::None
-            | PySparkUdfType::Batched
-            | PySparkUdfType::ArrowBatched
-            | PySparkUdfType::ScalarPandas
-            | PySparkUdfType::GroupedMapPandas
-            | PySparkUdfType::WindowAggPandas
-            | PySparkUdfType::ScalarPandasIter
-            | PySparkUdfType::MapPandasIter
-            | PySparkUdfType::CogroupedMapPandas
-            | PySparkUdfType::MapArrowIter
-            | PySparkUdfType::GroupedMapPandasWithState
-            | PySparkUdfType::Table
-            | PySparkUdfType::ArrowTable => {
-                let udf = PySparkUDF::new(
-                    get_udf_name(function_name, &payload),
-                    deterministic,
-                    eval_type,
-                    input_types,
-                    output_type,
-                    payload,
-                );
-                expr::Expr::ScalarFunction(expr::ScalarFunction {
-                    func: Arc::new(ScalarUDF::from(udf)),
-                    args: arguments,
-                })
-            }
-            PySparkUdfType::GroupedAggPandas => {
-                let udaf = PySparkAggregateUDF::new(
-                    PySparkAggFormat::GroupAgg,
-                    get_udf_name(function_name, &payload),
-                    deterministic,
-                    argument_names.clone(),
-                    input_types,
-                    output_type,
-                    payload,
-                );
-                expr::Expr::AggregateFunction(expr::AggregateFunction {
-                    func: Arc::new(AggregateUDF::from(udaf)),
-                    args: arguments,
-                    distinct: false,
-                    filter: None,
-                    order_by: None,
-                    null_treatment: None,
-                })
-            }
-        };
         let name = self.config.plan_formatter.function_to_string(
-            function_name,
+            &function_name,
             argument_names.iter().map(|x| x.as_str()).collect(),
             false,
         )?;

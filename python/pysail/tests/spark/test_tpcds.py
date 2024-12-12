@@ -33,7 +33,6 @@ def test_derived_tpcds_query_execution(sail, query):
         "q16",
         "q20",
         "q23",
-        "q27",
         "q36",
         "q47",
         "q51",

@@ -53,29 +53,31 @@ message ExtendedMapIterUdf {
 message ExtendedAggregateUdf {
   oneof UdafKind {
     StandardUdaf standard = 1;
-    PySparkUdaf py_spark_agg = 2;
+    PySparkGroupAggUdaf py_spark_group_agg = 2;
+    PySparkGroupMapUdaf py_spark_group_map = 3;
+    PySparkBatchCollectorUdaf py_spark_batch_collector = 4;
   }
 }
 
 message StandardUdf {}
 
 message PySparkUdf {
-  string function_name = 1;
-  bool deterministic = 2;
-  int32 eval_type = 3;
-  repeated bytes input_types = 4;
-  bytes output_type = 5;
-  bytes function = 6;
+  PySparkUdfKind kind = 1;
+  string name = 2;
+  bytes payload = 3;
+  bool deterministic = 4;
+  repeated bytes input_types = 5;
+  bytes output_type = 6;
 }
 
 message PySparkCoGroupMapUdf {
-  string function_name = 1;
-  bool deterministic = 2;
-  bytes left_type = 3;
-  bytes right_type = 4;
-  bytes output_type = 5;
-  bytes function = 6;
-  bool legacy = 7;
+  string name = 1;
+  bytes payload = 2;
+  bool deterministic = 3;
+  bytes left_type = 4;
+  bytes right_type = 5;
+  bytes output_type = 6;
+  ColumnMatch column_match = 7;
 }
 
 message MapToArrayUdf {
@@ -108,33 +110,52 @@ message SparkWeekOfYearUdf {
 
 message StandardUdaf {}
 
-message PySparkUdaf {
-  PySparkAggFormat format = 1;
-  string function_name = 2;
+message PySparkGroupAggUdaf {
+  string name = 1;
+  bytes payload = 2;
   bool deterministic = 3;
   repeated string input_names = 4;
   repeated bytes input_types = 5;
   bytes output_type = 6;
-  bytes function = 7;
 }
 
-enum PySparkAggFormat {
-  PY_SPARK_AGG_FORMAT_NO_OP = 0;
-  PY_SPARK_AGG_FORMAT_GROUP_AGG = 1;
-  PY_SPARK_AGG_FORMAT_GROUP_MAP = 2;
-  PY_SPARK_AGG_FORMAT_GROUP_MAP_LEGACY = 3;
+message PySparkGroupMapUdaf {
+  string name = 1;
+  bytes payload = 2;
+  bool deterministic = 3;
+  repeated string input_names = 4;
+  repeated bytes input_types = 5;
+  bytes output_type = 6;
+  ColumnMatch column_match = 7;
+}
+
+message PySparkBatchCollectorUdaf {
+  repeated bytes input_types = 1;
+  bytes output_type = 2;
 }
 
 message PySparkMapIterUdf {
-  PySparkMapIterFormat format = 1;
-  string function_name = 2;
-  bytes function = 3;
+  PySparkMapIterKind kind = 1;
+  string name = 2;
+  bytes payload = 3;
   bytes output_schema = 4;
 }
 
-enum PySparkMapIterFormat {
-  PY_SPARK_MAP_ITER_FORMAT_PANDAS = 0;
-  PY_SPARK_MAP_ITER_FORMAT_ARROW = 1;
+enum ColumnMatch {
+  COLUMN_MATCH_BY_POSITION = 0;
+  COLUMN_MATCH_BY_NAME = 1;
+}
+
+enum PySparkUdfKind {
+  PY_SPARK_UDF_KIND_BATCH = 0;
+  PY_SPARK_UDF_KIND_ARROW_BATCH = 1;
+  PY_SPARK_UDF_KIND_SCALAR_PANDAS = 2;
+  PY_SPARK_UDF_KIND_SCALAR_PANDAS_ITER = 3;
+}
+
+enum PySparkMapIterKind {
+  PY_SPARK_MAP_ITER_KIND_PANDAS = 0;
+  PY_SPARK_MAP_ITER_KIND_ARROW = 1;
 }
 
 message RangeExecNode {

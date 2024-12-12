@@ -154,7 +154,7 @@ packages = ["python/pysail"]
 packages = ["python/pysail"]
 
 [tool.ruff.lint.per-file-ignores]
-"crates/sail-cli/src/**/*.py" = ["INP001"]
+"crates/**/*.py" = ["INP001"]
 "python/pysail/docs/conf.py" = ["INP001"]
 "python/pysail/examples/**/*.py" = ["T201"]
 "python/pysail/tests/**/*.py" = ["S101"]

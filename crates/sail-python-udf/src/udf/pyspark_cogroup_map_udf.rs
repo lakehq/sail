@@ -5,26 +5,25 @@ use datafusion::arrow::array::{Array, ArrayRef, AsArray, ListArray, RecordBatch,
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute::concat;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::common::Result;
 use datafusion::logical_expr::{ColumnarValue, Signature, Volatility};
 use datafusion_common::arrow::datatypes::SchemaRef;
 use datafusion_common::exec_err;
 use datafusion_expr::ScalarUDFImpl;
-use pyo3::prelude::PyAnyMethods;
-use pyo3::{Bound, PyAny, PyObject, Python};
+use pyo3::{PyObject, Python};
 
-use crate::cereal::pyspark_udf::PySparkUdfObject;
+use crate::cereal::pyspark_udf::PySparkUdfPayload;
+use crate::conversion::{TryFromPy, TryToPy};
 use crate::error::PyUdfResult;
+use crate::lazy::LazyPyObject;
 use crate::udf::ColumnMatch;
-use crate::utils::builtins::PyBuiltins;
-use crate::utils::pandas::PandasDataFrame;
-use crate::utils::pyarrow::{PyArrowRecordBatch, PyArrowToPandasOptions};
+use crate::utils::spark::PySpark;
 
 #[derive(Debug)]
 pub struct PySparkCoGroupMapUDF {
     signature: Signature,
-    function_name: String,
+    name: String,
+    payload: Vec<u8>,
     deterministic: bool,
     left_type: DataType,
     left_inner_schema: SchemaRef,
@@ -32,19 +31,19 @@ pub struct PySparkCoGroupMapUDF {
     right_inner_schema: SchemaRef,
     output_type: DataType,
     output_inner_schema: SchemaRef,
-    python_function: PySparkUdfObject,
-    legacy: bool,
+    column_match: ColumnMatch,
+    udf: LazyPyObject,
 }
 
 impl PySparkCoGroupMapUDF {
     pub fn try_new(
-        function_name: String,
+        name: String,
+        payload: Vec<u8>,
         deterministic: bool,
         left_type: DataType,
         right_type: DataType,
         output_type: DataType,
-        function: Vec<u8>,
-        legacy: bool,
+        column_match: ColumnMatch,
     ) -> Result<Self> {
         let input_types = vec![left_type.clone(), right_type.clone()];
         let left_inner_schema = Self::get_inner_schema(&left_type)?;
@@ -59,7 +58,8 @@ impl PySparkCoGroupMapUDF {
                     false => Volatility::Volatile,
                 },
             ),
-            function_name,
+            name,
+            payload,
             deterministic,
             left_type,
             left_inner_schema,
@@ -67,13 +67,13 @@ impl PySparkCoGroupMapUDF {
             right_inner_schema,
             output_type,
             output_inner_schema,
-            python_function: PySparkUdfObject::new(function),
-            legacy,
+            column_match,
+            udf: LazyPyObject::new(),
         })
     }
 
-    pub fn function_name(&self) -> &str {
-        &self.function_name
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
     }
 
     pub fn deterministic(&self) -> bool {
@@ -92,12 +92,22 @@ impl PySparkCoGroupMapUDF {
         &self.output_type
     }
 
-    pub fn function(&self) -> &[u8] {
-        self.python_function.data()
+    pub fn column_match(&self) -> ColumnMatch {
+        self.column_match
     }
 
-    pub fn legacy(&self) -> bool {
-        self.legacy
+    fn udf(&self, py: Python) -> PyUdfResult<PyObject> {
+        let udf = self.udf.get_or_try_init(py, || {
+            let udf = PySparkUdfPayload::load(py, &self.payload)?;
+            Ok(PySpark::cogroup_map_udf(
+                py,
+                udf,
+                self.output_inner_schema.clone(),
+                self.column_match,
+            )?
+            .unbind())
+        })?;
+        Ok(udf.clone_ref(py))
     }
 
     fn validate_input(data: &ArrayRef, data_type: &DataType) -> Result<()> {
@@ -136,62 +146,6 @@ impl PySparkCoGroupMapUDF {
         }
         Ok(RecordBatch::from(value.clone()))
     }
-
-    fn invoke_group(
-        &self,
-        py: Python,
-        udf: PyObject,
-        left: RecordBatch,
-        right: RecordBatch,
-    ) -> PyUdfResult<RecordBatch> {
-        let udf = udf.into_bound(py);
-        let left = Self::get_group_arg(py, left)?;
-        let right = Self::get_group_arg(py, right)?;
-        let args = vec![left, right];
-
-        let result = udf.call1((py.None(), (args,)))?;
-        let result = PyBuiltins::list(py)?.call1((result,))?;
-        let result = result.get_item(0)?.get_item(0)?;
-
-        let data = result.get_item(0)?;
-        let _data_type = result.get_item(1)?;
-
-        let schema = &self.output_inner_schema;
-        let pyarrow_record_batch_from_pandas =
-            PyArrowRecordBatch::from_pandas(py, Some(schema.to_pyarrow(py)?))?;
-        let column_match = if self.legacy {
-            ColumnMatch::ByPosition
-        } else {
-            ColumnMatch::ByName
-        };
-        let batch = if data.is_empty()? {
-            RecordBatch::new_empty(schema.clone())
-        } else {
-            let data = if matches!(column_match, ColumnMatch::ByName)
-                && PandasDataFrame::has_string_columns(&data)?
-            {
-                data
-            } else {
-                PandasDataFrame::rename_columns_by_position(&data, schema)?
-            };
-            let batch = pyarrow_record_batch_from_pandas.call1((data,))?;
-            RecordBatch::from_pyarrow_bound(&batch)?
-        };
-
-        Ok(batch)
-    }
-
-    fn get_group_arg(py: Python, batch: RecordBatch) -> PyUdfResult<Bound<PyAny>> {
-        let batch = batch.to_pyarrow(py)?;
-        let df = PyArrowRecordBatch::to_pandas(
-            py,
-            PyArrowToPandasOptions {
-                use_pandas_nullable_types: false,
-            },
-        )?
-        .call1((batch,))?;
-        Ok(PandasDataFrame::to_series_list(&df)?)
-    }
 }
 
 impl ScalarUDFImpl for PySparkCoGroupMapUDF {
@@ -200,7 +154,7 @@ impl ScalarUDFImpl for PySparkCoGroupMapUDF {
     }
 
     fn name(&self) -> &str {
-        &self.function_name
+        &self.name
     }
 
     fn signature(&self) -> &Signature {
@@ -230,9 +184,11 @@ impl ScalarUDFImpl for PySparkCoGroupMapUDF {
         for i in 0..left.len() {
             let left = Self::get_group(&left, i, &self.left_inner_schema)?;
             let right = Self::get_group(&right, i, &self.right_inner_schema)?;
-            let result = Python::with_gil(|py| {
-                let udf = self.python_function.get(py)?;
-                self.invoke_group(py, udf, left, right)
+            let result = Python::with_gil(|py| -> PyUdfResult<_> {
+                let output = self
+                    .udf(py)?
+                    .call1(py, (left.try_to_py(py)?, right.try_to_py(py)?))?;
+                Ok(RecordBatch::try_from_py(py, &output)?)
             })?;
             let result = StructArray::from(result);
             arrays.push(Arc::new(result));
