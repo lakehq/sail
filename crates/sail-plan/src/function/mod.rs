@@ -42,3 +42,8 @@ pub fn get_built_in_table_function(name: &str) -> PlanResult<Arc<TableFunction>>
         .ok_or_else(|| PlanError::unsupported(format!("unknown table function: {name}")))?
         .clone())
 }
+
+pub fn is_built_in_generator_function(name: &str) -> bool {
+    let name = name.to_lowercase();
+    BUILT_IN_GENERATOR_FUNCTIONS.contains_key(name.as_str())
+}

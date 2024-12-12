@@ -72,7 +72,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown table function: posexplode"
+        "success": "ok"
       }
     },
     {
@@ -101,7 +101,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown table function: posexplode_outer"
+        "success": "ok"
       }
     },
     {

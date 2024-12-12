@@ -52,7 +52,7 @@ use crate::extension::logical::{
     ShowStringFormat, ShowStringNode, ShowStringStyle, SortWithinPartitionsNode,
 };
 use crate::extension::source::rename::RenameTableProvider;
-use crate::function::get_built_in_table_function;
+use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
@@ -642,32 +642,46 @@ impl PlanResolver<'_> {
         if !options.is_empty() {
             return Err(PlanError::todo("ReadType::UDTF options"));
         }
-        // TODO: Handle qualified table reference.
-        let function_name = self.resolve_table_reference(&name)?;
-        let function_name = function_name.table();
-        let schema = Arc::new(DFSchema::empty());
-        let (_, arguments) = self
-            .resolve_expressions_and_names(arguments, &schema, state)
-            .await?;
-        let table_function = if let Ok(f) = self.ctx.table_function(function_name) {
-            f
-        } else if let Ok(f) = get_built_in_table_function(function_name) {
-            f
-        } else {
-            return Err(PlanError::unsupported(format!(
-                "unknown table function: {function_name}"
-            )));
+        let table_reference = self.resolve_table_reference(&name)?;
+        let function_name = match &table_reference {
+            TableReference::Bare { table } => table.as_ref(),
+            _ => {
+                return Err(PlanError::unsupported(format!(
+                    "qualified table function name: {table_reference}"
+                )))
+            }
         };
-        let table_provider = table_function.create_table_provider(&arguments)?;
-        let names = state.register_fields(&table_provider.schema());
-        let table_provider = RenameTableProvider::try_new(table_provider, names)?;
-        Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
-            function_name,
-            provider_as_source(Arc::new(table_provider)),
-            None,
-            vec![],
-            None,
-        )?))
+        if is_built_in_generator_function(function_name) {
+            let f = spec::Expr::UnresolvedFunction {
+                function_name: function_name.to_string(),
+                arguments,
+                is_distinct: false,
+                is_user_defined_function: false,
+            };
+            self.resolve_query_project(None, vec![f], state).await
+        } else {
+            let schema = Arc::new(DFSchema::empty());
+            let arguments = self.resolve_expressions(arguments, &schema, state).await?;
+            let table_function = if let Ok(f) = self.ctx.table_function(function_name) {
+                f
+            } else if let Ok(f) = get_built_in_table_function(function_name) {
+                f
+            } else {
+                return Err(PlanError::unsupported(format!(
+                    "unknown table function: {function_name}"
+                )));
+            };
+            let table_provider = table_function.create_table_provider(&arguments)?;
+            let names = state.register_fields(&table_provider.schema());
+            let table_provider = RenameTableProvider::try_new(table_provider, names)?;
+            Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                function_name,
+                provider_as_source(Arc::new(table_provider)),
+                None,
+                vec![],
+                None,
+            )?))
+        }
     }
 
     async fn resolve_query_read_data_source(
