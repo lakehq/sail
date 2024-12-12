@@ -71,8 +71,8 @@ impl PlanFormatter for DefaultPlanFormatter {
             DataType::Char { length } => Ok(format!("char({})", length)),
             DataType::VarChar { length } => Ok(format!("varchar({})", length)),
             DataType::Date32 => Ok("date".to_string()),
-            DataType::Timestamp(_time_unit, _timezone) => Ok("timestamp".to_string()),
-            DataType::TimestampNtz => Ok("timestamp_ntz".to_string()),
+            DataType::Timestamp(_time_unit, Some(_timezone)) => Ok("timestamp".to_string()),
+            DataType::Timestamp(_time_unit, None) => Ok("timestamp_ntz".to_string()),
             DataType::CalendarInterval => Ok("interval".to_string()),
             DataType::YearMonthInterval {
                 start_field,
