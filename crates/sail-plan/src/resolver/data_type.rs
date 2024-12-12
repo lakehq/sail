@@ -376,7 +376,7 @@ impl PlanResolver<'_> {
         match timezone {
             None => Ok(None),
             Some(timezone) => {
-                if timezone.as_ref().to_lowercase().trim() == "ltz" {
+                if timezone.is_empty() || timezone.as_ref().to_lowercase().trim() == "ltz" {
                     Ok(Some(Arc::<str>::from(self.config.time_zone.as_str())))
                 } else {
                     Ok(Some(Arc::clone(timezone)))

@@ -359,12 +359,8 @@ impl TryFrom<spec::DataType> for DataType {
             spec::DataType::Timestamp(spec::TimeUnit::Microsecond, None) => {
                 Ok(Kind::TimestampNtz(sdt::TimestampNtz::default()))
             }
-            spec::DataType::Timestamp(spec::TimeUnit::Microsecond, Some(timezone)) => {
-                if timezone.is_empty() {
-                    Ok(Kind::TimestampNtz(sdt::TimestampNtz::default()))
-                } else {
-                    Ok(Kind::Timestamp(sdt::Timestamp::default()))
-                }
+            spec::DataType::Timestamp(spec::TimeUnit::Microsecond, Some(_timezone)) => {
+                Ok(Kind::Timestamp(sdt::Timestamp::default()))
             }
             spec::DataType::Timestamp(spec::TimeUnit::Second, _)
             | spec::DataType::Timestamp(spec::TimeUnit::Millisecond, _)
