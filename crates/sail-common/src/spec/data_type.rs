@@ -4,7 +4,7 @@ use std::sync::Arc;
 use num_enum::TryFromPrimitive;
 use serde::{Deserialize, Serialize};
 
-use crate::error::CommonError;
+use crate::error::{CommonError, CommonResult};
 
 /// Native Sail data types that convert to Arrow types.
 /// These types directly match to [arrow_schema::DataType] variants when there is a corresponding type.
@@ -165,7 +165,14 @@ pub enum DataType {
     /// A "calendar" interval which models types that don't necessarily
     /// have a precise duration without the context of a base timestamp (e.g.
     /// days can differ in length during daylight savings time transitions).
-    Interval(IntervalUnit),
+    ///
+    /// This differs from the Arrow specification.
+    /// Sail's specification allows for an optional `start_field` and `end_field`.
+    Interval(
+        IntervalUnit,
+        Option<IntervalFieldType>, // `start_field`
+        Option<IntervalFieldType>, // `end_field`
+    ),
     /// Opaque binary data of variable length.
     ///
     /// A single Binary array can store up to [`i32::MAX`] bytes
@@ -544,6 +551,61 @@ pub enum YearMonthIntervalField {
 impl YearMonthIntervalField {
     fn invalid(value: i32) -> CommonError {
         CommonError::invalid(format!("year month interval field: {value}"))
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    TryFromPrimitive,
+)]
+#[serde(rename_all = "camelCase")]
+#[num_enum(error_type(name = CommonError, constructor = IntervalFieldType::invalid))]
+#[repr(i32)]
+pub enum IntervalFieldType {
+    Year = 0,
+    Month = 1,
+    Day = 2,
+    Hour = 3,
+    Minute = 4,
+    Second = 5,
+}
+
+impl IntervalFieldType {
+    fn invalid(value: i32) -> CommonError {
+        CommonError::invalid(format!("interval field type: {value}"))
+    }
+}
+
+impl TryFrom<DayTimeIntervalField> for IntervalFieldType {
+    type Error = CommonError;
+
+    fn try_from(field_type: DayTimeIntervalField) -> CommonResult<IntervalFieldType> {
+        match field_type {
+            DayTimeIntervalField::Day => Ok(IntervalFieldType::Day),
+            DayTimeIntervalField::Hour => Ok(IntervalFieldType::Hour),
+            DayTimeIntervalField::Minute => Ok(IntervalFieldType::Minute),
+            DayTimeIntervalField::Second => Ok(IntervalFieldType::Second),
+        }
+    }
+}
+
+impl TryFrom<YearMonthIntervalField> for IntervalFieldType {
+    type Error = CommonError;
+
+    fn try_from(field_type: YearMonthIntervalField) -> CommonResult<IntervalFieldType> {
+        match field_type {
+            YearMonthIntervalField::Year => Ok(IntervalFieldType::Year),
+            YearMonthIntervalField::Month => Ok(IntervalFieldType::Month),
+        }
     }
 }
 

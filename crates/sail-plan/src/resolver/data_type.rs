@@ -59,9 +59,14 @@ impl PlanResolver<'_> {
             DataType::Duration(time_unit) => {
                 Ok(adt::DataType::Duration(Self::resolve_time_unit(time_unit)?))
             }
-            DataType::Interval(interval_unit) => Ok(adt::DataType::Interval(
-                Self::resolve_interval_unit(interval_unit),
-            )),
+            DataType::Interval(interval_unit, _start_field, _end_field) => {
+                // TODO: Currently `start_field` and `end_field` is lost in translation.
+                //  This does not impact computation accuracy,
+                //  This may affect the display string in the `data_type_to_simple_string` function.
+                Ok(adt::DataType::Interval(Self::resolve_interval_unit(
+                    interval_unit,
+                )))
+            }
             DataType::Binary => Ok(adt::DataType::Binary),
             DataType::FixedSizeBinary(i32) => Ok(adt::DataType::FixedSizeBinary(*i32)),
             DataType::LargeBinary => Ok(adt::DataType::LargeBinary),
@@ -143,9 +148,16 @@ impl PlanResolver<'_> {
             adt::DataType::Duration(time_unit) => {
                 Ok(DataType::Duration(Self::unresolve_time_unit(time_unit)?))
             }
-            adt::DataType::Interval(interval_unit) => Ok(DataType::Interval(
-                Self::unresolve_interval_unit(interval_unit),
-            )),
+            adt::DataType::Interval(interval_unit) => {
+                // TODO: Currently `start_field` and `end_field` is lost in translation.
+                //  This does not impact computation accuracy,
+                //  This may affect the display string in the `data_type_to_simple_string` function.
+                Ok(DataType::Interval(
+                    Self::unresolve_interval_unit(interval_unit),
+                    None,
+                    None,
+                ))
+            }
             adt::DataType::Binary => Ok(DataType::Binary),
             adt::DataType::FixedSizeBinary(i32) => Ok(DataType::FixedSizeBinary(*i32)),
             adt::DataType::LargeBinary => Ok(DataType::LargeBinary),

@@ -143,17 +143,34 @@ impl TryFrom<DataType> for spec::DataType {
             Kind::TimestampNtz(_) => {
                 Ok(spec::DataType::Timestamp(spec::TimeUnit::Microsecond, None))
             }
-            Kind::CalendarInterval(_) => {
-                Ok(spec::DataType::Interval(spec::IntervalUnit::MonthDayNano))
-            }
+            Kind::CalendarInterval(_) => Ok(spec::DataType::Interval(
+                spec::IntervalUnit::MonthDayNano,
+                None,
+                None,
+            )),
             Kind::YearMonthInterval(sdt::YearMonthInterval {
-                // FIXME: Currently `start_field` and `end_field` are lost in translation.
-                //  This does not impact computation accuracy.
-                //  This may affect the display string in the `data_type_to_simple_string` function.
-                start_field: _,
-                end_field: _,
+                start_field,
+                end_field,
                 type_variation_reference: _,
-            }) => Ok(spec::DataType::Interval(spec::IntervalUnit::YearMonth)),
+            }) => {
+                let start_field = start_field
+                    .map(spec::YearMonthIntervalField::try_from)
+                    .transpose()?
+                    .map(spec::IntervalFieldType::try_from)
+                    .transpose()?;
+                let end_field = end_field
+                    .map(spec::YearMonthIntervalField::try_from)
+                    .transpose()?
+                    .map(spec::IntervalFieldType::try_from)
+                    .transpose()?;
+                let start_field = Some(start_field.unwrap_or(spec::IntervalFieldType::Year));
+                let end_field = Some(end_field.unwrap_or(spec::IntervalFieldType::Month));
+                Ok(spec::DataType::Interval(
+                    spec::IntervalUnit::YearMonth,
+                    start_field,
+                    end_field,
+                ))
+            }
             Kind::DayTimeInterval(sdt::DayTimeInterval {
                 // FIXME: Currently `start_field` and `end_field` are lost in translation.
                 //  This does not impact computation accuracy.
@@ -350,17 +367,17 @@ impl TryFrom<spec::DataType> for DataType {
                     "TryFrom spec::DataType::Timestamp(Second | Millisecond | Nanosecond) to Spark Kind",
                 ))
             }
-            spec::DataType::Interval(spec::IntervalUnit::MonthDayNano) => {
+            spec::DataType::Interval(spec::IntervalUnit::MonthDayNano, _, _) => {
                 Ok(Kind::CalendarInterval(sdt::CalendarInterval::default()))
             }
-            spec::DataType::Interval(spec::IntervalUnit::YearMonth) => {
+            spec::DataType::Interval(spec::IntervalUnit::YearMonth, start_field, end_field) => {
                 Ok(Kind::YearMonthInterval(sdt::YearMonthInterval {
-                    start_field: None,
-                    end_field: None,
+                    start_field: start_field.map(|f| f as i32),
+                    end_field: end_field.map(|f| f as i32),
                     type_variation_reference: 0,
                 }))
             }
-            spec::DataType::Interval(spec::IntervalUnit::DayTime) => {
+            spec::DataType::Interval(spec::IntervalUnit::DayTime, _, _) => {
                 // This error theoretically should never be reached.
                 Err(SparkError::unsupported(
                     "TryFrom spec::DataType::Interval(DayTime) to Spark Kind",
