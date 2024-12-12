@@ -1,12 +1,14 @@
 use md5::{Digest, Md5};
 use num_bigint::BigUint;
 
+pub mod pyspark_batch_collector;
 pub mod pyspark_cogroup_map_udf;
+pub mod pyspark_group_map_udf;
 pub mod pyspark_map_iter_udf;
 pub mod pyspark_udaf;
 pub mod pyspark_udf;
 pub mod pyspark_udtf;
-pub mod unresolved_pyspark_udf;
+pub mod pyspark_unresolved_udf;
 
 /// Generates a unique function name by combining the base name with a hash of the Python function payload.
 /// Without this, lambda functions with the name `<lambda>` will be treated as the same function
@@ -20,7 +22,25 @@ pub fn get_udf_name(name: &str, payload: &[u8]) -> String {
     format!("{name}@{hash}")
 }
 
-pub(crate) enum ColumnMatch {
+#[derive(Debug, Copy, Clone)]
+pub enum ColumnMatch {
     ByName,
     ByPosition,
+}
+
+impl ColumnMatch {
+    pub fn by_name(value: bool) -> Self {
+        if value {
+            ColumnMatch::ByName
+        } else {
+            ColumnMatch::ByPosition
+        }
+    }
+
+    pub fn is_by_name(&self) -> bool {
+        match self {
+            ColumnMatch::ByName => true,
+            ColumnMatch::ByPosition => false,
+        }
+    }
 }

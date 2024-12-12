@@ -25,6 +25,7 @@ pub struct PlanConfig<F: ?Sized = dyn PlanFormatter> {
     /// The plan formatter.
     pub plan_formatter: Arc<F>,
     /// The Spark UDF configuration.
+    // TODO: use `Arc` for cheap cloning.
     pub spark_udf_config: SparkUdfConfig,
     /// The default file format for bounded tables.
     pub default_bounded_table_file_format: String,
