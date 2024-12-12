@@ -46,7 +46,7 @@ impl PlanResolver<'_> {
             DataType::Float64 => Ok(adt::DataType::Float64),
             DataType::Timestamp(time_unit, timezone) => Ok(adt::DataType::Timestamp(
                 Self::resolve_time_unit(time_unit)?,
-                timezone.clone(),
+                self.resolve_timezone(timezone)?,
             )),
             DataType::Date32 => Ok(adt::DataType::Date32),
             DataType::Date64 => Ok(adt::DataType::Date64),
