@@ -14,9 +14,11 @@
               }
             },
             "castToType": {
-              "array": {
-                "elementType": "integer",
-                "containsNull": true
+              "list": {
+                "name": "item",
+                "dataType": "int32",
+                "nullable": true,
+                "metadata": []
               }
             }
           }
@@ -36,7 +38,7 @@
                 "planId": null
               }
             },
-            "castToType": "integer"
+            "castToType": "int32"
           }
         }
       }
@@ -79,10 +81,10 @@
                     "planId": null
                   }
                 },
-                "castToType": "integer"
+                "castToType": "int32"
               }
             },
-            "castToType": "long"
+            "castToType": "int64"
           }
         }
       }
