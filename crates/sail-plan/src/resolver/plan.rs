@@ -52,6 +52,7 @@ use crate::extension::logical::{
     ShowStringFormat, ShowStringNode, ShowStringStyle, SortWithinPartitionsNode,
 };
 use crate::extension::source::rename::RenameTableProvider;
+use crate::function::get_built_in_table_function;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
@@ -648,7 +649,15 @@ impl PlanResolver<'_> {
         let (_, arguments) = self
             .resolve_expressions_and_names(arguments, &schema, state)
             .await?;
-        let table_function = self.ctx.table_function(function_name)?;
+        let table_function = if let Ok(f) = self.ctx.table_function(function_name) {
+            f
+        } else if let Ok(f) = get_built_in_table_function(function_name) {
+            f
+        } else {
+            return Err(PlanError::unsupported(format!(
+                "unknown table function: {function_name}"
+            )));
+        };
         let table_provider = table_function.create_table_provider(&arguments)?;
         let names = state.register_fields(&table_provider.schema());
         let table_provider = RenameTableProvider::try_new(table_provider, names)?;

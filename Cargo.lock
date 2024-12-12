@@ -4676,6 +4676,7 @@ dependencies = [
  "thiserror 2.0.6",
  "tokio",
  "tokio-stream",
+ "tonic",
  "twox-hash 2.1.0",
  "url",
 ]
