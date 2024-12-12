@@ -228,7 +228,7 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   }
@@ -270,7 +270,7 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   }
@@ -314,13 +314,13 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": true,
                     "metadata": []
                   }
@@ -364,13 +364,13 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": true,
                     "metadata": []
                   }
@@ -416,13 +416,13 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": true,
                     "metadata": []
                   }
@@ -484,13 +484,13 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": true,
                     "metadata": []
                   }
@@ -536,13 +536,13 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": true,
                     "metadata": []
                   }
@@ -595,13 +595,13 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": true,
                     "metadata": []
                   }
@@ -654,13 +654,13 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": true,
                     "metadata": []
                   }
@@ -729,13 +729,13 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": true,
                     "metadata": []
                   }
@@ -788,13 +788,13 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": true,
                     "metadata": []
                   }
@@ -844,13 +844,13 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": true,
                     "metadata": []
                   }
@@ -938,7 +938,7 @@
                 "fields": [
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": true,
                     "metadata": []
                   }
@@ -981,13 +981,13 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": true,
                     "metadata": []
                   }
@@ -1041,13 +1041,13 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   }
@@ -1098,13 +1098,13 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": false,
                     "metadata": []
                   }
@@ -1156,13 +1156,13 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": false,
                     "metadata": []
                   }
@@ -1212,13 +1212,13 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": false,
                     "metadata": []
                   }
@@ -1272,13 +1272,13 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": false,
                     "metadata": []
                   }
@@ -1328,13 +1328,13 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": false,
                     "metadata": []
                   }
@@ -1456,13 +1456,13 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": true,
                     "metadata": []
                   }
@@ -1506,13 +1506,13 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": true,
                     "metadata": []
                   }
@@ -1556,13 +1556,13 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "string",
+                    "dataType": "utf8",
                     "nullable": true,
                     "metadata": []
                   }

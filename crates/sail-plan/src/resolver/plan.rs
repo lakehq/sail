@@ -2374,7 +2374,7 @@ impl PlanResolver<'_> {
             let logical_plan = self.resolve_query_plan(*query, state).await?;
             (logical_plan.schema().clone(), Some(logical_plan))
         } else {
-            let fields = self.resolve_fields(schema.fields)?;
+            let fields = self.resolve_fields(&schema.fields)?;
             let schema = Arc::new(DFSchema::from_unqualified_fields(fields, HashMap::new())?);
             (schema, None)
         };

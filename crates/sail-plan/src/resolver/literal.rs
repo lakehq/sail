@@ -43,7 +43,7 @@ impl PlanResolver<'_> {
                 timezone,
             } => Ok(ScalarValue::TimestampMicrosecond(
                 Some(microseconds),
-                self.resolve_timezone(timezone)?,
+                self.resolve_timezone(&timezone)?,
             )),
             Literal::TimestampNtz { microseconds } => {
                 Ok(ScalarValue::TimestampMicrosecond(Some(microseconds), None))
@@ -84,7 +84,7 @@ impl PlanResolver<'_> {
                 element_type,
                 elements,
             } => {
-                let element_type = self.resolve_data_type(element_type)?;
+                let element_type = self.resolve_data_type(&element_type)?;
                 let scalars: Vec<ScalarValue> = elements
                     .into_iter()
                     .map(|literal| self.resolve_literal(literal))
@@ -100,7 +100,7 @@ impl PlanResolver<'_> {
                 struct_type,
                 elements,
             } => {
-                let struct_type = self.resolve_data_type(struct_type)?;
+                let struct_type = self.resolve_data_type(&struct_type)?;
                 let fields = match &struct_type {
                     arrow::datatypes::DataType::Struct(fields) => fields.clone(),
                     _ => return Err(PlanError::invalid("expected struct type")),

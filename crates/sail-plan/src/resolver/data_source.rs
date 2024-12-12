@@ -54,7 +54,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<adt::Schema> {
         let schema = match schema {
             // ignore empty schema
-            Some(spec::Schema { fields }) if fields.0.is_empty() => None,
+            Some(spec::Schema { fields }) if fields.is_empty() => None,
             x => x,
         };
         // The logic is similar to `ListingOptions::infer_schema()`
