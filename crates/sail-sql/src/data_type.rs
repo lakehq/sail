@@ -39,22 +39,26 @@ fn from_ast_char_length(length: &Option<ast::CharacterLength>) -> SqlResult<u32>
     }
 }
 
-fn from_ast_year_month_interval_field(field: &ast::DateTimeField) -> SqlResult<i32> {
+fn from_ast_year_month_interval_field(
+    field: &ast::DateTimeField,
+) -> SqlResult<spec::IntervalFieldType> {
     match field {
-        ast::DateTimeField::Year => Ok(0),
-        ast::DateTimeField::Month => Ok(1),
+        ast::DateTimeField::Year => Ok(spec::IntervalFieldType::Year),
+        ast::DateTimeField::Month => Ok(spec::IntervalFieldType::Month),
         _ => Err(SqlError::unsupported(format!(
             "year month interval field: {field:?}"
         ))),
     }
 }
 
-fn from_ast_day_time_interval_field(field: &ast::DateTimeField) -> SqlResult<i32> {
+fn from_ast_day_time_interval_field(
+    field: &ast::DateTimeField,
+) -> SqlResult<spec::IntervalFieldType> {
     match field {
-        ast::DateTimeField::Day => Ok(0),
-        ast::DateTimeField::Hour => Ok(1),
-        ast::DateTimeField::Minute => Ok(2),
-        ast::DateTimeField::Second => Ok(3),
+        ast::DateTimeField::Day => Ok(spec::IntervalFieldType::Day),
+        ast::DateTimeField::Hour => Ok(spec::IntervalFieldType::Hour),
+        ast::DateTimeField::Minute => Ok(spec::IntervalFieldType::Minute),
+        ast::DateTimeField::Second => Ok(spec::IntervalFieldType::Second),
         _ => Err(SqlError::unsupported(format!(
             "date time interval field: {field:?}"
         ))),
@@ -150,7 +154,11 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
                 leading_precision: None,
                 last_field: None,
                 fractional_seconds_precision: None,
-            } => Ok(spec::DataType::Interval(spec::IntervalUnit::MonthDayNano)),
+            } => Ok(spec::DataType::Interval(
+                spec::IntervalUnit::MonthDayNano,
+                None,
+                None,
+            )),
             ast::IntervalUnit {
                 leading_field: Some(start),
                 leading_precision: None,
@@ -158,17 +166,16 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
                 fractional_seconds_precision: None,
             } => {
                 // TODO: [CHECK HERE] BEFORE MERGING IN. If tests fail because of no start_field/end_field then need to adjust tests.
-                if let Ok(_start) = from_ast_year_month_interval_field(start) {
-                    Ok(spec::DataType::Interval(spec::IntervalUnit::MonthDayNano))
-                    // Ok(spec::DataType::YearMonthInterval {
-                    //     start_field: Some(start.try_into()?),
-                    //     end_field: None,
-                    // })
+                if let Ok(start) = from_ast_year_month_interval_field(start) {
+                    Ok(spec::DataType::Interval(
+                        spec::IntervalUnit::YearMonth,
+                        Some(start),
+                        None,
+                    ))
                 } else if let Ok(_start) = from_ast_day_time_interval_field(start) {
-                    // Ok(spec::DataType::YearMonthInterval {
-                    //     start_field: Some(start.try_into()?),
-                    //     end_field: None,
-                    // })
+                    // FIXME: Currently `start_field` and `end_field` are lost in translation.
+                    //  This does not impact computation accuracy.
+                    //  This may affect the display string in the `data_type_to_simple_string` function.
                     Ok(spec::DataType::Duration(spec::TimeUnit::Microsecond))
                 } else {
                     Err(SqlError::invalid(format!("interval start field: {unit:?}")))
@@ -186,20 +193,19 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
                     if end <= start {
                         return Err(SqlError::invalid(format!("interval end field: {unit:?}")));
                     }
-                    // Ok(spec::DataType::YearMonthInterval {
-                    //     start_field: Some(start.try_into()?),
-                    //     end_field: Some(end.try_into()?),
-                    // })
-                    Ok(spec::DataType::Interval(spec::IntervalUnit::MonthDayNano))
+                    Ok(spec::DataType::Interval(
+                        spec::IntervalUnit::YearMonth,
+                        Some(start),
+                        Some(end),
+                    ))
                 } else if let Ok(start) = from_ast_day_time_interval_field(start) {
                     let end = from_ast_day_time_interval_field(end)?;
                     if end <= start {
                         return Err(SqlError::invalid(format!("interval end field: {unit:?}")));
                     }
-                    // Ok(spec::DataType::DayTimeInterval {
-                    //     start_field: Some(start.try_into()?),
-                    //     end_field: Some(end.try_into()?),
-                    // })
+                    // FIXME: Currently `start_field` and `end_field` are lost in translation.
+                    //  This does not impact computation accuracy.
+                    //  This may affect the display string in the `data_type_to_simple_string` function.
                     Ok(spec::DataType::Duration(spec::TimeUnit::Microsecond))
                 } else {
                     return Err(SqlError::invalid(format!("interval start field: {unit:?}")));

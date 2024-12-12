@@ -31,21 +31,23 @@ impl_dyn_object_traits!(PlanFormatter);
 pub struct DefaultPlanFormatter;
 
 impl DefaultPlanFormatter {
-    fn year_month_interval_field_to_simple_string(
-        field: spec::YearMonthIntervalField,
-    ) -> &'static str {
+    fn interval_field_type_to_simple_string(field: spec::IntervalFieldType) -> &'static str {
         match field {
-            spec::YearMonthIntervalField::Year => "year",
-            spec::YearMonthIntervalField::Month => "month",
+            spec::IntervalFieldType::Year => "year",
+            spec::IntervalFieldType::Month => "month",
+            spec::IntervalFieldType::Day => "day",
+            spec::IntervalFieldType::Hour => "hour",
+            spec::IntervalFieldType::Minute => "minute",
+            spec::IntervalFieldType::Second => "second",
         }
     }
 
-    fn day_time_interval_field_to_simple_string(field: spec::DayTimeIntervalField) -> &'static str {
+    fn time_unit_to_simple_string(field: spec::TimeUnit) -> &'static str {
         match field {
-            spec::DayTimeIntervalField::Day => "day",
-            spec::DayTimeIntervalField::Hour => "hour",
-            spec::DayTimeIntervalField::Minute => "minute",
-            spec::DayTimeIntervalField::Second => "second",
+            spec::TimeUnit::Second => "second",
+            spec::TimeUnit::Millisecond => "millisecond",
+            spec::TimeUnit::Microsecond => "microsecond",
+            spec::TimeUnit::Nanosecond => "nanosecond",
         }
     }
 }
@@ -53,31 +55,60 @@ impl DefaultPlanFormatter {
 impl PlanFormatter for DefaultPlanFormatter {
     fn data_type_to_simple_string(&self, data_type: &spec::DataType) -> PlanResult<String> {
         use spec::DataType;
-
         match data_type {
             DataType::Null => Ok("void".to_string()),
-            DataType::Binary => Ok("binary".to_string()),
+            DataType::Binary
+            | DataType::FixedSizeBinary(_)
+            | DataType::LargeBinary
+            | DataType::BinaryView
+            | DataType::ConfiguredBinary => Ok("binary".to_string()),
             DataType::Boolean => Ok("boolean".to_string()),
             DataType::Int8 => Ok("tinyint".to_string()),
             DataType::Int16 => Ok("smallint".to_string()),
             DataType::Int32 => Ok("int".to_string()),
             DataType::Int64 => Ok("bigint".to_string()),
+            DataType::UInt8 => Ok("unsigned tinyint".to_string()),
+            DataType::UInt16 => Ok("unsigned smallint".to_string()),
+            DataType::UInt32 => Ok("unsigned int".to_string()),
+            DataType::UInt64 => Ok("unsigned bigint".to_string()),
+            DataType::Float16 => Ok("half-float".to_string()),
             DataType::Float32 => Ok("float".to_string()),
             DataType::Float64 => Ok("double".to_string()),
             DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
                 Ok(format!("decimal({},{})", precision, scale))
             }
-            DataType::Utf8 | DataType::LargeUtf8 => Ok("string".to_string()),
-            DataType::Char { length } => Ok(format!("char({})", length)),
-            DataType::VarChar { length } => Ok(format!("varchar({})", length)),
+            DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Utf8View
+            | DataType::ConfiguredUtf8(_, None) => Ok("string".to_string()),
+            DataType::ConfiguredUtf8(length, Some(utf8_type)) => {
+                let length =
+                    length.ok_or(PlanError::invalid("Length required for Char and Varchar."))?;
+                match utf8_type {
+                    spec::ConfiguredUtf8Type::Char => Ok(format!("char({})", length)),
+                    spec::ConfiguredUtf8Type::VarChar => Ok(format!("varchar({})", length)),
+                }
+            }
             DataType::Date32 => Ok("date".to_string()),
+            DataType::Date64 => Ok("date64".to_string()),
+            DataType::Time32(time_unit) => Ok(format!(
+                "time32({})",
+                Self::time_unit_to_simple_string(*time_unit)
+            )),
+            DataType::Time64(time_unit) => Ok(format!(
+                "time64({})",
+                Self::time_unit_to_simple_string(*time_unit)
+            )),
+            DataType::Duration(time_unit) => Ok(format!(
+                "duration({})",
+                Self::time_unit_to_simple_string(*time_unit)
+            )),
             DataType::Timestamp(_time_unit, Some(_timezone)) => Ok("timestamp".to_string()),
             DataType::Timestamp(_time_unit, None) => Ok("timestamp_ntz".to_string()),
-            DataType::CalendarInterval => Ok("interval".to_string()),
-            DataType::YearMonthInterval {
-                start_field,
-                end_field,
-            } => {
+            DataType::Interval(spec::IntervalUnit::MonthDayNano, _, _) => {
+                Ok("interval".to_string())
+            }
+            DataType::Interval(spec::IntervalUnit::YearMonth, start_field, end_field) => {
                 let (start_field, end_field) = match (*start_field, *end_field) {
                     (Some(start), Some(end)) => (start, end),
                     (Some(start), None) => (start, start),
@@ -87,30 +118,27 @@ impl PlanFormatter for DefaultPlanFormatter {
                         ))
                     }
                     (None, None) => (
-                        spec::YearMonthIntervalField::Year,
-                        spec::YearMonthIntervalField::Month,
+                        spec::IntervalFieldType::Year,
+                        spec::IntervalFieldType::Month,
                     ),
                 };
 
                 match start_field.cmp(&end_field) {
                     Ordering::Less => Ok(format!(
                         "interval {} to {}",
-                        Self::year_month_interval_field_to_simple_string(start_field),
-                        Self::year_month_interval_field_to_simple_string(end_field),
+                        Self::interval_field_type_to_simple_string(start_field),
+                        Self::interval_field_type_to_simple_string(end_field),
                     )),
                     Ordering::Equal => Ok(format!(
                         "interval {}",
-                        Self::year_month_interval_field_to_simple_string(start_field)
+                        Self::interval_field_type_to_simple_string(start_field)
                     )),
                     Ordering::Greater => Err(PlanError::invalid(
                         "year-month interval with invalid start and end field order",
                     )),
                 }
             }
-            DataType::DayTimeInterval {
-                start_field,
-                end_field,
-            } => {
+            DataType::Interval(spec::IntervalUnit::DayTime, start_field, end_field) => {
                 let (start_field, end_field) = match (*start_field, *end_field) {
                     (Some(start), Some(end)) => (start, end),
                     (Some(start), None) => (start, start),
@@ -120,30 +148,40 @@ impl PlanFormatter for DefaultPlanFormatter {
                         ))
                     }
                     (None, None) => (
-                        spec::DayTimeIntervalField::Day,
-                        spec::DayTimeIntervalField::Second,
+                        spec::IntervalFieldType::Day,
+                        spec::IntervalFieldType::Second,
                     ),
                 };
 
                 match start_field.cmp(&end_field) {
                     Ordering::Less => Ok(format!(
                         "interval {} to {}",
-                        Self::day_time_interval_field_to_simple_string(start_field),
-                        Self::day_time_interval_field_to_simple_string(end_field),
+                        Self::interval_field_type_to_simple_string(start_field),
+                        Self::interval_field_type_to_simple_string(end_field),
                     )),
                     Ordering::Equal => Ok(format!(
                         "interval {}",
-                        Self::day_time_interval_field_to_simple_string(start_field)
+                        Self::interval_field_type_to_simple_string(start_field)
                     )),
                     Ordering::Greater => Err(PlanError::invalid(
                         "day-time interval with invalid start and end field order",
                     )),
                 }
             }
-            DataType::Array { element_type, .. } => Ok(format!(
-                "array<{}>",
-                self.data_type_to_simple_string(element_type.as_ref())?
-            )),
+            DataType::List(field)
+            | DataType::FixedSizeList(field, _)
+            | DataType::LargeList(field) => {
+                let spec::Field {
+                    name: _,
+                    data_type,
+                    nullable: _,
+                    metadata: _,
+                } = field.as_ref();
+                Ok(format!(
+                    "array<{}>",
+                    self.data_type_to_simple_string(data_type)?
+                ))
+            }
             DataType::Struct(fields) => {
                 let fields = fields
                     .iter()
@@ -157,18 +195,46 @@ impl PlanFormatter for DefaultPlanFormatter {
                     .collect::<PlanResult<Vec<String>>>()?;
                 Ok(format!("struct<{}>", fields.join(",")))
             }
-            DataType::Map {
-                key_type,
-                value_type,
-                ..
-            } => Ok(format!(
-                "map<{},{}>",
-                self.data_type_to_simple_string(key_type.as_ref())?,
-                self.data_type_to_simple_string(value_type.as_ref())?
-            )),
+            DataType::Map(field, _keys_are_sorted) => {
+                let spec::Field {
+                    name: _,
+                    data_type,
+                    nullable: _,
+                    metadata: _,
+                } = field.as_ref();
+                let fields = match data_type {
+                    DataType::Struct(fields) => fields,
+                    _ => {
+                        return Err(PlanError::invalid(
+                            "data_type_to_simple_string Invalid Map data type.",
+                        ))
+                    }
+                };
+                if fields.len() != 2 {
+                    return Err(PlanError::invalid(
+                        "data_type_to_simple_string Map data type must have key and value fields",
+                    ));
+                }
+                let key_type = &fields[0].data_type;
+                let value_type = &fields[1].data_type;
+                Ok(format!(
+                    "map<{},{}>",
+                    self.data_type_to_simple_string(key_type)?,
+                    self.data_type_to_simple_string(value_type)?
+                ))
+            }
             DataType::UserDefined { sql_type, .. } => {
                 self.data_type_to_simple_string(sql_type.as_ref())
             }
+            DataType::Union(_union_fields, _union_mode) => {
+                // TODO: Add union_fields and union_mode
+                Ok("union".to_string())
+            }
+            DataType::Dictionary(key_type, value_type) => Ok(format!(
+                "dictionary<{},{}>",
+                self.data_type_to_simple_string(key_type)?,
+                self.data_type_to_simple_string(value_type)?
+            )),
         }
     }
 
@@ -293,7 +359,6 @@ impl PlanFormatter for DefaultPlanFormatter {
                     _ => return Err(PlanError::invalid("struct type")),
                 };
                 let fields = fields
-                    .0
                     .iter()
                     .zip(elements.iter())
                     .map(|(field, value)| {
@@ -393,7 +458,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 Ok(format!("{name}({args})"))
             }
             // This case is only reached when both conditions are true:
-            //   1. The explode operation is `ExplodeKind::ExplodeOuter`
+            //   1. The `explode` operation is `ExplodeKind::ExplodeOuter`
             //   2. The data type being exploded is `ExplodeDataType::List`
             // In this specific scenario, we always use "col" as the column name.
             "explode_outer" => Ok("col".to_string()),
@@ -417,7 +482,7 @@ impl PlanFormatter for DefaultPlanFormatter {
 struct BinaryDisplay<'a>(pub &'a Vec<u8>);
 
 impl Display for BinaryDisplay<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "X'")?;
         for b in self.0 {
             write!(f, "{:02X}", b)?;
