@@ -316,8 +316,8 @@ impl TryFrom<spec::DataType> for DataType {
             )),
             spec::DataType::Float32 => Ok(Kind::Float(sdt::Float::default())),
             spec::DataType::Float64 => Ok(Kind::Double(sdt::Double::default())),
-            spec::DataType::Decimal128(scale, precision)
-            | spec::DataType::Decimal256(scale, precision) => Ok(Kind::Decimal(sdt::Decimal {
+            spec::DataType::Decimal128(precision, scale)
+            | spec::DataType::Decimal256(precision, scale) => Ok(Kind::Decimal(sdt::Decimal {
                 scale: Some(scale as i32),
                 precision: Some(precision as i32),
                 type_variation_reference: 0,
@@ -359,8 +359,12 @@ impl TryFrom<spec::DataType> for DataType {
             spec::DataType::Timestamp(spec::TimeUnit::Microsecond, None) => {
                 Ok(Kind::TimestampNtz(sdt::TimestampNtz::default()))
             }
-            spec::DataType::Timestamp(spec::TimeUnit::Microsecond, Some(_timezone)) => {
-                Ok(Kind::Timestamp(sdt::Timestamp::default()))
+            spec::DataType::Timestamp(spec::TimeUnit::Microsecond, Some(timezone)) => {
+                if timezone.is_empty() {
+                    Ok(Kind::TimestampNtz(sdt::TimestampNtz::default()))
+                } else {
+                    Ok(Kind::Timestamp(sdt::Timestamp::default()))
+                }
             }
             spec::DataType::Timestamp(spec::TimeUnit::Second, _)
             | spec::DataType::Timestamp(spec::TimeUnit::Millisecond, _)

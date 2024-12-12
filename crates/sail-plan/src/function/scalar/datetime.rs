@@ -189,7 +189,7 @@ fn date_format(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResu
 
 fn to_timestamp(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<Expr> {
     if args.len() == 1 {
-        Ok(expr_fn::to_timestamp(args))
+        Ok(expr_fn::to_timestamp_micros(args))
     } else if args.len() == 2 {
         let (expr, format) = args.two()?;
         let format = to_chrono_fmt(format)?;
