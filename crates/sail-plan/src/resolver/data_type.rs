@@ -374,7 +374,7 @@ impl PlanResolver<'_> {
 
     pub fn resolve_timezone(&self, timezone: &Option<Arc<str>>) -> PlanResult<Option<Arc<str>>> {
         match timezone {
-            None => Ok(Some(Arc::<str>::from(self.config.time_zone.as_str()))),
+            None => Ok(None),
             Some(timezone) => {
                 if timezone.is_empty() || timezone.as_ref().to_lowercase().trim() == "ltz" {
                     Ok(Some(Arc::<str>::from(self.config.time_zone.as_str())))
