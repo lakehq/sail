@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::{CommonError, CommonResult};
 
 /// Native Sail data types that convert to Arrow types.
-/// These types directly match to [arrow_schema::DataType] variants when there is a corresponding type.
+/// These types usually directly match to [arrow_schema::DataType] variants when there is a corresponding type.
+/// Exceptions to this are: [`Interval`].
 /// Additionally, custom data types are supported for cases not covered by Arrow (e.g. [`UserDefined`]).
 /// [Credit]: Comments within the enum are copied from [`arrow_schema::DataType`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
