@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use datafusion::datasource::function::TableFunction;
 use lazy_static::lazy_static;
 
 use crate::error::{PlanError, PlanResult};
@@ -9,6 +11,7 @@ mod aggregate;
 pub(crate) mod common;
 mod generator;
 mod scalar;
+mod table;
 mod window;
 
 pub(crate) use aggregate::get_built_in_aggregate_function;
@@ -19,6 +22,8 @@ lazy_static! {
         HashMap::from_iter(scalar::list_built_in_scalar_functions());
     pub static ref BUILT_IN_GENERATOR_FUNCTIONS: HashMap<&'static str, Function> =
         HashMap::from_iter(generator::list_built_in_generator_functions());
+    pub static ref BUILT_IN_TABLE_FUNCTIONS: HashMap<&'static str, Arc<TableFunction>> =
+        HashMap::from_iter(table::list_built_in_table_functions());
 }
 
 pub fn get_built_in_function(name: &str) -> PlanResult<Function> {
@@ -28,4 +33,17 @@ pub fn get_built_in_function(name: &str) -> PlanResult<Function> {
         .or_else(|| BUILT_IN_GENERATOR_FUNCTIONS.get(name.as_str()))
         .ok_or_else(|| PlanError::unsupported(format!("unknown function: {name}")))?
         .clone())
+}
+
+pub fn get_built_in_table_function(name: &str) -> PlanResult<Arc<TableFunction>> {
+    let name = name.to_lowercase();
+    Ok(BUILT_IN_TABLE_FUNCTIONS
+        .get(name.as_str())
+        .ok_or_else(|| PlanError::unsupported(format!("unknown table function: {name}")))?
+        .clone())
+}
+
+pub fn is_built_in_generator_function(name: &str) -> bool {
+    let name = name.to_lowercase();
+    BUILT_IN_GENERATOR_FUNCTIONS.contains_key(name.as_str())
 }
