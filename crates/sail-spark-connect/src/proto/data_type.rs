@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION;
 use sail_common::spec;
+use sail_common::spec::{LOCAL_TIME_ZONE_IDENTIFIER, NO_TIME_ZONE_IDENTIFIER};
 use sail_sql::data_type::parse_data_type;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
@@ -137,12 +138,13 @@ impl TryFrom<DataType> for spec::DataType {
                 //  Reference: org.apache.spark.sql.connect.planner.SparkConnectPlanner#parseDatatypeString
                 Ok(spec::DataType::Timestamp(
                     spec::TimeUnit::Microsecond,
-                    Some(Arc::<str>::from("ltz")),
+                    Some(Arc::<str>::from(LOCAL_TIME_ZONE_IDENTIFIER)),
                 ))
             }
-            Kind::TimestampNtz(_) => {
-                Ok(spec::DataType::Timestamp(spec::TimeUnit::Microsecond, None))
-            }
+            Kind::TimestampNtz(_) => Ok(spec::DataType::Timestamp(
+                spec::TimeUnit::Microsecond,
+                Some(Arc::<str>::from(NO_TIME_ZONE_IDENTIFIER)),
+            )),
             Kind::CalendarInterval(_) => Ok(spec::DataType::Interval(
                 spec::IntervalUnit::MonthDayNano,
                 None,
@@ -359,8 +361,12 @@ impl TryFrom<spec::DataType> for DataType {
             spec::DataType::Timestamp(spec::TimeUnit::Microsecond, None) => {
                 Ok(Kind::TimestampNtz(sdt::TimestampNtz::default()))
             }
-            spec::DataType::Timestamp(spec::TimeUnit::Microsecond, Some(_timezone)) => {
-                Ok(Kind::Timestamp(sdt::Timestamp::default()))
+            spec::DataType::Timestamp(spec::TimeUnit::Microsecond, Some(timezone)) => {
+                if timezone.as_ref().to_lowercase().trim() == NO_TIME_ZONE_IDENTIFIER {
+                    Ok(Kind::TimestampNtz(sdt::TimestampNtz::default()))
+                } else {
+                    Ok(Kind::Timestamp(sdt::Timestamp::default()))
+                }
             }
             spec::DataType::Timestamp(spec::TimeUnit::Second, _)
             | spec::DataType::Timestamp(spec::TimeUnit::Millisecond, _)

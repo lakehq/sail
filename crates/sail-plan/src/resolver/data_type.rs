@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use arrow::datatypes as adt;
 use sail_common::spec;
+use sail_common::spec::{LOCAL_TIME_ZONE_IDENTIFIER, NO_TIME_ZONE_IDENTIFIER};
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -374,10 +375,14 @@ impl PlanResolver<'_> {
 
     pub fn resolve_timezone(&self, timezone: &Option<Arc<str>>) -> PlanResult<Option<Arc<str>>> {
         match timezone {
-            None => Ok(None),
+            None => Ok(Some(Arc::<str>::from(self.config.time_zone.as_str()))),
             Some(timezone) => {
-                if timezone.is_empty() || timezone.as_ref().to_lowercase().trim() == "ltz" {
+                if timezone.is_empty()
+                    || timezone.as_ref().to_lowercase().trim() == LOCAL_TIME_ZONE_IDENTIFIER
+                {
                     Ok(Some(Arc::<str>::from(self.config.time_zone.as_str())))
+                } else if timezone.as_ref().to_lowercase().trim() == NO_TIME_ZONE_IDENTIFIER {
+                    Ok(None)
                 } else {
                     Ok(Some(Arc::clone(timezone)))
                 }

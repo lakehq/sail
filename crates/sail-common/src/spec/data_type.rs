@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CommonError, CommonResult};
 
+pub const LOCAL_TIME_ZONE_IDENTIFIER: &str = "ltz";
+pub const NO_TIME_ZONE_IDENTIFIER: &str = "ntz";
+
 /// Native Sail data types that convert to Arrow types.
 /// These types usually directly match to [arrow_schema::DataType] variants when there is a corresponding type.
 /// Exceptions to this are: [`Interval`].

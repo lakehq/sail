@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION;
 use sail_common::spec;
+use sail_common::spec::LOCAL_TIME_ZONE_IDENTIFIER;
 use sqlparser::ast;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Token;
@@ -135,7 +136,7 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
             let tz = match tz_info {
                 TimezoneInfo::None | TimezoneInfo::WithoutTimeZone => None,
                 TimezoneInfo::WithLocalTimeZone | TimezoneInfo::WithTimeZone | TimezoneInfo::Tz => {
-                    Some(Arc::<str>::from("ltz"))
+                    Some(Arc::<str>::from(LOCAL_TIME_ZONE_IDENTIFIER))
                 }
             };
             let precision = match precision {
