@@ -24,7 +24,7 @@ fn timestamp(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult<
                     Some(timezone),
                 )))
             }
-            _ => Ok(expr_fn::to_timestamp(vec![arg])),
+            _ => Ok(expr_fn::to_timestamp_micros(vec![arg])),
         }
     } else {
         Ok(expr_fn::to_timestamp_micros(args))
