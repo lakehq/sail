@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION;
 use sail_common::spec;
-use sail_common::spec::LOCAL_TIME_ZONE_IDENTIFIER;
 use sqlparser::ast;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Token;
@@ -86,7 +85,7 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
         ast::DataType::UnsignedBigInt(_)
         | ast::DataType::UnsignedLong(_)
         | ast::DataType::UInt64 => Ok(spec::DataType::UInt64),
-        ast::DataType::Binary(_) | ast::DataType::Bytea => Ok(spec::DataType::Binary),
+        ast::DataType::Binary(_) | ast::DataType::Bytea => Ok(spec::DataType::ConfiguredBinary),
         ast::DataType::Float(_) | ast::DataType::Real | ast::DataType::Float32 => {
             Ok(spec::DataType::Float32)
         }
@@ -113,40 +112,49 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
                 }
             };
             if precision > ARROW_DECIMAL128_MAX_PRECISION {
-                Ok(spec::DataType::Decimal256(precision, scale))
+                Ok(spec::DataType::Decimal256 { precision, scale })
             } else {
-                Ok(spec::DataType::Decimal128(precision, scale))
+                Ok(spec::DataType::Decimal128 { precision, scale })
             }
         }
-        ast::DataType::Char(n) | ast::DataType::Character(n) => Ok(spec::DataType::ConfiguredUtf8(
-            Some(from_ast_char_length(n)?),
-            Some(spec::ConfiguredUtf8Type::Char),
-        )),
+        ast::DataType::Char(n) | ast::DataType::Character(n) => {
+            Ok(spec::DataType::ConfiguredUtf8 {
+                length: Some(from_ast_char_length(n)?),
+                utf8_type: Some(spec::ConfiguredUtf8Type::Char),
+            })
+        }
         ast::DataType::Varchar(n)
         | ast::DataType::CharVarying(n)
-        | ast::DataType::CharacterVarying(n) => Ok(spec::DataType::ConfiguredUtf8(
-            Some(from_ast_char_length(n)?),
-            Some(spec::ConfiguredUtf8Type::VarChar),
-        )),
-        ast::DataType::String(_) => Ok(spec::DataType::Utf8),
+        | ast::DataType::CharacterVarying(n) => Ok(spec::DataType::ConfiguredUtf8 {
+            length: Some(from_ast_char_length(n)?),
+            utf8_type: Some(spec::ConfiguredUtf8Type::VarChar),
+        }),
+        ast::DataType::String(_) => Ok(spec::DataType::ConfiguredUtf8 {
+            length: None,
+            utf8_type: None,
+        }),
         ast::DataType::Text => Ok(spec::DataType::LargeUtf8),
         ast::DataType::Timestamp(precision, tz_info) => {
             use ast::TimezoneInfo;
 
-            let tz = match tz_info {
-                TimezoneInfo::None | TimezoneInfo::WithoutTimeZone => None,
+            let time_zone_info = match tz_info {
+                TimezoneInfo::WithoutTimeZone => spec::TimeZoneInfo::NoTimeZone,
+                TimezoneInfo::None => spec::TimeZoneInfo::ConfiguredTimeZone,
                 TimezoneInfo::WithLocalTimeZone | TimezoneInfo::WithTimeZone | TimezoneInfo::Tz => {
-                    Some(Arc::<str>::from(LOCAL_TIME_ZONE_IDENTIFIER))
+                    spec::TimeZoneInfo::LocalTimeZone
                 }
             };
-            let precision = match precision {
+            let time_unit = match precision {
                 Some(0) => spec::TimeUnit::Second,
                 Some(3) => spec::TimeUnit::Millisecond,
                 None | Some(6) => spec::TimeUnit::Microsecond,
                 Some(9) => spec::TimeUnit::Nanosecond,
                 _ => Err(SqlError::invalid("from_ast_data_type timestamp precision"))?,
             };
-            Ok(spec::DataType::Timestamp(precision, tz))
+            Ok(spec::DataType::Timestamp {
+                time_unit,
+                time_zone_info,
+            })
         }
         ast::DataType::Date | ast::DataType::Date32 => Ok(spec::DataType::Date32),
         ast::DataType::Interval(unit) => match unit {
@@ -155,29 +163,30 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
                 leading_precision: None,
                 last_field: None,
                 fractional_seconds_precision: None,
-            } => Ok(spec::DataType::Interval(
-                spec::IntervalUnit::MonthDayNano,
-                None,
-                None,
-            )),
+            } => Ok(spec::DataType::Interval {
+                interval_unit: spec::IntervalUnit::MonthDayNano,
+                start_field: None,
+                end_field: None,
+            }),
             ast::IntervalUnit {
                 leading_field: Some(start),
                 leading_precision: None,
                 last_field: None,
                 fractional_seconds_precision: None,
             } => {
-                // TODO: [CHECK HERE] BEFORE MERGING IN. If tests fail because of no start_field/end_field then need to adjust tests.
                 if let Ok(start) = from_ast_year_month_interval_field(start) {
-                    Ok(spec::DataType::Interval(
-                        spec::IntervalUnit::YearMonth,
-                        Some(start),
-                        None,
-                    ))
+                    Ok(spec::DataType::Interval {
+                        interval_unit: spec::IntervalUnit::YearMonth,
+                        start_field: Some(start),
+                        end_field: None,
+                    })
                 } else if let Ok(_start) = from_ast_day_time_interval_field(start) {
                     // FIXME: Currently `start_field` and `end_field` are lost in translation.
                     //  This does not impact computation accuracy.
                     //  This may affect the display string in the `data_type_to_simple_string` function.
-                    Ok(spec::DataType::Duration(spec::TimeUnit::Microsecond))
+                    Ok(spec::DataType::Duration {
+                        time_unit: spec::TimeUnit::Microsecond,
+                    })
                 } else {
                     Err(SqlError::invalid(format!("interval start field: {unit:?}")))
                 }
@@ -188,17 +197,16 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
                 last_field: Some(end),
                 fractional_seconds_precision: None,
             } => {
-                // TODO: [CHECK HERE] BEFORE MERGING IN. If tests fail because of no start_field/end_field then need to adjust tests.
                 if let Ok(start) = from_ast_year_month_interval_field(start) {
                     let end = from_ast_year_month_interval_field(end)?;
                     if end <= start {
                         return Err(SqlError::invalid(format!("interval end field: {unit:?}")));
                     }
-                    Ok(spec::DataType::Interval(
-                        spec::IntervalUnit::YearMonth,
-                        Some(start),
-                        Some(end),
-                    ))
+                    Ok(spec::DataType::Interval {
+                        interval_unit: spec::IntervalUnit::YearMonth,
+                        start_field: Some(start),
+                        end_field: Some(end),
+                    })
                 } else if let Ok(start) = from_ast_day_time_interval_field(start) {
                     let end = from_ast_day_time_interval_field(end)?;
                     if end <= start {
@@ -207,7 +215,9 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
                     // FIXME: Currently `start_field` and `end_field` are lost in translation.
                     //  This does not impact computation accuracy.
                     //  This may affect the display string in the `data_type_to_simple_string` function.
-                    Ok(spec::DataType::Duration(spec::TimeUnit::Microsecond))
+                    Ok(spec::DataType::Duration {
+                        time_unit: spec::TimeUnit::Microsecond,
+                    })
                 } else {
                     return Err(SqlError::invalid(format!("interval start field: {unit:?}")));
                 }
@@ -226,7 +236,9 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
                         nullable: true,
                         metadata: vec![],
                     };
-                    Ok(spec::DataType::List(Arc::new(field)))
+                    Ok(spec::DataType::List {
+                        field: Arc::new(field),
+                    })
                 }
                 ArrayElemTypeDef::SquareBracket(_, _)
                 | ArrayElemTypeDef::Parenthesis(_)
@@ -254,35 +266,19 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
                     })
                 })
                 .collect::<SqlResult<Vec<_>>>()?;
-            Ok(spec::DataType::Struct(spec::Fields::from(fields)))
+            Ok(spec::DataType::Struct {
+                fields: spec::Fields::from(fields),
+            })
         }
         ast::DataType::Map(key, value) => {
             let key = from_ast_data_type(key)?;
             let value = from_ast_data_type(value)?;
-            let fields = spec::Fields::from(vec![
-                spec::Field {
-                    name: "key".to_string(),
-                    data_type: key,
-                    nullable: false,
-                    metadata: vec![],
-                },
-                spec::Field {
-                    name: "value".to_string(),
-                    data_type: value,
-                    nullable: true,
-                    metadata: vec![],
-                },
-            ]);
-            let keys_are_sorted = false;
-            Ok(spec::DataType::Map(
-                Arc::new(spec::Field {
-                    name: "entries".to_string(),
-                    data_type: spec::DataType::Struct(fields),
-                    nullable: false,
-                    metadata: vec![],
-                }),
-                keys_are_sorted,
-            ))
+            Ok(spec::DataType::Map {
+                key_type: Box::new(key),
+                value_type: Box::new(value),
+                value_type_nullable: true,
+                keys_are_sorted: false,
+            })
         }
         ast::DataType::Int2(_)
         | ast::DataType::Int4(_)

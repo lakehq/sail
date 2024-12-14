@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -5,9 +6,6 @@ use num_enum::TryFromPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CommonError, CommonResult};
-
-pub const LOCAL_TIME_ZONE_IDENTIFIER: &str = "ltz";
-pub const NO_TIME_ZONE_IDENTIFIER: &str = "ntz";
 
 /// Native Sail data types that convert to Arrow types.
 /// Types directly match to [arrow_schema::DataType] variants when there is a corresponding type.
@@ -572,11 +570,22 @@ impl ConfiguredUtf8Type {
     }
 }
 
+impl Display for ConfiguredUtf8Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConfiguredUtf8Type::VarChar => write!(f, "VarChar"),
+            ConfiguredUtf8Type::Char => write!(f, "Char"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TimeZoneInfo {
-    ConfiguredTimeZone, // TODO: After refactoring can get rid of this variant
+    // TODO: Refactor data type resolution in [`sail-spark-connect`] to avoid using `TryFrom`,
+    //  which would allow for removal of ConfiguredTimeZone.
+    ConfiguredTimeZone,
     LocalTimeZone,
     NoTimeZone,
-    TimeZone(Arc<str>),
+    TimeZone { time_zone: Arc<str> },
 }
