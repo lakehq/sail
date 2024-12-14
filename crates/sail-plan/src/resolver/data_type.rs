@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow::datatypes as adt;
+use sail_common::spec;
+
 use crate::config::TimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
-use arrow::datatypes as adt;
-use sail_common::spec;
 
 impl PlanResolver<'_> {
     fn arrow_binary_type(&self) -> adt::DataType {

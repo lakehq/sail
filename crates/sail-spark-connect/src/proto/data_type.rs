@@ -331,7 +331,7 @@ impl TryFrom<spec::DataType> for DataType {
                 ))
             },
             spec::DataType::ConfiguredUtf8 { length: None, utf8_type } => {
-                match utf8_type { 
+                match utf8_type {
                     None => Ok(Kind::String(sdt::String::default())),
                     Some(utf8_type) => Err(SparkError::invalid(
                         format!("TryFrom spec::DataType::ConfiguredUtf8 {{ length: None, utf8_type: {utf8_type} }} to Spark Kind. Cannot have Char or VarChar without length"),
